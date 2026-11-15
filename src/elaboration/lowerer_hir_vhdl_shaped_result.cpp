@@ -56,9 +56,8 @@ Lowerer::hir_vhdl_shaped_call_profile(
             && expression->vhdl->kind != ExpressionKind::unary
             && expression->vhdl->kind != ExpressionKind::binary)
         || expression->vhdl->text.starts_with('\'')
-        || expression->vhdl->text.starts_with('@')
-        || expression->vhdl->text.starts_with(
-            semantic::vhdl::qualified_expression_prefix)) {
+        || expression->vhdl->marker != support::ExpressionMarker::none
+        || expression->vhdl->text.starts_with('@')) {
         return std::nullopt;
     }
     const auto resolution = resolve_hir_vhdl_function_call(

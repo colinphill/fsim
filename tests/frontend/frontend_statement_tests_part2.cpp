@@ -775,14 +775,17 @@ endmodule
         "concatenation expression node and operand order");
     require(
         statements[3].value.kind == ExpressionKind::Call
-            && statements[3].value.text == "@stream-left"
+            && statements[3].value.marker
+                == fsim::support::ExpressionMarker::stream_left
             && statements[3].value.operands.size() == 2
             && statements[3].value.operands[0].text == "2"
             && statements[4].value.kind == ExpressionKind::Call
-            && statements[4].value.text == "@stream-right"
+            && statements[4].value.marker
+                == fsim::support::ExpressionMarker::stream_right
             && statements[4].value.operands[0].text == "1"
             && statements[5].value.kind == ExpressionKind::Call
-            && statements[5].value.text == "@stream-left"
+            && statements[5].value.marker
+                == fsim::support::ExpressionMarker::stream_left
             && statements[5].value.operands[1].kind
                 == ExpressionKind::Concatenation,
         "stream direction, slice size, and nested concatenation HIR");

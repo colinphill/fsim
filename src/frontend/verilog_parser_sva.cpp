@@ -3710,8 +3710,8 @@ void VerilogParser::extract_procedural_assertions(
                     declare_inline_property(directive, declarations);
                     variables.push_back(VariableDeclaration {
                         name,
-                        Type { ValueDomain::Bit2, "bit",
-                            PackedRange { 0, 0, true }, false },
+                        systemverilog_builtin_type(ValueDomain::Bit2,
+                            support::SystemVerilogBuiltinType::bit, PackedRange { 0, 0, true }, false),
                         std::nullopt, statement.span });
                     variables.back().synthesized = true;
                     // Reaching the statement enables an attempt at the next
@@ -5688,7 +5688,7 @@ bool VerilogParser::resolve_expect_statements(const DesignUnit& scope,
         const auto hidden_bit = [&](const std::string& name, const std::size_t width) {
             Type net_type;
             net_type.domain = ValueDomain::Bit2;
-            net_type.spelling = "bit";
+            set_systemverilog_builtin_type(net_type, support::SystemVerilogBuiltinType::bit);
             if (width > 1U) {
                 const auto msb = static_cast<std::int64_t>(width - 1U);
                 net_type.packed_range = PackedRange { msb, 0, true };
@@ -5723,7 +5723,7 @@ bool VerilogParser::resolve_expect_statements(const DesignUnit& scope,
         if (disable_assignment) {
             Type net_type;
             net_type.domain = ValueDomain::Bit2;
-            net_type.spelling = "bit";
+            set_systemverilog_builtin_type(net_type, support::SystemVerilogBuiltinType::bit);
             signals.push_back(SignalDeclaration { disable_net,
                 std::move(net_type), PortDirection::Unknown, false,
                 directive.span });
@@ -6241,7 +6241,7 @@ bool VerilogParser::resolve_sva_monitor(DesignUnit& unit,
     if (disable_assignment) {
         Type net_type;
         net_type.domain = ValueDomain::Bit2;
-        net_type.spelling = "bit";
+        set_systemverilog_builtin_type(net_type, support::SystemVerilogBuiltinType::bit);
         unit.signals.push_back(SignalDeclaration { disable_net,
             std::move(net_type), PortDirection::Unknown, false,
             directive.span });
@@ -6254,7 +6254,7 @@ bool VerilogParser::resolve_sva_monitor(DesignUnit& unit,
                                  const std::size_t width) {
         Type net_type;
         net_type.domain = ValueDomain::Bit2;
-        net_type.spelling = "bit";
+        set_systemverilog_builtin_type(net_type, support::SystemVerilogBuiltinType::bit);
         if (width > 1U) {
             const auto msb = static_cast<std::int64_t>(width - 1U);
             net_type.packed_range = PackedRange { msb, 0, true };
@@ -6527,9 +6527,10 @@ void VerilogParser::resolve_procedural_sva_endpoints(DesignUnit& unit)
         }
         // `s(actuals).triggered`: the instance's tokens come from the token
         // stream at the call's source order.
-        // (`@sv-select:triggered` of the call `s(actuals)`).
+        // (the `triggered` selection of the call `s(actuals)`).
         if (expression.kind == ExpressionKind::Call
-            && expression.text == "@sv-select:triggered"
+            && expression.marker == support::ExpressionMarker::sv_select
+            && expression.marker_argument == "triggered"
             && expression.operands.size() == 1U
             && expression.operands.front().kind == ExpressionKind::Call
             && (expression.systemverilog_source_order != 0U
@@ -6638,6 +6639,9 @@ void VerilogParser::resolve_procedural_sva_endpoints(DesignUnit& unit)
             self(self, child);
         }
         for (auto& child : statement.loop_updates) {
+            self(self, child);
+        }
+        for (auto& child : statement.loop_initializations) {
             self(self, child);
         }
     };

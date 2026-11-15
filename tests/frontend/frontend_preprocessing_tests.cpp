@@ -1513,7 +1513,7 @@ end architecture;
         "named generic maps must remain in the instance HIR");
     require(architecture->instances[1].connections.size() == 2 && architecture->instances[1].connections[0].value.kind == ExpressionKind::Call && architecture->instances[1].connections[1].kind == PortActualKind::Open,
         "indexed actual and explicit open state retained");
-    require(architecture->instances[2].connections.size() == 2 && architecture->instances[2].connections[0].value.kind == ExpressionKind::Call && architecture->instances[2].connections[0].value.text == "@vhdl-qualified:std_logic_vector" && architecture->instances[2].connections[0].value.operands.size() == 1 && architecture->instances[2].connections[0].value.operands.front().text == "data",
+    require(architecture->instances[2].connections.size() == 2 && architecture->instances[2].connections[0].value.kind == ExpressionKind::Call && architecture->instances[2].connections[0].value.marker == fsim::support::ExpressionMarker::vhdl_qualified && architecture->instances[2].connections[0].value.marker_argument == "std_logic_vector" && architecture->instances[2].connections[0].value.operands.size() == 1 && architecture->instances[2].connections[0].value.operands.front().text == "data",
         "qualified input actual retains its explicit type mark");
 
     const auto invalid = parse_text("invalid-port-associations.vhd",

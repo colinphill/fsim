@@ -24,19 +24,19 @@ namespace {
     }
 
     struct Atom {
-        std::string_view keyword;
+        support::SystemVerilogBuiltinType builtin;
         std::uint64_t bits;
         bool is_signed;
         bool four_state;
     };
 
     constexpr std::array atoms {
-        Atom { "byte", 8U, true, false },
-        Atom { "shortint", 16U, true, false },
-        Atom { "int", 32U, true, false },
-        Atom { "longint", 64U, true, false },
-        Atom { "integer", 32U, true, true },
-        Atom { "time", 64U, false, true },
+        Atom { support::SystemVerilogBuiltinType::byte, 8U, true, false },
+        Atom { support::SystemVerilogBuiltinType::shortint, 16U, true, false },
+        Atom { support::SystemVerilogBuiltinType::int_type, 32U, true, false },
+        Atom { support::SystemVerilogBuiltinType::longint, 64U, true, false },
+        Atom { support::SystemVerilogBuiltinType::integer, 32U, true, true },
+        Atom { support::SystemVerilogBuiltinType::time, 64U, false, true },
     };
 
     [[nodiscard]] std::optional<std::int64_t> bound(
@@ -78,7 +78,7 @@ namespace {
     {
         SystemVerilogTypeDescriptor result;
         result.kind = Kind::integer_vector;
-        result.keyword = four_state ? "logic" : "bit";
+        result.builtin = four_state ? support::SystemVerilogBuiltinType::logic : support::SystemVerilogBuiltinType::bit;
         result.is_signed = is_signed;
         result.four_state = four_state;
         result.bits = bits;
@@ -140,15 +140,15 @@ std::string SystemVerilogTypeDescriptor::canonical() const
     // 1800-2023 6.22.1 e), so both spell that vector; reg is logic (6.11.2).
     const bool atom_vector = kind == Kind::integer_atom && bits
         && packed.empty()
-        && (keyword == "byte" || keyword == "shortint" || keyword == "int"
-            || keyword == "longint" || keyword == "integer"
-            || keyword == "time");
+        && support::systemverilog_integer_atom(builtin);
     switch (kind) {
     case Kind::integer_atom:
     case Kind::integer_vector:
         result = atom_vector ? (four_state ? "logic" : "bit")
-            : keyword == "reg" ? std::string { "logic" }
-                               : keyword;
+            : builtin == support::SystemVerilogBuiltinType::reg ? std::string { "logic" }
+                                  : std::string {
+                                        support::systemverilog_builtin_type_name(
+                                            builtin) };
         break;
     case Kind::real:
         result = "real";
@@ -216,7 +216,7 @@ std::optional<sv::TypeReference> systemverilog_type_reference(
     result.four_state = type.four_state;
     switch (type.kind) {
     case Kind::integer_atom:
-        result.target.spelling = type.keyword;
+        sv::set_builtin_type(result, type.builtin);
         result.value_form = sv::TypeForm::packed_integral;
         result.executable_width = type.bits;
         // An integer atom carries its native range, as declared.
@@ -229,7 +229,7 @@ std::optional<sv::TypeReference> systemverilog_type_reference(
         }
         break;
     case Kind::integer_vector: {
-        result.target.spelling = type.keyword;
+        sv::set_builtin_type(result, type.builtin);
         result.value_form = sv::TypeForm::packed_integral;
         for (const auto& dimension : type.packed) {
             if (!dimension.left || !dimension.right) {
@@ -256,22 +256,22 @@ std::optional<sv::TypeReference> systemverilog_type_reference(
     }
     case Kind::real:
     case Kind::realtime:
-        result.target.spelling = "real";
+        sv::set_builtin_type(result, support::SystemVerilogBuiltinType::real);
         result.executable_width = 64U;
         break;
     case Kind::shortreal:
-        result.target.spelling = "shortreal";
+        sv::set_builtin_type(result, support::SystemVerilogBuiltinType::shortreal);
         result.executable_width = 32U;
         break;
     case Kind::string:
-        result.target.spelling = "string";
+        sv::set_builtin_type(result, support::SystemVerilogBuiltinType::string);
         result.value_form = sv::TypeForm::string;
         break;
     case Kind::chandle:
-        result.target.spelling = "chandle";
+        sv::set_builtin_type(result, support::SystemVerilogBuiltinType::chandle);
         break;
     case Kind::event:
-        result.target.spelling = "event";
+        sv::set_builtin_type(result, support::SystemVerilogBuiltinType::event);
         break;
     default:
         if (!type.nominal) {
@@ -395,7 +395,7 @@ std::optional<SystemVerilogTypeDescriptor> describe_systemverilog_type(
         }
     }
     const auto atom = std::ranges::find(
-        atoms, std::string_view { spelling }, &Atom::keyword);
+        atoms, resolved.builtin, &Atom::builtin);
     // An integer atom may carry its native range ([31:0] for int).
     const auto native_range = [&] {
         if (!resolved.packed_range) {
@@ -410,28 +410,27 @@ std::optional<SystemVerilogTypeDescriptor> describe_systemverilog_type(
     if (atom != atoms.end() && resolved.packed_dimensions.empty()
         && native_range()) {
         result.kind = Kind::integer_atom;
-        result.keyword = std::string { atom->keyword };
+        result.builtin = atom->builtin;
         result.bits = atom->bits;
         result.four_state = atom->four_state;
         return result;
     }
-    if (spelling == "real" || spelling == "realtime"
-        || spelling == "shortreal") {
-        result.kind = spelling == "shortreal" ? Kind::shortreal
-            : spelling == "realtime"          ? Kind::realtime
-                                              : Kind::real;
-        result.bits = spelling == "shortreal" ? 32U : 64U;
+    if (support::systemverilog_real_family(resolved.builtin)) {
+        result.kind = resolved.builtin == support::SystemVerilogBuiltinType::shortreal ? Kind::shortreal
+            : resolved.builtin == support::SystemVerilogBuiltinType::realtime        ? Kind::realtime
+                                                     : Kind::real;
+        result.bits = resolved.builtin == support::SystemVerilogBuiltinType::shortreal ? 32U : 64U;
         return result;
     }
-    if (spelling == "string" || form == sv::TypeForm::string) {
+    if (resolved.builtin == support::SystemVerilogBuiltinType::string || form == sv::TypeForm::string) {
         result.kind = Kind::string;
         return result;
     }
-    if (spelling == "chandle") {
+    if (resolved.builtin == support::SystemVerilogBuiltinType::chandle) {
         result.kind = Kind::chandle;
         return result;
     }
-    if (spelling == "event") {
+    if (resolved.builtin == support::SystemVerilogBuiltinType::event) {
         result.kind = Kind::event;
         return result;
     }
@@ -463,8 +462,8 @@ std::optional<SystemVerilogTypeDescriptor> describe_systemverilog_type(
     } else {
         result.kind = Kind::integer_vector;
         // `reg` and `logic` are the same type (IEEE 1800-2017 6.11.2).
-        result.keyword = spelling == "bit" ? "bit" : "logic";
-        result.four_state = result.keyword == "logic";
+        result.builtin = resolved.builtin == support::SystemVerilogBuiltinType::bit ? support::SystemVerilogBuiltinType::bit : support::SystemVerilogBuiltinType::logic;
+        result.four_state = result.builtin == support::SystemVerilogBuiltinType::logic;
     }
     if (!resolved.packed_dimensions.empty()) {
         for (const auto& range : resolved.packed_dimensions) {
@@ -552,7 +551,7 @@ describe_systemverilog_expression_type(const SpecializedHirUnit& unit,
             // unsized based one is unsigned unless `s` is given.
             SystemVerilogTypeDescriptor result;
             result.kind = Kind::integer_atom;
-            result.keyword = "int";
+            result.builtin = support::SystemVerilogBuiltinType::int_type;
             result.is_signed = quote == std::string::npos
                 || (record.text.size() > quote + 1U
                     && (record.text[quote + 1U] == 's'
@@ -651,7 +650,7 @@ describe_systemverilog_expression_type(const SpecializedHirUnit& unit,
     }
     case sv::ExpressionKind::call:
         // `type(x)` denotes the type of x; a type operand denotes itself.
-        if (record.text == "@sv-type") {
+        if (record.marker == support::ExpressionMarker::sv_type) {
             if (!record.type_operand.empty()) {
                 return describe_systemverilog_type(
                     unit, record.type_operand.front(), record.scope);

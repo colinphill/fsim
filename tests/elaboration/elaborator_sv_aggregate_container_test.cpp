@@ -82,8 +82,8 @@ endmodule
   const auto fixed = elaborated.design->find_container(
       "aggregate_containers.fixed");
   assert(
-      fixed && !elaborated.design->container_objects().at(*fixed)
-                    .type.element_nominal_type.empty());
+      fixed && elaborated.design->container_objects().at(*fixed)
+                    .type.element_nominal_type_id.has_value());
   auto interpreter = elaborated.design->create_interpreter();
   assert(
       interpreter->run().status

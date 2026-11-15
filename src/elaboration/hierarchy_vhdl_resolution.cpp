@@ -27,7 +27,8 @@ HierarchyBuilder::register_compiled_vhdl_resolution(
     const CompiledVhdlResolutionBinding& binding,
     const semantic::SpecializedHirUnit& specialization)
 {
-    resolver_by_signal_.insert_or_assign(signal, binding.designator);
+    resolver_by_signal_.insert_or_assign(
+        signal, SignalResolver { binding.designator, false });
     const auto source = binding.source.valid()
         ? binding.source
         : declaration_source;
@@ -100,10 +101,9 @@ void HierarchyBuilder::register_compiled_vhdl_record_resolution(
     const semantic::SourceSpanId source,
     const semantic::SpecializedHirUnit& specialization)
 {
-    static const std::string designator { "@vhdl-record-resolution" };
-    resolver_by_signal_.insert_or_assign(signal, designator);
-    vhdl_resolution_kinds_.insert_or_assign(
-        designator, ResolutionKind::user_function);
+    // A record's element resolutions run as one user resolution function.
+    resolver_by_signal_.insert_or_assign(
+        signal, SignalResolver { { }, true });
     const auto body = segments.front().function;
     vhdl_function_resolvers_.insert_or_assign(signal,
         PendingVhdlResolver { body, source,
@@ -406,7 +406,8 @@ bool vhdl_conversion_actual(
                 }
                 const auto kind = value->vhdl->kind;
                 if (kind == semantic::vhdl::ExpressionKind::aggregate
-                    && value->vhdl->text == "@vhdl-formal-subelements") {
+                    && value->vhdl->marker
+                        == support::ExpressionMarker::vhdl_formal_subelements) {
                     return support::with_stack([&] { return self(self, *value->vhdl, depth + 1U); });
                 }
                 // An inertial part (`r.y => inertial t`) is an implicit
@@ -415,7 +416,8 @@ bool vhdl_conversion_actual(
                 // while the other parts follow their actuals in the same
                 // cycle.
                 if (kind == semantic::vhdl::ExpressionKind::call
-                    && value->vhdl->text == "@vhdl-inertial"
+                    && value->vhdl->marker
+                        == support::ExpressionMarker::vhdl_inertial
                     && value->vhdl->operands.size() == 1U) {
                     const auto operand = specialization.find_expression(
                         value->vhdl->operands.front());
@@ -431,6 +433,7 @@ bool vhdl_conversion_actual(
                 // (`p(3 downto 2) => std_ulogic_vector(s)`).
                 if (kind == semantic::vhdl::ExpressionKind::call
                     && value->vhdl->operands.size() == 1U
+                    && value->vhdl->marker == support::ExpressionMarker::none
                     && !value->vhdl->text.starts_with('@')) {
                     const auto operand = specialization.find_expression(
                         value->vhdl->operands.front());
@@ -460,9 +463,8 @@ bool vhdl_conversion_actual(
                     == semantic::vhdl::ExpressionKind::unary
                 && expression->vhdl->operator_symbol_call))
         || expression->vhdl->operands.size() != 1U
-        || expression->vhdl->text.starts_with('@')
-        || expression->vhdl->text.starts_with(
-            semantic::vhdl::qualified_expression_prefix)) {
+        || expression->vhdl->marker != support::ExpressionMarker::none
+        || expression->vhdl->text.starts_with('@')) {
         return false;
     }
     const auto operand = specialization.find_expression(
@@ -902,7 +904,8 @@ bool HierarchyBuilder::vhdl_output_port_read(
             if ((source.kind == vhdl::ExpressionKind::index
                     || source.kind == vhdl::ExpressionKind::slice
                     || (source.kind == vhdl::ExpressionKind::call
-                        && source.text.starts_with("@vhdl-member:")))
+                        && source.marker
+                            == support::ExpressionMarker::vhdl_member))
                 && !source.operands.empty()) {
                 support::with_stack([&] { return self(self, source.operands.front(), depth + 1U); });
             } else if (source.kind == vhdl::ExpressionKind::aggregate) {

@@ -1,0 +1,23 @@
+#c scope [top.lbl] name [lbl] type 15
+#c   scope [top.lbl.lb] name [lb] type 33
+#c scope [top.fl] name [fl] type 675
+#c   scope [top.fl.blk] name [blk] type 33
+#c scope [top.m2] name [m2] type 675
+#c   scope [top.m2.b2] name [b2] type 33
+#c scope [top.st] name [st] type 33
+#c scope [-] name [-] type 15
+#c   scope [-] name [inner] type 33
+#c scope [top.g] name [g] type 134
+#c   scope [-] name [-] type 4
+#c   scope [top.g.nb] name [nb] type 33
+#c   scope [top.g.gl] name [gl] type 15
+#c     scope [top.g.gl.glb] name [glb] type 33
+#c   scope [-] name [-] type 675
+#c     scope [-] name [gfb] type 33
+#c find top.lbl.lb.w: top.lbl.lb.w scope [top.lbl.lb] type 33
+#c find top.fl.blk.v: top.fl.blk.v scope [top.fl.blk] type 33
+#c find top.m2.b2.c: top.m2.b2.c scope [top.m2.b2] type 33
+#c find top.st: top.st scope [top] type 32
+#c find top.lbl: top.lbl scope [top] type 32
+#c find top.g.nb.s: top.g.nb.s scope [top.g.nb] type 33
+#c find top.g.gl.glb.gw: top.g.gl.glb.gw scope [top.g.gl.glb] type 33

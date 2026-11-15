@@ -3361,7 +3361,11 @@ private:
     [[nodiscard]] bool saves_compiled_registers(const Member& member) const noexcept;
     void save_thread_registers();
     void restore_thread_registers();
+    /// Sizes the wait tables of a behavioral kernel.
     void prepare_behavioral();
+    /// Takes the edge baselines and arms the processes that begin at their
+    /// static wait, after the declaration initializers ran.
+    void arm_behavioral();
     [[nodiscard]] bool start_after_procedures();
     /// Runs the declaration initializers that are thread members, before
     /// the once members and threads of time zero.

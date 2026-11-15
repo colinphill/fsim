@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include "fsim/support/systemverilog_builtin_type.hpp"
+
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -24,15 +26,16 @@ enum class SystemVerilogScalarKind {
       || kind == SystemVerilogScalarKind::Realtime;
 }
 
-// The scalar kind a builtin type keyword names; None for any other spelling.
+// The scalar kind of a built-in data type; None for every other kind.
 [[nodiscard]] constexpr SystemVerilogScalarKind systemverilog_scalar_kind(
-    const std::string_view spelling) noexcept {
-  return spelling == "shortreal" ? SystemVerilogScalarKind::ShortReal
-      : spelling == "real"       ? SystemVerilogScalarKind::Real
-      : spelling == "realtime"   ? SystemVerilogScalarKind::Realtime
-      : spelling == "time"       ? SystemVerilogScalarKind::Time
-      : spelling == "chandle"    ? SystemVerilogScalarKind::Chandle
-                                 : SystemVerilogScalarKind::None;
+    const support::SystemVerilogBuiltinType kind) noexcept {
+  using Builtin = support::SystemVerilogBuiltinType;
+  return kind == Builtin::shortreal ? SystemVerilogScalarKind::ShortReal
+      : kind == Builtin::real       ? SystemVerilogScalarKind::Real
+      : kind == Builtin::realtime   ? SystemVerilogScalarKind::Realtime
+      : kind == Builtin::time       ? SystemVerilogScalarKind::Time
+      : kind == Builtin::chandle    ? SystemVerilogScalarKind::Chandle
+                                    : SystemVerilogScalarKind::None;
 }
 
 enum class SystemVerilogDecimalLiteralKind {

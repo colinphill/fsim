@@ -321,7 +321,7 @@ void resolve_type(
       if (completed.size() == 1U
           && !completed.front()->declaration->is_forward_declaration) {
         type.named_type = aliased->named_type;
-        type.spelling = aliased->spelling;
+        copy_systemverilog_type_spelling(type, *aliased);
         type.systemverilog_class_parameter_actuals =
             aliased->systemverilog_class_parameter_actuals;
         for (auto& actual : type.systemverilog_class_parameter_actuals) {
@@ -631,6 +631,10 @@ void resolve_statement_types(
         child, owner, entries, local_shadowed_types, diagnostics);
   }
   for (auto& child : statement.else_statements) {
+    resolve_statement_types(
+        child, owner, entries, local_shadowed_types, diagnostics);
+  }
+  for (auto& child : statement.loop_initializations) {
     resolve_statement_types(
         child, owner, entries, local_shadowed_types, diagnostics);
   }
@@ -1189,7 +1193,7 @@ static Type class_specialization_type(
     const SystemVerilogClassSelection& specialization,
     const SourceSpan& span) {
   Type result;
-  result.spelling = specialization.name;
+  set_systemverilog_type_name(result, specialization.name);
   result.named_type = specialization.name;
   result.named_type_span = span;
   result.systemverilog_class_name = specialization.name;

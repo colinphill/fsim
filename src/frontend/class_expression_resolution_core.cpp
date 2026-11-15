@@ -9,14 +9,30 @@
 
 namespace fsim::frontend::class_resolution_detail {
 
+namespace {
+
+// Turns `expression` into the synthesized node `marker` with `argument`; the
+// text of a marked node is empty.
+void mark_expression(Expression& expression,
+    const support::ExpressionMarker marker, std::string argument = { },
+    std::string owner = { })
+{
+  expression.text.clear();
+  expression.marker = marker;
+  expression.marker_argument = std::move(argument);
+  expression.marker_owner = std::move(owner);
+}
+
+} // namespace
+
 bool is_class_property_access(const Expression& expression)
 {
   if (expression.kind != ExpressionKind::Call) return false;
-  if (expression.text.starts_with("@sv-property:")
-      || expression.text.starts_with("@sv-static-property:")) {
+  if (expression.marker == support::ExpressionMarker::sv_property
+      || expression.marker == support::ExpressionMarker::sv_static_property) {
     return true;
   }
-  return expression.text.starts_with("@sv-select:")
+  return expression.marker == support::ExpressionMarker::sv_select
       && expression.operands.size() == 1U
       && is_class_property_access(expression.operands.front());
 }
@@ -34,7 +50,7 @@ bool is_class_property_access(const Expression& expression)
 [[nodiscard]] Type class_type(
     const SystemVerilogClassDeclaration& declaration) {
   Type type;
-  type.spelling = declaration.name;
+  set_systemverilog_type_name(type, declaration.name);
   type.named_type = declaration.name;
   type.systemverilog_class_name = declaration.name;
   type.systemverilog_class_declaration = declaration.canonical_identity;
@@ -43,7 +59,7 @@ bool is_class_property_access(const Expression& expression)
 
 [[nodiscard]] Type chandle_type() {
   Type type;
-  type.spelling = "chandle";
+  set_systemverilog_builtin_type(type, support::SystemVerilogBuiltinType::chandle);
   type.domain = ValueDomain::Unknown;
   type.systemverilog_scalar = SystemVerilogScalarKind::Chandle;
   return type;
@@ -145,6 +161,7 @@ void Resolver::run() {
         effective_library(unit.library) + "::" + unit.name,
         nullptr,
         {}};
+    scope.unit = &unit;
     // Compilation-unit objects are visible to every unit of the file, and
     // the unit's own declarations hide them (IEEE 1800-2017 3.12.1).
     for (const auto& import : unit.systemverilog_imports) {
@@ -196,7 +213,7 @@ void Resolver::run() {
             && override_value.value.text.find("::") != std::string::npos) {
           Type named;
           named.named_type = override_value.value.text;
-          named.spelling = named.named_type;
+          set_systemverilog_type_name(named, named.named_type);
           if (auto scoped = resolve_class_scoped_type(named, scope)) {
             override_value.type_value = std::move(*scoped);
           }
@@ -237,7 +254,8 @@ void Resolver::run() {
     const auto resolve_forward_string = [&](auto& objects) {
       for (auto& object : objects) {
         if (object.type.named_type.empty()
-            || object.type.spelling == "string"
+            || object.type.systemverilog_builtin
+                == support::SystemVerilogBuiltinType::string
             || object.type.systemverilog_container) {
           continue;
         }
@@ -246,7 +264,8 @@ void Resolver::run() {
               return candidate.name == object.type.named_type;
             });
         if (alias != unit.type_aliases.end()
-            && alias->type.spelling == "string") {
+            && alias->type.systemverilog_builtin
+                == support::SystemVerilogBuiltinType::string) {
           object.type = alias->type;
         }
       }
@@ -456,6 +475,7 @@ void Resolver::append_lexical_type_aliases(
             collect_type(collect_type, argument.type);
           }
           self(self, nested_statement.loop_updates);
+          self(self, nested_statement.loop_initializations);
           self(self, nested_statement.statements);
           self(self, nested_statement.else_statements);
           for (const auto& alternative :
@@ -522,18 +542,12 @@ bool Resolver::hydrate_task_call(
     Statement& statement,
     std::set<std::string>& active,
     std::set<std::string>& expanded) {
-  constexpr std::string_view instance_prefix{"@sv-task:"};
-  constexpr std::string_view static_prefix{"@sv-static-task:"};
   std::string_view canonical;
   if (statement.kind == StatementKind::TaskCall
-      && statement.task_name.starts_with(instance_prefix)) {
-    canonical = std::string_view{statement.task_name}.substr(
-        instance_prefix.size());
-  } else if (
-      statement.kind == StatementKind::TaskCall
-      && statement.task_name.starts_with(static_prefix)) {
-    canonical = std::string_view{statement.task_name}.substr(
-        static_prefix.size());
+      && (statement.task_marker == support::ExpressionMarker::sv_task
+          || statement.task_marker
+              == support::ExpressionMarker::sv_static_task)) {
+    canonical = statement.task_marker_argument;
   } else {
     return false;
   }
@@ -600,6 +614,7 @@ void Resolver::hydrate_statements(
       continue;
     }
     hydrate_statements(statement.loop_updates, active, expanded);
+    hydrate_statements(statement.loop_initializations, active, expanded);
     hydrate_statements(statement.statements, active, expanded);
     hydrate_statements(statement.else_statements, active, expanded);
     for (auto& alternative : statement.case_alternatives) {
@@ -1138,7 +1153,7 @@ std::optional<Type> Resolver::class_type_parameter_actual(
     if (value.kind == ExpressionKind::Identifier && !value.text.empty()) {
       Type named_actual;
       named_actual.named_type = value.text;
-      named_actual.spelling = value.text;
+      set_systemverilog_type_name(named_actual, value.text);
       named_actual = canonicalize_selected_type(
           std::move(named_actual), scope);
       if (!named_actual.systemverilog_class_declaration.empty()) {
@@ -1250,6 +1265,7 @@ std::optional<Type> Resolver::packed_member_type(
   Type result;
   result.domain = found->domain;
   result.spelling = found->spelling;
+  result.systemverilog_builtin = found->systemverilog_builtin;
   result.packed_range = found->packed_range;
   result.is_signed = found->is_signed;
   // A member of a named structure type (`inner_t inner`).
@@ -1286,8 +1302,11 @@ std::optional<Type> Resolver::packed_member_type(
 [[nodiscard]] Type Resolver::selected_type_actual(
     const std::string_view source, const Scope& scope) const {
   const auto spelling = trim_type_spelling(source);
-  if (spelling == "string") {
-    return Type{ValueDomain::String, "string", std::nullopt, false};
+  if (support::systemverilog_builtin_type_keyword(spelling)
+      == support::SystemVerilogBuiltinType::string) {
+    Type keyword{ValueDomain::String, { }, std::nullopt, false};
+    set_systemverilog_builtin_type(keyword, support::SystemVerilogBuiltinType::string);
+    return keyword;
   }
   // `virtual [interface] I[.mp]`: a virtual interface type (25.9).
   if (spelling.starts_with("virtual ")) {
@@ -1305,19 +1324,21 @@ std::optional<Type> Resolver::packed_member_type(
     if (dot != std::string_view::npos) {
       type.systemverilog_interface_modport = std::string{name.substr(dot + 1U)};
     }
-    type.spelling = "virtual interface " + std::string{name};
+    set_systemverilog_type_name(type, "virtual interface " + std::string{name});
     return type;
   }
   // A built-in integer type keyword is the type a declaration spelled
   // the same way has, so `C#(int)` and `typedef int T; C#(T)` name one
   // specialization (IEEE 1800-2023 6.11, 6.22.1, 8.25).
+  // The actual is the source text of a type argument here, so its keyword
+  // is read through the integral keyword table (common.cpp).
   if (Type keyword; apply_systemverilog_integral_type(keyword, spelling)) {
     return keyword;
   }
   const auto classes = resolve_class_name(spelling, scope);
   if (classes.size() == 1U) return class_type(*classes.front());
   Type retained;
-  retained.spelling = std::string{spelling};
+  set_systemverilog_type_name(retained, std::string{spelling});
   retained.named_type = retained.spelling;
   return retained;
 }
@@ -1379,7 +1400,7 @@ void Resolver::resolve_class_scope_constants(
       named = *type_operand;
     } else {
       named.named_type = expression.operands.front().text;
-      named.spelling = named.named_type;
+      set_systemverilog_type_name(named, named.named_type);
       // `C#(6)::t` keeps its actuals (IEEE 1800-2017 8.25.1).
       if (const auto& selection
           = expression.operands.front().systemverilog_class_selection) {
@@ -1458,8 +1479,10 @@ void Resolver::resolve_class_scope_constants(
           const bool specialized
               = selects_specialization(name.substr(0U, at), *selection);
           expression.kind = ExpressionKind::Call;
-          expression.text = "@sv-static-property:"
-              + declaring->canonical_identity + "::" + member;
+          mark_expression(expression,
+              support::ExpressionMarker::sv_static_property,
+              declaring->canonical_identity + "::" + member,
+              declaring->canonical_identity);
           expression.operands.clear();
           if (specialized) {
             expression.systemverilog_class_owner =
@@ -1468,8 +1491,9 @@ void Resolver::resolve_class_scope_constants(
           }
           retain_result_type(expression, type);
           for (std::size_t index = 0; index < selected.size(); ++index) {
-            Expression select{ExpressionKind::Call,
-                "@sv-select:" + selected[index], {}, expression.span};
+            auto select = marked_expression(
+                support::ExpressionMarker::sv_select, selected[index], {},
+                expression.span);
             select.operands.push_back(std::move(expression));
             expression = std::move(select);
             retain_result_type(expression, selected_types[index]);
@@ -1483,6 +1507,7 @@ void Resolver::resolve_class_scope_constants(
   // constant function call (IEEE 1800-2017 11.2.1, 8.25.1).
   if (expression.kind == ExpressionKind::Call
       && !expression.text.starts_with('$')
+      && expression.marker == support::ExpressionMarker::none
       && !expression.text.starts_with('@')
       && expression.text.find('.') == std::string::npos) {
     const auto at = expression.text.rfind("::");
@@ -1802,13 +1827,13 @@ std::optional<Expression> Resolver::class_specialization_parameter_value(
       return value;
     }
     // A sibling local parameter already resolved to the class's static
-    // property (`@sv-static-property:C::base`) names it again.
-    const auto static_prefix = "@sv-static-property:"
-        + owner.canonical_identity + "::";
+    // property (`C::base` of a static property read) names it again.
+    const auto static_prefix = owner.canonical_identity + "::";
     if (value.kind == ExpressionKind::Call && value.operands.empty()
-        && value.text.starts_with(static_prefix)) {
+        && value.marker == support::ExpressionMarker::sv_static_property
+        && value.marker_argument.starts_with(static_prefix)) {
       value = Expression{ExpressionKind::Identifier,
-          value.text.substr(static_prefix.size()), {}, value.span};
+          value.marker_argument.substr(static_prefix.size()), {}, value.span};
     }
     // `$bits(t)` of a typedef of the class body (`typedef logic [a-1:0]
     // t`) is the typedef's width under this specialization's parameters
@@ -2228,7 +2253,7 @@ Resolver::resolve_own_class_selection(
                 cut != std::string::npos) {
               owner_type.named_type.resize(cut);
             }
-            owner_type.spelling = owner_type.named_type;
+            set_systemverilog_type_name(owner_type, owner_type.named_type);
             retained.value.systemverilog_class_selection
                 = std::make_shared<const Type>(std::move(owner_type));
           }
@@ -2568,14 +2593,15 @@ void Resolver::normalize_selection_actuals(
           && !resolved.packed_range_expression
           && resolved.systemverilog_packed_dimensions.empty()
           && !resolved.systemverilog_container
-          && (resolved.spelling == "string"
-              || (systemverilog_integral_type_descriptor(resolved.spelling)
+          && (resolved.systemverilog_builtin
+                  == support::SystemVerilogBuiltinType::string
+              || (support::systemverilog_integral(resolved.systemverilog_builtin)
                   && resolved.is_signed
-                      == systemverilog_integral_type_descriptor(
-                             resolved.spelling)->default_signed
+                      == support::systemverilog_builtin_default_signed(
+                             resolved.systemverilog_builtin)
                   && (!resolved.packed_range
-                      || systemverilog_integral_type_descriptor(
-                             resolved.spelling)->fixed_width)))) {
+                      || support::systemverilog_integer_atom(
+                             resolved.systemverilog_builtin))))) {
         // A built-in type keyword names its predefined type.
         resolved = selected_type_actual(resolved.spelling, scope);
       }
@@ -2769,8 +2795,10 @@ void Resolver::anchor_alias_actuals(
           + actual.type_actual->systemverilog_class_declaration;
     }
     if ((actual.type_actual->domain == ValueDomain::Integer
-            || actual.type_actual->spelling == "int"
-            || actual.type_actual->spelling == "integer")
+            || actual.type_actual->systemverilog_builtin
+                == support::SystemVerilogBuiltinType::int_type
+            || actual.type_actual->systemverilog_builtin
+                == support::SystemVerilogBuiltinType::integer)
         && actual.type_actual->width() == 32U) {
       return "packed:int:32";
     }
@@ -3503,9 +3531,10 @@ void Resolver::retain_result_type(
       // `C#(virtual I)::vif.m`: a member of the interface a static class
       // property designates (8.9, 25.9), selected from the read handle.
       if (receiver.kind == ExpressionKind::Call
-          && receiver.text.starts_with("@sv-static-property:")) {
+          && receiver.marker == support::ExpressionMarker::sv_static_property) {
         expression.kind = ExpressionKind::Call;
-        expression.text = "@sv-select:" + member;
+        mark_expression(
+            expression, support::ExpressionMarker::sv_select, member);
         expression.operands = {std::move(receiver)};
         return std::nullopt;
       }
@@ -3517,7 +3546,7 @@ void Resolver::retain_result_type(
       auto type = packed_member_type(*receiver_type, member);
       if (!type) return std::nullopt;
       expression.kind = ExpressionKind::Call;
-      expression.text = "@sv-select:" + member;
+      mark_expression(expression, support::ExpressionMarker::sv_select, member);
       expression.operands = {std::move(receiver)};
       return type;
     }
@@ -3609,8 +3638,10 @@ void Resolver::retain_result_type(
         if (method->method->is_static) {
           // A static method called through a handle (8.10), in the
           // handle's class specialization (8.25).
-          expression.text = "@sv-static-method:"
-              + method->method->canonical_identity;
+          mark_expression(expression,
+              support::ExpressionMarker::sv_static_method,
+              method->method->canonical_identity,
+              method->owner->canonical_identity);
           if (!receiver_type->systemverilog_class_parameter_actuals.empty()) {
             expression.systemverilog_class_owner =
                 std::make_shared<const Type>(*receiver_type);
@@ -3618,8 +3649,9 @@ void Resolver::retain_result_type(
           expression.operands.clear();
           retain_call_profile(expression, *method->method, false);
         } else {
-          expression.text = "@sv-method:"
-              + method->method->canonical_identity;
+          mark_expression(expression, support::ExpressionMarker::sv_method,
+              method->method->canonical_identity,
+              method->owner->canonical_identity);
           expression.operands = {std::move(receiver)};
           retain_call_profile(expression, *method->method, true);
         }
@@ -3684,7 +3716,7 @@ void Resolver::retain_result_type(
             // A positional actual that names a type is parsed as a name.
             Type named_actual;
             named_actual.named_type = actual.value.text;
-            named_actual.spelling = actual.value.text;
+            set_systemverilog_type_name(named_actual, actual.value.text);
             named_actual = canonicalize_selected_type(
                 std::move(named_actual), scope);
             if (!named_actual.systemverilog_class_declaration.empty()) {
@@ -3711,20 +3743,24 @@ void Resolver::retain_result_type(
       // A static property reached through an object handle denotes the
       // class's single storage (IEEE 1800-2017 8.9), the one of the
       // handle's specialization (8.25).
-      expression.text = (type.systemverilog_container
-              ? "@sv-static-container-property:"
-              : "@sv-static-property:")
-          + match.owner->canonical_identity + "::" + member;
+      mark_expression(expression,
+          type.systemverilog_container
+              ? support::ExpressionMarker::sv_static_container_property
+              : support::ExpressionMarker::sv_static_property,
+          match.owner->canonical_identity + "::" + member,
+          match.owner->canonical_identity);
       if (!receiver_type->systemverilog_class_parameter_actuals.empty()) {
         expression.systemverilog_class_owner =
             std::make_shared<const Type>(*receiver_type);
       }
       expression.operands.clear();
     } else {
-      expression.text = (type.systemverilog_container
-              ? "@sv-container-property:"
-              : "@sv-property:")
-          + match.owner->canonical_identity + "::" + member;
+      mark_expression(expression,
+          type.systemverilog_container
+              ? support::ExpressionMarker::sv_container_property
+              : support::ExpressionMarker::sv_property,
+          match.owner->canonical_identity + "::" + member,
+          match.owner->canonical_identity);
       expression.operands = {std::move(receiver)};
     }
     retain_result_type(expression, type);
@@ -3839,11 +3875,12 @@ void Resolver::retain_result_type(
           }
         }
         expression.kind = ExpressionKind::Call;
-        expression.text =
-            (type.systemverilog_container
-                 ? "@sv-static-container-property:"
-                 : "@sv-static-property:")
-            + match.owner->canonical_identity + "::" + member;
+        mark_expression(expression,
+            type.systemverilog_container
+                ? support::ExpressionMarker::sv_static_container_property
+                : support::ExpressionMarker::sv_static_property,
+            match.owner->canonical_identity + "::" + member,
+            match.owner->canonical_identity);
         if (selection && selects_specialization(owner_name, *selection)) {
           expression.systemverilog_class_owner =
               std::make_shared<const Type>(selection->type);
@@ -3865,8 +3902,10 @@ void Resolver::retain_result_type(
             expression.span);
         if (method && method->method && method->method->is_static) {
           expression.kind = ExpressionKind::Call;
-          expression.text = "@sv-static-method:"
-              + method->method->canonical_identity;
+          mark_expression(expression,
+              support::ExpressionMarker::sv_static_method,
+              method->method->canonical_identity,
+              method->owner->canonical_identity);
           expression.operands.clear();
           retain_call_profile(expression, *method->method, false);
           const auto type = resolve_alias_type(
@@ -3923,15 +3962,17 @@ void Resolver::retain_result_type(
           ExpressionKind::Identifier, "this", {}, expression.span};
       receiver.nominal_type = scope.class_owner->canonical_identity;
       expression.kind = ExpressionKind::Call;
-      expression.text = (match.property->is_static
-          ? (type.systemverilog_container
-                 ? "@sv-static-container-property:"
-                 : "@sv-static-property:")
-          : (type.systemverilog_container
-                 ? "@sv-container-property:"
-                 : "@sv-property:"))
-          + match.owner->canonical_identity + "::"
-          + match.property->declaration.name;
+      mark_expression(expression,
+          match.property->is_static
+              ? (type.systemverilog_container
+                     ? support::ExpressionMarker::sv_static_container_property
+                     : support::ExpressionMarker::sv_static_property)
+              : (type.systemverilog_container
+                     ? support::ExpressionMarker::sv_container_property
+                     : support::ExpressionMarker::sv_property),
+          match.owner->canonical_identity + "::"
+              + match.property->declaration.name,
+              match.owner->canonical_identity);
       if (!match.property->is_static) {
         expression.operands = {std::move(receiver)};
       }
@@ -3954,11 +3995,13 @@ void Resolver::retain_result_type(
       const auto type = resolve_alias_type(
           outer.property->declaration.type, outer.owner->canonical_identity);
       expression.kind = ExpressionKind::Call;
-      expression.text =
-          (type.systemverilog_container ? "@sv-static-container-property:"
-                                        : "@sv-static-property:")
-          + outer.owner->canonical_identity + "::"
-          + outer.property->declaration.name;
+      mark_expression(expression,
+          type.systemverilog_container
+              ? support::ExpressionMarker::sv_static_container_property
+              : support::ExpressionMarker::sv_static_property,
+          outer.owner->canonical_identity + "::"
+              + outer.property->declaration.name,
+              outer.owner->canonical_identity);
       retain_result_type(expression, type);
       if (const auto identity = class_identity(type)) {
         expression.nominal_type = *identity;

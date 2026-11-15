@@ -577,9 +577,9 @@ endmodule
             return statement.value.kind
                     == ExpressionKind::Aggregate
                 && std::ranges::all_of(
-                    statement.value.aggregate_choices,
-                    [](const auto& choice) {
-                      return choice == "@key";
+                    statement.value.aggregate_choice_markers,
+                    [](const auto marker) {
+                      return marker == fsim::support::ExpressionMarker::key;
                     });
           });
   require(
@@ -596,7 +596,9 @@ endmodule
                     == ExpressionKind::Aggregate
                 && statement.value.aggregate_choices
                     == std::vector<std::string>{
-                        "default", "@key"};
+                        "default", ""}
+                && aggregate_choice_marker(statement.value, 1U)
+                    == fsim::support::ExpressionMarker::key;
           });
   require(
       defaulted_pattern != query_statements.end()
@@ -1544,7 +1546,8 @@ endmodule
       construction_statements.size() == 3U
           && construction_statements[0].value.kind
               == ExpressionKind::Call
-          && construction_statements[0].value.text == "@new-array"
+          && construction_statements[0].value.marker
+              == fsim::support::ExpressionMarker::new_array
           && construction_statements[0].value.operands.size() == 2U
           && construction_statements[1].value.text == ".insert"
           && construction_statements[1].value.operands.size() == 3U

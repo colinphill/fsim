@@ -610,7 +610,7 @@ private:
                 return result_object(root);
             }
             if (root->vhdl->kind != semantic::vhdl::ExpressionKind::call
-                || !root->vhdl->text.starts_with("@vhdl-member:")
+                || root->vhdl->marker != support::ExpressionMarker::vhdl_member
                 || root->vhdl->operands.empty()) {
                 break;
             }
@@ -1201,10 +1201,8 @@ private:
 
         const auto& value = *expression->vhdl;
         using Kind = semantic::vhdl::ExpressionKind;
-        constexpr std::string_view qualified_prefix {
-            semantic::vhdl::qualified_expression_prefix };
         if (value.kind == Kind::call
-            && value.text.starts_with(qualified_prefix)
+            && value.marker == support::ExpressionMarker::vhdl_qualified
             && value.operands.size() == 1U) {
             const auto qualified_subtype = expression_subtype(expression_id);
             const auto qualified_type = qualified_subtype
@@ -3372,7 +3370,8 @@ private:
                 == semantic::vhdl::ExpressionKind::slice
             || (expression->vhdl->kind
                     == semantic::vhdl::ExpressionKind::call
-                && expression->vhdl->text.starts_with("@vhdl-member:"))) {
+                && expression->vhdl->marker
+                    == support::ExpressionMarker::vhdl_member)) {
             if (const auto subtype = expression_subtype(id)) {
                 const auto type = subtype_type(*subtype);
                 if (type) {
@@ -3451,6 +3450,7 @@ private:
         if ((expression.kind != semantic::vhdl::ExpressionKind::call
                 && !operator_expression)
             || !expression.referenced_name
+            || expression.marker != support::ExpressionMarker::none
             || expression.text.starts_with('@')
             || expression.text.find('\'') != std::string::npos) {
             return std::nullopt;
@@ -3836,13 +3836,9 @@ private:
                 selection && !selection->slice_result) {
                 return selection_result_subtype(*selection);
             }
-            constexpr std::string_view qualified_prefix {
-                semantic::vhdl::qualified_expression_prefix
-            };
-            if (value.text.starts_with(qualified_prefix)
+            if (value.marker == support::ExpressionMarker::vhdl_qualified
                 && value.operands.size() == 1U) {
-                const auto mark = std::string_view { value.text }.substr(
-                    qualified_prefix.size());
+                const auto mark = std::string_view { value.marker_argument };
                 if (mark.empty()) {
                     return std::nullopt;
                 }
@@ -3892,13 +3888,13 @@ private:
             }
         }
         if (value.kind == semantic::vhdl::ExpressionKind::call
-            && value.text.starts_with("@vhdl-member:")
+            && value.marker == support::ExpressionMarker::vhdl_member
             && value.operands.size() == 1U) {
             const auto prefix = expression_subtype(value.operands.front());
             const auto* record = prefix ? root_definition(*prefix) : nullptr;
             if (record != nullptr && record->form == TypeForm::record) {
-                const auto member_name = std::string_view { value.text }
-                    .substr(std::string_view { "@vhdl-member:" }.size());
+                const auto member_name
+                    = std::string_view { value.marker_argument };
                 const auto member = std::ranges::find_if(
                     record->record_elements,
                     [&](const semantic::vhdl::RecordElement& element) {
@@ -4434,22 +4430,21 @@ private:
             }
             return { };
         case Kind::call:
-            if (value.text == "@vhdl-null") {
+            if (value.marker == support::ExpressionMarker::vhdl_null) {
                 return { OperandClass::null, { } };
             }
-            if (value.text == "@vhdl-new" || value.text == "@vhdl-new-qualified") {
+            if (value.marker
+                == support::ExpressionMarker::vhdl_new || value.marker == support::ExpressionMarker::vhdl_new_qualified) {
                 return { OperandClass::access, { } };
             }
             // `10 ns`: a physical literal of the type declaring the unit.
-            if (value.text.starts_with("@vhdl-physical:")) {
+            if (value.marker == support::ExpressionMarker::vhdl_physical) {
                 return { OperandClass::physical, { } };
             }
             // T'(e) has the type of its type mark (9.3.5).
-            if (constexpr std::string_view qualified {
-                    semantic::vhdl::qualified_expression_prefix };
-                value.text.starts_with(qualified)
+            if (value.marker == support::ExpressionMarker::vhdl_qualified
                 && value.operands.size() == 1U) {
-                const auto mark = std::string_view { value.text }.substr(qualified.size());
+                const auto mark = std::string_view { value.marker_argument };
                 const auto subtype = mark_subtype(mark, value.scope);
                 return support::with_stack([&] { return subtype_operand_type(subtype, depth + 1U); });
             }
@@ -4829,17 +4824,17 @@ private:
     void validate_allocator(const semantic::vhdl::Expression& expression)
     {
         if (expression.kind != semantic::vhdl::ExpressionKind::call
-            || expression.text != "@vhdl-new" || expression.operands.empty()) {
+            || expression.marker
+                != support::ExpressionMarker::vhdl_new || expression.operands.empty()) {
             return;
         }
         const auto subtype = specialization_.find_expression(expression.operands.front());
-        constexpr std::string_view prefix { "@vhdl-subtype:" };
         if (!subtype || subtype->vhdl == nullptr
-            || !subtype->vhdl->text.starts_with(prefix)
+            || subtype->vhdl->marker != support::ExpressionMarker::vhdl_subtype
             || !subtype->vhdl->operands.empty()) {
             return;
         }
-        const auto mark = std::string_view { subtype->vhdl->text }.substr(prefix.size());
+        const auto mark = std::string_view { subtype->vhdl->marker_argument };
         bool unconstrained { };
         if (const auto type = named_type(mark, expression.scope)) {
             const auto* definition = type_definition(*type);
@@ -4952,16 +4947,13 @@ private:
         if (expression.kind != semantic::vhdl::ExpressionKind::call) {
             return;
         }
-        constexpr std::string_view qualified_prefix {
-            semantic::vhdl::qualified_expression_prefix
-        };
         if (expression.operands.empty()) {
             return;
         }
-        if (expression.text.starts_with(qualified_prefix)
+        if (expression.marker == support::ExpressionMarker::vhdl_qualified
             && expression.operands.size() == 1U) {
-            const auto mark = std::string_view { expression.text }.substr(
-                qualified_prefix.size());
+            const auto mark
+                = std::string_view { expression.marker_argument };
             const auto subtype = mark_subtype(mark, expression.scope);
             const auto expected = subtype_operand_type(subtype, 0U);
             const auto actual = operand_type(expression.operands.front());
@@ -5090,7 +5082,8 @@ private:
             }
             return;
         }
-        if (expression.text.starts_with('@') || !expression.referenced_name) {
+        if (expression.marker != support::ExpressionMarker::none
+            || expression.text.starts_with('@') || !expression.referenced_name) {
             return;
         }
         const semantic::CompiledDeclarationPredicate type_declaration
@@ -5112,8 +5105,10 @@ private:
             || (operand && operand->vhdl != nullptr
             && (operand->vhdl->kind == semantic::vhdl::ExpressionKind::string_literal
                 || operand->vhdl->kind == semantic::vhdl::ExpressionKind::aggregate
-                || operand->vhdl->text == "@vhdl-null"
-                || operand->vhdl->text.starts_with("@vhdl-new")))) {
+                || operand->vhdl->marker == support::ExpressionMarker::vhdl_null
+                || operand->vhdl->marker == support::ExpressionMarker::vhdl_new
+                || operand->vhdl->marker
+                    == support::ExpressionMarker::vhdl_new_qualified))) {
             report("FSIM-ELAB-VHCONV-005",
                 "the operand of a VHDL type conversion cannot be a string "
                 "literal, aggregate, allocator or null",
@@ -5645,8 +5640,6 @@ private:
                 && all_operands_static());
         }
         case Kind::call: {
-            constexpr auto qualified_prefix
-                = semantic::vhdl::qualified_expression_prefix;
             const auto conversion_subtype = [&](const auto& name,
                                                 const semantic::ScopeId scope)
                 -> std::optional<SubtypeIndication> {
@@ -5687,7 +5680,7 @@ private:
                 result.type_mark.target = *type_id;
                 return result;
             };
-            if (expression.text.starts_with(qualified_prefix)
+            if (expression.marker == support::ExpressionMarker::vhdl_qualified
                 && expression.operands.size() == 1U) {
                 // The type mark analysis resolved (9.3.5, 12.3, 12.4).
                 const auto target = expression.qualified_type_mark
@@ -5839,7 +5832,7 @@ private:
                     value.operands.front(), depth + 1U); });
         }
         if (value.kind == Kind::call
-            && value.text.starts_with("@vhdl-member:")
+            && value.marker == support::ExpressionMarker::vhdl_member
             && value.operands.size() == 1U) {
             return support::with_stack([&] { return aggregate_target_name_is_locally_static(
                 value.operands.front(), depth + 1U); });
@@ -6025,7 +6018,8 @@ private:
                     using Kind = semantic::vhdl::ExpressionKind;
                     bool static_name = value.kind == Kind::name
                         || (value.kind == Kind::call
-                            && value.text.starts_with("@vhdl-member:"));
+                            && value.marker
+                                == support::ExpressionMarker::vhdl_member);
                     if (value.kind == Kind::index || value.kind == Kind::slice) {
                         // Index expressions of a static name are globally
                         // static: literals, constants and generics, and
@@ -6079,8 +6073,8 @@ private:
                         && (value.kind == Kind::aggregate
                             || value.kind == Kind::index
                             || value.kind == Kind::slice
-                            || value.text.starts_with(
-                                semantic::vhdl::qualified_expression_prefix)
+                            || value.marker
+                                == support::ExpressionMarker::vhdl_qualified
                             || value.kind == Kind::string_literal)) {
                         report("FSIM-ELAB-VHSENS-001",
                             "a VHDL sensitivity list names signals with static names",
@@ -6487,7 +6481,9 @@ private:
     bool called_before_declaration(const semantic::vhdl::Expression& name,
         const semantic::SourceSpanId source)
     {
-        if (!name.referenced_name || name.text.empty() || name.text.starts_with('@')
+        if (!name.referenced_name || name.text.empty() || name.marker
+            != support::ExpressionMarker::none
+            || name.text.starts_with('@')
             || name.text.find_first_of(".'") != std::string::npos) {
             return false;
         }
@@ -6563,6 +6559,7 @@ private:
     {
         if (expression.kind != semantic::vhdl::ExpressionKind::call
             || !expression.referenced_name || expression.text.empty()
+            || expression.marker != support::ExpressionMarker::none
             || expression.text.starts_with('@')
             || expression.text.find('\'') != std::string::npos
             || expression.operands.empty()) {
@@ -6855,6 +6852,7 @@ private:
     {
         if (expression.kind != semantic::vhdl::ExpressionKind::name
             || expression.text.find('\'') != std::string::npos
+            || expression.marker != support::ExpressionMarker::none
             || expression.text.starts_with('@')) {
             return;
         }
@@ -7015,6 +7013,7 @@ private:
     {
         if (expression.kind != semantic::vhdl::ExpressionKind::name
             || !expression.referenced_name || expression.text.empty()
+            || expression.marker != support::ExpressionMarker::none
             || expression.text.starts_with('@')
             || expression.text.find_first_of(".'") != std::string::npos) {
             return;
@@ -7229,8 +7228,7 @@ private:
             }
         }
         if (expression.kind == semantic::vhdl::ExpressionKind::call
-            && expression.text.starts_with(
-                semantic::vhdl::qualified_expression_prefix)
+            && expression.marker == support::ExpressionMarker::vhdl_qualified
             && expression.operands.size() == 1U) {
             const auto operand = specialization_.find_expression(
                 expression.operands.front());
@@ -8154,7 +8152,7 @@ private:
                     && ((found->vhdl->kind == semantic::vhdl::ExpressionKind::binary
                             && (found->vhdl->text == "to" || found->vhdl->text == "downto"))
                         || (found->vhdl->kind == semantic::vhdl::ExpressionKind::call
-                            && found->vhdl->text.starts_with("@vhdl-case-range-")));
+                            && support::vhdl_case_range(found->vhdl->marker)));
                 if (range_choice) {
                     if (!check_value(found->vhdl->operands.front())
                         || !check_value(found->vhdl->operands.back())) {
@@ -9178,12 +9176,10 @@ private:
             // in HIR even though its operand gives an exact positional
             // cardinality. Unwrap only the compiler's qualified-expression
             // marker after verifying exact nominal identity and rank above.
-            constexpr std::string_view qualified_prefix {
-                semantic::vhdl::qualified_expression_prefix
-            };
             if (value->vhdl->kind
                     == semantic::vhdl::ExpressionKind::call
-                && value->vhdl->text.starts_with(qualified_prefix)
+                && value->vhdl->marker
+                    == support::ExpressionMarker::vhdl_qualified
                 && value->vhdl->operands.size() == 1U) {
                 const auto operand_id = value->vhdl->operands.front();
                 const auto operand
@@ -10039,6 +10035,7 @@ private:
             if (subtype->unconstrained || expression_array_root(id)
                 || predefined_array_identity(*subtype, scope)
                 || (value.kind == semantic::vhdl::ExpressionKind::call
+                    && value.marker == support::ExpressionMarker::none
                     && !value.text.starts_with('@'))) {
                 return std::nullopt;
             }
@@ -10189,7 +10186,8 @@ private:
         const TypeDefinition& record)
     {
         for (const auto& association : aggregate.associations) {
-            if (!association.choice_spelling.empty()
+            if ((!association.choice_spelling.empty()
+                || association.choice_marker != support::ExpressionMarker::none)
                 && association.choices.empty()) {
                 report(
                     "FSIM-ELAB-VHAGG-002",
@@ -10243,8 +10241,6 @@ private:
             return;
         }
         const auto element_profile = profile(element);
-        constexpr std::string_view qualified_prefix {
-            semantic::vhdl::qualified_expression_prefix };
         for (const auto& association : aggregate.associations) {
             const auto value = specialization_.find_expression(
                 association.value);
@@ -10285,7 +10281,8 @@ private:
                 }
                 if (expression.kind
                         == semantic::vhdl::ExpressionKind::call
-                    && expression.text.starts_with(qualified_prefix)
+                    && expression.marker
+                        == support::ExpressionMarker::vhdl_qualified
                     && expression.operands.size() == 1U) {
                     const auto operand = specialization_.find_expression(
                         expression.operands.front());
@@ -10351,7 +10348,8 @@ private:
 
             if (expression.kind
                     == semantic::vhdl::ExpressionKind::call
-                && expression.text.starts_with(qualified_prefix)
+                && expression.marker
+                    == support::ExpressionMarker::vhdl_qualified
                 && expression.operands.size() == 1U
                 && (element_profile.kind == ProfileKind::array
                     || element_profile.kind == ProfileKind::record)) {
@@ -10683,7 +10681,8 @@ private:
             for (const auto& association : aggregate.associations) {
                 if (association.positional() || association.choices.empty()
                     || choice_is_others(association)
-                    || (!association.choice_spelling.empty()
+                    || ((!association.choice_spelling.empty()
+                        || association.choice_marker != support::ExpressionMarker::none)
                         && association.choice_spelling != "@array")) {
                     return std::nullopt;
                 }
@@ -10762,12 +10761,11 @@ private:
                                         const semantic::SourceSpanId source)
             -> void {
             const auto expression = specialization_.find_expression(value);
-            constexpr std::string_view qualified_prefix {
-                semantic::vhdl::qualified_expression_prefix };
             if (expression && expression->vhdl != nullptr
                 && expression->vhdl->kind
                     == semantic::vhdl::ExpressionKind::call
-                && expression->vhdl->text.starts_with(qualified_prefix)
+                && expression->vhdl->marker
+                    == support::ExpressionMarker::vhdl_qualified
                 && expression->vhdl->operands.size() == 1U) {
                 const auto element_profile = profile(
                     element);
@@ -11159,7 +11157,8 @@ private:
         };
 
         for (const auto& association : aggregate.associations) {
-            if (!association.choice_spelling.empty()
+            if ((!association.choice_spelling.empty()
+                || association.choice_marker != support::ExpressionMarker::none)
                 && association.choices.empty()) {
                 report(
                     "FSIM-ELAB-VHARRAYAGG-002",
@@ -11664,8 +11663,8 @@ private:
                          == semantic::vhdl::ExpressionKind::slice
                      || (prefix_expression->vhdl->kind
                              == semantic::vhdl::ExpressionKind::call
-                         && prefix_expression->vhdl->text.starts_with(
-                             "@vhdl-member:")))
+                         && prefix_expression->vhdl->marker
+                             == support::ExpressionMarker::vhdl_member))
                  && !prefix_expression->vhdl->operands.empty()) {
                 prefix_expression = specialization_.find_expression(
                     prefix_expression->vhdl->operands.front());
@@ -12154,6 +12153,7 @@ private:
         if (value.kind == semantic::vhdl::ExpressionKind::call) {
             if (value.text.empty() || value.text.front() == '\''
                 || value.text.front() == '@'
+                || value.marker != support::ExpressionMarker::none
                 || !value.referenced_name
                 || !value.referenced_name->selected) {
                 return std::nullopt;
@@ -13166,6 +13166,7 @@ private:
             using Kind = semantic::vhdl::ExpressionKind;
             // A conversion to a floating or physical type (`real(i)`).
             if (value.kind == Kind::call && value.operands.size() == 1U
+                && value.marker == support::ExpressionMarker::none
                 && !value.text.starts_with('@')
                 && value.text.find('\'') == std::string::npos) {
                 // STD.STANDARD's REAL and TIME are not retained.
@@ -13472,7 +13473,9 @@ private:
                                 == semantic::vhdl::ExpressionKind::call) {
                                 if (current_value.text.empty()
                                     || current_value.text.front() == '\''
-                                    || current_value.text.front() == '@') {
+                                    || current_value.text.front() == '@'
+                                    || current_value.marker
+                                        != support::ExpressionMarker::none) {
                                     return false;
                                 }
                                 const semantic::CompiledDesignResolver resolver {
@@ -13764,7 +13767,7 @@ private:
                 // (IEEE 1076-2008 5.2.4.1). Specialization folds the literal
                 // itself, so the stored call identifies it.
                 if (stored.kind == semantic::vhdl::ExpressionKind::call
-                    && stored.text.starts_with("@vhdl-physical:")
+                    && stored.marker == support::ExpressionMarker::vhdl_physical
                     && stored.operands.size() == 1U) {
                     portable_range_exempt_literals.insert(
                         stored.operands.front().value());
@@ -13826,7 +13829,8 @@ private:
                 && (prefix->vhdl->kind == semantic::vhdl::ExpressionKind::index
                     || (prefix->vhdl->kind
                             == semantic::vhdl::ExpressionKind::call
-                        && prefix->vhdl->text.starts_with("@vhdl-member:")))
+                        && prefix->vhdl->marker
+                            == support::ExpressionMarker::vhdl_member))
                 && !prefix->vhdl->operands.empty()
                 && attribute_prefix_selections.insert(prefix_id.value())
                        .second;
@@ -13920,7 +13924,8 @@ private:
             validate_out_port_attribute(expression);
             // 8.3: `.all` designates the object of an access value.
             if (expression.kind == semantic::vhdl::ExpressionKind::call
-                && expression.text == "@vhdl-dereference" && expression.operands.size() == 1U) {
+                && expression.marker
+                    == support::ExpressionMarker::vhdl_dereference && expression.operands.size() == 1U) {
                 const auto prefix = operand_type(expression.operands.front());
                 if (prefix.kind != OperandClass::unknown && prefix.kind != OperandClass::access
                     && prefix.kind != OperandClass::null) {
@@ -14086,8 +14091,8 @@ private:
                     || expression.kind == semantic::vhdl::ExpressionKind::unary
                     || (expression.kind == semantic::vhdl::ExpressionKind::call
                         && expression.operands.size() == 1U
-                        && expression.text.starts_with(
-                            semantic::vhdl::qualified_expression_prefix)))) {
+                        && expression.marker
+                            == support::ExpressionMarker::vhdl_qualified))) {
                 for (const auto operand : expression.operands) {
                     validate_value_name(operand);
                 }
@@ -14104,6 +14109,7 @@ private:
             if (name_check_
                 && expression.kind == semantic::vhdl::ExpressionKind::call
                 && expression.operands.size() == 1U
+                && expression.marker == support::ExpressionMarker::none
                 && !expression.text.starts_with('@') && expression.referenced_name
                 && expression.referenced_name->selected) {
                 const auto callee = specialization_.find_declaration(

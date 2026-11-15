@@ -69,6 +69,7 @@ void Lowerer::record_container_object_dependency(
         info.name = name;
         info.width = 1U;
         info.type_name = "bit";
+        info.systemverilog_builtin = support::SystemVerilogBuiltinType::bit;
         info.source_domain = frontend::ValueDomain::Bit2;
         design_.signal_info_.push_back(std::move(info));
         design_.signals_.push_back(Signal {

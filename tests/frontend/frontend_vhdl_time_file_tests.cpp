@@ -171,8 +171,10 @@ end architecture;
               == std::numeric_limits<std::int64_t>::max()
           && architecture->parameters.front().default_value.kind
               == ExpressionKind::Call
-          && architecture->parameters.front().default_value.text
-              == "@vhdl-physical:ns",
+          && architecture->parameters.front().default_value.marker
+              == fsim::support::ExpressionMarker::vhdl_physical
+          && architecture->parameters.front().default_value.marker_argument
+              == "ns",
       "physical time literals remain exact expression nodes");
 
   const auto& process = architecture->processes.front();

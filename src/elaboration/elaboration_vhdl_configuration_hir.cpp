@@ -139,6 +139,12 @@ std::string expression_identity(
     output << "kind=" << static_cast<int>(expression->kind);
     append_identity_value(output, "text", expression->text);
     append_identity_value(output, "nominal", expression->nominal_type);
+    append_identity_value(
+        output, "marker", static_cast<int>(expression->marker));
+    append_identity_value(output, "payload", expression->marker_argument);
+    append_identity_value(output, "external_width", expression->external_width);
+    append_identity_value(
+        output, "external_domain", static_cast<int>(expression->external_domain));
     append_identity_value(output, "folded", expression->folded);
     append_identity_value(
         output, "decoded",
@@ -606,8 +612,7 @@ std::optional<std::vector<std::string>> configuration_block_scopes(
     const auto* index = expression_for(compiled, *block.generate_index);
     if (index != nullptr
         && index->kind == semantic::vhdl::ExpressionKind::call
-        && (index->text == "@vhdl-case-range-to"
-            || index->text == "@vhdl-case-range-downto")
+        && support::vhdl_case_range(index->marker)
         && index->operands.size() == 2U) {
         // A static discrete range selects every generate parameter value in
         // it (IEEE 1076-2008 3.4.2); a null range selects none.
@@ -618,7 +623,8 @@ std::optional<std::vector<std::string>> configuration_block_scopes(
         if (!left || !right) {
             return std::nullopt;
         }
-        const bool descending = index->text == "@vhdl-case-range-downto";
+        const bool descending = index->marker
+            == support::ExpressionMarker::vhdl_case_range_downto;
         const auto low = descending ? *right : *left;
         const auto high = descending ? *left : *right;
         std::vector<std::string> scopes;

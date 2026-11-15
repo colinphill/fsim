@@ -431,7 +431,8 @@ endmodule
         malformed_stream_expressions,
         [](const semantic::sv::Expression& expression) {
             return expression.kind == semantic::sv::ExpressionKind::call
-                && expression.text == "@stream-left";
+                && expression.marker
+                    == fsim::support::ExpressionMarker::stream_left;
         });
     assert(malformed_stream_call != malformed_stream_expressions.end());
     assert(malformed_stream_call->operands.size() >= 2U);

@@ -2,6 +2,7 @@
 #pragma once
 
 #include "fsim/runtime/packed_value.hpp"
+#include "fsim/support/systemverilog_builtin_type.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -232,6 +233,10 @@ struct SystemVerilogVpiTypespec {
     // the declaration of a class with no parameters (IEEE 1800-2023 8.25);
     // empty for a built-in class (37.32 detail 13).
     std::string class_identity;
+    // The std package class a built-in class typespec names (vpiClassType,
+    // 37.32); `none` for a user-defined class and every other typespec.
+    support::SystemVerilogStandardClass standard_class {
+        support::SystemVerilogStandardClass::none };
 
     friend bool operator==(
         const SystemVerilogVpiTypespec&,

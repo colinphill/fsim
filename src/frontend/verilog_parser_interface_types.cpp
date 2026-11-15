@@ -280,14 +280,14 @@ std::optional<std::string> VerilogParser::import_interface_member(
     if (!type.named_type.empty()) {
       if (const auto hidden = import_alias(type.named_type)) {
         if (type.spelling == type.named_type) {
-          type.spelling = *hidden;
+          set_systemverilog_type_name(type, *hidden);
         }
         type.named_type = *hidden;
       } else if (const auto parameter = context.names.find(type.named_type);
                  parameter != context.names.end()) {
         // A type parameter of the interface (`the_type foo;`).
         if (type.spelling == type.named_type) {
-          type.spelling = parameter->second;
+          set_systemverilog_type_name(type, parameter->second);
         }
         type.named_type = parameter->second;
       }
@@ -475,7 +475,8 @@ void VerilogParser::resolve_generic_interface_types(ParsedDesign& design) {
         && (node->kind == ExpressionKind::Index
             || node->kind == ExpressionKind::Slice
             || (node->kind == ExpressionKind::Call
-                && node->text.starts_with("@sv-select:")))) {
+                && node->marker
+                    == support::ExpressionMarker::sv_select))) {
       node = &node->operands.front();
     }
     if (node->kind != ExpressionKind::Identifier) return {};

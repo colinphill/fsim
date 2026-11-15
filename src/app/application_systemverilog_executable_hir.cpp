@@ -380,27 +380,24 @@ namespace {
         [[nodiscard]] sv::ExpressionKind expression_kind(
             const frontend::Expression& expression) const noexcept
         {
-            if (expression.text == "@sv-null") {
+            switch (expression.marker) {
+            case support::ExpressionMarker::sv_null:
                 return sv::ExpressionKind::class_null;
-            }
-            if (expression.text.starts_with("@sv-new:")) {
+            case support::ExpressionMarker::sv_new_constructor:
                 return sv::ExpressionKind::class_allocation;
-            }
-            if (expression.text.starts_with("@sv-dollar-cast:")) {
+            case support::ExpressionMarker::sv_dollar_cast_class:
                 return sv::ExpressionKind::class_cast;
-            }
-            if (expression.text.starts_with("@sv-property:")) {
+            case support::ExpressionMarker::sv_property:
                 return sv::ExpressionKind::class_property;
-            }
-            if (expression.text.starts_with("@sv-static-property:")) {
+            case support::ExpressionMarker::sv_static_property:
                 return sv::ExpressionKind::class_static_property;
-            }
-            if (expression.text.starts_with("@sv-method:")
-                || expression.text.starts_with("@sv-base-method:")) {
+            case support::ExpressionMarker::sv_method:
+            case support::ExpressionMarker::sv_base_method:
                 return sv::ExpressionKind::class_method_call;
-            }
-            if (expression.text.starts_with("@sv-static-method:")) {
+            case support::ExpressionMarker::sv_static_method:
                 return sv::ExpressionKind::class_static_method_call;
+            default:
+                break;
             }
             switch (expression.kind) {
             case frontend::ExpressionKind::Invalid:
@@ -769,15 +766,19 @@ namespace {
                 // 8.25); elaboration selects it by name.
                 if (access->type_parameter) {
                     output.kind = sv::ExpressionKind::class_property;
-                    output.text = "@sv-dependent-property:"
-                        + std::string { access->member };
+                    output.text.clear();
+                    output.marker
+                        = support::ExpressionMarker::sv_dependent_property;
+                    output.marker_argument = std::string { access->member };
                     output.referenced_name.reset();
                     output.operands = { access->receiver };
                 }
                 return;
             }
             output.kind = sv::ExpressionKind::class_property;
-            output.text = "@sv-property:" + property->canonical_identity;
+            output.text.clear();
+            output.marker = support::ExpressionMarker::sv_property;
+            output.marker_argument = property->canonical_identity;
             output.class_identity = access->declaration->canonical_identity;
             output.class_member_identity = property->canonical_identity;
             output.class_checked = true;
@@ -793,8 +794,11 @@ namespace {
             const semantic::OriginId parent)
         {
             if (input.kind != frontend::StatementKind::TaskCall
+                || input.task_marker != support::ExpressionMarker::none
                 || input.task_name.empty()
-                || input.task_name.front() == '$'
+                || systemverilog_hir_detail::systemverilog_call_kind(
+                       input.task_name)
+                    == sv::CallKind::system
                 || input.task_name.front() == '@') {
                 return std::nullopt;
             }
@@ -816,10 +820,11 @@ namespace {
                 return std::nullopt;
             }
             output.task = sv::Name {
-                "@sv-task:" + method->canonical_identity,
-                source(input.span), method->declaration,
+                { }, source(input.span), method->declaration,
                 { method->declaration }
             };
+            output.task_marker = support::ExpressionMarker::sv_task;
+            output.task_marker_argument = method->canonical_identity;
             return access->receiver;
         }
 
@@ -842,7 +847,8 @@ namespace {
                     && input.call_result_signed);
             const auto clocking_edge
                 = input.kind == frontend::ExpressionKind::Call
-                    && input.text == "@sv-clocking-event"
+                    && input.marker
+                        == support::ExpressionMarker::sv_clocking_event
                 ? edge_kind(static_cast<frontend::EdgeKind>(
                       input.call_result_width))
                 : sv::EdgeKind::any;
@@ -857,6 +863,8 @@ namespace {
                     || candidate.source != expression_source
                     || candidate.kind != kind
                     || candidate.text != input.text
+                    || candidate.marker != input.marker
+                    || candidate.marker_argument != input.marker_argument
                     || candidate.nominal_type != input.nominal_type
                     || candidate.decoded_string != input.decoded_string
                     || candidate.signed_value != signed_value
@@ -915,7 +923,7 @@ namespace {
             output.signed_value = signed_value;
             output.clocking_edge = clocking_edge;
             systemverilog_hir_detail::bind_systemverilog_class_operation(
-                output, input.text);
+                output, input);
             bind_class_allocation(output);
             output.class_checked = output.kind == sv::ExpressionKind::class_cast
                 || output.kind == sv::ExpressionKind::class_property
@@ -941,12 +949,19 @@ namespace {
                 = static_cast<sv::GeneratedTextKind>(input.generated_text);
             output.pattern = static_cast<sv::PatternKind>(
                 input.systemverilog_pattern);
+            output.cast_target = input.systemverilog_cast_target;
+            output.cast_builtin = input.systemverilog_cast_builtin;
+            output.keyword_type = input.systemverilog_keyword_type;
+            output.call_kind
+                = systemverilog_hir_detail::systemverilog_call_kind(input);
+            output.marker = input.marker;
+            output.marker_argument = input.marker_argument;
             if (input.kind == frontend::ExpressionKind::Identifier
                 || (input.kind == frontend::ExpressionKind::Pattern
                     && input.systemverilog_pattern
                         == frontend::SystemVerilogPatternKind::bind)
                 || (input.kind == frontend::ExpressionKind::Call
-                    && !input.text.starts_with("@sv-"))) {
+                    && input.marker == support::ExpressionMarker::none)) {
                 output.referenced_name = name(
                     input.text, input.span, scope,
                     input.systemverilog_source_order);
@@ -959,11 +974,12 @@ namespace {
                         input.text.rfind('.') + 1U);
                 }
             } else if (input.kind == frontend::ExpressionKind::Call
-                && input.text.starts_with("@sv-cast:")
-                && input.text != "@sv-cast:@type") {
+                && input.marker == support::ExpressionMarker::sv_cast
+                && input.systemverilog_cast_target
+                    == support::SystemVerilogCastTarget::named) {
+                // A cast to a named type `T'(e)` names T (6.24.1).
                 output.referenced_name = name(
-                    input.text.substr(
-                        std::string_view { "@sv-cast:" }.size()),
+                    input.marker_argument,
                     input.span,
                     scope,
                     input.systemverilog_source_order);
@@ -1038,6 +1054,8 @@ namespace {
                     if (index < input.aggregate_choices.size()) {
                         association.choice_spelling = input.aggregate_choices[index];
                     }
+                    association.choice_marker
+                        = frontend::aggregate_choice_marker(input, index);
                     if (index < input.aggregate_choice_expressions.size()) {
                         for (const auto& choice :
                             input.aggregate_choice_expressions[index]) {
@@ -1051,14 +1069,15 @@ namespace {
                 }
             }
             const auto inline_marker = std::ranges::find(
-                input.aggregate_choices, "@sv-inline-constraint");
-            if (inline_marker != input.aggregate_choices.end()) {
+                input.aggregate_choice_markers,
+                support::ExpressionMarker::sv_inline_constraint);
+            if (inline_marker != input.aggregate_choice_markers.end()) {
                 const auto index = static_cast<std::size_t>(std::distance(
-                    input.aggregate_choices.begin(), inline_marker));
+                    input.aggregate_choice_markers.begin(), inline_marker));
                 if (index < input.aggregate_choice_expressions.size()) {
                     sv::AssignmentPatternAssociation association;
-                    association.choice_spelling
-                        = "@sv-inline-constraint";
+                    association.choice_marker
+                        = support::ExpressionMarker::sv_inline_constraint;
                     association.source = expression_source;
                     for (const auto& constraint :
                         input.aggregate_choice_expressions[index]) {
@@ -1076,14 +1095,15 @@ namespace {
             }
             // `randomize() with (names)`: the names bound to the object.
             const auto names_marker = std::ranges::find(
-                input.aggregate_choices, "@sv-inline-constraint-names");
-            if (names_marker != input.aggregate_choices.end()) {
+                input.aggregate_choice_markers,
+                support::ExpressionMarker::sv_inline_constraint_names);
+            if (names_marker != input.aggregate_choice_markers.end()) {
                 const auto index = static_cast<std::size_t>(std::distance(
-                    input.aggregate_choices.begin(), names_marker));
+                    input.aggregate_choice_markers.begin(), names_marker));
                 if (index < input.aggregate_choice_expressions.size()) {
                     sv::AssignmentPatternAssociation association;
-                    association.choice_spelling
-                        = "@sv-inline-constraint-names";
+                    association.choice_marker
+                        = support::ExpressionMarker::sv_inline_constraint_names;
                     association.source = expression_source;
                     for (const auto& name :
                         input.aggregate_choice_expressions[index]) {
@@ -1429,6 +1449,19 @@ namespace {
                 source(input.named_type.empty() ? fallback : input.named_type_span),
                 spelling
             };
+            output.named = !input.named_type.empty();
+            // A std package class is a named type (IEEE 1800-2023 9.7, 15.3,
+            // 15.4, 8.30); its kind travels whether or not the name is kept. A
+            // type or class of that name visible here hides the std package's
+            // wildcard import (26.7).
+            output.standard_class = output.target.target.valid()
+                    || !input.systemverilog_class_declaration.empty()
+                ? support::SystemVerilogStandardClass::none
+                : input.systemverilog_standard_class;
+            if (!output.named) {
+                output.builtin = input.systemverilog_builtin;
+                output.net_kind = input.systemverilog_net_kind;
+            }
             // A procedural typedef cache can carry the cached frontend shape
             // of an alias whose lexical spelling now resolves to a different
             // visible declaration. Once the exact TypeId is known, its
@@ -1459,6 +1492,7 @@ namespace {
                         return expression(value, scope, parent);
                     });
             output.systemverilog_net_type = input.systemverilog_net_type;
+            output.net_type_kind = input.systemverilog_net_type_kind;
             output.systemverilog_interconnect
                 = input.systemverilog_interconnect;
             output.systemverilog_resolution_function
@@ -1605,6 +1639,8 @@ namespace {
                     frontend::Type member_type;
                     member_type.domain = member.domain;
                     member_type.spelling = member.spelling;
+                    member_type.systemverilog_builtin
+                        = member.systemverilog_builtin;
                     member_type.packed_range = member.packed_range;
                     member_type.is_signed = member.is_signed;
                     member_type.packed_range_expression
@@ -1889,10 +1925,6 @@ namespace {
                         output.declarations.end(),
                         alias_declarations.begin(), alias_declarations.end());
                 }
-                for (const auto& declaration : input.declarations) {
-                    output.declarations.push_back(block_variable(
-                        declaration, child_scope, statement_origin));
-                }
                 if (declares_loop_variable) {
                     frontend::VariableDeclaration loop_variable;
                     loop_variable.name = input.loop_variable;
@@ -1901,17 +1933,19 @@ namespace {
                     loop_variable.systemverilog_automatic = true;
                     loop_variable.type = input.loop_variable_type
                         ? *input.loop_variable_type
-                        : frontend::Type {
+                        : frontend::systemverilog_builtin_type(
                               frontend::ValueDomain::Integer,
-                              "int",
-                              std::nullopt,
-                              true,
-                          };
+                              support::SystemVerilogBuiltinType::int_type,
+                              std::nullopt, true);
                     loop_variable.span = input.target.valid()
                         ? input.target.span
                         : input.span;
                     output.declarations.push_back(block_variable(
                         loop_variable, child_scope, statement_origin));
+                }
+                for (const auto& declaration : input.declarations) {
+                    output.declarations.push_back(block_variable(
+                        declaration, child_scope, statement_origin));
                 }
             }
             output.assignment_kind = assignment_kind(input.assignment_kind);
@@ -1922,6 +1956,13 @@ namespace {
             output.task = name(
                 input.task_name, input.span, child_scope,
                 input.systemverilog_source_order);
+            output.task_marker = input.task_marker;
+            output.task_marker_argument = input.task_marker_argument;
+            output.task_call_kind = input.task_marker
+                    == support::ExpressionMarker::none
+                ? systemverilog_hir_detail::systemverilog_call_kind(
+                      input.task_name)
+                : sv::CallKind::user;
             const auto implicit_class_receiver
                 = bind_implicit_class_task_call(
                     output, input, child_scope, statement_origin);
@@ -1930,7 +1971,7 @@ namespace {
             const bool function_statement
                 = input.kind == frontend::StatementKind::TaskCall
                 && !input.task_name.empty()
-                && input.task_name.front() != '$'
+                && output.task_call_kind == sv::CallKind::user
                 && !output.task.overloads.empty()
                 && std::ranges::all_of(output.task.overloads,
                     [&](const semantic::DeclarationId id) {
@@ -1985,6 +2026,10 @@ namespace {
                 input.loop_limit, child_scope, statement_origin);
             output.loop_update_target = expression(
                 input.loop_update_target, child_scope, statement_origin);
+            for (const auto& initialization : input.loop_initializations) {
+                output.loop_initializations.push_back(statement(
+                    initialization, child_scope, statement_origin));
+            }
             for (const auto& update : input.loop_updates) {
                 output.loop_updates.push_back(statement(
                     update, child_scope, statement_origin));
@@ -2055,6 +2100,7 @@ namespace {
             output.immediate_final = input.immediate_final;
             output.immediate_label = input.immediate_label;
             output.generated_role = input.generated_role;
+            output.foreach_break = input.foreach_break;
             if (input.expect_property && expect_declarations_ != nullptr
                 && *input.expect_property < expect_declarations_->size()) {
                 output.expect_property = sv::ExpectPropertyReference {

@@ -29,6 +29,11 @@ namespace {
         const auto& right_expression = *right->systemverilog;
         if (left_expression.kind != right_expression.kind
             || left_expression.text != right_expression.text
+            || left_expression.marker != right_expression.marker
+            || left_expression.marker_argument
+                != right_expression.marker_argument
+            || left_expression.cast_target != right_expression.cast_target
+            || left_expression.cast_builtin != right_expression.cast_builtin
             || left_expression.argument_names
                 != right_expression.argument_names
             || left_expression.nominal_type
@@ -83,6 +88,7 @@ namespace {
         if (prototype.target.spelling != definition.target.spelling
             || prototype.value_form != definition.value_form
             || prototype.class_identity != definition.class_identity
+            || prototype.net_type_kind != definition.net_type_kind
             || prototype.systemverilog_net_type
                 != definition.systemverilog_net_type
             || prototype.systemverilog_resolution_function

@@ -220,10 +220,10 @@ bool Lowerer::is_hir_vhdl_access_expression(
     }
     const auto& source = *expression->vhdl;
     if (source.kind == semantic::vhdl::ExpressionKind::call) {
-        return source.text == "@vhdl-null"
-            || source.text == "@vhdl-new"
-            || source.text == "@vhdl-new-qualified"
-            || source.text == "@vhdl-dereference";
+        return source.marker == support::ExpressionMarker::vhdl_null
+            || source.marker == support::ExpressionMarker::vhdl_new
+            || source.marker == support::ExpressionMarker::vhdl_new_qualified
+            || source.marker == support::ExpressionMarker::vhdl_dereference;
     }
     if (source.kind != semantic::vhdl::ExpressionKind::binary
         || source.operands.size() != 2U
@@ -237,7 +237,8 @@ bool Lowerer::is_hir_vhdl_access_expression(
             if (operand && operand->vhdl != nullptr
                 && operand->vhdl->kind
                     == semantic::vhdl::ExpressionKind::call
-                && operand->vhdl->text == "@vhdl-null") {
+                && operand->vhdl->marker
+                    == support::ExpressionMarker::vhdl_null) {
                 return true;
             }
             const auto subtype = hir_vhdl_expression_subtype(operand_id);
@@ -721,8 +722,8 @@ Lowerer::HirVhdlAccessHeap* Lowerer::hir_vhdl_access_heap(
                 if (!inference_source || inference_source->vhdl == nullptr
                     || inference_source->vhdl->kind
                         != semantic::vhdl::ExpressionKind::call
-                    || !inference_source->vhdl->text.starts_with(
-                        semantic::vhdl::qualified_expression_prefix)
+                    || inference_source->vhdl->marker
+                        != support::ExpressionMarker::vhdl_qualified
                     || inference_source->vhdl->operands.size() != 1U) {
                     break;
                 }
@@ -788,8 +789,8 @@ Lowerer::HirVhdlAccessHeap* Lowerer::hir_vhdl_access_heap(
             if (!qualified || qualified->vhdl == nullptr
                 || qualified->vhdl->kind
                     != semantic::vhdl::ExpressionKind::call
-                || !qualified->vhdl->text.starts_with(
-                    semantic::vhdl::qualified_expression_prefix)
+                || qualified->vhdl->marker
+                    != support::ExpressionMarker::vhdl_qualified
                 || qualified->vhdl->operands.size() != 1U) {
                 break;
             }
@@ -840,8 +841,8 @@ Lowerer::HirVhdlAccessHeap* Lowerer::hir_vhdl_access_heap(
             if (!qualified || qualified->vhdl == nullptr
                 || qualified->vhdl->kind
                     != semantic::vhdl::ExpressionKind::call
-                || !qualified->vhdl->text.starts_with(
-                    semantic::vhdl::qualified_expression_prefix)
+                || qualified->vhdl->marker
+                    != support::ExpressionMarker::vhdl_qualified
                 || qualified->vhdl->operands.size() != 1U) {
                 break;
             }
@@ -850,7 +851,8 @@ Lowerer::HirVhdlAccessHeap* Lowerer::hir_vhdl_access_heap(
         const auto value = specialized_hir_unit_->find_expression(value_id);
         if (!value || value->vhdl == nullptr
             || value->vhdl->kind != semantic::vhdl::ExpressionKind::call
-            || value->vhdl->text != "@vhdl-dereference"
+            || value->vhdl->marker
+                != support::ExpressionMarker::vhdl_dereference
             || value->vhdl->operands.size() != 1U) {
             return false;
         }
@@ -1128,7 +1130,8 @@ Lowerer::lower_hir_vhdl_access_string_object(
     if (!expression || expression->vhdl == nullptr
         || expression->vhdl->kind
             != semantic::vhdl::ExpressionKind::call
-        || expression->vhdl->text != "@vhdl-dereference"
+        || expression->vhdl->marker
+            != support::ExpressionMarker::vhdl_dereference
         || expression->vhdl->operands.size() != 1U) {
         return std::nullopt;
     }
@@ -1202,15 +1205,15 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
         const auto subtype_expression
             = specialized_hir_unit_->find_expression(
                 source.operands.front());
-        constexpr std::string_view prefix { "@vhdl-subtype:" };
         if (!subtype_expression
             || subtype_expression->vhdl == nullptr
-            || !subtype_expression->vhdl->text.starts_with(prefix)) {
+            || subtype_expression->vhdl->marker
+                != support::ExpressionMarker::vhdl_subtype) {
             return nullptr;
         }
         const auto designated_name = std::string_view {
-            subtype_expression->vhdl->text
-        }.substr(prefix.size());
+            subtype_expression->vhdl->marker_argument
+        };
         const auto resolver = hir_resolver();
         using BuiltinType = semantic::vhdl::BuiltinTypeIdentity;
         using ScalarType = semantic::CompiledVhdlStandardScalarIdentity;
@@ -1418,7 +1421,8 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
         const auto null_literal = [&](const semantic::ExpressionId id) {
             const auto operand = specialized_hir_unit_->find_expression(id);
             return operand && operand->vhdl != nullptr
-                && operand->vhdl->text == "@vhdl-null";
+                && operand->vhdl->marker
+                    == support::ExpressionMarker::vhdl_null;
         };
         // A STD.TEXTIO LINE is held as its string; null is the empty
         // value (IEEE 1076-2008 16.4).
@@ -1487,7 +1491,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
         process_.operations.emplace_back(UnaryNot { different, equal });
         return different;
     }
-    if (source.text == "@vhdl-null") {
+    if (source.marker == support::ExpressionMarker::vhdl_null) {
         if (expected_width != 32U) {
             report(
                 "FSIM-ELAB-VHACCESS-009",
@@ -1499,8 +1503,8 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
             unsigned_value(0U, 32U), frontend::ValueDomain::Bit2);
         return result;
     }
-    if (source.text == "@vhdl-new"
-        || source.text == "@vhdl-new-qualified") {
+    if (source.marker == support::ExpressionMarker::vhdl_new
+        || source.marker == support::ExpressionMarker::vhdl_new_qualified) {
         const auto* type = allocated_type();
         if (type == nullptr || expected_width != 32U) {
             report(
@@ -1619,7 +1623,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
             }
         }
         const auto allocator_initializer
-            = source.text == "@vhdl-new-qualified"
+            = source.marker == support::ExpressionMarker::vhdl_new_qualified
                     && source.operands.size() == 2U
             ? std::optional { source.operands[1] }
             : std::nullopt;
@@ -1633,12 +1637,12 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
             // The allocator's subtype mark, whose element constraints shape
             // a record object (9.3.7).
             std::optional<semantic::vhdl::SubtypeIndication> allocated;
-            constexpr std::string_view mark_prefix { "@vhdl-subtype:" };
             if (allocator_subtype && allocator_subtype->vhdl != nullptr
-                && allocator_subtype->vhdl->text.starts_with(mark_prefix)) {
+                && allocator_subtype->vhdl->marker
+                    == support::ExpressionMarker::vhdl_subtype) {
                 const auto name = std::string_view {
-                    allocator_subtype->vhdl->text
-                }.substr(mark_prefix.size());
+                    allocator_subtype->vhdl->marker_argument
+                };
                 const auto resolved = hir_resolver().resolve_vhdl_type_identity(
                     name, source.scope);
                 if (resolved.status
@@ -1699,7 +1703,8 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
                     return std::nullopt;
                 }
             }
-            const bool qualified = source.text == "@vhdl-new-qualified"
+            const bool qualified = source.marker
+                == support::ExpressionMarker::vhdl_new_qualified
                 && source.operands.size() == 2U;
             if (!qualified) {
                 if (!extent) {
@@ -1773,7 +1778,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
             return std::nullopt;
         }
         std::optional<RegisterId> value;
-        if (source.text == "@vhdl-new-qualified"
+        if (source.marker == support::ExpressionMarker::vhdl_new_qualified
             && source.operands.size() == 2U) {
             const auto initial = specialized_hir_unit_->find_expression(
                 source.operands[1]);
@@ -1784,7 +1789,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
                       source.operands[1], *width,
                       &heap->designated_subtype)
                 : lower_hir_expression(source.operands[1], *width);
-        } else if (source.text == "@vhdl-new"
+        } else if (source.marker == support::ExpressionMarker::vhdl_new
             && source.operands.size() == 1U) {
             // An allocator without an initial value creates an object with
             // its subtype's default value (IEEE 1076-2008 9.3.7, 6.4.2.3).
@@ -1834,7 +1839,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
         return lower_hir_vhdl_access_object(
             *handle, *subtype, span);
     }
-    if (source.text != "@vhdl-dereference"
+    if (source.marker != support::ExpressionMarker::vhdl_dereference
         || source.operands.size() != 1U) {
         return std::nullopt;
     }
@@ -1960,7 +1965,8 @@ bool Lowerer::is_hir_vhdl_access_assignment(
     }
     if (target->vhdl->kind
             == semantic::vhdl::ExpressionKind::call
-        && target->vhdl->text == "@vhdl-dereference") {
+        && target->vhdl->marker
+            == support::ExpressionMarker::vhdl_dereference) {
         return true;
     }
     const auto member = hir_vhdl_member_selection(
@@ -1973,6 +1979,7 @@ bool Lowerer::is_hir_vhdl_access_assignment(
     // the heap exists.
     if ((target->vhdl->kind == semantic::vhdl::ExpressionKind::index
             || target->vhdl->kind == semantic::vhdl::ExpressionKind::call)
+        && target->vhdl->marker == support::ExpressionMarker::none
         && !target->vhdl->text.starts_with('@')
         && !target->vhdl->operands.empty()) {
         // The prefix's expression subtype is already the designated one;
@@ -1997,7 +2004,8 @@ bool Lowerer::is_hir_vhdl_access_assignment(
     if (member_root && member_root->vhdl != nullptr
         && member_root->vhdl->kind
             == semantic::vhdl::ExpressionKind::call
-        && member_root->vhdl->text == "@vhdl-dereference"
+        && member_root->vhdl->marker
+            == support::ExpressionMarker::vhdl_dereference
         && member_root->vhdl->operands.size() == 1U) {
         return true;
     }
@@ -2024,8 +2032,8 @@ bool Lowerer::is_hir_vhdl_access_assignment(
         *statement->vhdl->value);
     const bool supported_line_value = value && value->vhdl != nullptr
         && value->vhdl->kind == semantic::vhdl::ExpressionKind::call
-        && (value->vhdl->text == "@vhdl-new-qualified"
-            || value->vhdl->text == "@vhdl-null");
+        && (value->vhdl->marker == support::ExpressionMarker::vhdl_new_qualified
+            || value->vhdl->marker == support::ExpressionMarker::vhdl_null);
     return supported_line_value
         && compiler_owned_textio_line_type(
             *specialized_hir_unit_, *subtype,
@@ -2056,18 +2064,20 @@ std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_line_value(
         return std::nullopt;
     }
     const auto& source = *value->vhdl;
-    if (source.text == "@vhdl-null") {
+    if (source.marker == support::ExpressionMarker::vhdl_null) {
         const auto destination = allocate_string_register();
         process_.operations.emplace_back(LoadStringConstant {
             destination, std::string { } });
         return destination;
     }
-    if (source.text == "@vhdl-new-qualified" && source.operands.size() == 2U) {
+    if (source.marker
+        == support::ExpressionMarker::vhdl_new_qualified && source.operands.size() == 2U) {
         return lower_hir_string_expression(source.operands[1]);
     }
     // `new string(1 to n)`: a STRING of n CHARACTER'LEFT (NUL) elements
     // (IEEE 1076-2008 9.3.7, 6.4.2.3).
-    if (source.text != "@vhdl-new" || source.operands.size() != 1U) {
+    if (source.marker
+        != support::ExpressionMarker::vhdl_new || source.operands.size() != 1U) {
         return std::nullopt;
     }
     const auto count = hir_vhdl_line_allocator_length(expression_id);
@@ -2091,7 +2101,8 @@ std::optional<std::size_t> Lowerer::hir_vhdl_line_allocator_length(
     const auto value = specialized_hir_unit_ != nullptr
         ? specialized_hir_unit_->find_expression(expression_id)
         : std::nullopt;
-    if (!value || value->vhdl == nullptr || value->vhdl->text != "@vhdl-new"
+    if (!value || value->vhdl == nullptr || value->vhdl->marker
+        != support::ExpressionMarker::vhdl_new
         || value->vhdl->operands.size() != 1U) {
         return std::nullopt;
     }
@@ -2159,7 +2170,7 @@ bool Lowerer::reject_hir_vhdl_access_signal_escape(
     if (expression && expression->vhdl != nullptr
         && expression->vhdl->kind
             == semantic::vhdl::ExpressionKind::call
-        && expression->vhdl->text == "@vhdl-null") {
+        && expression->vhdl->marker == support::ExpressionMarker::vhdl_null) {
         return false;
     }
     report(
@@ -2182,6 +2193,7 @@ std::optional<bool> Lowerer::lower_hir_vhdl_access_element_assignment(
     if (!target || target->vhdl == nullptr
         || (target->vhdl->kind != semantic::vhdl::ExpressionKind::index
             && (target->vhdl->kind != semantic::vhdl::ExpressionKind::call
+                || target->vhdl->marker != support::ExpressionMarker::none
                 || target->vhdl->text.starts_with('@')))
         || target->vhdl->operands.size() != 2U) {
         return std::nullopt;
@@ -2319,9 +2331,12 @@ bool Lowerer::lower_hir_vhdl_access_assignment(
         && assigned_line->vhdl != nullptr
         && assigned_line->vhdl->kind
             == semantic::vhdl::ExpressionKind::call) {
-        if (assigned_line->vhdl->text == "@vhdl-new-qualified"
-            || assigned_line->vhdl->text == "@vhdl-null"
-            || assigned_line->vhdl->text == "@vhdl-new") {
+        if (assigned_line->vhdl->marker
+            == support::ExpressionMarker::vhdl_new_qualified
+            || assigned_line->vhdl->marker
+                == support::ExpressionMarker::vhdl_null
+            || assigned_line->vhdl->marker
+                == support::ExpressionMarker::vhdl_new) {
             const auto value
                 = lower_hir_vhdl_line_value(*statement->vhdl->value);
             if (value) {
@@ -2329,7 +2344,8 @@ bool Lowerer::lower_hir_vhdl_access_assignment(
                     *line_binding->local, *value });
                 return true;
             }
-            if (assigned_line->vhdl->text != "@vhdl-new") {
+            if (assigned_line->vhdl->marker
+                != support::ExpressionMarker::vhdl_new) {
                 return false;
             }
         }
@@ -2386,9 +2402,10 @@ bool Lowerer::lower_hir_vhdl_access_assignment(
             = assigned_expression && assigned_expression->vhdl != nullptr
             && assigned_expression->vhdl->kind
                 == semantic::vhdl::ExpressionKind::call
-            && (assigned_expression->vhdl->text == "@vhdl-new"
-                || assigned_expression->vhdl->text
-                    == "@vhdl-new-qualified");
+            && (assigned_expression->vhdl->marker
+                == support::ExpressionMarker::vhdl_new
+                || assigned_expression->vhdl->marker
+                    == support::ExpressionMarker::vhdl_new_qualified);
         const auto assigned = contextual_allocator
             ? lower_hir_vhdl_access_expression(
                   *statement->vhdl->value, 32U,
@@ -2443,7 +2460,8 @@ bool Lowerer::lower_hir_vhdl_access_assignment(
         && (!dereference || dereference->vhdl == nullptr
             || dereference->vhdl->kind
                 != semantic::vhdl::ExpressionKind::call
-            || dereference->vhdl->text != "@vhdl-dereference"
+            || dereference->vhdl->marker
+                != support::ExpressionMarker::vhdl_dereference
             || dereference->vhdl->operands.size() != 1U)) {
         return false;
     }
@@ -2577,11 +2595,12 @@ bool Lowerer::lower_hir_vhdl_access_assignment(
     const bool contextual_allocator = access_member_type != nullptr
         && input && input->vhdl != nullptr
         && input->vhdl->kind == semantic::vhdl::ExpressionKind::call
-        && (input->vhdl->text == "@vhdl-new"
-            || input->vhdl->text == "@vhdl-new-qualified");
+        && (input->vhdl->marker == support::ExpressionMarker::vhdl_new
+            || input->vhdl->marker
+                == support::ExpressionMarker::vhdl_new_qualified);
     const bool null_assignment = input && input->vhdl != nullptr
         && input->vhdl->kind == semantic::vhdl::ExpressionKind::call
-        && input->vhdl->text == "@vhdl-null";
+        && input->vhdl->marker == support::ExpressionMarker::vhdl_null;
     if (access_member_type != nullptr
         && !contextual_allocator && !null_assignment) {
         const auto assigned_subtype = hir_vhdl_expression_subtype(
@@ -2747,7 +2766,7 @@ bool Lowerer::is_hir_vhdl_physical_expression(
     return expression && expression->vhdl != nullptr
         && expression->vhdl->kind
             == semantic::vhdl::ExpressionKind::call
-        && expression->vhdl->text.starts_with("@vhdl-physical:");
+        && expression->vhdl->marker == support::ExpressionMarker::vhdl_physical;
 }
 
 std::optional<Lowerer::HirVhdlPhysicalUnit> Lowerer::hir_vhdl_physical_unit(
@@ -2848,18 +2867,13 @@ std::optional<Lowerer::HirVhdlPhysicalUnit> Lowerer::hir_vhdl_physical_unit(
                 const auto scale_expression
                     = specialized_hir_unit_->find_expression(
                         *candidate.scale);
-                constexpr std::string_view physical_prefix {
-                    "@vhdl-physical:"
-                };
                 if (scale_expression
                     && scale_expression->vhdl != nullptr
-                    && scale_expression->vhdl->text.starts_with(
-                        physical_prefix)
+                    && scale_expression->vhdl->marker
+                        == support::ExpressionMarker::vhdl_physical
                     && scale_expression->vhdl->operands.size() == 1U) {
-                    const auto referenced = std::string {
-                        std::string_view { scale_expression->vhdl->text }
-                            .substr(physical_prefix.size())
-                    };
+                    const auto referenced
+                        = scale_expression->vhdl->marker_argument;
                     const auto prior = scales.find(referenced);
                     const auto multiplier = specialized_hir_unit_
                         ->evaluate_integral_expression(
@@ -2939,9 +2953,8 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_physical_expression(
             && expected_width != 64U)) {
         return std::nullopt;
     }
-    constexpr std::string_view prefix { "@vhdl-physical:" };
     const auto unit = hir_vhdl_physical_unit(
-        std::string_view { expression->vhdl->text }.substr(prefix.size()),
+        std::string_view { expression->vhdl->marker_argument },
         expected_width, expression->vhdl->scope);
     std::optional<std::int64_t> value;
     const auto magnitude_expression = specialized_hir_unit_->find_expression(

@@ -42,8 +42,9 @@ struct SystemVerilogTypeDescriptor {
     };
 
     Kind kind { Kind::other };
-    // The built-in keyword for an integer atom or vector (`int`, `logic`).
-    std::string keyword;
+    // The built-in type of an integer atom or vector (`int`, `logic`).
+    support::SystemVerilogBuiltinType builtin {
+        support::SystemVerilogBuiltinType::none };
     bool is_signed { };
     bool four_state { };
     // Packed dimensions, outermost first.

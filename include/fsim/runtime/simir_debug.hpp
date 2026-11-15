@@ -23,6 +23,10 @@ struct DebugLocal {
   SystemVerilogScalarKind systemverilog_scalar{
       SystemVerilogScalarKind::None};
   DebugLocalStorage storage{DebugLocalStorage::packed};
+  // The built-in data type the local is declared with (IEEE 1800-2023 6.11,
+  // 6.12); none for a user-defined type, whose name type_name holds.
+  support::SystemVerilogBuiltinType systemverilog_builtin{
+      support::SystemVerilogBuiltinType::none};
 };
 
 /// The slot name of the value a system function with state returned

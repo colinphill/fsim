@@ -1171,11 +1171,12 @@ Simulation::Impl::Impl(
         [this, invoke_source_with_notifications](
             const auto handle, const auto identity, auto& actuals,
             auto& string_actuals, const auto names, const auto directions,
-            const bool virtual_dispatch, const auto actual_references) {
+            const bool virtual_dispatch, const bool randomize_no_properties,
+            const auto actual_references) {
             return invoke_source_with_notifications([&] {
                 return invoke_source_function(handle, identity, actuals,
                     string_actuals, names, directions, virtual_dispatch,
-                    actual_references);
+                    randomize_no_properties, actual_references);
             });
         },
         [this, invoke_source_with_notifications](
@@ -1713,14 +1714,25 @@ Simulation::Impl::Impl(
             const runtime::simir::ProcessId report_process,
             const std::uint64_t handle,
             const std::string_view method,
+            const runtime::simir::ClassMethodHook hook,
             std::vector<runtime::PackedLogic4>& actuals,
             std::vector<std::string>& string_actuals,
             const std::span<const std::string> names,
             const std::span<const std::uint8_t> directions,
             const std::span<const runtime::SystemVerilogConstraintTemplate>
                 inline_constraints,
-            const bool virtual_dispatch) {
+            const bool virtual_dispatch,
+            const bool randomize_no_properties) {
             return invoke_source_with_notifications([&] {
+                // A lowered randomize() step (18.6.1).
+                if (hook == runtime::simir::ClassMethodHook::randomize_callback) {
+                    run_randomize_callback(handle, method, report_process);
+                    return runtime::PackedLogic4::from_aval_bval(1U, 0U, 0U);
+                }
+                if (hook != runtime::simir::ClassMethodHook::none) {
+                    return invoke_lowered_randomize_step(
+                        report_process, handle, hook, method, actuals);
+                }
                 // `new handle` copies the object's properties into a new object
                 // of the same class (IEEE 1800-2017 8.12).
                 if (method == "@shallow-copy") {
@@ -1809,32 +1821,25 @@ Simulation::Impl::Impl(
                     ? invoke_checked_class_cast(handle, method)
                     : method == "@builtin-randomize"
                     ? invoke_source_randomize(handle, names, actuals,
-                          inline_constraints, report_process)
+                          inline_constraints, randomize_no_properties,
+                          report_process)
                     : method == "@builtin-randomize-solve"
                     ? invoke_source_randomize(handle, names, actuals,
-                          inline_constraints, report_process, true)
-                    : method == "@randomize-begin"
-                        || method == "@randomize-member"
-                        || method == "@randomize-end"
-                        || method.starts_with("@randomize-callback-enter:")
-                        || method == "@randomize-callback-leave"
-                        || method == "@process-kill-begin"
+                          inline_constraints, randomize_no_properties,
+                          report_process, true)
+                    : method == "@process-kill-begin"
                         || method == "@process-kill-end"
-                    ? invoke_lowered_randomize_step(
-                          report_process, handle, method, actuals)
-                    : method.starts_with("@randomize-callback:")
-                    ? (run_randomize_callback(handle,
-                           method.substr(method.find(':') + 1U),
-                           report_process),
-                          runtime::PackedLogic4::from_aval_bval(1U, 0U, 0U))
+                    ? invoke_lowered_randomize_step(report_process, handle,
+                          runtime::simir::ClassMethodHook::none, method,
+                          actuals)
                     : method.starts_with("@builtin-rand-mode:")
                         || method.starts_with("@builtin-constraint-mode:")
                     ? invoke_source_randomization_mode(
                           handle, method, actuals)
                     : invoke_source_function(
                           handle, method, actuals, string_actuals,
-                          names, directions, virtual_dispatch, {},
-                          report_process);
+                          names, directions, virtual_dispatch,
+                          randomize_no_properties, {}, report_process);
                 return result;
             });
         });

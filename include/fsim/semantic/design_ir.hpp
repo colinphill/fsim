@@ -138,6 +138,10 @@ struct Object {
     // so traces, debugger name tables and name lookups leave it out; `path`
     // is only its storage identity.
     bool no_hierarchical_name{};
+    // `path` is the name relative to the root by which a single-root
+    // design's object is also found: a lookup name, not a hierarchical name
+    // (IEEE 1800-2023 21.7.2.3), so traces leave it out.
+    bool root_relative_alias{};
 };
 
 struct Port {

@@ -473,7 +473,8 @@ HierarchyBuilder::construct_systemc_instance(const std::string& path,
             aliases.emplace(full_name, id);
             design_.signal_by_name_.emplace(full_name, id);
             if (design_.roots_.size() == 1U && path == active_root_) {
-                design_.signal_by_name_.emplace(name, id);
+                note_root_relative_name(
+                    design_.signal_by_name_, name, id, false);
             }
 
             SignalInfo info;
@@ -484,6 +485,7 @@ HierarchyBuilder::construct_systemc_instance(const std::string& path,
             info.source_domain = type.domain;
             info.systemverilog_scalar = type.systemverilog_scalar;
             info.systemverilog_net_type = type.systemverilog_net_type;
+            info.systemverilog_net_kind = type.systemverilog_net_type_kind;
             info.is_signed = type.is_signed;
             info.packed_range = type.packed_range;
             info.vhdl_array = type.vhdl_array;

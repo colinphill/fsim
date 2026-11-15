@@ -44,6 +44,20 @@ struct ClassPropertyContainerWrite {
   bool when_watched{};
 };
 
+// A lowered randomize() step the simulation runs for a ClassMethodCall
+// (IEEE 1800-2023 18.6.1): the call's method identity is then empty, or the
+// callback's name for the callback steps.
+enum class ClassMethodHook : std::uint8_t {
+  none,
+  randomize_begin,
+  randomize_member,
+  randomize_end,
+  randomize_callback_enter,
+  randomize_callback_leave,
+  randomize_callback,
+  last = randomize_callback,
+};
+
 struct ClassMethodCall {
   RegisterId destination{};
   RegisterId receiver{};
@@ -55,6 +69,10 @@ struct ClassMethodCall {
   bool virtual_dispatch{true};
   std::vector<std::uint8_t> actual_kinds{};
   std::vector<SystemVerilogConstraintTemplate> inline_constraints { };
+  ClassMethodHook hook { ClassMethodHook::none };
+  // `randomize(null)`: the checker call that randomizes no property (IEEE
+  // 1800-2023 18.11.1).
+  bool randomize_no_properties { };
 };
 
 struct ClassStaticPropertyRead {

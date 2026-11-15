@@ -577,7 +577,7 @@ namespace systemverilog_hir_detail {
         output.class_identity = input.nominal_type;
         // Keep class operation identity in the primary HIR. The executable
         // completion pass can reuse this expression by source and origin.
-        bind_systemverilog_class_operation(output, input.text);
+        bind_systemverilog_class_operation(output, input);
         output.signed_value = input.kind
                 == frontend::ExpressionKind::IntegerLiteral
             || (input.kind == frontend::ExpressionKind::LogicLiteral
@@ -586,7 +586,7 @@ namespace systemverilog_hir_detail {
             || (input.call_result_width != 0U
                 && input.call_result_signed);
         if (input.kind == frontend::ExpressionKind::Call
-            && input.text == "@sv-clocking-event") {
+            && input.marker == support::ExpressionMarker::sv_clocking_event) {
             output.clocking_edge = edge_kind(
                 static_cast<frontend::EdgeKind>(input.call_result_width));
         }
@@ -609,9 +609,15 @@ namespace systemverilog_hir_detail {
         output.generated_text
             = static_cast<sv::GeneratedTextKind>(input.generated_text);
         output.pattern = static_cast<sv::PatternKind>(input.systemverilog_pattern);
+        output.cast_target = input.systemverilog_cast_target;
+        output.cast_builtin = input.systemverilog_cast_builtin;
+        output.keyword_type = input.systemverilog_keyword_type;
+        output.call_kind = systemverilog_hir_detail::systemverilog_call_kind(input);
+        output.marker = input.marker;
+        output.marker_argument = input.marker_argument;
         if (input.kind == frontend::ExpressionKind::Identifier
             || (input.kind == frontend::ExpressionKind::Call
-                && !input.text.starts_with("@sv-"))) {
+                && input.marker == support::ExpressionMarker::none)) {
             output.referenced_name = name(
                 input.text, input.span, scope,
                 input.systemverilog_source_order);
@@ -657,6 +663,8 @@ namespace systemverilog_hir_detail {
                 if (index < input.aggregate_choices.size()) {
                     association.choice_spelling = input.aggregate_choices[index];
                 }
+                association.choice_marker
+                    = frontend::aggregate_choice_marker(input, index);
                 if (index < input.aggregate_choice_expressions.size()) {
                     for (const auto& choice :
                         input.aggregate_choice_expressions[index]) {
@@ -670,13 +678,15 @@ namespace systemverilog_hir_detail {
             }
         }
         const auto inline_marker = std::ranges::find(
-            input.aggregate_choices, "@sv-inline-constraint");
-        if (inline_marker != input.aggregate_choices.end()) {
+            input.aggregate_choice_markers,
+            support::ExpressionMarker::sv_inline_constraint);
+        if (inline_marker != input.aggregate_choice_markers.end()) {
             const auto index = static_cast<std::size_t>(std::distance(
-                input.aggregate_choices.begin(), inline_marker));
+                input.aggregate_choice_markers.begin(), inline_marker));
             if (index < input.aggregate_choice_expressions.size()) {
                 sv::AssignmentPatternAssociation association;
-                association.choice_spelling = "@sv-inline-constraint";
+                association.choice_marker
+                    = support::ExpressionMarker::sv_inline_constraint;
                 association.source = span;
                 for (const auto& constraint :
                     input.aggregate_choice_expressions[index]) {
@@ -693,13 +703,15 @@ namespace systemverilog_hir_detail {
         }
         // `randomize() with (names)`: the names bound to the object.
         const auto names_marker = std::ranges::find(
-            input.aggregate_choices, "@sv-inline-constraint-names");
-        if (names_marker != input.aggregate_choices.end()) {
+            input.aggregate_choice_markers,
+            support::ExpressionMarker::sv_inline_constraint_names);
+        if (names_marker != input.aggregate_choice_markers.end()) {
             const auto index = static_cast<std::size_t>(std::distance(
-                input.aggregate_choices.begin(), names_marker));
+                input.aggregate_choice_markers.begin(), names_marker));
             if (index < input.aggregate_choice_expressions.size()) {
                 sv::AssignmentPatternAssociation association;
-                association.choice_spelling = "@sv-inline-constraint-names";
+                association.choice_marker
+                    = support::ExpressionMarker::sv_inline_constraint_names;
                 association.source = span;
                 for (const auto& name :
                     input.aggregate_choice_expressions[index]) {
@@ -721,27 +733,24 @@ namespace systemverilog_hir_detail {
     [[nodiscard]] sv::ExpressionKind SystemVerilogHirBuilder::expression_kind(
         const frontend::Expression& expression) noexcept
     {
-        if (expression.text == "@sv-null") {
+        switch (expression.marker) {
+        case support::ExpressionMarker::sv_null:
             return sv::ExpressionKind::class_null;
-        }
-        if (expression.text.starts_with("@sv-new:")) {
+        case support::ExpressionMarker::sv_new_constructor:
             return sv::ExpressionKind::class_allocation;
-        }
-        if (expression.text.starts_with("@sv-dollar-cast:")) {
+        case support::ExpressionMarker::sv_dollar_cast_class:
             return sv::ExpressionKind::class_cast;
-        }
-        if (expression.text.starts_with("@sv-property:")) {
+        case support::ExpressionMarker::sv_property:
             return sv::ExpressionKind::class_property;
-        }
-        if (expression.text.starts_with("@sv-static-property:")) {
+        case support::ExpressionMarker::sv_static_property:
             return sv::ExpressionKind::class_static_property;
-        }
-        if (expression.text.starts_with("@sv-method:")
-            || expression.text.starts_with("@sv-base-method:")) {
+        case support::ExpressionMarker::sv_method:
+        case support::ExpressionMarker::sv_base_method:
             return sv::ExpressionKind::class_method_call;
-        }
-        if (expression.text.starts_with("@sv-static-method:")) {
+        case support::ExpressionMarker::sv_static_method:
             return sv::ExpressionKind::class_static_method_call;
+        default:
+            break;
         }
         using Input = frontend::ExpressionKind;
         switch (expression.kind) {
@@ -1498,6 +1507,7 @@ namespace systemverilog_hir_detail {
             input.time_unit,
             input.time_precision,
             input.default_nettype,
+            input.default_net_kind,
             input.is_cell
         };
         output.implicit_generate_scopes = input.implicit_generate_scopes;

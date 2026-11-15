@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+sit t0 n=1 o=1 p=1 s=5,4 arr=5,6 r=7.5
+sit vhdl r woke at 1000000 fs r='1'
+sit vhdl p woke at 1000000 fs p='1'
+sit s event 8 at 2000000
+sit arr event 7 at 2000000

@@ -45,6 +45,9 @@ public:
     };
     using ActualReferences = std::span<
         const std::optional<VariableReference>>;
+    // Receiver, method identity, actuals, string actuals, actual names,
+    // directions, virtual dispatch, `randomize(null)` (IEEE 1800-2023
+    // 18.11.1), and the actuals' variable references.
     using FunctionInvoker = std::function<runtime::PackedLogic4(
         runtime::SystemVerilogClassHandle,
         std::string_view,
@@ -52,6 +55,7 @@ public:
         std::vector<std::string>&,
         std::span<const std::string>,
         std::span<const std::uint8_t>,
+        bool,
         bool,
         ActualReferences)>;
     // The last argument is the specialization the static method runs in
@@ -512,7 +516,7 @@ private:
     };
     [[nodiscard]] StaticPropertySelection static_property_selection(
         const semantic::sv::Expression& selection,
-        std::string_view marker,
+        support::ExpressionMarker marker,
         runtime::SystemVerilogClassHandle handle) const;
     // The specialization a class type names, its parameter actuals read in
     // the specialization `context` (IEEE 1800-2023 8.25); empty when the

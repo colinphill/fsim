@@ -104,14 +104,30 @@ endmodule
     assert(!unresolved.ok());
     assert(has_diagnostic(unresolved, "FSIM-ELAB-DEFPARAM-002"));
 
+    // Of several defparams for one parameter the last one applies (IEEE
+    // 1800-2023 23.10.1): a later `lanes[1].VALUE = 257'h2` replaces the
+    // earlier ROOT_VALUE.
     auto duplicate_design = parsed.design;
     auto& duplicate_top = duplicate_design.units.back();
-    duplicate_top.verilog_defparams.push_back(
-        duplicate_top.verilog_defparams[1]);
+    auto later = duplicate_top.verilog_defparams[1];
+    later.value = duplicate_top.verilog_defparams[2].value;
+    duplicate_top.verilog_defparams.push_back(std::move(later));
     const auto duplicate = compile_and_elaborate(
         duplicate_design, "verilog:work.defparam_top");
-    assert(!duplicate.ok());
-    assert(has_diagnostic(duplicate, "FSIM-ELAB-DEFPARAM-003"));
+    assert(duplicate.ok());
+    const auto duplicate_identity = [&](const std::string_view path) {
+        const auto found = std::ranges::find_if(
+            duplicate.design->specializations(),
+            [&](const auto& candidate) { return candidate.instance == path; });
+        assert(found != duplicate.design->specializations().end());
+        const auto value = std::ranges::find_if(
+            found->parameter_identity_values,
+            [](const auto& parameter) { return parameter.first == "VALUE"; });
+        assert(value != found->parameter_identity_values.end());
+        return value->second;
+    };
+    assert(duplicate_identity("defparam_top.lanes[1]")
+        == duplicate_identity("defparam_top.lanes[0]"));
 
     auto local_design = parsed.design;
     auto& local_top = local_design.units.back();

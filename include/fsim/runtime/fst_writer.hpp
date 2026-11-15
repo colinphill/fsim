@@ -9,10 +9,16 @@
 #include <iosfwd>
 #include <memory>
 #include <string>
+#include <string_view>
 
 namespace fsim::runtime {
 
 class FstEncodedValue;
+
+// The module scope the writer synthesizes, as the outermost scope, for
+// declarations of the trace's root scope; the reader recognizes the same
+// scope. No design scope is written at that position under this name.
+inline constexpr std::string_view fst_synthesized_root_scope { "__fsim_root" };
 
 struct FstWriterLimits {
     std::size_t maximum_scopes { 1U << 20U };

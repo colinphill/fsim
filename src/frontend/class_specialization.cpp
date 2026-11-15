@@ -213,25 +213,29 @@ void diagnose(
   }
   // A cast to an integral type or a size (IEEE 1800-2017 6.24.1).
   if (expression.kind == ExpressionKind::Call
-      && expression.text.starts_with("@sv-cast:")
+      && expression.marker == support::ExpressionMarker::sv_cast
       && expression.operands.size() == 1U) {
     const auto value = evaluate(expression.operands.front(), environment);
     if (!value) {
       return std::nullopt;
     }
-    const std::string_view target{
-        std::string_view{expression.text}.substr(9U)};
-    static constexpr std::array<std::pair<std::string_view, std::uint64_t>, 5>
-        signed_types{{{"byte", 8U}, {"shortint", 16U}, {"int", 32U},
-            {"longint", 64U}, {"integer", 32U}}};
-    for (const auto& [name, width] : signed_types) {
-      if (target == name) {
-        return fit_width(*value, width, true);
+    if (expression.systemverilog_cast_target
+        == support::SystemVerilogCastTarget::builtin) {
+      const auto kind = expression.systemverilog_cast_builtin;
+      if (support::systemverilog_builtin_default_signed(kind)) {
+        return fit_width(
+            *value, support::systemverilog_builtin_width(kind), true);
       }
+      if (support::systemverilog_integer_vector(kind)) {
+        return fit_width(*value, 1U, false);
+      }
+      return std::nullopt;
     }
-    if (target == "bit" || target == "logic" || target == "reg") {
-      return fit_width(*value, 1U, false);
+    if (expression.systemverilog_cast_target
+        != support::SystemVerilogCastTarget::size) {
+      return std::nullopt;
     }
+    const std::string_view target{expression.marker_argument};
     std::uint64_t width{};
     const auto converted = std::from_chars(
         target.data(), target.data() + target.size(), width, 10);
@@ -1085,7 +1089,7 @@ specialize_systemverilog_classes(const ParsedDesign& design) {
             actual.value.kind == ExpressionKind::Identifier
             && actual.value.operands.empty()) {
           Type inferred;
-          inferred.spelling = actual.value.text;
+          set_systemverilog_type_name(inferred, actual.value.text);
           inferred.named_type = actual.value.text;
           inferred.named_type_span = actual.value.span;
           if (const auto alias =
@@ -1747,6 +1751,7 @@ specialize_systemverilog_classes(const ParsedDesign& design) {
                 argument.type = expand_type_aliases(argument.type, {});
               }
               self(self, statement.loop_updates);
+              self(self, statement.loop_initializations);
               self(self, statement.statements);
               self(self, statement.else_statements);
               for (auto& alternative : statement.case_alternatives) {

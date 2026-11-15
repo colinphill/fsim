@@ -160,6 +160,23 @@ public:
     }
 
 private:
+    // A single root's object is also found by its name relative to the
+    // root. That key names no hierarchical object (IEEE 1800-2023 21.7.2.3):
+    // a key this call adds is recorded as a root-relative alias, which
+    // traces leave out and lookups still find. `replace` overwrites a key
+    // already present instead of keeping it.
+    template<typename Map, typename Id>
+    void note_root_relative_name(Map& map, std::string name, const Id id,
+        const bool replace = true)
+    {
+        const bool added = replace
+            ? map.insert_or_assign(name, id).second
+            : map.emplace(name, id).second;
+        if (added) {
+            design_.root_relative_alias_paths_.insert(std::move(name));
+        }
+    }
+
     using SignalMap = elaboration_detail::SignalBindings;
     using StringMap = elaboration_detail::StringObjectBindings;
     using ContainerMap = elaboration_detail::ContainerObjectBindings;
@@ -2600,7 +2617,14 @@ private:
         vhdl_package_objects_;
     std::unordered_map<std::uint32_t, PackageObjectBindings>
         vhdl_package_object_bindings_;
-    std::unordered_map<SignalId, std::string> resolver_by_signal_;
+    // A signal's resolver: a resolution function designator (a bind
+    // resolver name or a VHDL function), or a VHDL record subtype's element
+    // resolutions (IEEE 1076-2008 6.3), which have no designator.
+    struct SignalResolver {
+        std::string designator;
+        bool record_resolution { };
+    };
+    std::unordered_map<SignalId, SignalResolver> resolver_by_signal_;
     // The out and buffer ports some expression reads, found on first use.
     std::optional<std::unordered_set<std::uint32_t>> vhdl_read_output_ports_;
     // An inout formal whose effective value is converted from its actual,

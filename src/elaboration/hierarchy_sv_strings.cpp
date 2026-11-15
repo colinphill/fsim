@@ -37,8 +37,8 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_string_declaration(
         design_.string_by_name_.insert_or_assign(full_name, alias->second);
         if (design_.roots_.size() == 1U
             && materialized_path == active_root_) {
-            design_.string_by_name_.insert_or_assign(
-                declaration.name, alias->second);
+            note_root_relative_name(
+                design_.string_by_name_, declaration.name, alias->second);
         }
         // The connected object keeps its own record; the port is another
         // name for it.
@@ -197,7 +197,8 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_string_declaration(
     design_.string_by_name_.emplace(full_name, id);
     if (design_.roots_.size() == 1U
         && materialized_path == active_root_) {
-        design_.string_by_name_.emplace(declaration.name, id);
+        note_root_relative_name(
+            design_.string_by_name_, declaration.name, id, false);
     }
     if (direction == frontend::PortDirection::Input) {
         read_only_strings.insert(id);

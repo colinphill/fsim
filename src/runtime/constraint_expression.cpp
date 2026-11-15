@@ -43,8 +43,13 @@ using Profile = SystemVerilogConstraintVariableProfile;
       SystemVerilogConstraintDomainKind::BitVector,
       1,
       false,
-      "bit",
-      false};
+      "",
+      false,
+      support::SystemVerilogBuiltinType::bit};
+}
+
+[[nodiscard]] bool names_type(const Profile& profile) {
+  return names_constraint_type(profile);
 }
 
 [[nodiscard]] Profile common_profile(
@@ -56,9 +61,13 @@ using Profile = SystemVerilogConstraintVariableProfile;
       : SystemVerilogConstraintDomainKind::BitVector;
   result.width = std::max(left.width, right.width);
   result.signed_value = left.signed_value && right.signed_value;
-  result.nominal_type = left.nominal_type == right.nominal_type
-      ? left.nominal_type
-      : "$constraint-expression";
+  const bool same_type = same_constraint_type(left, right);
+  result.nominal_type = same_type ? left.nominal_type
+                                  : "$constraint-expression";
+  result.builtin = same_type ? left.builtin
+                             : support::SystemVerilogBuiltinType::none;
+  result.nominal_type_id = same_type ? left.nominal_type_id : std::nullopt;
+  result.state_property = same_type && left.state_property;
   result.four_state = left.four_state || right.four_state;
   return result;
 }
@@ -486,7 +495,7 @@ SystemVerilogConstraintExpressionId
 SystemVerilogConstraintExpressionBuilder::variable(
     const SystemVerilogConstraintVariableId variable,
     SystemVerilogConstraintVariableProfile profile) {
-  if (profile.width == 0 || profile.nominal_type.empty()) {
+  if (profile.width == 0 || !names_type(profile)) {
     throw std::invalid_argument{
         "constraint expression variable requires an exact profile"};
   }
@@ -502,7 +511,7 @@ SystemVerilogConstraintExpressionBuilder::constant(
     PackedLogic4 value,
     SystemVerilogConstraintVariableProfile profile) {
   if (profile.width == 0 || profile.width != value.width()
-      || profile.nominal_type.empty() || value.is_logic9()) {
+      || !names_type(profile) || value.is_logic9()) {
     throw std::invalid_argument{
         "constraint expression constant does not match its exact profile"};
   }
@@ -560,7 +569,7 @@ SystemVerilogConstraintExpressionBuilder::resize(
   // so domain analysis sees it as one (IEEE 1800-2017 6.24.1).
   if (const auto& source = nodes_[operand];
       source.operation == Operator::Constant && !source.constant.is_logic9()
-      && !profile.nominal_type.empty()) {
+      && names_type(profile)) {
     auto value = resized(
         source.constant, profile.width, source.profile.signed_value);
     return constant(std::move(value), std::move(profile));
@@ -675,15 +684,16 @@ PackedLogic4 evaluate_graph(
       // constraint reads its value as the property's declared type (IEEE
       // 1800-2017 18.3).
       const bool state_variable
-          = assigned_profile.nominal_type == "packed property"
-          || assigned_profile.nominal_type == "integer";
+          = assigned_profile.state_property
+          || assigned_profile.builtin
+              == support::SystemVerilogBuiltinType::integer;
       if (assigned_profile.width != node.profile.width
           || (!state_variable
               && (assigned_profile.kind != node.profile.kind
                   || assigned_profile.signed_value
                       != node.profile.signed_value
-                  || assigned_profile.nominal_type
-                      != node.profile.nominal_type
+                  || !same_constraint_type(
+                      assigned_profile, node.profile)
                   || assigned_profile.four_state
                       != node.profile.four_state))) {
         throw std::invalid_argument{
@@ -1421,42 +1431,47 @@ namespace {
 
     [[nodiscard]] SystemVerilogConstraintVariableProfile index_profile()
     {
-        return { SystemVerilogConstraintDomainKind::Integer, 32, true, "int",
-            false };
+        return { SystemVerilogConstraintDomainKind::Integer, 32, true,
+            std::string { }, false,
+            support::SystemVerilogBuiltinType::int_type };
     }
 
     [[nodiscard]] SystemVerilogConstraintVariableProfile truth_profile()
     {
-        return { SystemVerilogConstraintDomainKind::BitVector, 1, false, "bit",
-            false };
+        return { SystemVerilogConstraintDomainKind::BitVector, 1, false,
+            std::string { }, false, support::SystemVerilogBuiltinType::bit };
     }
 
     [[nodiscard]] std::optional<SystemVerilogConstraintVariableProfile>
-    integral_cast_profile(const std::string_view type)
+    integral_cast_profile(const support::SystemVerilogBuiltinType type)
     {
         using Kind = SystemVerilogConstraintDomainKind;
-        if (type == "int")
-            return SystemVerilogConstraintVariableProfile { Kind::Integer, 32,
-                true, "int", false };
-        if (type == "integer")
-            return SystemVerilogConstraintVariableProfile { Kind::Integer, 32,
-                true, "integer", true };
-        if (type == "shortint")
-            return SystemVerilogConstraintVariableProfile { Kind::Integer, 16,
-                true, "shortint", false };
-        if (type == "longint")
-            return SystemVerilogConstraintVariableProfile { Kind::Integer, 64,
-                true, "longint", false };
-        if (type == "byte")
-            return SystemVerilogConstraintVariableProfile { Kind::Integer, 8,
-                true, "byte", false };
-        if (type == "bit")
-            return SystemVerilogConstraintVariableProfile { Kind::BitVector, 1,
-                false, "bit", false };
-        if (type == "logic" || type == "reg")
-            return SystemVerilogConstraintVariableProfile { Kind::BitVector, 1,
-                false, "logic", true };
-        return std::nullopt;
+        using Builtin = support::SystemVerilogBuiltinType;
+        const auto profile = [&](const Kind kind, const std::size_t width,
+                                 const bool signed_value,
+                                 const bool four_state, const Builtin builtin) {
+            return SystemVerilogConstraintVariableProfile { kind, width,
+                signed_value, std::string { }, four_state, builtin };
+        };
+        switch (type) {
+        case Builtin::int_type:
+            return profile(Kind::Integer, 32, true, false, Builtin::int_type);
+        case Builtin::integer:
+            return profile(Kind::Integer, 32, true, true, Builtin::integer);
+        case Builtin::shortint:
+            return profile(Kind::Integer, 16, true, false, Builtin::shortint);
+        case Builtin::longint:
+            return profile(Kind::Integer, 64, true, false, Builtin::longint);
+        case Builtin::byte:
+            return profile(Kind::Integer, 8, true, false, Builtin::byte);
+        case Builtin::bit:
+            return profile(Kind::BitVector, 1, false, false, Builtin::bit);
+        case Builtin::logic:
+        case Builtin::reg:
+            return profile(Kind::BitVector, 1, false, true, Builtin::logic);
+        default:
+            return std::nullopt;
+        }
     }
 
     class InlineTemplateLowerer final {
@@ -2459,37 +2474,36 @@ namespace {
                     identity.set(0, Logic4::one);
                 return builder_.constant(std::move(identity), profile);
             }
-            if (method.starts_with("@sv-cast:")
+            // A cast (IEEE 1800-2023 6.24.1): a signedness cast, with the
+            // width of a resolved typedef beside it; an integral built-in
+            // type; or a size.
+            if (expression.cast_target != support::SystemVerilogCastTarget::none
                 && expression.operands.size() == 1U) {
+                using CastTarget = support::SystemVerilogCastTarget;
                 const auto operand = lower(expression.operands[0]);
                 if (!operand)
                     return std::nullopt;
-                auto target = std::string_view { method }.substr(9U);
                 auto profile = builder_.profile(*operand);
-                // `signed:N` and `unsigned:N` spell a resolved named type.
-                if (const auto separator = target.find(':');
-                    separator != std::string_view::npos) {
+                const auto cast_width = expression.cast_width;
+                if (expression.cast_target == CastTarget::signed_type
+                    || expression.cast_target == CastTarget::unsigned_type) {
                     profile.signed_value
-                        = target.substr(0, separator) == "signed";
-                    target.remove_prefix(separator + 1U);
-                }
-                if (target == "signed" || target == "unsigned") {
-                    profile.signed_value = target == "signed";
-                } else if (const auto scalar = integral_cast_profile(target)) {
-                    profile = *scalar;
-                } else {
-                    std::uint64_t width { };
-                    const auto parsed = std::from_chars(target.data(),
-                        target.data() + target.size(), width);
-                    if (parsed.ec != std::errc { }
-                        || parsed.ptr != target.data() + target.size()
-                        || width == 0U || width > 4096U) {
-                        throw std::invalid_argument {
-                            "unsupported inline constraint cast '"
-                            + std::string { target } + "'"
-                        };
+                        = expression.cast_target == CastTarget::signed_type;
+                    if (cast_width != 0U) {
+                        profile.width = cast_width;
                     }
-                    profile.width = static_cast<std::size_t>(width);
+                } else if (const auto scalar
+                           = expression.cast_target == CastTarget::builtin
+                               ? integral_cast_profile(expression.cast_builtin)
+                               : std::nullopt) {
+                    profile = *scalar;
+                } else if (expression.cast_target == CastTarget::size
+                           && cast_width != 0U && cast_width <= 4096U) {
+                    profile.width = cast_width;
+                } else {
+                    throw std::invalid_argument {
+                        "unsupported inline constraint cast"
+                    };
                 }
                 return builder_.resize(*operand, profile);
             }

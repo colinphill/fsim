@@ -125,6 +125,8 @@ struct Scope {
   // Package imports visible in the enclosing unit or class's package
   // (IEEE 1800-2017 26.3).
   std::vector<const SystemVerilogImport*> imports{};
+  // The design unit of a unit-level scope, whose subroutines are visible.
+  const DesignUnit* unit{};
 };
 
 struct PropertyMatch {
@@ -192,11 +194,25 @@ class Resolver final {
     }
   }
 
+  // `type`, with each std class it names by a bare name that a class of the
+  // design hides in `scope` replaced by that class (IEEE 1800-2023 26.7).
+  [[nodiscard]] Type release_hidden_standard_class(
+      Type type, const Scope& scope) const;
+  template <typename Declaration>
+  void release_hidden_standard_classes(
+      std::vector<Declaration>& declarations, const Scope& scope) const {
+    for (auto& declaration : declarations) {
+      declaration.type
+          = release_hidden_standard_class(std::move(declaration.type), scope);
+    }
+  }
+
   // Replaces each class-scoped declared type (`C #(...)::t`) by the
   // specialized type it names.
   template <typename Declaration>
   void resolve_scoped_types(
       std::vector<Declaration>& declarations, const Scope& scope) const {
+    release_hidden_standard_classes(declarations, scope);
     for (auto& declaration : declarations) {
       if (auto scoped = resolve_class_scoped_type(declaration.type, scope)) {
         declaration.type = std::move(*scoped);
@@ -341,6 +357,18 @@ class Resolver final {
       const ClassSelection& selection);
   [[nodiscard]] std::vector<const SystemVerilogClassDeclaration*>
   resolve_class_name(std::string_view spelling, const Scope& scope) const;
+  // Drops the std process member marker of `process::m` when a class of
+  // that name declared by the design is visible in `scope`.
+  void release_hidden_process_member(
+      Expression& expression, const Scope& scope) const;
+  // The std class `type` names, or none when a class the design declares or
+  // imports under that bare name is visible in `scope`.
+  [[nodiscard]] support::SystemVerilogStandardClass visible_standard_class(
+      const Type& type, const Scope& scope) const;
+  // Whether the design declares or imports a subroutine `name` visible in
+  // `scope`.
+  [[nodiscard]] bool design_subroutine_visible(
+      std::string_view name, const Scope& scope) const;
   // `receiver` is the handle type the lookup starts from: a base named by a
   // type parameter is that receiver's actual (IEEE 1800-2017 8.25).
   [[nodiscard]] PropertyMatch find_property(

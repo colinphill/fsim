@@ -31,6 +31,9 @@ bool same_port_bound_expression(
     const Expression& left, const Expression& right)
 {
   if (left.kind != right.kind || left.text != right.text
+      || left.marker != right.marker
+      || left.marker_argument != right.marker_argument
+      || left.aggregate_choice_markers != right.aggregate_choice_markers
       || left.nominal_type != right.nominal_type
       || left.operands.size() != right.operands.size()
       || left.aggregate_choices != right.aggregate_choices
@@ -99,7 +102,6 @@ void VerilogParser::parse_parameter_overrides(
         || keyword("longint") || keyword("time")
         || keyword("shortreal") || keyword("real")
         || keyword("realtime") || keyword("chandle")
-        || keyword("process")
         || keyword("integer") || keyword("int")
         || keyword("logic") || keyword("reg") || keyword("bit")
         || keyword("signed") || keyword("unsigned")
@@ -118,7 +120,13 @@ void VerilogParser::parse_parameter_overrides(
                     current().text + "::" + current(2).text)
                 || packed_typedef_types_.contains(current(2).text)))
         // ... of another unit's package (26.3).
-        || imported_packed_type_at(0U);
+        || imported_packed_type_at(0U)
+        // A std package class named alone (`weak_reference #(process)`):
+        // the std wildcard import binds it unless a value of that name is
+        // declared here (IEEE 1800-2023 26.7).
+        || (at(TokenKind::Identifier)
+            && (at(TokenKind::Comma, 1) || at(TokenKind::RightParen, 1))
+            && standard_class_name_visible(current().text));
   };
   const auto parse_actual = [&](ParameterOverride& override) {
     // `type(...)` is a type actual (6.23) unless it begins a constant
@@ -406,6 +414,7 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
               "duplicate module port declaration '"
                   + port_name.text + "'");
         } else {
+          unit_port_names_.insert(declaration.name);
           unit.ports.push_back(std::move(declaration));
         }
         if (!match(TokenKind::Comma)) {
@@ -484,7 +493,6 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
         const bool explicit_type =
             explicit_variable || is_net_type_keyword()
             || keyword("string") || keyword("chandle")
-            || keyword("process")
             || keyword("struct") || keyword("union") || keyword("enum")
             || is_named_type_reference_start();
         // A structure, union or enumeration data type after the direction
@@ -492,7 +500,6 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
         // dimensions.
         bool aggregate_type = false;
         if (keyword("string") || keyword("chandle")
-            || keyword("process")
             || keyword("struct") || keyword("union") || keyword("enum")) {
           aggregate_type = keyword("struct") || keyword("union")
               || keyword("enum");
@@ -509,23 +516,21 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
           // `input wire struct packed {...} s`: a net port of an aggregate
           // or enumeration data type (IEEE 1800-2017 6.7.1, 23.2.2.3).
           if (language_ == Language::SystemVerilog2017
-              && contains_word(
-                  {"wire", "tri", "tri0", "tri1", "wand", "triand", "wor",
-                      "trior", "trireg", "uwire", "supply0", "supply1"},
-                  spec.type.spelling)
+              && spec.type.systemverilog_net_kind
+                  != support::SystemVerilogNetKind::none
               && (keyword("struct") || keyword("union")
                   || keyword("enum"))) {
-            const auto net_kind = spec.type.spelling;
+            const auto net_kind = spec.type.systemverilog_net_kind;
             spec.type = parse_parameter_type();
-            spec.type.systemverilog_net_type = net_kind;
+            set_systemverilog_net_type(spec.type, net_kind);
             aggregate_type = true;
           }
           // `output var b` declares a variable of type logic (IEEE 1800-2017
           // 6.8), not the default net.
           if (explicit_variable && spec.type.spelling == default_spelling) {
-            spec.type.spelling = "logic";
+            set_systemverilog_builtin_type(spec.type, support::SystemVerilogBuiltinType::logic);
             spec.type.domain = ValueDomain::Logic4;
-            spec.type.systemverilog_net_type.clear();
+            clear_systemverilog_net_type(spec.type);
           }
           // `input wire T x`: a net port whose data type is a type name
           // (IEEE 1800-2017 23.2.2.3).
@@ -568,13 +573,13 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
         declaration.default_value = parse_expression();
         // An output net port's initializer is a net declaration assignment,
         // a continuous assignment to the net (6.7.1, 23.2.2.3).
-        const auto& net = spec.type.systemverilog_net_type.empty()
-            ? spec.type.spelling
-            : spec.type.systemverilog_net_type;
+        const auto net = spec.type.systemverilog_net_type.empty()
+            ? spec.type.systemverilog_net_kind
+            : spec.type.systemverilog_net_type_kind;
+        using NetKind = support::SystemVerilogNetKind;
         if (spec.direction == PortDirection::Output
-            && contains_word({"wire", "tri", "tri0", "tri1", "wand",
-                                 "triand", "wor", "trior", "uwire"},
-                net)) {
+            && net != NetKind::none && net != NetKind::trireg
+            && net != NetKind::supply0 && net != NetKind::supply1) {
           Statement driver;
           driver.kind = StatementKind::Assignment;
           driver.assignment_kind = AssignmentKind::Continuous;
@@ -664,6 +669,7 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
             "port '" + port_name.text
                 + "' conflicts with a parameter declaration");
       } else {
+        unit_port_names_.insert(declaration.name);
         unit.ports.push_back(std::move(declaration));
       }
       }
@@ -1090,7 +1096,7 @@ void VerilogParser::parse_modport(
           const auto span = selected_signal->span;
           SignalDeclaration net;
           net.name = member.text;
-          net.type = Type{ValueDomain::Logic4, "wire", std::nullopt, false};
+          net.type = systemverilog_net_type(support::SystemVerilogNetKind::wire);
           net.type.packed_range_expression = PackedRangeExpression{
               Expression{ExpressionKind::Binary, "-",
                   {Expression{ExpressionKind::Call, "$bits",
@@ -1296,18 +1302,16 @@ PortDirection VerilogParser::parse_direction() {
 }
 
 Type VerilogParser::default_verilog_type() {
-  return Type{ValueDomain::Logic4, "wire", std::nullopt, false};
+  return systemverilog_net_type(support::SystemVerilogNetKind::wire);
 }
 
 Type VerilogParser::default_port_net_type() const  {
   if (current_default_nettype_ == "none") {
     return default_verilog_type();
   }
-  return Type{
-      ValueDomain::Logic4,
-      current_default_nettype_,
-      std::nullopt,
-      false};
+  Type type { ValueDomain::Logic4, { }, std::nullopt, false };
+  set_systemverilog_type_keyword(type, current_default_nettype_);
+  return type;
 }
 
 void VerilogParser::require_default_port_net_type(
@@ -1540,10 +1544,14 @@ Type VerilogParser::parse_named_type() {
             standard_declaration->minimum_standard,
             first,
             "FSIM-SV-PARSE-349")) {
-      type.spelling = std::string { standard_name };
-      type.named_type = type.spelling;
+      set_systemverilog_type_name(type, std::string { standard_name });
+      // The name as written: `std::mailbox` selects the std class wherever
+      // it is looked up; a bare `mailbox` binds a design type of that name
+      // where one is visible (IEEE 1800-2023 26.7).
+      type.named_type = name;
       type.domain = ValueDomain::Bit2;
       type.systemverilog_scalar = SystemVerilogScalarKind::Chandle;
+      type.systemverilog_standard_class = standard_declaration->standard_class;
     }
   } else if (standard_name == "weak_reference") {
     (void)require_standard(
@@ -1575,7 +1583,7 @@ Type VerilogParser::parse_named_type() {
       (void)advance();
       const auto member = advance();
       type.named_type += "::" + member.text;
-      type.spelling = type.named_type;
+      set_systemverilog_type_name(type, type.named_type);
       type.named_type_span = cover(type.named_type_span, member.span);
     }
   }
@@ -1714,7 +1722,6 @@ void VerilogParser::parse_virtual_interface_declaration(
           && at(TokenKind::LeftParen, 1))
       || keyword("static") || keyword("automatic")
       || keyword("string") || keyword("chandle") || keyword("event")
-      || (keyword("process") && !at(TokenKind::Scope, 1))
       || keyword("struct") || keyword("union") || keyword("enum")
       || is_named_type_reference_start()
       || (at(TokenKind::Identifier) && at(TokenKind::LeftBracket, 1)
@@ -1725,7 +1732,7 @@ void VerilogParser::parse_virtual_interface_declaration(
 void VerilogParser::parse_event_declaration(
   DesignUnit& unit, const Token& start) {
   Type type = default_verilog_type();
-  type.spelling = "event";
+  set_systemverilog_builtin_type(type, support::SystemVerilogBuiltinType::event);
   type.domain = ValueDomain::Logic4;
   for (;;) {
     const auto name = expect_identifier("named event");
@@ -1799,11 +1806,8 @@ void VerilogParser::parse_event_declaration(
 
 void VerilogParser::parse_declaration(DesignUnit& unit) {
   const auto start = current();
-  const auto net_kind_spelling = [](const std::string& spelling) {
-    return contains_word(
-        {"wire", "tri", "tri0", "tri1", "wand", "triand", "wor", "trior",
-            "trireg", "uwire", "supply0", "supply1"},
-        spelling);
+  const auto net_kind_type = [](const Type& type) {
+    return type.systemverilog_net_kind != support::SystemVerilogNetKind::none;
   };
   if (keyword("automatic") || keyword("static")) {
     const auto lifetime = advance();
@@ -1833,7 +1837,7 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
         && !keyword("struct") && !keyword("union") && !keyword("enum")
         && !(keyword("type") && at(TokenKind::LeftParen, 1))
         && !is_named_type_reference_start()) {
-      spec.type.spelling = "logic";
+      set_systemverilog_builtin_type(spec.type, support::SystemVerilogBuiltinType::logic);
     }
   }
   bool port_type_explicit = false;
@@ -1842,13 +1846,12 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
     spec.type = default_port_net_type();
     const bool explicit_variable = match_keyword("var");
     port_type_explicit = explicit_variable || is_net_type_keyword()
-        || keyword("string") || keyword("chandle") || keyword("process")
+        || keyword("string") || keyword("chandle")
         || keyword("struct") || keyword("union") || keyword("enum")
         || is_named_type_reference_start();
     const bool explicit_type =
         explicit_variable || is_net_type_keyword()
         || keyword("string") || keyword("chandle")
-        || keyword("process")
         || keyword("struct") || keyword("union") || keyword("enum")
         || is_named_type_reference_start();
     // In Verilog an input or inout port is a net (IEEE 1364-2005 12.3.4).
@@ -1863,7 +1866,6 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
           "a Verilog input or inout port must be a net, not a variable");
     }
     if (keyword("string") || keyword("chandle")
-        || keyword("process")
         || keyword("struct") || keyword("union") || keyword("enum")) {
       spec.type = parse_parameter_type();
     } else if (auto expanded = parse_named_packed_array_type()) {
@@ -1877,32 +1879,31 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
       // A net port of an aggregate, enumeration or user-defined data type
       // (IEEE 1800-2017 6.7.1, 23.2.2.3): `input wire struct_t p;`.
       if (language_ == Language::SystemVerilog2017
-          && net_kind_spelling(spec.type.spelling)) {
-        const auto net_kind = spec.type.spelling;
+          && net_kind_type(spec.type)) {
+        const auto net_kind = spec.type.systemverilog_net_kind;
         if (keyword("struct") || keyword("union") || keyword("enum")) {
           spec.type = parse_parameter_type();
-          spec.type.systemverilog_net_type = net_kind;
+          set_systemverilog_net_type(spec.type, net_kind);
         } else if (is_named_type_reference_start()) {
           if (auto named_array = parse_named_packed_array_type()) {
             spec.type = std::move(*named_array);
           } else {
             spec.type = parse_named_type();
           }
-          spec.type.systemverilog_net_type = net_kind;
+          set_systemverilog_net_type(spec.type, net_kind);
         }
       }
       // `output var b` declares a variable of type logic (IEEE 1800-2017
       // 6.8), not the default net.
       if (explicit_variable && spec.type.spelling == default_spelling
           && !spec.type.packed_range && !spec.type.packed_range_expression) {
-        spec.type.spelling = "logic";
+        set_systemverilog_builtin_type(spec.type, support::SystemVerilogBuiltinType::logic);
         spec.type.domain = ValueDomain::Logic4;
-        spec.type.systemverilog_net_type.clear();
+        clear_systemverilog_net_type(spec.type);
       }
     }
     require_default_port_net_type(current(), explicit_type);
   } else if (keyword("string") || keyword("chandle")
-             || keyword("process")
              || keyword("struct") || keyword("union") || keyword("enum")) {
     spec.type = parse_parameter_type();
   } else if (auto operator_type = parse_type_operator_type()) {
@@ -1917,22 +1918,22 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
     // A net of an aggregate or enumeration data type (IEEE 1800-2017
     // 6.7.1): `wire struct packed {...} w;`.
     if (language_ == Language::SystemVerilog2017
-        && net_kind_spelling(spec.type.spelling)
+        && net_kind_type(spec.type)
         && (keyword("struct") || keyword("union") || keyword("enum"))) {
-      const auto net_kind = spec.type.spelling;
+      const auto net_kind = spec.type.systemverilog_net_kind;
       spec.type = parse_parameter_type();
-      spec.type.systemverilog_net_type = net_kind;
+      set_systemverilog_net_type(spec.type, net_kind);
     } else if (language_ == Language::SystemVerilog2017
-        && net_kind_spelling(spec.type.spelling)
+        && net_kind_type(spec.type)
         && is_named_type_reference_start()) {
       // A net of a user-defined data type: `wire byte_t [1:0] w;`.
-      const auto net_kind = spec.type.spelling;
+      const auto net_kind = spec.type.systemverilog_net_kind;
       if (auto named_array = parse_named_packed_array_type()) {
         spec.type = std::move(*named_array);
       } else {
         spec.type = parse_named_type();
       }
-      spec.type.systemverilog_net_type = net_kind;
+      set_systemverilog_net_type(spec.type, net_kind);
       // A net's data type is integral or an aggregate of integral types;
       // a class handle is not (IEEE 1800-2017 6.7.1).
       if (std::ranges::any_of(unit.systemverilog_classes,
@@ -1948,18 +1949,18 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
   auto drive_strength = parse_verilog_drive_strength("net declaration");
   auto charge_strength = parse_verilog_charge_strength("net declaration");
   if (drive_strength
-      && contains_word(
-      {"reg", "logic", "bit", "byte", "shortint", "int",
-           "longint", "integer", "time", "shortreal", "real",
-           "realtime"},
-          spec.type.spelling)) {
+      && (support::systemverilog_integral(spec.type.systemverilog_builtin)
+          || support::systemverilog_real_family(
+              spec.type.systemverilog_builtin))) {
     error(
         start,
         "FSIM-SV-SEM-150",
         "a variable declaration cannot carry a net drive strength");
     drive_strength.reset();
   }
-  if (charge_strength && spec.type.spelling != "trireg") {
+  if (charge_strength
+      && spec.type.systemverilog_net_kind
+          != support::SystemVerilogNetKind::trireg) {
     error(
         start,
         "FSIM-SV-SEM-151",
@@ -2032,14 +2033,17 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
   std::optional<Delay> charge_decay;
   if (match(TokenKind::Hash)) {
     auto parsed_delay = parse_verilog_delay(previous(), 3);
-    if (spec.type.spelling == "trireg") {
+    if (spec.type.systemverilog_net_kind
+        == support::SystemVerilogNetKind::trireg) {
       charge_decay = std::move(parsed_delay);
     } else {
       net_delay = std::move(parsed_delay);
     }
-    if (spec.type.spelling != "wire"
-        && spec.type.systemverilog_net_type != "wire"
-        && spec.type.spelling != "trireg") {
+    if (spec.type.systemverilog_net_kind != support::SystemVerilogNetKind::wire
+        && spec.type.systemverilog_net_type_kind
+            != support::SystemVerilogNetKind::wire
+        && spec.type.systemverilog_net_kind
+            != support::SystemVerilogNetKind::trireg) {
       error(
           start,
           "FSIM-SV-SEM-110",
@@ -2054,7 +2058,8 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
     unit_foreach_types_.insert_or_assign(name.text, declaration_type);
     if (!declaration_type.systemverilog_container
         && (declaration_type.domain == ValueDomain::String
-            || declaration_type.spelling == "string")) {
+            || declaration_type.systemverilog_builtin
+                == support::SystemVerilogBuiltinType::string)) {
       unit_string_names_.insert(name.text);
     }
     if (declaration_type.systemverilog_container) {
@@ -2067,10 +2072,10 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
     std::optional<Expression> initializer;
     if (match(TokenKind::Assign)) {
       const auto assignment = previous();
-      if (!contains_word(
-              {"wire", "tri", "tri0", "tri1", "wand", "triand",
-               "wor", "trior", "trireg", "supply0", "supply1"},
-              spec.type.spelling)) {
+      if (spec.type.systemverilog_net_kind
+              == support::SystemVerilogNetKind::none
+          || spec.type.systemverilog_net_kind
+              == support::SystemVerilogNetKind::uwire) {
         (void)require_standard(
             "a variable declaration initializer",
             StandardRevision::Verilog2001,
@@ -2082,7 +2087,7 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
         !declaration_type.named_type.empty()
         && initializer
         && initializer->kind == ExpressionKind::Call
-        && initializer->text == "@sv-new";
+        && initializer->marker == support::ExpressionMarker::sv_new;
     // A covergroup variable is a handle like a class variable, constructed
     // by `new` in its declaration or in a procedure (IEEE 1800-2023 19.4).
     const bool covergroup_handle = !declaration_type.named_type.empty()
@@ -2151,10 +2156,13 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
             && (unit.kind == UnitKind::VerilogModule
                 || unit.kind == UnitKind::SystemVerilogProgram
                 || unit.kind == UnitKind::SystemVerilogInterface)
-            && named != "process"
+            && declaration_type.systemverilog_standard_class
+                != support::SystemVerilogStandardClass::process
             // A scoped type may name a package covergroup; one that names a
             // class parsed in this file constructs it.
             && (named.find("::") == std::string::npos
+                || declaration_type.systemverilog_standard_class
+                    != support::SystemVerilogStandardClass::none
                 || known_class_names_.contains(
                     named.substr(named.rfind("::") + 2U))
                 || imported_member(named)
@@ -2178,7 +2186,8 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
         const bool string_runtime_initializer = initializer
             && !declaration_type.systemverilog_container
             && (declaration_type.domain == ValueDomain::String
-                || declaration_type.spelling == "string")
+                || declaration_type.systemverilog_builtin
+                    == support::SystemVerilogBuiltinType::string)
             && initializer->kind == ExpressionKind::Call
             && initializer->text.starts_with('$');
         if (string_runtime_initializer && !package_variable
@@ -2422,15 +2431,20 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
     }
     // A net declaration assignment is a continuous assignment to the net
     // (IEEE 1800-2017 6.7.1, 10.3.1).
-    const auto net_spelling = [](const std::string_view spelling) {
-      return spelling == "wire" || spelling == "tri" || spelling == "tri0"
-          || spelling == "tri1" || spelling == "wand" || spelling == "triand"
-          || spelling == "wor" || spelling == "trior" || spelling == "uwire"
-          || spelling == "supply0" || spelling == "supply1";
-    };
+    const bool driving_net_kind
+        = spec.type.systemverilog_net_kind != support::SystemVerilogNetKind::none
+        && spec.type.systemverilog_net_kind
+            != support::SystemVerilogNetKind::trireg;
+    // A net of a built-in net type under an explicit net-type text
+    // (IEEE 1800-2023 6.7.1); a trireg is not driven by its declaration.
+    const bool typed_driving_net
+        = spec.type.systemverilog_net_type_kind
+            != support::SystemVerilogNetKind::none
+        && spec.type.systemverilog_net_type_kind
+            != support::SystemVerilogNetKind::trireg;
     if (initializer
-        && (net_spelling(spec.type.spelling)
-            || net_spelling(spec.type.systemverilog_net_type))
+        && (driving_net_kind
+            || typed_driving_net)
         && spec.direction == PortDirection::Unknown) {
       Statement driver;
       driver.kind = StatementKind::Assignment;
@@ -2497,9 +2511,9 @@ void VerilogParser::parse_procedural_declaration(Statement& block) {
   Type type = default_verilog_type();
   if (local_parameter && at(TokenKind::Identifier) && at(TokenKind::Assign, 1)) {
     // An untyped parameter takes an integer value.
-    type = Type{ValueDomain::Logic4, "integer", PackedRange{31, 0, true}, true};
+    type = systemverilog_builtin_type(ValueDomain::Logic4, support::SystemVerilogBuiltinType::integer,
+        PackedRange{31, 0, true}, true);
   } else if (keyword("string") || keyword("chandle") || keyword("event")
-      || keyword("process")
       || keyword("struct") || keyword("union") || keyword("enum")) {
     type = parse_parameter_type();
   } else if (auto expanded = parse_named_packed_array_type()) {
@@ -2536,13 +2550,16 @@ void VerilogParser::parse_procedural_declaration(Statement& block) {
     }
   }
   // `var` with an implicit data type declares a logic variable (6.8).
-  if (explicit_variable && type.named_type.empty() && type.spelling == "wire") {
-    type.spelling = "logic";
+  if (explicit_variable && type.named_type.empty()
+      && type.systemverilog_net_kind == support::SystemVerilogNetKind::wire) {
+    set_systemverilog_builtin_type(type, support::SystemVerilogBuiltinType::logic);
   }
-  if (local_parameter && type.named_type.empty() && type.spelling == "wire") {
-    type.spelling = "logic";
+  if (local_parameter && type.named_type.empty()
+      && type.systemverilog_net_kind == support::SystemVerilogNetKind::wire) {
+    set_systemverilog_builtin_type(type, support::SystemVerilogBuiltinType::logic);
   }
-  if (type.named_type.empty() && type.spelling == "wire") {
+  if (type.named_type.empty()
+      && type.systemverilog_net_kind == support::SystemVerilogNetKind::wire) {
     error(
         start,
         "FSIM-SV-UNSUPPORTED-014",
@@ -2633,10 +2650,12 @@ void VerilogParser::check_port_redeclaration(
   const bool atom = !data_type.named_type.empty()
       || !data_type.packed_members.empty()
       || !data_type.enumeration_literals.empty()
-      || contains_word({ "integer", "int", "shortint", "longint", "byte",
-                         "time", "real", "realtime", "shortreal", "string",
-                         "event", "chandle" },
-          data_type.spelling);
+      || (data_type.systemverilog_builtin
+              != support::SystemVerilogBuiltinType::none
+          && !support::systemverilog_integer_vector(
+              data_type.systemverilog_builtin)
+          && data_type.systemverilog_builtin
+              != support::SystemVerilogBuiltinType::void_type);
   bool mismatch = false;
   if (atom) {
     mismatch = ranged(port_type);
@@ -2767,13 +2786,14 @@ void VerilogParser::check_verilog_primitive_net_terminal(const Expression& termi
   if (signal == signals.end()) {
     return;
   }
-  const auto spelling = detail::ascii_lower(signal->type.spelling);
-  if (spelling == "reg" || spelling == "integer" || spelling == "time"
-      || spelling == "real" || spelling == "realtime"
+  const auto signal_kind = signal->type.systemverilog_builtin;
+  using Kind = support::SystemVerilogBuiltinType;
+  if (signal_kind == Kind::reg || signal_kind == Kind::integer || signal_kind == Kind::time
+      || signal_kind == Kind::real || signal_kind == Kind::realtime
       || (systemverilog && signal->type.systemverilog_net_type.empty()
-          && (spelling == "logic" || spelling == "bit" || spelling == "int"
-              || spelling == "byte" || spelling == "shortint"
-              || spelling == "longint"))) {
+          && (signal_kind == Kind::logic || signal_kind == Kind::bit
+              || signal_kind == Kind::int_type || signal_kind == Kind::byte
+              || signal_kind == Kind::shortint || signal_kind == Kind::longint))) {
     if (continuous_assignment) {
       // IEEE 1364-2005 6.1: a continuous assignment drives a net.
       error(instance_start, "FSIM-SV-SEM-412",

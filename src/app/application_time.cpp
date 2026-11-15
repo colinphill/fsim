@@ -364,10 +364,8 @@ void visit_physical_time_units(
     return;
   }
   const auto& expression = *expressions[id.value()];
-  constexpr std::string_view prefix { "@vhdl-physical:" };
-  if (expression.text.starts_with(prefix)) {
-    const auto unit =
-        std::string_view { expression.text }.substr(prefix.size());
+  if (expression.marker == support::ExpressionMarker::vhdl_physical) {
+    const auto unit = std::string_view { expression.marker_argument };
     if (unit_femtoseconds(unit)) {
       function("1" + std::string { unit });
     }
@@ -696,18 +694,17 @@ std::string effective_resolution(
   // (IEEE 1076-2008 5.2.4.3 leaves the resolution limit to the
   // implementation): select the coarsest of 1 ns, 1 ps and 1 fs that
   // divides each one, wherever the literal appears.
-  constexpr std::string_view physical_prefix { "@vhdl-physical:" };
   for (const auto& expression : compiled.vhdl_hir.expressions()) {
     if (implicit_vhdl_time_unit(compiled, expression)) {
       consider_resolution("1" + expression.text);
       continue;
     }
-    if (!expression.text.starts_with(physical_prefix)
+    if (expression.marker != support::ExpressionMarker::vhdl_physical
         || expression.operands.size() != 1U) {
       continue;
     }
     const auto factor = unit_femtoseconds(
-        std::string_view { expression.text }.substr(physical_prefix.size()));
+        std::string_view { expression.marker_argument });
     const auto operand = expression.operands.front();
     const auto* magnitude_expression = operand.valid()
             && operand.value() < vhdl_expression_index.size()
@@ -809,9 +806,9 @@ bool normalize_delays(
       for (auto& operand : expression.operands) {
         if (!normalize_time_literals(operand)) return false;
       }
-      constexpr std::string_view qualification{"@vhdl-qualified:time"};
       if (expression.kind == frontend::ExpressionKind::Call
-          && expression.text == qualification
+          && expression.marker == support::ExpressionMarker::vhdl_qualified
+          && expression.marker_argument == "time"
           && expression.operands.size() == 1) {
         const auto retained_span = expression.span;
         auto replacement = std::move(expression.operands.front());
@@ -819,12 +816,11 @@ bool normalize_delays(
         expression.span = retained_span;
         return true;
       }
-      constexpr std::string_view prefix{"@vhdl-physical:"};
       if (expression.kind != frontend::ExpressionKind::Call
-          || !expression.text.starts_with(prefix)) {
+          || expression.marker != support::ExpressionMarker::vhdl_physical) {
         return true;
       }
-      const auto unit_name = expression.text.substr(prefix.size());
+      const auto unit_name = expression.marker_argument;
       const auto factor = unit_femtoseconds(unit_name);
       if (!factor || shadowed.contains(lowercase(unit_name))) {
         return true;
@@ -856,6 +852,8 @@ bool normalize_delays(
         }
         expression.kind = frontend::ExpressionKind::IntegerLiteral;
         expression.text = std::to_string(*ticks);
+        expression.marker = support::ExpressionMarker::none;
+        expression.marker_argument.clear();
         expression.operands.clear();
         expression.nominal_type = "@builtin:time";
         return true;
@@ -906,6 +904,8 @@ bool normalize_delays(
       expression.kind = frontend::ExpressionKind::IntegerLiteral;
       expression.text = std::to_string(
           scaled_magnitude * literal_factor);
+      expression.marker = support::ExpressionMarker::none;
+      expression.marker_argument.clear();
       expression.operands.clear();
       expression.nominal_type = "@builtin:time";
       return true;
@@ -953,6 +953,7 @@ bool normalize_delays(
             normalize_statement_expressions(statement.statements);
             normalize_statement_expressions(statement.else_statements);
             normalize_statement_expressions(statement.loop_updates);
+            normalize_statement_expressions(statement.loop_initializations);
             for (auto& alternative : statement.case_alternatives) {
               for (auto& choice : alternative.choices) {
                 normalize_expression(choice);
@@ -1554,9 +1555,8 @@ struct VhdlDelayExpression {
                            { *value, { } } }
                      : std::nullopt;
     }
-    constexpr std::string_view prefix { "@vhdl-physical:" };
     if (expression.kind != semantic::vhdl::ExpressionKind::call
-        || !expression.text.starts_with(prefix)
+        || expression.marker != support::ExpressionMarker::vhdl_physical
         || expression.operands.size() != 1U) {
         return std::nullopt;
     }
@@ -1567,7 +1567,7 @@ struct VhdlDelayExpression {
     }
     return VhdlDelayExpression {
         magnitude->magnitude,
-        expression.text.substr(prefix.size())
+        expression.marker_argument
     };
 }
 
@@ -1787,10 +1787,10 @@ private:
                 self(self, operand);
             }
 
-            constexpr auto qualification
-                = std::string_view { "@vhdl-qualified:time" };
             if (expression.kind == semantic::vhdl::ExpressionKind::call
-                && expression.text == qualification
+                && expression.marker
+                    == support::ExpressionMarker::vhdl_qualified
+                && expression.marker_argument == "time"
                 && expression.operands.size() == 1U) {
                 const auto operand = expression.operands.front();
                 if (operand.valid() && operand.value() < index.size()
@@ -1812,8 +1812,6 @@ private:
                 }
             }
 
-            constexpr auto prefix
-                = std::string_view { "@vhdl-physical:" };
             if (const auto factor = implicit_vhdl_time_unit(
                     compiled_, expression)) {
                 if (!tick_femtoseconds_ || *tick_femtoseconds_ == 0U
@@ -1850,7 +1848,8 @@ private:
                 }
             }
             if (expression.kind == semantic::vhdl::ExpressionKind::call
-                && expression.text.starts_with(prefix)) {
+                && expression.marker
+                    == support::ExpressionMarker::vhdl_physical) {
                 normalize_vhdl_physical_expression(expression, index);
             }
             state[id.value()] = 2U;
@@ -1864,9 +1863,7 @@ private:
         semantic::vhdl::Expression& expression,
         const std::span<semantic::vhdl::Expression* const> expressions)
     {
-        constexpr auto prefix = std::string_view { "@vhdl-physical:" };
-        const auto unit = std::string_view { expression.text }.substr(
-            prefix.size());
+        const auto unit = std::string_view { expression.marker_argument };
         const auto factor = unit_femtoseconds(unit);
         if (!factor || user_physical_unit(unit, expression.scope)) {
             return;

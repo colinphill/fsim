@@ -58,6 +58,9 @@ struct ContainerType {
   std::optional<std::uint64_t> maximum_elements;
   std::vector<ContainerDimension> dimensions;
   std::string element_nominal_type;
+  // The SystemVerilog enumeration, structure or union an element profile
+  // names (semantic::sv::nominal_type_index); unset for every other profile.
+  std::optional<std::uint32_t> element_nominal_type_id;
   // Container elements retain exactly one recursive element profile.
   // Aggregate elements retain one profile and optional name per member.
   std::vector<ContainerType> element_types;
@@ -68,11 +71,12 @@ struct ContainerType {
   // shape.
   bool vhdl_shaped{};
   std::uint32_t vhdl_rank{};
-  // A fixed one-dimensional packed or scalar array whose dense storage
-  // exceeds the owning-storage budget: the value's `keys` hold the 32-bit
-  // ordinals of the stored elements in increasing order, paired with
-  // `elements`, and every other element holds the element type's initial
-  // value.
+  // A fixed array of packed, scalar or string elements (any number of
+  // dimensions) whose dense storage exceeds the owning-storage budget: the
+  // value's `keys` hold the 32-bit ordinals (row-major linear ordinals of a
+  // multidimensional array) of the stored elements in increasing order,
+  // paired with `elements` or `string_elements`, and every other element
+  // holds the value's background element (sparse_container_background).
   bool sparse{};
   friend bool operator==(const ContainerType&,
                          const ContainerType&) = default;
@@ -93,8 +97,10 @@ struct ContainerValue {
   // The index ranges of a VHDL shaped value; empty for every other value.
   std::vector<VhdlShapeRange> shape;
   // An associative array's `default:` value from an assignment pattern: a
-  // read of a missing key returns it (IEEE 1800-2017 7.9.11). Run-time
-  // state only; elaborated initial values never carry one.
+  // read of a missing key returns it (IEEE 1800-2017 7.9.11). For a sparse
+  // fixed array, the element every unstored ordinal holds: its
+  // initializer's `default:` value (10.9.1); unset, the element type's
+  // initial value.
   std::optional<PackedLogic4> associative_default;
   std::optional<std::string> associative_default_text;
   ContainerValue() = default;
@@ -137,23 +143,34 @@ maximum_container_elements(const ContainerType& type) noexcept {
 [[nodiscard]] std::size_t
 container_value_size(const ContainerValue& value) noexcept;
 
-/// Whether a fixed array type may use sparse storage: one dimension of
-/// packed or scalar elements.
+/// Whether a fixed array type may use sparse storage: packed, scalar or
+/// string elements, any number of dimensions.
 [[nodiscard]] bool sparse_container_eligible(const ContainerType& type) noexcept;
 
-/// The declared element count of a sparse fixed array.
+/// The declared element count of a sparse fixed array (the product of its
+/// dimensions); saturates at the largest std::uint64_t.
 [[nodiscard]] std::uint64_t
 sparse_container_element_count(const ContainerType& type) noexcept;
 
-/// Element `ordinal` of a sparse fixed array; an element never stored holds
-/// the element type's initial value.
+/// Element `ordinal` of a sparse fixed array of packed or scalar elements;
+/// an element never stored holds the background element.
 [[nodiscard]] PackedLogic4 read_sparse_container_element(
     const ContainerValue& value, std::uint64_t ordinal);
 
-/// Store element `ordinal` of a sparse fixed array, keeping only elements
-/// that differ from the initial value. Returns whether the element changed.
+/// Store element `ordinal` of a sparse fixed array of packed or scalar
+/// elements, keeping only elements that differ from the background element.
+/// Returns whether the element changed.
 bool write_sparse_container_element(
     ContainerValue& value, std::uint64_t ordinal, PackedLogic4 element);
+
+/// Element `ordinal` of a sparse fixed array of strings.
+[[nodiscard]] std::string read_sparse_container_string(
+    const ContainerValue& value, std::uint64_t ordinal);
+
+/// Store element `ordinal` of a sparse fixed array of strings, as
+/// write_sparse_container_element does.
+bool write_sparse_container_string(
+    ContainerValue& value, std::uint64_t ordinal, std::string element);
 
 /// Approximate recursively owned capacity used to enforce the per-value
 /// resource budget independently of host allocator behavior.

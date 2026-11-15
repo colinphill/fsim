@@ -462,7 +462,7 @@ declaration_word_standard(const std::string_view word) {
   }
   if (word == "bit" || word == "byte" || word == "chandle"
       || word == "const" || word == "enum" || word == "int"
-      || word == "logic" || word == "longint" || word == "process"
+      || word == "logic" || word == "longint"
       || word == "shortint" || word == "shortreal" || word == "static"
       || word == "string" || word == "struct" || word == "type"
       || word == "typedef" || word == "union" || word == "var") {
@@ -544,7 +544,7 @@ declaration_word_standard(const std::string_view word) {
            "intersect", "join_any", "join_none", "local", "logic",
            "longint", "matches", "modport", "new", "null", "package",
            "packed", "priority", "program", "property", "protected",
-           "process", "pure", "rand", "randc", "randcase", "randsequence", "ref",
+           "pure", "rand", "randc", "randcase", "randsequence", "ref",
            "return", "sequence", "shortint", "shortreal", "solve",
            "static", "string", "struct", "super", "tagged", "this",
            "throughout", "timeprecision", "timeunit", "type", "typedef",

@@ -634,8 +634,8 @@ endclass
           && *conditional_value->real() == 1.25,
       "real comparisons and conditional truth fold deterministically");
 
-  auto cast = Expression{
-      ExpressionKind::Call, "@sv-cast:shortreal", {exact}, exact.span};
+  auto cast = systemverilog_builtin_cast(
+      fsim::support::SystemVerilogBuiltinType::shortreal, exact, exact.span);
   require(
       propagate_systemverilog_scalar_types(cast, {}, scalar_error)
           && cast.systemverilog_scalar_kind

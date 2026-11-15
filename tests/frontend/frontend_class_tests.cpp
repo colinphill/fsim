@@ -20,6 +20,7 @@
 namespace fsim::tests::frontend {
 
 using namespace fsim::frontend;
+using Marker = fsim::support::ExpressionMarker;
 
 namespace {
 
@@ -337,12 +338,16 @@ endmodule : class_owner
       worker.methods.front().statements.size() == 2
           // `count` is static: `this.count` denotes the class's single
           // storage (IEEE 1800-2017 8.9).
-          && worker.methods.front().statements.back().target.text
-              == "@sv-static-property:work::$unit::Worker::count"
+          && worker.methods.front().statements.back().target.marker
+              == Marker::sv_static_property
+          && worker.methods.front().statements.back().target.marker_argument
+              == "work::$unit::Worker::count"
           && worker.methods.front().statements.back().target.operands
                  .empty()
-          && worker.methods.front().statements.front().task_name
-              == "@sv-base-constructor:work::base_pkg::Base::new"
+          && worker.methods.front().statements.front().task_marker
+              == Marker::sv_base_constructor
+          && worker.methods.front().statements.front().task_marker_argument
+              == "work::base_pkg::Base::new"
           && worker.methods.front().statements.front().task_arguments.front()
                  .text == "super",
       "this and super selections must bind to canonical class members");
@@ -634,50 +639,58 @@ endmodule
           + std::to_string(executable_body.size()));
   require(
       executable_body[0].value.kind == ExpressionKind::Call
-          && executable_body[0].value.text
-              == "@sv-new:work::$unit::ParseObject"
+          && executable_body[0].value.marker == Marker::sv_new_constructor
+          && executable_body[0].value.marker_argument
+              == "work::$unit::ParseObject"
           && executable_body[0].value.call_argument_names
               == std::vector<std::string>{"seed"},
       "new and named constructor actuals must retain a distinct expression");
   require(
       executable_body[1].value.kind == ExpressionKind::Call
-          && executable_body[1].value.text == "@sv-null",
+          && executable_body[1].value.marker == Marker::sv_null,
       "null must retain a distinct expression");
   require(
       executable_body[2].value.text == "handle"
           && executable_body[3].value.kind == ExpressionKind::Binary
           && executable_body[3].value.text == "=="
-          && executable_body[3].value.operands[1].text == "@sv-null",
+          && executable_body[3].value.operands[1].marker == Marker::sv_null,
       "class-handle assignment and equality must retain opaque operands");
   require(
       executable_body[4].value.kind == ExpressionKind::Call
-          && executable_body[4].value.text
-              == "@sv-method:work::$unit::ParseObject::value"
+          && executable_body[4].value.marker == Marker::sv_method
+          && executable_body[4].value.marker_argument
+              == "work::$unit::ParseObject::value"
           && executable_body[4].value.operands.front().text == "handle"
           && executable_body[4].value.call_argument_names
               == std::vector<std::string>({"", "offset"})
-          && executable_body[5].value.text
-              == "@sv-static-property:work::$unit::ParseObject::count"
+          && executable_body[5].value.marker == Marker::sv_static_property
+          && executable_body[5].value.marker_argument
+              == "work::$unit::ParseObject::count"
           && executable_body[6].value.kind == ExpressionKind::Call
-          && executable_body[6].value.text
-              == "@sv-static-method:work::$unit::ParseObject::make",
+          && executable_body[6].value.marker == Marker::sv_static_method
+          && executable_body[6].value.marker_argument
+              == "work::$unit::ParseObject::make",
       "selected methods, named actuals, and class-qualified statics must remain source owned");
   require(
       executable_body[7].value.kind == ExpressionKind::Call
-          && executable_body[7].value.text
-              == "@sv-dollar-cast:work::$unit::ParseObject"
+          && executable_body[7].value.marker == Marker::sv_dollar_cast_class
+          && executable_body[7].value.marker_argument
+              == "work::$unit::ParseObject"
           && executable_body[7].value.operands.size() == 2,
       "$cast must bind to its destination handle type");
   require(
-      executable_body[8].target.text
-              == "@sv-property:work::$unit::ParseObject::payload"
-          && executable_body[8].value.text
-              == "@sv-property:work::$unit::ParseObject::payload",
+      executable_body[8].target.marker == Marker::sv_property
+          && executable_body[8].target.marker_argument
+              == "work::$unit::ParseObject::payload"
+          && executable_body[8].value.marker == Marker::sv_property
+          && executable_body[8].value.marker_argument
+              == "work::$unit::ParseObject::payload",
       "selected properties must bind to their declaring class");
   require(
       executable_body[9].kind == StatementKind::TaskCall
-          && executable_body[9].task_name
-              == "@sv-task:work::$unit::ParseObject::run"
+          && executable_body[9].task_marker == Marker::sv_task
+          && executable_body[9].task_marker_argument
+              == "work::$unit::ParseObject::run"
           && executable_body[9].task_argument_names
               == std::vector<std::string>({"", "cycles"})
           && executable_body[9].task_arguments.front().text == "handle"
@@ -1093,8 +1106,11 @@ endpackage
           parameterized_static_call.design,
           parameterized_static_diagnostics)
           && parameterized_static_call.design.units.front()
-                 .functions.front().statements.front().value.text
-              == "@sv-static-method:work::uvm_parameterized_static_call::"
+                 .functions.front().statements.front().value.marker
+              == Marker::sv_static_method
+          && parameterized_static_call.design.units.front()
+                 .functions.front().statements.front().value.marker_argument
+              == "work::uvm_parameterized_static_call::"
                  "uvm_formatter::format",
       "parameterized static class calls must bind to canonical executable "
       "methods");
@@ -1132,8 +1148,9 @@ endmodule
       registry_alias_static_call.design.units.front()
           .processes.front().statements.front().value;
   require(
-      registry_alias_call.text
-              == "@sv-static-method:work::$unit::Registry::create"
+      registry_alias_call.marker == Marker::sv_static_method
+          && registry_alias_call.marker_argument
+              == "work::$unit::Registry::create"
           && registry_alias_call.call_result_width == 64
           && registry_alias_call.call_result_domain == ValueDomain::Bit2
           && registry_alias_call.operands.size() == 1
@@ -1216,14 +1233,17 @@ endmodule
   const auto& uvm_get_call =
       uvm_call_unit.processes[2].statements.front().condition.operands.front();
   require(
-      uvm_create_call.text.starts_with(
-          "@sv-static-method:@uvm-registry-create:")
+      uvm_create_call.marker == Marker::sv_static_method
+          && uvm_create_call.marker_argument.starts_with(
+              "@uvm-registry-create:")
           && uvm_create_call.call_result_width == 64
-          && uvm_set_call.task_name
-              == "@sv-static-task:@uvm-config-db-set:packed:int:32"
+          && uvm_set_call.task_marker == Marker::sv_static_task
+          && uvm_set_call.task_marker_argument
+              == "@uvm-config-db-set:packed:int:32"
           && uvm_set_call.task_arguments.front().call_result_width == 64
-          && uvm_get_call.text
-              == "@sv-static-method:@uvm-config-db-get:packed:int:32"
+          && uvm_get_call.marker == Marker::sv_static_method
+          && uvm_get_call.marker_argument
+              == "@uvm-config-db-get:packed:int:32"
           && uvm_get_call.call_result_width == 1
           && uvm_get_call.operands.front().call_result_width == 64
           && uvm_get_call.call_argument_directions.back()
@@ -1276,12 +1296,14 @@ endmodule
       user_registry_calls.design.units.front()
           .processes.front().statements.front().value;
   require(
-      !user_create_call.text.starts_with("@sv-static-method:@uvm-registry-create:")
-          && user_create_call.text
-              == "@sv-static-method:work::$unit::uvm_object_registry::create",
+      !user_create_call.marker_argument.starts_with(
+          "@uvm-registry-create:")
+          && user_create_call.marker == Marker::sv_static_method
+          && user_create_call.marker_argument
+              == "work::$unit::uvm_object_registry::create",
       "a $unit class named uvm_object_registry is not the library's "
       "registry and its create must stay an ordinary static call (got "
-          + user_create_call.text + ")");
+          + user_create_call.marker_argument + ")");
 
   auto uvm_compare_call = parse_text(
       "uvm_compare_call.sv",
@@ -1388,7 +1410,7 @@ endmodule
   require(
       indexed_aggregate_value.kind == ExpressionKind::Index
           && indexed_aggregate_value.text == "index.value",
-      "non-class @sv-select markers must fold back to indexed aggregate "
+      "non-class member selection markers must fold back to indexed aggregate "
       "member syntax");
 
   auto out_of_block_argument_types = parse_text(
@@ -1461,13 +1483,13 @@ endclass
           && function_statement_derived->methods.size() == 1
           && function_statement_derived->methods.front().statements.size() == 4
           && function_statement_derived->methods.front()
-                 .statements[0].task_name.starts_with("@sv-task:")
+                 .statements[0].task_marker == Marker::sv_task
           && function_statement_derived->methods.front()
-                 .statements[1].task_name.starts_with("@sv-task:")
+                 .statements[1].task_marker == Marker::sv_task
           && function_statement_derived->methods.front()
-                 .statements[2].task_name.starts_with("@sv-static-task:")
+                 .statements[2].task_marker == Marker::sv_static_task
           && function_statement_derived->methods.front()
-                 .statements[3].task_name == "@sv-object-srandom",
+                 .statements[3].task_marker == Marker::sv_object_srandom,
       "function statements must retain executable class-call identities");
 
   auto recursive_class_task = parse_text(

@@ -39,11 +39,18 @@ namespace {
 
 // The suffix `.all` of any prefix denotes the designated object (IEEE
 // 1076-2008 8.3); any other suffix selects a record element.
-std::string vhdl_selection_suffix(const std::string_view spelling)
+Expression vhdl_selection_node(
+    const std::string_view spelling, Expression prefix, const SourceSpan span)
 {
     auto name = vhdl_name(spelling);
-    return name == "all" ? std::string { "@vhdl-dereference" }
-                         : "@vhdl-member:" + name;
+    std::vector<Expression> operands;
+    operands.push_back(std::move(prefix));
+    if (name == "all") {
+        return marked_expression(support::ExpressionMarker::vhdl_dereference,
+            { }, std::move(operands), span);
+    }
+    return marked_expression(support::ExpressionMarker::vhdl_member,
+        std::move(name), std::move(operands), span);
 }
 
 // A based real literal (IEEE 1076-2008 15.5.3): base # digits . digits #
@@ -481,9 +488,8 @@ Expression VhdlParser::parse_vhdl_name_suffixes(
         if (at(TokenKind::Dot) && at(TokenKind::Identifier, 1)) {
             advance();
             const auto member = advance();
-            prefix = Expression { ExpressionKind::Call,
-                vhdl_selection_suffix(member.text),
-                { std::move(prefix) }, cover(start, member.span) };
+            prefix = vhdl_selection_node(member.text, std::move(prefix),
+                cover(start, member.span));
             continue;
         }
         if (at(TokenKind::Apostrophe) && at(TokenKind::Identifier, 1)) {
@@ -734,7 +740,8 @@ Expression VhdlParser::parse_unary()
     // an attribute prefix (8.6).
     while (at(TokenKind::Apostrophe) && at(TokenKind::Identifier, 1)
         && ((primary.kind == ExpressionKind::Call
-                && !primary.text.starts_with("@vhdl-qualified:"))
+                && primary.marker
+                    != support::ExpressionMarker::vhdl_qualified)
             || primary.kind == ExpressionKind::Index
             || primary.kind == ExpressionKind::Slice)) {
         advance();
@@ -841,10 +848,10 @@ Expression VhdlParser::parse_primary()
         const auto allocator = previous();
         const auto subtype_start = current();
         auto allocated_type = parse_vhdl_type(true, true);
-        Expression subtype { ExpressionKind::Identifier,
-            "@vhdl-subtype:" + allocated_type.spelling,
-            { },
+        Expression subtype { ExpressionKind::Identifier, { }, { },
             cover(subtype_start.span, previous().span) };
+        subtype.marker = support::ExpressionMarker::vhdl_subtype;
+        subtype.marker_argument = allocated_type.spelling;
         const auto append_constraint =
             [&](const DiscreteRangeExpression& constraint) {
                 subtype.operands.push_back(
@@ -860,18 +867,18 @@ Expression VhdlParser::parse_primary()
             append_constraint(constraint);
         }
         std::vector<Expression> operands { std::move(subtype) };
-        std::string operation = "@vhdl-new";
+        auto operation = support::ExpressionMarker::vhdl_new;
         if (match(TokenKind::Apostrophe)) {
-            operation = "@vhdl-new-qualified";
+            operation = support::ExpressionMarker::vhdl_new_qualified;
             operands.push_back(parse_primary());
         }
-        return Expression { ExpressionKind::Call, std::move(operation),
-            std::move(operands),
-            cover(allocator.span, previous().span) };
+        return marked_expression(operation, { }, std::move(operands),
+            cover(allocator.span, previous().span));
     }
     if (match_keyword("null", true)) {
         const auto token = previous();
-        return Expression { ExpressionKind::Call, "@vhdl-null", { }, token.span };
+        return marked_expression(support::ExpressionMarker::vhdl_null, { },
+            { }, token.span);
     }
     if (keyword("true", 0, true) || keyword("false", 0, true)) {
         const auto token = advance();
@@ -928,10 +935,9 @@ Expression VhdlParser::parse_primary()
             };
         if (at(TokenKind::Identifier) && !binary_operation() && std::ranges::find(physical_literal_terminators, vhdl_name(current().text)) == physical_literal_terminators.end()) {
             const auto unit = advance();
-            return Expression { ExpressionKind::Call,
-                "@vhdl-physical:" + vhdl_name(unit.text),
-                { std::move(literal) },
-                cover(token.span, unit.span) };
+            return marked_expression(support::ExpressionMarker::vhdl_physical,
+                vhdl_name(unit.text), { std::move(literal) },
+                cover(token.span, unit.span));
         }
         return literal;
     }
@@ -1032,10 +1038,12 @@ Expression VhdlParser::parse_primary()
             "FSIM-VHDL-PARSE-279");
         Expression subtype {
             ExpressionKind::Identifier,
-            "@vhdl-subtype:" + external_type.spelling,
+            { },
             { },
             cover(first.span, previous().span)
         };
+        subtype.marker = support::ExpressionMarker::vhdl_subtype;
+        subtype.marker_argument = external_type.spelling;
         // Only a written constraint fixes the width; a bare unconstrained
         // mark takes the shape of the object denoted.
         subtype.call_result_width
@@ -1045,14 +1053,12 @@ Expression VhdlParser::parse_primary()
         subtype.call_result_domain = external_type.domain;
         subtype.call_result_signed = external_type.is_signed;
         subtype.nominal_type = external_type.nominal_type;
-        Expression external {
-            ExpressionKind::Call,
-            "@vhdl-external",
+        auto external = marked_expression(
+            support::ExpressionMarker::vhdl_external, { },
             { Expression { ExpressionKind::Identifier, target,
                   std::move(path_indices), first.span },
                 std::move(subtype) },
-            cover(start.span, previous().span)
-        };
+            cover(start.span, previous().span));
         // An external name is a name; an element or record element of the
         // object it denotes is selected by suffix (IEEE 1076-2008 8.3, 8.7).
         if ((at(TokenKind::Dot) && at(TokenKind::Identifier, 1))
@@ -1286,10 +1292,9 @@ Expression VhdlParser::parse_primary()
             && (at(TokenKind::LeftParen) || array_attribute()
                 || (at(TokenKind::Dot) && at(TokenKind::Identifier, 1)
                     && vhdl_name(current(1).text) != "all"))) {
-            selected = Expression { ExpressionKind::Call,
-                "@vhdl-dereference",
-                { std::move(selected) },
-                name.span };
+            selected = marked_expression(
+                support::ExpressionMarker::vhdl_dereference, { },
+                { std::move(selected) }, name.span);
             saw_dereference = true;
         }
         while (match(TokenKind::Dot)) {
@@ -1354,16 +1359,14 @@ Expression VhdlParser::parse_primary()
                     selected.text = canonical;
                 }
                 selected.span = cover(name.span, part.span);
-                selected = Expression { ExpressionKind::Call,
-                    "@vhdl-dereference",
-                    { std::move(selected) },
-                    cover(name.span, part.span) };
+                selected = marked_expression(
+                    support::ExpressionMarker::vhdl_dereference, { },
+                    { std::move(selected) }, cover(name.span, part.span));
                 saw_dereference = true;
             } else if (saw_dereference || method_result) {
-                selected = Expression { ExpressionKind::Call,
-                    "@vhdl-member:" + canonical_part,
-                    { std::move(selected) },
-                    cover(name.span, part.span) };
+                selected = marked_expression(
+                    support::ExpressionMarker::vhdl_member, canonical_part,
+                    { std::move(selected) }, cover(name.span, part.span));
             } else {
                 selected_spelling += '.';
                 selected_spelling += part.text;
@@ -1408,10 +1411,8 @@ Expression VhdlParser::parse_primary()
                     break;
                 }
                 const auto member = expect_identifier("selected dereferenced element");
-                selected = Expression { ExpressionKind::Call,
-                    vhdl_selection_suffix(member.text),
-                    { std::move(selected) },
-                    cover(name.span, member.span) };
+                selected = vhdl_selection_node(member.text,
+                    std::move(selected), cover(name.span, member.span));
             }
             return selected;
         }
@@ -1441,10 +1442,9 @@ Expression VhdlParser::parse_primary()
         if (match(TokenKind::Apostrophe)) {
             if (at(TokenKind::LeftParen)) {
                 auto value = parse_primary();
-                auto qualified = Expression { ExpressionKind::Call,
-                    "@vhdl-qualified:" + canonical,
-                    { std::move(value) },
-                    cover(name.span, previous().span) };
+                auto qualified = marked_expression(
+                    support::ExpressionMarker::vhdl_qualified, canonical,
+                    { std::move(value) }, cover(name.span, previous().span));
                 attach_selected_spelling(qualified);
                 return qualified;
             }
@@ -1623,10 +1623,9 @@ Expression VhdlParser::parse_primary()
                         for (;;) {
                             if (match(TokenKind::Dot)) {
                                 const auto member = expect_identifier("selected attribute element");
-                                value = Expression { ExpressionKind::Call,
-                                    vhdl_selection_suffix(member.text),
-                                    { std::move(value) },
-                                    cover(name.span, member.span) };
+                                value = vhdl_selection_node(member.text,
+                                    std::move(value),
+                                    cover(name.span, member.span));
                                 continue;
                             }
                             // An indexed name or slice of the attribute's
@@ -1635,7 +1634,8 @@ Expression VhdlParser::parse_primary()
                                 break;
                             }
                             const auto& specified
-                                = value.text.starts_with("@vhdl-qualified:")
+                                = value.marker
+                                        == support::ExpressionMarker::vhdl_qualified
                                     && value.operands.size() == 1U
                                 ? value.operands.front()
                                 : value;
@@ -1868,20 +1868,18 @@ Expression VhdlParser::parse_primary()
                 // A function call is the prefix of a selected name in
                 // every revision (IEEE 1076-1993 6.3).
                 const auto member = expect_identifier("selected record element");
-                call = Expression { ExpressionKind::Call,
-                    vhdl_selection_suffix(member.text),
-                    { std::move(call) },
-                    cover(name.span, member.span) };
+                call = vhdl_selection_node(member.text, std::move(call),
+                    cover(name.span, member.span));
             }
             return call;
         }
         if (vhdl_physical_unit_names_.contains(canonical)
             && !vhdl_unit_hiding_object_names_.contains(canonical)) {
-            return Expression { ExpressionKind::Call,
-                "@vhdl-physical:" + canonical,
+            return marked_expression(support::ExpressionMarker::vhdl_physical,
+                canonical,
                 { Expression { ExpressionKind::IntegerLiteral, "1", { },
                     name.span } },
-                name.span };
+                name.span);
         }
         auto expression = Expression {
             ExpressionKind::Identifier, std::move(canonical), { }, name.span

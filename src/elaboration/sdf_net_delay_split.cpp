@@ -4,6 +4,7 @@
 #include "lowerer_driver_regions.hpp"
 #include "sdf_net_delay_dual_write.hpp"
 #include "systemverilog_template_bindings.hpp"
+#include "fsim/support/systemverilog_builtin_type.hpp"
 
 #include <algorithm>
 #include <functional>
@@ -1231,7 +1232,12 @@ SdfNetDelaySplitResult split_sdf_net_delays(ElaboratedDesignState& state)
             signal.initial_value
                 = runtime::PackedLogic4(signal.initial_value.width(), runtime::Logic4::z);
             if (info.systemverilog_net_type.empty()) {
-                info.systemverilog_net_type = "wire";
+                info.systemverilog_net_type = std::string {
+                    support::systemverilog_net_kind_name(
+                        support::SystemVerilogNetKind::wire)
+                };
+                info.systemverilog_net_kind
+                    = support::SystemVerilogNetKind::wire;
             }
         }
         info.id = id;

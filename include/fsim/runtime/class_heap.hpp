@@ -3,6 +3,7 @@
 
 #include "fsim/runtime/packed_value.hpp"
 #include "fsim/runtime/simir_container_value.hpp"
+#include "fsim/support/systemverilog_builtin_type.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -141,6 +142,7 @@ struct SystemVerilogClassRandomState {
   SystemVerilogClassRandomKind kind{SystemVerilogClassRandomKind::None};
   std::size_t width{};
   bool signed_value{};
+  // A user-defined type's name; empty for a built-in type.
   std::string nominal_type;
   bool enabled{true};
   std::uint64_t revision{};
@@ -152,6 +154,9 @@ struct SystemVerilogClassRandomState {
   /// permutation of its values instead of recording them; this counts the
   /// values drawn in the current cycle.
   std::uint64_t randc_position{};
+  /// The built-in data type (IEEE 1800-2023 6.11); none for a user type.
+  support::SystemVerilogBuiltinType builtin{
+      support::SystemVerilogBuiltinType::none};
 };
 
 struct SystemVerilogClassRandomStream {
@@ -193,10 +198,15 @@ struct SystemVerilogClassPropertyDescriptor {
   SystemVerilogClassRandomKind random_kind{
       SystemVerilogClassRandomKind::None};
   bool signed_value{};
+  /// A user-defined type's name (a class identity for a handle); empty for
+  /// a built-in type.
   std::string nominal_type;
   /// A container of containers whose leaves are class handles, held as a
   /// nested value container (IEEE 1800-2017 7.4.5, 8.9).
   bool nested_handles{};
+  /// The built-in data type (IEEE 1800-2023 6.11); none for a user type.
+  support::SystemVerilogBuiltinType builtin{
+      support::SystemVerilogBuiltinType::none};
 };
 
 struct SystemVerilogClassDescriptor {

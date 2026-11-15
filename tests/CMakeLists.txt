@@ -7320,6 +7320,22 @@ set_tests_properties(fsim.application.sv-package-initializers PROPERTIES
   LABELS "application;systemverilog;positive"
   TIMEOUT 600)
 
+# Static variable declaration initializers that are not elaboration constants
+# initialize plain, resolved and aggregate targets before any procedure is
+# armed: no event for a SystemVerilog procedure, no transaction for a VHDL
+# process (IEEE 1800-2023 6.8, 6.21). Interpreter, kernel and verified kernel.
+add_test(
+  NAME fsim.application.sv-initializer-targets
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/systemverilog/sv_initializer_targets"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/systemverilog/sv_initializer_targets/run_sv_initializer_targets.cmake"
+)
+set_tests_properties(fsim.application.sv-initializer-targets PROPERTIES
+  LABELS "application;systemverilog;mixed;positive"
+  TIMEOUT 600)
+
 # A design's compiled objects are ordered, linked and given their IEEE
 # packages by the units they define, not by checksums that carry the
 # workspace path: compile, elaborate and simulate report the same in several

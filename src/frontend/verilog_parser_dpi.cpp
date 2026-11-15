@@ -18,6 +18,25 @@
 
 namespace fsim::frontend {
 
+void mark_type_keyword_token(Token& token, const KeywordSet set)
+{
+  if (token.kind != TokenKind::Identifier
+      || !keyword_reserved(set, token.text)) {
+    return;
+  }
+  token.systemverilog_builtin
+      = support::systemverilog_builtin_type_keyword(token.text);
+  token.systemverilog_type_word = token.text == "signed"
+      ? support::SystemVerilogTypeWord::signed_keyword
+      : token.text == "unsigned"
+      ? support::SystemVerilogTypeWord::unsigned_keyword
+      : token.text == "const"
+      ? support::SystemVerilogTypeWord::const_keyword
+      : token.text == "var"
+      ? support::SystemVerilogTypeWord::var_keyword
+      : support::SystemVerilogTypeWord::none;
+}
+
 namespace {
 
 [[nodiscard]] bool dpi_word(
@@ -123,7 +142,10 @@ void VerilogParser::parse_dpi_declaration(
   std::size_t brace_depth{};
   bool terminated = false;
   while (!at_end()) {
-    const auto token = advance();
+    auto token = advance();
+    // The prototype stays source text; its type keywords are read here
+    // under the active keyword set (IEEE 1800-2023 5.6.2, 35.5.6).
+    mark_type_keyword_token(token, keyword_set_);
     declaration.tokens.push_back(token);
     switch (token.kind) {
     case TokenKind::LeftParen:

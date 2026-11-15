@@ -202,11 +202,12 @@ namespace {
             }
             // A ranged specparam holds its value at the range's width.
             if (source.kind == semantic::sv::ExpressionKind::call
-                && source.text.starts_with("@sv-cast:")
+                && source.marker == support::ExpressionMarker::sv_cast
+                && source.cast_target
+                    == support::SystemVerilogCastTarget::size
                 && source.operands.size() == 1U) {
                 std::size_t width { };
-                const auto digits = std::string_view { source.text }
-                                        .substr(9U);
+                const std::string_view digits { source.marker_argument };
                 const auto parsed = std::from_chars(digits.data(),
                     digits.data() + digits.size(), width);
                 const auto value = specialization.evaluate_integral_expression(
@@ -712,10 +713,9 @@ void HierarchyBuilder::validate_verilog_specify(
                         || (!declaration->systemverilog->type->packed_range
                             && (declaration->systemverilog->type->target
                                     .spelling.empty()
-                                || declaration->systemverilog->type->target
-                                        .spelling.ends_with("real")
-                                || declaration->systemverilog->type->target
-                                        .spelling == "realtime")))) {
+                                || support::systemverilog_real_family(
+                                    declaration->systemverilog->type
+                                        ->builtin))))) {
                     // A specparam whose value names itself has no value.
                     if (!active_declarations.enter(selected->value())) {
                         return std::nullopt;

@@ -19,6 +19,14 @@
 namespace fsim::elaboration {
 namespace {
 
+// A streaming concatenation `{<< ...}` or `{>> ...}` (IEEE 1800-2023 11.4.14).
+[[nodiscard]] bool sv_stream_marker(
+    const support::ExpressionMarker marker) noexcept
+{
+    return marker == support::ExpressionMarker::stream_left
+        || marker == support::ExpressionMarker::stream_right;
+}
+
     // A VHDL for-loop always ends (IEEE 1076-2008 10.10); a loop too long to
     // unroll runs at run time with 64-bit counters.
     constexpr std::uint64_t maximum_runtime_vhdl_for_iterations
@@ -148,15 +156,13 @@ Lowerer::SizedIntegralComparison Lowerer::size_integral_comparison(
 std::optional<std::size_t> Lowerer::hir_tagged_union_aggregate_member(
     const semantic::sv::Expression& expression, const ContainerType& type)
 {
-    constexpr std::string_view prefix { "@sv-tagged:" };
     if (expression.kind != semantic::sv::ExpressionKind::call
-        || !expression.text.starts_with(prefix)
+        || expression.marker != support::ExpressionMarker::sv_tagged
         || expression.operands.size() != 1U
         || !hir_tagged_union_aggregate(type)) {
         return std::nullopt;
     }
-    const auto name = std::string_view { expression.text }.substr(
-        prefix.size());
+    const std::string_view name { expression.marker_argument };
     const auto found = std::find(
         std::next(type.member_names.begin()), type.member_names.end(), name);
     return found == type.member_names.end()
@@ -291,7 +297,7 @@ Lowerer::lower_hir_container_assignment_pattern(
             source, aggregate);
         if (!pattern && !tagged_member && source.kind
                 == semantic::sv::ExpressionKind::call
-            && source.text.starts_with("@sv-tagged:")) {
+            && source.marker == support::ExpressionMarker::sv_tagged) {
             return false;
         }
         // A structure value (`'{default: s}`) is assigned whole (IEEE
@@ -376,7 +382,9 @@ Lowerer::lower_hir_container_assignment_pattern(
                     continue;
                 }
                 std::string_view member_name = association.choice_spelling;
-                if (member_name == "@key"
+                auto key_type = support::SystemVerilogBuiltinType::none;
+                if (association.choice_marker
+                        == support::ExpressionMarker::key
                     && association.choices.size() == 1U) {
                     const auto choice = specialized_hir_unit_->find_expression(
                         association.choices.front());
@@ -384,6 +392,7 @@ Lowerer::lower_hir_container_assignment_pattern(
                         && choice->systemverilog->kind
                             == semantic::sv::ExpressionKind::name) {
                         member_name = choice->systemverilog->text;
+                        key_type = choice->systemverilog->keyword_type;
                     }
                 }
                 // A member key names a member of the top level only.
@@ -405,28 +414,33 @@ Lowerer::lower_hir_container_assignment_pattern(
                                 && type.signed_elements == is_signed
                                 && type.two_state == two_state;
                         };
-                        return member_name == "int" ? packed(32U, true, true)
-                            : member_name == "integer"
+                        using Builtin = support::SystemVerilogBuiltinType;
+                        return key_type == Builtin::int_type
+                            ? packed(32U, true, true)
+                            : key_type == Builtin::integer
                             ? packed(32U, true, false)
-                            : member_name == "shortint"
+                            : key_type == Builtin::shortint
                             ? packed(16U, true, true)
-                            : member_name == "longint"
+                            : key_type == Builtin::longint
                             ? packed(64U, true, true)
-                            : member_name == "byte" ? packed(8U, true, true)
-                            : member_name == "bit" ? packed(1U, false, true)
-                            : member_name == "logic" || member_name == "reg"
+                            : key_type == Builtin::byte ? packed(8U, true, true)
+                            : key_type == Builtin::bit ? packed(1U, false, true)
+                            : key_type == Builtin::logic
+                                || key_type == Builtin::reg
                             ? packed(1U, false, false)
-                            : member_name == "string"
+                            : key_type == Builtin::string
                             ? type.element_kind == ContainerElementKind::String
-                            : member_name == "real"
+                            : key_type == Builtin::real
                             ? type.scalar_kind
                                 == frontend::SystemVerilogScalarKind::Real
-                            : member_name == "shortreal"
+                            : key_type == Builtin::shortreal
                             ? type.scalar_kind
                                 == frontend::SystemVerilogScalarKind::ShortReal
+                            : key_type != Builtin::none
+                            ? false
                             // A named type key (`Pkg::color_t:`) matches
                             // members of that type or of a typedef of it.
-                            : !type.element_nominal_type.empty()
+                            : type.element_nominal_type_id.has_value()
                                 && [&] {
                                        const auto declaration
                                            = hir_systemverilog_named_type_declaration(
@@ -443,9 +457,9 @@ Lowerer::lower_hir_container_assignment_pattern(
                                        std::unordered_set<std::uint32_t> seen;
                                        while (type_id.valid()
                                            && seen.insert(type_id.value()).second) {
-                                           if (semantic::sv::nominal_type_identity(
+                                           if (semantic::sv::nominal_type_index(
                                                    type_id)
-                                               == type.element_nominal_type) {
+                                               == *type.element_nominal_type_id) {
                                                return true;
                                            }
                                            const auto definition
@@ -473,14 +487,12 @@ Lowerer::lower_hir_container_assignment_pattern(
                         }
                     }
                     // A type key may match only members of substructures.
-                    static constexpr std::array<std::string_view, 13>
-                        built_in_types { "int", "integer", "shortint",
-                            "longint", "byte", "bit", "logic", "reg",
-                            "string", "real", "shortreal", "realtime",
-                            "time" };
-                    if (typed || inherited
-                        || std::ranges::find(built_in_types, member_name)
-                            != built_in_types.end()
+                    const bool built_in_key = key_type
+                            != support::SystemVerilogBuiltinType::none
+                        && key_type != support::SystemVerilogBuiltinType::chandle
+                        && key_type != support::SystemVerilogBuiltinType::event
+                        && key_type != support::SystemVerilogBuiltinType::void_type;
+                    if (typed || inherited || built_in_key
                         || hir_systemverilog_named_type_declaration(
                             member_name, source.scope)) {
                         type_keys = true;
@@ -751,11 +763,11 @@ Lowerer::lower_hir_container_assignment_pattern(
                         == semantic::sv::ExpressionKind::assignment_pattern
                     || (member_expression->systemverilog->kind
                             == semantic::sv::ExpressionKind::call
-                        && member_expression->systemverilog->text.starts_with(
-                            "@sv-tagged:")));
+                        && member_expression->systemverilog->marker
+                            == support::ExpressionMarker::sv_tagged));
             const auto nominal_type = packed_pattern
-                ? semantic::sv::nominal_identity_type(
-                    member_type.element_nominal_type)
+                ? semantic::sv::nominal_index_type(
+                    member_type.element_nominal_type_id)
                 : std::nullopt;
             semantic::sv::TypeReference member_reference;
             if (nominal_type) {
@@ -881,8 +893,8 @@ Lowerer::lower_hir_container_assignment_pattern(
                     == semantic::sv::ExpressionKind::assignment_pattern
                 || (source->systemverilog->kind
                         == semantic::sv::ExpressionKind::call
-                    && source->systemverilog->text.starts_with(
-                        "@sv-tagged:")));
+                    && source->systemverilog->marker
+                        == support::ExpressionMarker::sv_tagged));
         auto value = packed_pattern
             ? lower_hir_systemverilog_packed_pattern(
                   value_id, *element_type, target.type->element_width)
@@ -954,7 +966,8 @@ Lowerer::lower_hir_container_assignment_pattern(
                     }
                     continue;
                 }
-                if (association.choice_spelling != "@key"
+                if (association.choice_marker
+                        != support::ExpressionMarker::key
                     || association.choices.size() != 1U) {
                     report(
                         "FSIM-ELAB-SVPATTERN-003",
@@ -1019,7 +1032,8 @@ Lowerer::lower_hir_container_assignment_pattern(
                 continue;
             }
             if (target.type->associative) {
-                if (association.choice_spelling != "@key"
+                if (association.choice_marker
+                        != support::ExpressionMarker::key
                     || association.choices.size() != 1U) {
                     report(
                         "FSIM-ELAB-SVPATTERN-003",
@@ -1228,7 +1242,8 @@ Lowerer::lower_hir_container_assignment_pattern(
                 default_value = association.value;
                 continue;
             }
-            if (association.choice_spelling != "@key"
+            if (association.choice_marker
+                    != support::ExpressionMarker::key
                 || association.choices.size() != 1U) {
                 report(
                     "FSIM-ELAB-SVPATTERN-001",
@@ -1472,9 +1487,9 @@ bool Lowerer::emit_hir_vhdl_call_length_check(
         const auto& source = *expression->vhdl;
         if (source.kind == semantic::vhdl::ExpressionKind::call
             && source.operands.size() == 1U
-            && (source.text == "@vhdl-inertial"
-                || source.text.starts_with(
-                    semantic::vhdl::qualified_expression_prefix))) {
+            && (source.marker == support::ExpressionMarker::vhdl_inertial
+                || source.marker
+                    == support::ExpressionMarker::vhdl_qualified)) {
             value = source.operands.front();
             continue;
         }
@@ -1526,8 +1541,8 @@ void Lowerer::emit_hir_vhdl_initializer_length_checks(
     while (expression && expression->vhdl != nullptr
         && expression->vhdl->kind == semantic::vhdl::ExpressionKind::call
         && expression->vhdl->operands.size() == 1U
-        && expression->vhdl->text.starts_with(
-            semantic::vhdl::qualified_expression_prefix)) {
+        && expression->vhdl->marker
+            == support::ExpressionMarker::vhdl_qualified) {
         value = expression->vhdl->operands.front();
         expression = specialized_hir_unit_->find_expression(value);
     }
@@ -1747,8 +1762,8 @@ bool Lowerer::lower_hir_queue_push(
                 == semantic::sv::ExpressionKind::assignment_pattern
             || (value_expression->systemverilog->kind
                     == semantic::sv::ExpressionKind::call
-                && value_expression->systemverilog->text.starts_with(
-                    "@sv-tagged:")));
+                && value_expression->systemverilog->marker
+                    == support::ExpressionMarker::sv_tagged));
     // The pushed value is converted as in an assignment to an element.
     auto pushed_value = packed_pattern
         ? lower_hir_systemverilog_packed_pattern(
@@ -1899,7 +1914,7 @@ bool Lowerer::lower_hir_statements(
                         + " could not be lowered" + detail + task,
                     origin);
                 if (!task.empty()
-                    && record->systemverilog->task.spelling.starts_with('$')) {
+                    && record->systemverilog->task_call_kind == semantic::sv::CallKind::system) {
                     system_call = record->systemverilog->task.spelling;
                 }
                 if (system_call) {
@@ -1945,7 +1960,8 @@ bool Lowerer::lower_hir_force_release(
         using Kind = semantic::vhdl::ExpressionKind;
         // An external signal name forces the signal it denotes (IEEE
         // 1076-2008 8.7, 10.5.2.1).
-        if (selected.kind == Kind::call && selected.text == "@vhdl-external") {
+        if (selected.kind == Kind::call
+            && selected.marker == support::ExpressionMarker::vhdl_external) {
             const auto signal = hir_vhdl_external_signal(target);
             if (!signal) {
                 return true;
@@ -2903,7 +2919,8 @@ bool Lowerer::hir_contains_deferred_assertion(
             return std::ranges::any_of(list, statement_holds);
         };
         if (holds(source.statements) || holds(source.else_statements)
-            || holds(source.loop_updates)) {
+            || holds(source.loop_updates)
+            || holds(source.loop_initializations)) {
             return true;
         }
         return std::ranges::any_of(source.case_alternatives,
@@ -4569,8 +4586,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
         if (input.kind != semantic::sv::ExpressionKind::call) {
             return std::nullopt;
         }
-        if ((input.text == "process::self"
-                || input.text == "std::process::self")
+        if (input.marker == support::ExpressionMarker::sv_process_self
             && input.operands.empty()) {
             const auto destination = allocate_register(
                 64U, frontend::ValueDomain::Bit2);
@@ -6159,8 +6175,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     || record->systemverilog->form
                         == semantic::sv::DeclarationForm::port)
                 && record->systemverilog->type
-                && (semantic::sv::is_builtin_net_kind(
-                        record->systemverilog->type->target.spelling)
+                && (record->systemverilog->type->net_kind
+                        != support::SystemVerilogNetKind::none
                     || !record->systemverilog->type->systemverilog_net_type
                             .empty());
             if (net_object) {
@@ -6375,10 +6391,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 || (hir_static_container_expression_type(*value)
                     && target_expression->systemverilog->kind
                         == semantic::sv::ExpressionKind::call
-                    && (target_expression->systemverilog->text
-                            == "@stream-left"
-                        || target_expression->systemverilog->text
-                            == "@stream-right")))
+                    && sv_stream_marker(
+                        target_expression->systemverilog->marker)))
             && !signal_assignment && !nonblocking
             && statement->systemverilog->assignment_control
                 == semantic::sv::AssignmentControl::none
@@ -6468,8 +6482,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 }
             } else if (expression.kind
                     == semantic::sv::ExpressionKind::call
-                && (expression.text == "@stream-left"
-                    || expression.text == "@stream-right")
+                && sv_stream_marker(expression.marker)
                 && expression.operands.size() >= 2U) {
                 elements.assign(
                     expression.operands.begin() + 1U,
@@ -6497,8 +6510,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
             const auto& expression = *target_expression->systemverilog;
             const auto streaming = expression.kind
                     == semantic::sv::ExpressionKind::call
-                && (expression.text == "@stream-left"
-                    || expression.text == "@stream-right");
+                && sv_stream_marker(expression.marker);
             if (*composite_target_width == 0U
                 || signal_assignment || nonblocking
                 || statement->systemverilog == nullptr
@@ -7583,12 +7595,10 @@ bool Lowerer::lower_hir_statement_unsuspended(
             && container_value_expression->systemverilog != nullptr
             && container_value_expression->systemverilog->kind
                 == semantic::sv::ExpressionKind::call
-            && (container_value_expression->systemverilog->text
-                    == "@stream-left"
-                || container_value_expression->systemverilog->text
-                    == "@stream-right"
-                || (container_value_expression->systemverilog->text
-                        .starts_with("@sv-cast:")
+            && (sv_stream_marker(
+                    container_value_expression->systemverilog->marker)
+                || (container_value_expression->systemverilog->marker
+                        == support::ExpressionMarker::sv_cast
                     && container_value_expression->systemverilog->operands
                         .size() == 1U
                     && !hir_static_container_expression_type(
@@ -8159,7 +8169,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 = *container_value_expression->systemverilog;
             const auto constructor_call
                 = container_source.kind == semantic::sv::ExpressionKind::call
-                && container_source.text == "@new-array"
+                && container_source.marker
+                    == support::ExpressionMarker::new_array
                 && (container_source.operands.size() == 1U
                     || container_source.operands.size() == 2U);
             const auto constructor_index
@@ -9022,7 +9033,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                       && constructor->systemverilog->text == "new";
                   const bool array_new
                       = source.kind == semantic::sv::ExpressionKind::call
-                      && source.text == "@new-array";
+                      && source.marker
+                          == support::ExpressionMarker::new_array;
                   // A pattern or unpacked array concatenation assigned to an
                   // array member (`a[i].q = '{..}`, `a[i].q = {..}`) is typed
                   // by that member (IEEE 1800-2017 10.9, 10.10).
@@ -9753,7 +9765,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     && value_expression->systemverilog != nullptr
                     && value_expression->systemverilog->kind
                         == semantic::sv::ExpressionKind::call
-                    && value_expression->systemverilog->text == "@new-array"
+                    && value_expression->systemverilog->marker
+                        == support::ExpressionMarker::new_array
                     && (value_expression->systemverilog->operands.size() == 1U
                         || value_expression->systemverilog->operands.size()
                             == 2U);
@@ -10028,8 +10041,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         == semantic::sv::ExpressionKind::assignment_pattern
                     || (value_expression->systemverilog->kind
                             == semantic::sv::ExpressionKind::call
-                        && value_expression->systemverilog->text.starts_with(
-                            "@sv-tagged:")));
+                        && value_expression->systemverilog->marker
+                            == support::ExpressionMarker::sv_tagged));
             const auto diagnostics_before = diagnostics_.size();
             // IEEE 1800-2017 6.12.2: an assignment converts between an
             // integral value and a real or shortreal element.
@@ -10237,16 +10250,14 @@ bool Lowerer::lower_hir_statement_unsuspended(
         }
         // `obj.v[i]` of a multidimensional array is a subarray, written
         // through a value path below.
-        const auto multidimensional_property = [&](std::string_view text) {
-            const auto type = hir_class_value_container_type(text.substr(
-                std::string_view { "@sv-container-index:" }.size()));
+        const auto multidimensional_property = [&](std::string_view identity) {
+            const auto type = hir_class_value_container_type(identity);
             return type && type->fixed && type->dimensions.size() > 1U;
         };
         // `obj.v[i] = new[n]` of a container or aggregate element is written
         // through a value path below as well.
-        const auto nested_property_element = [&](std::string_view text) {
-            const auto type = hir_class_value_container_type(text.substr(
-                std::string_view { "@sv-container-index:" }.size()));
+        const auto nested_property_element = [&](std::string_view identity) {
+            const auto type = hir_class_value_container_type(identity);
             return type && type->element_kind != ContainerElementKind::Packed
                 && type->element_kind != ContainerElementKind::Scalar
                 && type->element_kind != ContainerElementKind::String;
@@ -10254,19 +10265,18 @@ bool Lowerer::lower_hir_statement_unsuspended(
         if (target_expression->systemverilog != nullptr
             && target_expression->systemverilog->kind
                 == semantic::sv::ExpressionKind::call
-            && target_expression->systemverilog->text.starts_with(
-                "@sv-container-index:")
+            && target_expression->systemverilog->marker
+                == support::ExpressionMarker::sv_container_index
             && !multidimensional_property(
-                target_expression->systemverilog->text)
+                target_expression->systemverilog->marker_argument)
             && !nested_property_element(
-                target_expression->systemverilog->text)) {
+                target_expression->systemverilog->marker_argument)) {
             const auto& access = *target_expression->systemverilog;
             if (signal_assignment || nonblocking
                 || access.operands.size() < 2U) {
                 return assignment_rejected(__LINE__);
             }
-            const auto identity = std::string_view { access.text }.substr(
-                std::string_view { "@sv-container-index:" }.size());
+            const std::string_view identity { access.marker_argument };
             // An element of a container of values held by an object, or of
             // a string-keyed associative array of handles (7.8.1).
             const auto string_handles = [&] {
@@ -10390,16 +10400,14 @@ bool Lowerer::lower_hir_statement_unsuspended(
             || (target_expression->systemverilog != nullptr
                 && target_expression->systemverilog->kind
                     == semantic::sv::ExpressionKind::call
-                && target_expression->systemverilog->text.starts_with(
-                    "@sv-container-property:"))) {
+                && target_expression->systemverilog->marker
+                    == support::ExpressionMarker::sv_container_property)) {
             const auto& access = *target_expression->systemverilog;
             // A container of values held by an object takes the assigned
             // value: `new[n]`, a pattern or another container (7.5, 7.6).
             if (const auto identity = boxed_place
                         ? std::string_view { boxed_place->identity }
-                        : std::string_view { access.text }.substr(
-                              std::string_view { "@sv-container-property:" }
-                                  .size());
+                        : std::string_view { access.marker_argument };
                 access.operands.size() == 1U
                 && hir_class_value_container_type(identity)) {
                 const auto held = lower_hir_class_value_container(
@@ -10421,7 +10429,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     && resized->systemverilog != nullptr
                     && resized->systemverilog->kind
                         == semantic::sv::ExpressionKind::call
-                    && resized->systemverilog->text == "@new-array"
+                    && resized->systemverilog->marker
+                        == support::ExpressionMarker::new_array
                     && !resized->systemverilog->operands.empty()
                     && resized->systemverilog->operands.size() <= 2U;
                 if (constructor && constructor->systemverilog != nullptr
@@ -10475,8 +10484,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 && resize_expression->systemverilog != nullptr
                 && resize_expression->systemverilog->kind
                     == semantic::sv::ExpressionKind::index;
-            if (const auto identity = std::string_view { access.text }.substr(
-                    std::string_view { "@sv-container-property:" }.size());
+            if (const std::string_view identity { access.marker_argument };
                 !handle_resize && access.operands.size() == 1U
                 && hir_class_handle_container_type(identity)) {
                 const auto held = lower_hir_class_handle_container(
@@ -10533,9 +10541,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 destination,
                 *receiver,
                 "@container-resize:"
-                    + access.text.substr(std::string_view {
-                        "@sv-container-property:" }
-                            .size()),
+                    + access.marker_argument,
                 { *size },
                 { "" },
                 { static_cast<std::uint8_t>(
@@ -10677,8 +10683,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 constructed && constructed->systemverilog != nullptr
                 && constructed->systemverilog->kind
                     == semantic::sv::ExpressionKind::call
-                && constructed->systemverilog->text.starts_with(
-                    "@sv-sync-new:")) {
+                && constructed->systemverilog->marker
+                    == support::ExpressionMarker::sv_sync_new) {
                 const auto* declared
                     = hir_resolver().resolve_systemverilog_class_property(
                         property->identity, property->static_storage)
@@ -10789,7 +10795,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 external && external->vhdl != nullptr
                 && external->vhdl->kind
                     == semantic::vhdl::ExpressionKind::call
-                && external->vhdl->text == "@vhdl-external") {
+                && external->vhdl->marker
+                    == support::ExpressionMarker::vhdl_external) {
                 const auto signal = hir_vhdl_external_signal(*target);
                 if (!signal) {
                     return std::nullopt;
@@ -10824,7 +10831,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                             != semantic::sv::ExpressionKind::slice)
                     || view->systemverilog->operands.empty()
                     || view->systemverilog->text.starts_with("index.")
-                    || view->systemverilog->text.starts_with("@sv-select:")) {
+                    || view->systemverilog->marker
+                        == support::ExpressionMarker::sv_select) {
                     break;
                 }
                 root = view->systemverilog->operands.front();
@@ -10838,8 +10846,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
             const bool selected_member_root = root_view
                 && root_view->systemverilog != nullptr
                 && (root_view->systemverilog->text.starts_with("index.")
-                    || root_view->systemverilog->text.starts_with(
-                        "@sv-select:"))
+                    || root_view->systemverilog->marker
+                        == support::ExpressionMarker::sv_select)
                 && [&] {
                        const auto member_declaration
                            = hir_target_declaration(root);
@@ -11070,7 +11078,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     && constructed->systemverilog != nullptr
                     && constructed->systemverilog->kind
                         == semantic::sv::ExpressionKind::call
-                    && constructed->systemverilog->text == "@new-array"
+                    && constructed->systemverilog->marker
+                        == support::ExpressionMarker::new_array
                     && !constructed->systemverilog->operands.empty()
                     && constructed->systemverilog->operands.size() <= 2U;
                 if (!path->leaf && !path->type.associative
@@ -11162,11 +11171,10 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     && !vhdl_expression.operands.empty()) {
                     return self(self, vhdl_expression.operands.front());
                 }
-                constexpr auto member_prefix
-                    = std::string_view { "@vhdl-member:" };
                 if (vhdl_expression.kind
                         == semantic::vhdl::ExpressionKind::call
-                    && vhdl_expression.text.starts_with(member_prefix)
+                    && vhdl_expression.marker
+                        == support::ExpressionMarker::vhdl_member
                     && vhdl_expression.operands.size() == 1U) {
                     auto base = self(
                         self, vhdl_expression.operands.front());
@@ -11174,8 +11182,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         return std::nullopt;
                     }
                     *base += '.';
-                    *base += vhdl_expression.text.substr(
-                        member_prefix.size());
+                    *base += vhdl_expression.marker_argument;
                     return base;
                 }
                 return std::nullopt;
@@ -11431,8 +11438,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                             return true;
                         }
                         if (source.kind == Kind::call
-                            && source.text.starts_with(
-                                semantic::vhdl::qualified_expression_prefix)
+                            && source.marker
+                                == support::ExpressionMarker::vhdl_qualified
                             && source.operands.size() == 1U) {
                             return support::with_stack([&] { return self(
                                 self, source.operands.front(), depth + 1U); });
@@ -11444,7 +11451,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                             source.associations,
                             [&](const auto& association) {
                                 const bool choices_are_static = [&] {
-                                    if (association.choice_spelling.empty()) {
+                                    if ((association.choice_spelling.empty()
+                                        && association.choice_marker == support::ExpressionMarker::none)) {
                                         return std::ranges::all_of(
                                             association.choices,
                                             static_choice);
@@ -13817,8 +13825,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     && value_expression->vhdl != nullptr
                     && value_expression->vhdl->kind
                         == semantic::vhdl::ExpressionKind::call
-                    && value_expression->vhdl->text.starts_with(
-                        semantic::vhdl::qualified_expression_prefix);
+                    && value_expression->vhdl->marker
+                        == support::ExpressionMarker::vhdl_qualified;
                 const auto value_declaration_id = value
                     ? hir_referenced_declaration(*value)
                     : std::nullopt;
@@ -14638,8 +14646,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
             && value_expression->systemverilog != nullptr
             && value_expression->systemverilog->kind
                 == semantic::sv::ExpressionKind::call
-            && value_expression->systemverilog->text.starts_with(
-                "@sv-sync-new:")
+            && value_expression->systemverilog->marker
+                == support::ExpressionMarker::sv_sync_new
             && target_declaration && target_declaration->systemverilog != nullptr
             && target_declaration->systemverilog->type) {
             const auto synchronization = lower_hir_synchronization_expression(
@@ -14719,7 +14727,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     && *type.container_form
                         != semantic::sv::TypeForm::static_array)
                 || type.unpacked_dimensions.size() != 1U
-                || type.target.spelling != "byte" || !dimension.left
+                || type.builtin != support::SystemVerilogBuiltinType::byte
+                || !dimension.left
                 || !dimension.right
                 || index_distance(*dimension.left, *dimension.right) + 1U
                     != *assignment_width / 8U) {
@@ -15581,7 +15590,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 }
                 const auto& source = *expression->systemverilog;
                 if (source.kind == semantic::sv::ExpressionKind::call
-                    && !source.text.starts_with('$')
+                    && source.call_kind != semantic::sv::CallKind::system
                     && hir_referenced_declaration(id)) {
                     return true;
                 }
@@ -16505,10 +16514,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                             && expression->vhdl != nullptr
                             && expression->vhdl->kind
                                 == semantic::vhdl::ExpressionKind::call
-                            && (expression->vhdl->text
-                                    == "@vhdl-case-range-to"
-                                || expression->vhdl->text
-                                    == "@vhdl-case-range-downto")
+                            && support::vhdl_case_range(
+                                expression->vhdl->marker)
                             && std::ranges::all_of(
                                 expression->vhdl->operands,
                                 [&](const semantic::ExpressionId bound) {
@@ -17428,10 +17435,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                             return expression && expression->vhdl != nullptr
                                 && expression->vhdl->kind
                                     == semantic::vhdl::ExpressionKind::call
-                                && (expression->vhdl->text
-                                        == "@vhdl-case-range-to"
-                                    || expression->vhdl->text
-                                        == "@vhdl-case-range-downto");
+                                && support::vhdl_case_range(
+                                    expression->vhdl->marker);
                         };
                         if (packed_array_case_selector
                             && is_vhdl_case_range()) {
@@ -18142,10 +18147,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         if (expression && expression->vhdl != nullptr
                             && expression->vhdl->kind
                                 == semantic::vhdl::ExpressionKind::call
-                            && (expression->vhdl->text
-                                    == "@vhdl-case-range-to"
-                                || expression->vhdl->text
-                                    == "@vhdl-case-range-downto")) {
+                            && support::vhdl_case_range(
+                                expression->vhdl->marker)) {
                             const auto& range = *expression->vhdl;
                             const auto bound = [&](
                                 const semantic::ExpressionId id) {
@@ -18182,8 +18185,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                                     continue;
                                 }
                             }
-                            const auto descending = range.text
-                                == "@vhdl-case-range-downto";
+                            const auto descending = range.marker
+                                == support::ExpressionMarker::vhdl_case_range_downto;
                             if ((descending && *left < *right)
                                 || (!descending && *left > *right)) {
                                 continue;
@@ -18304,10 +18307,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                             if (expression && expression->vhdl != nullptr
                                 && expression->vhdl->kind
                                     == semantic::vhdl::ExpressionKind::call
-                                && (expression->vhdl->text
-                                        == "@vhdl-case-range-to"
-                                    || expression->vhdl->text
-                                        == "@vhdl-case-range-downto")) {
+                                && support::vhdl_case_range(
+                                    expression->vhdl->marker)) {
                                 packed_choices
                                     = expression->vhdl->operands;
                             } else {
@@ -18936,10 +18937,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
             if (!systemverilog && expression->vhdl != nullptr
                 && expression->vhdl->kind
                     == semantic::vhdl::ExpressionKind::call
-                && (expression->vhdl->text
-                        == "@vhdl-case-range-to"
-                    || expression->vhdl->text
-                        == "@vhdl-case-range-downto")) {
+                && support::vhdl_case_range(
+                    expression->vhdl->marker)) {
                 const auto& range = *expression->vhdl;
                 if (range.operands.size() != 2U) {
                     return std::nullopt;
@@ -18963,8 +18962,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     right = resize_register(
                         *right, operand.width, signed_values);
                 }
-                const auto descending = range.text
-                    == "@vhdl-case-range-downto";
+                const auto descending = range.marker
+                    == support::ExpressionMarker::vhdl_case_range_downto;
                 const auto valid = allocate_register(
                     1U, frontend::ValueDomain::Boolean);
                 const auto after_left = allocate_register(
@@ -19321,12 +19320,13 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     auto result = LoweredChoice { one, { } };
                     std::vector<bool> selected(type->members.size());
                     const auto named
-                        = pattern.associations.front().choice_spelling
-                        == "@key";
+                        = pattern.associations.front().choice_marker
+                        == support::ExpressionMarker::key;
                     std::size_t positional { };
                     for (const auto& association :
                         pattern.associations) {
-                        if ((association.choice_spelling == "@key")
+                        if ((association.choice_marker
+                                    == support::ExpressionMarker::key)
                             != named) {
                             report(
                                 "FSIM-ELAB-SVMATCH-009",
@@ -20066,7 +20066,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
             return !(condition && condition->systemverilog != nullptr
                 && condition->systemverilog->kind
                     == semantic::sv::ExpressionKind::call
-                && condition->systemverilog->text == "@sv-foreach");
+                && condition->systemverilog->marker
+                    == support::ExpressionMarker::sv_foreach);
         }();
         if (runtime_repeat_count || long_repeat || long_static_for) {
             static_loop_iterations.reset();
@@ -20267,8 +20268,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     && foreach_expression->systemverilog != nullptr
                     && foreach_expression->systemverilog->kind
                         == semantic::sv::ExpressionKind::call
-                    && foreach_expression->systemverilog->text
-                        == "@sv-foreach";
+                    && foreach_expression->systemverilog->marker
+                        == support::ExpressionMarker::sv_foreach;
                 if (systemverilog_foreach) {
                     const auto& foreach
                         = *foreach_expression->systemverilog;
@@ -20534,9 +20535,13 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     && loop_statement.target && loop_statement.loop_initial
                     && loop_statement.condition && loop_statement.value;
                 if (runtime_for) {
+                    // The further initializations run after the first, once
+                    // (12.7.1).
                     if (!lower_loop_assignment(
                             loop_statement.target,
-                            loop_statement.loop_initial)) {
+                            loop_statement.loop_initial)
+                        || !lower_hir_statements(
+                            loop_statement.loop_initializations)) {
                         restore_scope();
                         return false;
                     }
@@ -22050,8 +22055,10 @@ bool Lowerer::lower_hir_statement_unsuspended(
             const auto& loop_statement = *statement->systemverilog;
             if (!loop_statement.loop_repeat
                 && !loop_statement.loop_variable.empty()
-                && !lower_loop_assignment(
-                    loop_statement.target, loop_statement.loop_initial)) {
+                && (!lower_loop_assignment(
+                        loop_statement.target, loop_statement.loop_initial)
+                    || !lower_hir_statements(
+                        loop_statement.loop_initializations))) {
                 restore_scope();
                 return false;
             }
@@ -22152,7 +22159,67 @@ bool Lowerer::lower_hir_statement_unsuspended(
         restore_scope();
         return true;
     };
-    const auto lower_block = [&](const std::string_view label) {
+    // Lowers `body` as a statement that a disable of `label` ends (9.6.2),
+    // and as the foreach statement a break in its innermost loop ends (12.8).
+    const auto lower_disable_target = [&](const std::string_view label,
+                                          const bool foreach_statement,
+                                          const std::vector<std::string>&
+                                              declaration_scope,
+                                          const InstructionIndex block_begin,
+                                          const auto& body) -> bool {
+        const bool named = !label.empty();
+        if (!named && !foreach_statement) {
+            return body();
+        }
+        block_controls_.push_back({
+            std::string { label },
+            { },
+            { },
+            static_cast<InstructionIndex>(process_.operations.size()),
+            foreach_statement,
+        });
+        std::optional<std::size_t> named_control_index;
+        if (named) {
+            named_control_index = named_block_controls_.size();
+            named_block_controls_.push_back({
+                std::string { label }, declaration_scope, block_begin,
+                std::nullopt, { },
+            });
+            emit_disable_scope_marker(
+                DebugPointKind::block_entry, label, span);
+        }
+        if (!body()) {
+            block_controls_.pop_back();
+            if (named_control_index) {
+                named_block_controls_.resize(*named_control_index);
+            }
+            return false;
+        }
+        auto control = std::move(block_controls_.back());
+        block_controls_.pop_back();
+        const auto end = static_cast<InstructionIndex>(
+            process_.operations.size());
+        for (const auto operation : control.disable_jumps) {
+            process_.operations[operation] = DisableBlock {
+                control.begin, end
+            };
+        }
+        if (!named_control_index) {
+            return true;
+        }
+        auto& named_control = named_block_controls_.at(
+            *named_control_index);
+        named_control.end = end;
+        for (const auto operation : named_control.disable_operations) {
+            process_.operations[operation] = DisableBlock {
+                named_control.begin, end
+            };
+        }
+        emit_disable_scope_marker(DebugPointKind::block_exit, label, span);
+        return true;
+    };
+    const auto lower_block = [&](const std::string_view label,
+                                 const bool foreach_statement) {
         const auto saved_scope = hir_process_scope_;
         const auto saved_hir_locals = hir_local_registers_;
         const auto saved_hir_string_locals
@@ -22177,56 +22244,13 @@ bool Lowerer::lower_hir_statement_unsuspended(
             hir_local_registers_ = saved_hir_locals;
             hir_process_scope_ = saved_scope;
         };
-        const bool named = !label.empty();
-        std::optional<std::size_t> named_control_index;
-        if (named) {
-            block_controls_.push_back({
-                std::string { label },
-                { },
-                { },
-                static_cast<InstructionIndex>(process_.operations.size()),
+        const bool lowered = lower_disable_target(label, foreach_statement,
+            declaration_scope, block_begin, [&] {
+                return initialize_hir_declarations(declarations)
+                    && lower_hir_statements(statements);
             });
-            named_control_index = named_block_controls_.size();
-            named_block_controls_.push_back({
-                std::string { label }, declaration_scope, block_begin,
-                std::nullopt, { },
-            });
-            emit_disable_scope_marker(
-                DebugPointKind::block_entry, label, span);
-        }
-        if (!initialize_hir_declarations(declarations)
-            || !lower_hir_statements(statements)) {
-            if (named) {
-                block_controls_.pop_back();
-                named_block_controls_.resize(*named_control_index);
-            }
-            restore_scope();
-            return false;
-        }
-        if (!named) {
-            restore_scope();
-            return true;
-        }
-        auto control = std::move(block_controls_.back());
-        block_controls_.pop_back();
-        const auto end = static_cast<InstructionIndex>(
-            process_.operations.size());
-        for (const auto operation : control.disable_jumps) {
-            process_.operations[operation] = DisableBlock {
-                control.begin, end
-            };
-        }
-        auto& named_control = named_block_controls_.at(
-            *named_control_index);
-        named_control.end = end;
-        for (const auto operation : named_control.disable_operations) {
-            process_.operations[operation] = DisableBlock {
-                named_control.begin, end
-            };
-        }
-        emit_disable_scope_marker(DebugPointKind::block_exit, label, span);
         restore_scope();
-        return true;
+        return lowered;
     };
     const auto lower_fork = [&](const semantic::sv::Statement& input) {
         // The branches run as other processes: they reach `this`'s
@@ -22403,7 +22427,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
             }
             if (!input.label.empty()) {
                 block_controls_.push_back(
-                    { input.label, { }, fork_site, fork_site });
+                    { input.label, { }, fork_site, fork_site, false });
             }
             if (!lower_hir_statement(branch)) {
                 loop_controls_ = std::move(outer_loop_controls);
@@ -23048,10 +23072,45 @@ bool Lowerer::lower_hir_statement_unsuspended(
             }
             return lowered;
         }
-        case semantic::sv::StatementKind::loop:
-            return lower_loop(input.label);
-        case semantic::sv::StatementKind::break_loop:
-            return lower_loop_control({ }, true);
+        case semantic::sv::StatementKind::loop: {
+            if (input.label.empty()) {
+                return lower_loop(input.label);
+            }
+            // A labeled loop is a named scope that a disable ends (9.3.5,
+            // 9.6.2).
+            const auto declaration_scope = local_scope_;
+            const auto loop_begin = static_cast<InstructionIndex>(
+                process_.operations.size());
+            hir_named_blocks_.push_back(input.label);
+            local_scope_.push_back(input.label);
+            const bool lowered = lower_disable_target(input.label, false,
+                declaration_scope, loop_begin,
+                [&] { return lower_loop(input.label); });
+            local_scope_.pop_back();
+            hir_named_blocks_.pop_back();
+            return lowered;
+        }
+        case semantic::sv::StatementKind::break_loop: {
+            if (!input.foreach_break) {
+                return lower_loop_control({ }, true);
+            }
+            // A break in a foreach statement over several dimensions ends
+            // the foreach statement (12.8).
+            const auto control = std::ranges::find_if(
+                block_controls_.rbegin(), block_controls_.rend(),
+                &BlockControlContext::foreach_statement);
+            if (control == block_controls_.rend()) {
+                report("FSIM-ELAB-078",
+                    "a break statement has no enclosing foreach statement",
+                    span);
+                return true;
+            }
+            control->disable_jumps.push_back(
+                static_cast<InstructionIndex>(process_.operations.size()));
+            process_.operations.emplace_back(DisableBlock {
+                control->begin, 0U });
+            return true;
+        }
         case semantic::sv::StatementKind::continue_loop:
             return lower_loop_control({ }, false);
         case semantic::sv::StatementKind::block:
@@ -23062,7 +23121,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
             }
             const auto lowered
                 = input.kind == semantic::sv::StatementKind::block
-                ? lower_block(input.label)
+                ? lower_block(
+                      input.label, input.foreach_collection.has_value())
                 : lower_fork(input);
             if (named) {
                 hir_named_blocks_.pop_back();
@@ -23227,15 +23287,14 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 // 35.5.3).
                 return lower_hir_dpi_export_foreign();
             }
-            if (!input.task.spelling.starts_with('$')) {
+            if (input.task_marker == support::ExpressionMarker::none
+                && input.task_call_kind != semantic::sv::CallKind::system) {
                 if (const auto lowered = lower_hir_dpi_call_statement(
                         statement_id, input.task.spelling, input.task_arguments, span,
                         input.scope)) {
                     return *lowered;
                 }
             }
-            constexpr auto container_push_prefix
-                = std::string_view { "@sv-container-push-back:" };
             constexpr std::array assertion_control_tasks {
                 std::string_view { "$assertcontrol" },
                 std::string_view { "$asserton" },
@@ -23248,16 +23307,6 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 std::string_view { "$assertnonvacuouson" },
                 std::string_view { "$assertvacuousoff" },
             };
-            constexpr auto coverage_sample_procedural_prefix
-                = std::string_view { "@sv-coverage-sample-procedural:" };
-            constexpr auto coverage_sample_explicit_prefix
-                = std::string_view { "@sv-coverage-sample-explicit:" };
-            constexpr auto coverage_sample_event_prefix
-                = std::string_view { "@sv-coverage-sample-event:" };
-            constexpr auto coverage_control_start_prefix
-                = std::string_view { "@sv-coverage-control-start:" };
-            constexpr auto coverage_control_stop_prefix
-                = std::string_view { "@sv-coverage-control-stop:" };
             const auto coverage_database_task
                 = input.task.spelling == "$set_coverage_db_name"
                 || input.task.spelling == "$load_coverage_db";
@@ -24427,7 +24476,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 process_.operations.emplace_back(std::move(request));
                 return true;
             }
-            if (input.task.spelling.starts_with(container_push_prefix)) {
+            if (input.task_marker
+                == support::ExpressionMarker::sv_container_push_back) {
                 if (input.task_arguments.size() != 2U
                     || !input.task_arguments[0].actual
                     || !input.task_arguments[1].actual) {
@@ -24448,8 +24498,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     destination,
                     *receiver,
                     "@container-push-back:"
-                        + input.task.spelling.substr(
-                            container_push_prefix.size()),
+                        + input.task_marker_argument,
                     { *pushed_value },
                     { "" },
                     { static_cast<std::uint8_t>(
@@ -24459,45 +24508,36 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 });
                 return true;
             }
-            if (input.task.spelling.starts_with(
-                    coverage_control_start_prefix)
-                || input.task.spelling.starts_with(
-                    coverage_control_stop_prefix)) {
+            if (input.task_marker
+                    == support::ExpressionMarker::sv_coverage_control_start
+                || input.task_marker
+                    == support::ExpressionMarker::sv_coverage_control_stop) {
                 if (!input.task_arguments.empty()) {
                     return false;
                 }
-                const auto start = input.task.spelling.starts_with(
-                    coverage_control_start_prefix);
-                const auto prefix = start
-                    ? coverage_control_start_prefix
-                    : coverage_control_stop_prefix;
+                const auto start = input.task_marker
+                    == support::ExpressionMarker::sv_coverage_control_start;
                 process_.operations.emplace_back(HostRequest {
                     CoverageControlRequest { start,
-                        input.task.spelling.substr(prefix.size()) },
+                        input.task_marker_argument },
                     { },
                     false,
                 });
                 return true;
             }
-            if (input.task.spelling.starts_with(
-                    coverage_sample_procedural_prefix)
-                || input.task.spelling.starts_with(
-                    coverage_sample_explicit_prefix)
-                || input.task.spelling.starts_with(
-                    coverage_sample_event_prefix)) {
-                const auto trigger = input.task.spelling.starts_with(
-                                         coverage_sample_procedural_prefix)
+            if (input.task_marker
+                    == support::ExpressionMarker::sv_coverage_sample_procedural
+                || input.task_marker
+                    == support::ExpressionMarker::sv_coverage_sample_explicit
+                || input.task_marker
+                    == support::ExpressionMarker::sv_coverage_sample_event) {
+                const auto trigger = input.task_marker
+                        == support::ExpressionMarker::sv_coverage_sample_procedural
                     ? CoverageSampleTrigger::procedural
-                    : input.task.spelling.starts_with(
-                          coverage_sample_event_prefix)
+                    : input.task_marker
+                        == support::ExpressionMarker::sv_coverage_sample_event
                     ? CoverageSampleTrigger::event
                     : CoverageSampleTrigger::explicit_sample;
-                const auto prefix
-                    = trigger == CoverageSampleTrigger::procedural
-                    ? coverage_sample_procedural_prefix
-                    : trigger == CoverageSampleTrigger::event
-                    ? coverage_sample_event_prefix
-                    : coverage_sample_explicit_prefix;
                 std::vector<RegisterId> actuals;
                 std::vector<std::uint32_t> widths;
                 std::vector<std::uint8_t> signed_actuals;
@@ -24534,15 +24574,6 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         ? specialized_hir_unit_->find_declaration(
                               *declaration_id)
                         : std::nullopt;
-                    const auto spelling
-                        = declaration
-                            && declaration->systemverilog != nullptr
-                            && declaration->systemverilog->type
-                        ? std::string_view {
-                              declaration->systemverilog->type
-                                  ->target.spelling
-                          }
-                        : std::string_view { };
                     actuals.push_back(*actual);
                     widths.push_back(static_cast<std::uint32_t>(*width));
                     signed_actuals.push_back(
@@ -24553,7 +24584,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         ? hir_declared_type_scalar_kind(
                               *declaration->systemverilog->type,
                               declaration->systemverilog->scope)
-                        : frontend::systemverilog_scalar_kind(spelling);
+                        : frontend::SystemVerilogScalarKind::None;
                     const auto expression
                         = specialized_hir_unit_->find_expression(
                             *argument.actual);
@@ -24571,7 +24602,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     scalar_kinds.push_back(scalar_kind);
                 }
                 process_.operations.emplace_back(CoverageSample {
-                    input.task.spelling.substr(prefix.size()),
+                    input.task_marker_argument,
                     std::move(actuals),
                     std::move(widths),
                     std::move(signed_actuals),
@@ -24612,7 +24643,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
             }
             // `obj.srandom(seed)` reseeds the object's random number
             // generator (IEEE 1800-2017 18.13.3).
-            if (input.task.spelling == "@sv-object-srandom"
+            if (input.task_marker
+                    == support::ExpressionMarker::sv_object_srandom
                 && input.task_arguments.size() == 2U
                 && input.task_arguments[0].actual
                 && input.task_arguments[1].actual) {
@@ -24636,7 +24668,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
             }
             // `obj.set_randstate(state)` restores the object's random
             // number generator (IEEE 1800-2017 18.13.5).
-            if (input.task.spelling == "@sv-object-set-randstate"
+            if (input.task_marker
+                    == support::ExpressionMarker::sv_object_set_randstate
                 && input.task_arguments.size() == 2U
                 && input.task_arguments[0].actual
                 && input.task_arguments[1].actual) {
@@ -25815,7 +25848,10 @@ bool Lowerer::lower_hir_statement_unsuspended(
             // discarded (23.8, 13.4.1).
             {
                 auto instance_call = *input.value;
-                if (call->systemverilog->text == "@sv-cast:void"
+                if (call->systemverilog->marker
+                        == support::ExpressionMarker::sv_cast
+                    && call->systemverilog->cast_builtin
+                        == support::SystemVerilogBuiltinType::void_type
                     && call->systemverilog->operands.size() == 1U) {
                     instance_call = call->systemverilog->operands.front();
                 }
@@ -25905,7 +25941,10 @@ bool Lowerer::lower_hir_statement_unsuspended(
             // 13.4.1).
             {
                 auto discarded = *input.value;
-                if (container_call.text == "@sv-cast:void"
+                if (container_call.marker
+                        == support::ExpressionMarker::sv_cast
+                    && container_call.cast_builtin
+                        == support::SystemVerilogBuiltinType::void_type
                     && container_call.operands.size() == 1U) {
                     discarded = container_call.operands.front();
                 }
@@ -25915,8 +25954,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     && discarded_expression->systemverilog != nullptr
                     && ((discarded_expression->systemverilog->kind
                                 == semantic::sv::ExpressionKind::call
-                            && discarded_expression->systemverilog->text
-                                == "@sv-dollar-cast")
+                            && discarded_expression->systemverilog->marker
+                                == support::ExpressionMarker::sv_dollar_cast)
                         || discarded_expression->systemverilog->kind
                             == semantic::sv::ExpressionKind::class_cast)) {
                     return lower_hir_expression(discarded, 1U).has_value();
@@ -25927,8 +25966,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     && discarded_expression->systemverilog != nullptr
                     && discarded_expression->systemverilog->kind
                         == semantic::sv::ExpressionKind::call
-                    && discarded_expression->systemverilog->text
-                        == "std::randomize") {
+                    && discarded_expression->systemverilog->marker
+                        == support::ExpressionMarker::sv_std_randomize) {
                     return lower_hir_expression(discarded, 32U).has_value();
                 }
                 // `void'(process::self())` (IEEE 1800-2017 9.7).
@@ -25936,10 +25975,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     && discarded_expression->systemverilog != nullptr
                     && discarded_expression->systemverilog->kind
                         == semantic::sv::ExpressionKind::call
-                    && (discarded_expression->systemverilog->text
-                            == "process::self"
-                        || discarded_expression->systemverilog->text
-                            == "std::process::self")) {
+                    && discarded_expression->systemverilog->marker
+                        == support::ExpressionMarker::sv_process_self) {
                     return lower_hir_expression(discarded, 64U).has_value();
                 }
                 if (discarded != *input.value && discarded_expression
@@ -26019,8 +26056,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     && discarded_expression->systemverilog != nullptr
                     && discarded_expression->systemverilog->kind
                         == semantic::sv::ExpressionKind::call
-                    && discarded_expression->systemverilog->text
-                        .starts_with('$')) {
+                    && discarded_expression->systemverilog->call_kind
+                        == semantic::sv::CallKind::system) {
                     if (hir_expression_is_string(
                             discarded, hir_process_scope_)) {
                         return lower_hir_string_expression(discarded)
@@ -26924,16 +26961,14 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 }
                 return true;
             }
-            constexpr auto push_prefix = std::string_view {
-                "@sv-container-method:push_back:"
-            };
-            if (!container_call.text.starts_with(push_prefix)
+            if (container_call.marker
+                    != support::ExpressionMarker::sv_container_push_back
                 || container_call.operands.size() != 2U) {
                 return false;
             }
             // `push_back` to a queue of values held by an object (7.10.2).
-            if (const auto identity = std::string_view { container_call.text }
-                    .substr(push_prefix.size());
+            if (const std::string_view identity {
+                    container_call.marker_argument };
                 hir_class_value_container_type(identity)) {
                 const auto container = lower_hir_class_value_container(
                     container_call.operands[0], identity);
@@ -26961,8 +26996,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 destination,
                 *receiver,
                 "@container-push-back:"
-                    + container_call.text.substr(
-                        push_prefix.size()),
+                    + container_call.marker_argument,
                 { *pushed_value },
                 { "" },
                 { static_cast<std::uint8_t>(
@@ -27038,7 +27072,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
     case semantic::vhdl::StatementKind::next_loop:
         return lower_loop_control(input.loop_control_label, false);
     case semantic::vhdl::StatementKind::block:
-        return lower_block(input.label);
+        return lower_block(input.label, false);
     case semantic::vhdl::StatementKind::assertion:
     case semantic::vhdl::StatementKind::report: {
         bool valid_report_types = true;
@@ -27460,7 +27494,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     external && external->vhdl != nullptr
                     && external->vhdl->kind
                         == semantic::vhdl::ExpressionKind::call
-                    && external->vhdl->text == "@vhdl-external") {
+                    && external->vhdl->marker
+                    == support::ExpressionMarker::vhdl_external) {
                     const auto denoted = hir_vhdl_external_signal(
                         *sensitivity.expression);
                     if (!denoted) {
@@ -27921,6 +27956,7 @@ void Lowerer::prepare_hir_procedural_continuous_assignments(
             for (const auto& alternative : source.case_alternatives) {
                 self(self, alternative.statements);
             }
+            self(self, source.loop_initializations);
             self(self, source.loop_updates);
         }
     };
@@ -27961,16 +27997,17 @@ bool Lowerer::hir_update_expression_pure(
         break;
     case Kind::call:
         // Member selections and casts are names, not calls.
-        if (!source.text.starts_with("@sv-select:")
-            && !source.text.starts_with("@sv-cast:")
-            && !source.text.starts_with("@sv-property:")
-            && !source.text.starts_with("@sv-container-index:")
-            && !source.text.starts_with("@sv-container-property:")
+        if (source.marker != support::ExpressionMarker::sv_select
+            && source.marker != support::ExpressionMarker::sv_cast
+            && source.marker != support::ExpressionMarker::sv_property
+            && source.marker != support::ExpressionMarker::sv_container_index
+            && source.marker
+                != support::ExpressionMarker::sv_container_property
             // A static property (`K::big`, IEEE 1800-2023 8.9, 8.23)
             // names its storage like a variable.
-            && !source.text.starts_with("@sv-static-property:")
-            && !source.text.starts_with(
-                "@sv-static-container-property:")) {
+            && source.marker != support::ExpressionMarker::sv_static_property
+            && source.marker
+                != support::ExpressionMarker::sv_static_container_property) {
             return false;
         }
         break;
@@ -28388,6 +28425,7 @@ std::optional<SignalId> Lowerer::hir_procedural_assign_owner(
     info.name = name;
     info.width = 32U;
     info.type_name = "int";
+    info.systemverilog_builtin = support::SystemVerilogBuiltinType::int_type;
     info.source_domain = frontend::ValueDomain::Bit2;
     design_.signal_info_.push_back(std::move(info));
     design_.signals_.push_back(Signal {
@@ -28763,6 +28801,7 @@ std::optional<SignalId> Lowerer::hir_local_event_notifier(
         info.name = name;
         info.width = 1U;
         info.type_name = "bit";
+        info.systemverilog_builtin = support::SystemVerilogBuiltinType::bit;
         info.source_domain = frontend::ValueDomain::Bit2;
         design_.signal_info_.push_back(std::move(info));
         design_.signals_.push_back(Signal {
@@ -28791,6 +28830,7 @@ std::optional<SignalId> Lowerer::hir_local_event_notifier(
     info.name = name;
     info.width = 1U;
     info.type_name = "bit";
+    info.systemverilog_builtin = support::SystemVerilogBuiltinType::bit;
     info.source_domain = frontend::ValueDomain::Bit2;
     design_.signal_info_.push_back(std::move(info));
     design_.signals_.push_back(Signal {
@@ -28909,12 +28949,10 @@ Lowerer::hir_named_class_property(const std::string_view name,
         }
         // A mailbox or semaphore property holds its object's handle (IEEE
         // 1800-2017 15.3, 15.4).
-        auto simple = std::string_view { property.type.target.spelling };
-        if (const auto separator = simple.rfind("::");
-            separator != std::string_view::npos) {
-            simple.remove_prefix(separator + 2U);
-        }
-        if ((simple == "mailbox" || simple == "semaphore")
+        if ((property.type.standard_class
+                    == support::SystemVerilogStandardClass::mailbox
+                || property.type.standard_class
+                    == support::SystemVerilogStandardClass::semaphore)
             && !property.type.container_form) {
             return HirNamedClassProperty { property.canonical_identity, object,
                 property.static_storage, 64U, frontend::ValueDomain::Bit2,
@@ -29124,6 +29162,7 @@ std::optional<SignalId> Lowerer::hir_class_heap_notifier()
     info.name = name;
     info.width = 1U;
     info.type_name = "bit";
+    info.systemverilog_builtin = support::SystemVerilogBuiltinType::bit;
     info.source_domain = frontend::ValueDomain::Bit2;
     design_.signal_info_.push_back(std::move(info));
     design_.signals_.push_back(Signal {
@@ -29150,15 +29189,15 @@ void Lowerer::hir_local_event_notifiers(
         if (const auto source = specialized_hir_unit_->find_expression(id);
             !class_heap && source && source->systemverilog != nullptr) {
             using Kind = semantic::sv::ExpressionKind;
-            const auto& text = source->systemverilog->text;
+            const auto marker = source->systemverilog->marker;
             const auto kind = source->systemverilog->kind;
             if (kind == Kind::class_property
                 || kind == Kind::class_static_property
                 || kind == Kind::class_method_call
-                || text.starts_with("@sv-property:")
-                || text.starts_with("@sv-static-property:")
-                || text.starts_with("@sv-container-property:")
-                || text.starts_with("@sv-method:")) {
+                || marker == support::ExpressionMarker::sv_property
+                || marker == support::ExpressionMarker::sv_static_property
+                || marker == support::ExpressionMarker::sv_container_property
+                || marker == support::ExpressionMarker::sv_method) {
                 if (const auto notifier = hir_class_heap_notifier()) {
                     dependencies.push_back(*notifier);
                     class_heap = true;
@@ -29301,6 +29340,7 @@ std::optional<SignalId> Lowerer::hir_monitor_expression_signal(
     info.name = name;
     info.width = *width;
     info.type_name = real_value ? "real" : "logic";
+    info.systemverilog_builtin = real_value ? support::SystemVerilogBuiltinType::real : support::SystemVerilogBuiltinType::logic;
     info.source_domain = domain;
     info.is_signed = hir_expression_signed(expression);
     info.generated = true;
@@ -29719,7 +29759,7 @@ bool Lowerer::lower_hir_sv_stream_target_bits(
         || *slice > std::numeric_limits<std::uint32_t>::max()) {
         return false;
     }
-    if (stream.text == "@stream-left") {
+    if (stream.marker == support::ExpressionMarker::stream_left) {
         ContainerBitstream reverse;
         reverse.operation = ContainerBitstreamOperation::reverse;
         reverse.bits = bits;
@@ -29792,9 +29832,10 @@ bool Lowerer::lower_hir_sv_stream_target_bits(
             if (!second) {
                 return false;
             }
-            if (with.text == "@stream-with-plus") {
+            if (with.marker == support::ExpressionMarker::stream_with_plus) {
                 count = *second;
-            } else if (with.text == "@stream-with-minus") {
+            } else if (with.marker
+                == support::ExpressionMarker::stream_with_minus) {
                 count = *second;
                 start = arithmetic(IntegerBinaryOperator::add,
                     arithmetic(IntegerBinaryOperator::subtract,
@@ -29883,7 +29924,14 @@ bool Lowerer::lower_hir_sv_stream_target_bits(
             with && with->systemverilog != nullptr
             && with->systemverilog->kind
                 == semantic::sv::ExpressionKind::call
-            && with->systemverilog->text.starts_with("@stream-with")) {
+            && (with->systemverilog->marker
+                    == support::ExpressionMarker::stream_with
+                || with->systemverilog->marker
+                    == support::ExpressionMarker::stream_with_range
+                || with->systemverilog->marker
+                    == support::ExpressionMarker::stream_with_plus
+                || with->systemverilog->marker
+                    == support::ExpressionMarker::stream_with_minus)) {
             if (!unpack_with_range(*with->systemverilog)) {
                 return false;
             }

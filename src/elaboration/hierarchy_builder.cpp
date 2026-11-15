@@ -37,9 +37,11 @@ bool same_optional_range(
 /// reading the other once width, range, signedness and kind agree.
 [[nodiscard]] bool plain_verilog_value(const SignalInfo& signal)
 {
-    return (signal.type_name == "reg" || signal.type_name == "wire")
-        && (signal.systemverilog_net_type.empty()
-            || signal.systemverilog_net_type == "wire");
+    return (signal.systemverilog_builtin
+                == support::SystemVerilogBuiltinType::reg
+               && signal.systemverilog_net_type.empty())
+        || signal.systemverilog_net_kind
+            == support::SystemVerilogNetKind::wire;
 }
 
 bool same_vhdl_array_metadata(
@@ -52,7 +54,11 @@ bool same_packed_type_metadata(
 {
     if (left.domain != right.domain || left.spelling != right.spelling
         || left.systemverilog_scalar != right.systemverilog_scalar
-        || left.systemverilog_net_type != right.systemverilog_net_type
+        || left.systemverilog_net_type_kind
+            != right.systemverilog_net_type_kind
+        || (left.systemverilog_net_type_kind
+                == support::SystemVerilogNetKind::none
+            && left.systemverilog_net_type != right.systemverilog_net_type)
         || left.systemverilog_resolution_function
             != right.systemverilog_resolution_function
         || !same_optional_range(left.packed_range, right.packed_range)
@@ -139,13 +145,6 @@ bool same_concurrent_signal_layout(
     // `wire`, whatever the net type of a plain wire.
     const bool interchangeable = read_only && plain_verilog_value(left)
         && plain_verilog_value(right);
-    // A net declared without a net type is a `wire` (IEEE 1800-2017 6.10).
-    const auto net_type = [](const SignalInfo& signal) -> std::string_view {
-        return signal.type_name == "wire"
-                && signal.systemverilog_net_type.empty()
-            ? std::string_view { "wire" }
-            : std::string_view { signal.systemverilog_net_type };
-    };
     if (left.width != right.width
         || (!interchangeable && left.type_name != right.type_name)
         || left.nominal_type != right.nominal_type
@@ -153,7 +152,14 @@ bool same_concurrent_signal_layout(
         || left.resolution != right.resolution
         || left.is_signed != right.is_signed
         || left.systemverilog_scalar != right.systemverilog_scalar
-        || (!interchangeable && net_type(left) != net_type(right))
+        || (!interchangeable
+            && (left.systemverilog_net_kind != right.systemverilog_net_kind
+                // User-defined nettypes (kind none) compare by name
+                // (IEEE 1800-2023 6.6.7).
+                || (left.systemverilog_net_kind
+                        == support::SystemVerilogNetKind::none
+                    && left.systemverilog_net_type
+                        != right.systemverilog_net_type)))
         || !same_optional_range(left.packed_range, right.packed_range)
         || !same_optional_range(left.integer_range, right.integer_range)
         || !same_optional_range(

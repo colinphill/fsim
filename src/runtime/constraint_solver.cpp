@@ -203,7 +203,7 @@ SystemVerilogConstraintSolver::add_variable(
   }
   if (variable.canonical_identity.empty()
       || variable.profile.width == 0
-      || variable.profile.nominal_type.empty()
+      || !names_constraint_type(variable.profile)
       || variable.domain.empty()) {
     throw std::invalid_argument{
         "constraint variable requires an identity, exact profile, and finite domain"};

@@ -581,8 +581,15 @@ endmodule
             && wildcard[0].port
                 == std::optional<std::string> { "*" }
             && implicit_connections.design.units.front()
-                   .processes.front().statements.front().value.text
-                == "@sv-cast:3"
+                   .processes.front().statements.front().value.marker
+                == support::ExpressionMarker::sv_cast
+            && implicit_connections.design.units.front()
+                   .processes.front().statements.front().value.marker_argument
+                == "3"
+            && implicit_connections.design.units.front()
+                   .processes.front().statements.front().value
+                   .systemverilog_cast_target
+                == support::SystemVerilogCastTarget::size
             && implicit_connections.design.units.front()
                    .processes.front().statements.front().value.call_result_width
                 == 3,

@@ -2602,7 +2602,8 @@ void ApplicationTestFixture::test_class_simulation_integration()
             handle, derived_identity + "::generated_value");
         assert(generated_random.kind == fsim::runtime::SystemVerilogClassRandomKind::Randc);
         assert(generated_random.width == 4);
-        assert(generated_random.nominal_type == "logic");
+        assert(generated_random.builtin
+            == fsim::support::SystemVerilogBuiltinType::logic);
         simulation.deposit_class_property(
             handle, base_identity + "::value",
             fsim::runtime::PackedLogic4::from_aval_bval(8, 0, 0));

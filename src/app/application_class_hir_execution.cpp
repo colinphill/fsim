@@ -132,13 +132,41 @@ constexpr std::size_t maximum_literal_width = 16U * 1024U * 1024U;
 
 [[nodiscard]] std::string_view marker_payload(
     const semantic::sv::Expression& expression,
-    const std::string_view marker)
+    const support::ExpressionMarker marker)
 {
     if (!expression.class_member_identity.empty())
         return expression.class_member_identity;
-    return expression.text.starts_with(marker)
-        ? std::string_view { expression.text }.substr(marker.size())
+    return expression.marker == marker
+        ? std::string_view { expression.marker_argument }
         : std::string_view { };
+}
+
+// The method a container query marker stands for (IEEE 1800-2023 7.5.2,
+// 7.10.2, 7.12.3).
+[[nodiscard]] std::string_view container_marker_method_name(
+    const support::ExpressionMarker marker)
+{
+    using Marker = support::ExpressionMarker;
+    switch (marker) {
+    case Marker::sv_container_pop_front:
+        return "pop_front";
+    case Marker::sv_container_pop_back:
+        return "pop_back";
+    case Marker::sv_container_size:
+        return "size";
+    case Marker::sv_container_sum:
+        return "sum";
+    case Marker::sv_container_product:
+        return "product";
+    case Marker::sv_container_and:
+        return "and";
+    case Marker::sv_container_or:
+        return "or";
+    case Marker::sv_container_xor:
+        return "xor";
+    default:
+        return { };
+    }
 }
 
 // Whether a property type is an array of class handles kept as a handle
@@ -154,7 +182,7 @@ constexpr std::size_t maximum_literal_width = 16U * 1024U * 1024U;
 {
     return value != nullptr
         && (value->kind == semantic::sv::ExpressionKind::class_allocation
-            || value->text.starts_with("@sv-new:"));
+            || value->marker == support::ExpressionMarker::sv_new_constructor);
 }
 
 [[nodiscard]] const semantic::sv::SpecializedClassProperty*
@@ -196,13 +224,13 @@ static_string_property(
     const std::span<const semantic::sv::ClassSpecialization> specializations,
     const semantic::sv::Expression& expression)
 {
-    constexpr std::string_view prefix { "@sv-static-property:" };
+    constexpr auto marker = support::ExpressionMarker::sv_static_property;
     if (expression.kind != semantic::sv::ExpressionKind::class_static_property
-        && !expression.text.starts_with(prefix)) {
+        && expression.marker != marker) {
         return nullptr;
     }
     const auto* property = static_class_property(specializations,
-        marker_payload(expression, prefix),
+        marker_payload(expression, marker),
         expression.referenced_name ? expression.referenced_name->selected
                                    : std::nullopt);
     if (property == nullptr || property->type.container_form
@@ -385,15 +413,13 @@ static_string_property(
         return true;
     }
 
-    constexpr std::array<std::string_view, 9> integral_names {
-        "bit", "logic", "reg", "byte", "shortint", "int",
-        "integer", "longint", "time"
-    };
+    // An integral built-in type (IEEE 1800-2023 6.11), directly or through
+    // a typedef chain.
     auto target = index_type.target;
+    auto builtin = index_type.builtin;
     std::vector<semantic::TypeId> visited;
     for (;;) {
-        if (std::ranges::find(integral_names, target.spelling)
-            != integral_names.end()) {
+        if (support::systemverilog_integral(builtin)) {
             return true;
         }
         if (!target.target.valid()
@@ -413,6 +439,7 @@ static_string_property(
         if (definition->form != TypeForm::alias)
             return false;
         target = definition->base.target;
+        builtin = definition->base.builtin;
     }
 }
 
@@ -668,7 +695,7 @@ std::string SystemVerilogClassHirExecution::static_member_specialization(
 SystemVerilogClassHirExecution::StaticPropertySelection
 SystemVerilogClassHirExecution::static_property_selection(
     const semantic::sv::Expression& selection,
-    const std::string_view marker,
+    const support::ExpressionMarker marker,
     const runtime::SystemVerilogClassHandle handle) const
 {
     const auto identity = marker_payload(selection, marker);
@@ -891,19 +918,9 @@ std::size_t SystemVerilogClassHirExecution::variable_width(
             return count * *element_width;
         }
         if (!reference.target.target.valid()) {
-            const auto& builtin = reference.target.spelling;
-            if (builtin == "bit" || builtin == "logic"
-                || builtin == "reg") {
-                return 1U;
+            if (support::systemverilog_integral(reference.builtin)) {
+                return support::systemverilog_builtin_width(reference.builtin);
             }
-            if (builtin == "byte")
-                return 8U;
-            if (builtin == "shortint")
-                return 16U;
-            if (builtin == "int" || builtin == "integer")
-                return 32U;
-            if (builtin == "longint" || builtin == "time")
-                return 64U;
             return std::nullopt;
         }
         if (std::ranges::find(followed, reference.target.target)
@@ -972,16 +989,13 @@ SystemVerilogClassHirExecution::packed_select_bounds(
             || reference.packed_dimensions.size() > 1U) {
             return std::nullopt;
         }
-        const auto& builtin = reference.target.spelling;
         const bool bit_element = !reference.target.target.valid()
-            && (builtin.empty() || builtin == "bit" || builtin == "logic"
-                || builtin == "reg");
+            && (reference.target.spelling.empty()
+                || support::systemverilog_integer_vector(reference.builtin));
         // An integer atom takes no packed dimension (A.2.2.1); a range kept
         // with one is its own `[W-1:0]`.
         const bool integer_atom = !reference.target.target.valid()
-            && (builtin == "byte" || builtin == "shortint" || builtin == "int"
-                || builtin == "integer" || builtin == "longint"
-                || builtin == "time");
+            && support::systemverilog_integer_atom(reference.builtin);
         if (reference.packed_range) {
             // Only a vector of single bits; a packed array of a named type
             // is not one.
@@ -997,14 +1011,13 @@ SystemVerilogClassHirExecution::packed_select_bounds(
             // takes only the select `[0]`.
             if (bit_element)
                 return Bounds { 0, 0 };
-            if (builtin == "byte")
-                return Bounds { 7, 0 };
-            if (builtin == "shortint")
-                return Bounds { 15, 0 };
-            if (builtin == "int" || builtin == "integer")
-                return Bounds { 31, 0 };
-            if (builtin == "longint" || builtin == "time")
-                return Bounds { 63, 0 };
+            if (integer_atom) {
+                return Bounds { static_cast<std::int64_t>(
+                                    support::systemverilog_builtin_width(
+                                        reference.builtin))
+                        - 1,
+                    0 };
+            }
             return std::nullopt;
         }
         if (std::ranges::find(followed, reference.target.target)
@@ -1073,12 +1086,13 @@ std::string SystemVerilogClassHirExecution::target_class_specialization(
     if (target == nullptr)
         return { };
     const auto running = running_specialization(handle);
-    constexpr std::string_view property_prefix { "@sv-property:" };
-    constexpr std::string_view static_prefix { "@sv-static-property:" };
+    constexpr auto property_marker = support::ExpressionMarker::sv_property;
+    constexpr auto static_marker
+        = support::ExpressionMarker::sv_static_property;
     if (target->kind == ExpressionKind::class_static_property
-        || target->text.starts_with(static_prefix)) {
+        || target->marker == static_marker) {
         const auto selected
-            = static_property_selection(*target, static_prefix, handle);
+            = static_property_selection(*target, static_marker, handle);
         return selected.property != nullptr
             ? type_specialization(selected.property->type,
                   selected.specialization.empty()
@@ -1087,7 +1101,7 @@ std::string SystemVerilogClassHirExecution::target_class_specialization(
             : std::string { };
     }
     if (target->kind == ExpressionKind::class_property
-        || target->text.starts_with(property_prefix)) {
+        || target->marker == property_marker) {
         auto owner = handle;
         if (!target->operands.empty()) {
             // Only a receiver read without side effects is followed here;
@@ -1106,7 +1120,7 @@ std::string SystemVerilogClassHirExecution::target_class_specialization(
             }
         }
         const auto* property = instance_property(
-            owner, marker_payload(*target, property_prefix));
+            owner, marker_payload(*target, property_marker));
         return property != nullptr
             ? type_specialization(property->type, running_specialization(owner))
             : std::string { };
@@ -1156,11 +1170,11 @@ SystemVerilogClassHirExecution::evaluate_class_cast(
     if (!source || source->width() != 64U || source->low_word().bval != 0U)
         return std::nullopt;
     const auto object = source->low_word().aval;
-    constexpr std::string_view prefix { "@sv-dollar-cast:" };
     std::string declaration_identity = !cast.class_member_identity.empty()
         ? cast.class_member_identity
-        : cast.text.starts_with(prefix) ? cast.text.substr(prefix.size())
-                                        : std::string { };
+        : cast.marker == support::ExpressionMarker::sv_dollar_cast_class
+        ? cast.marker_argument
+        : std::string { };
     // The destination's class type names one specialization; an object of
     // another specialization of the class does not convert to it (IEEE
     // 1800-2023 8.25).
@@ -1230,22 +1244,17 @@ SystemVerilogClassHirExecution::handle_container_target(
     PackedEnvironment& environment)
 {
     using semantic::sv::ExpressionKind;
-    constexpr std::string_view static_container_prefix {
-        "@sv-static-container-property:"
-    };
-    constexpr std::string_view static_prefix { "@sv-static-property:" };
-    constexpr std::string_view container_prefix { "@sv-container-property:" };
-    constexpr std::string_view property_prefix { "@sv-property:" };
+    using Marker = support::ExpressionMarker;
     const bool static_container
-        = container.text.starts_with(static_container_prefix);
+        = container.marker == Marker::sv_static_container_property;
     const bool instance_container
-        = container.text.starts_with(container_prefix);
-    const auto marker = static_container ? static_container_prefix
-        : instance_container             ? container_prefix
+        = container.marker == Marker::sv_container_property;
+    const auto marker = static_container ? Marker::sv_static_container_property
+        : instance_container             ? Marker::sv_container_property
         : container.kind == ExpressionKind::class_static_property
-            || container.text.starts_with(static_prefix)
-        ? static_prefix
-        : property_prefix;
+            || container.marker == Marker::sv_static_property
+        ? Marker::sv_static_property
+        : Marker::sv_property;
     const auto identity = marker_payload(container, marker);
     // Only a property some class declares as an array of handles is one;
     // a receiver is read only then.
@@ -1260,12 +1269,13 @@ SystemVerilogClassHirExecution::handle_container_target(
     if (identity.empty() || !declared)
         return std::nullopt;
     HandleContainerTarget result;
-    if (marker == static_container_prefix || marker == static_prefix) {
+    if (marker == Marker::sv_static_container_property
+        || marker == Marker::sv_static_property) {
         auto selected = static_property_selection(container, marker, handle);
         result.property = selected.property;
         result.specialization = std::move(selected.specialization);
     } else if (container.kind == ExpressionKind::class_property
-        || container.text.starts_with(marker)) {
+        || container.marker == marker) {
         result.owner = handle;
         if (!container.operands.empty()) {
             const auto receiver = evaluate_packed(
@@ -1365,20 +1375,17 @@ SystemVerilogClassHirExecution::static_value_container(
     const semantic::ExpressionId selection,
     const runtime::SystemVerilogClassHandle handle) const
 {
-    constexpr std::string_view static_container_prefix {
-        "@sv-static-container-property:"
-    };
-    constexpr std::string_view static_prefix { "@sv-static-property:" };
+    using Marker = support::ExpressionMarker;
     const auto* base = expression(selection);
     if (base == nullptr || !base->operands.empty())
         return std::nullopt;
-    const auto marker = base->text.starts_with(static_container_prefix)
-        ? static_container_prefix
+    const auto marker = base->marker == Marker::sv_static_container_property
+        ? Marker::sv_static_container_property
         : base->kind == semantic::sv::ExpressionKind::class_static_property
-            || base->text.starts_with(static_prefix)
-        ? static_prefix
-        : std::string_view { };
-    if (marker.empty())
+            || base->marker == Marker::sv_static_property
+        ? Marker::sv_static_property
+        : Marker::none;
+    if (marker == Marker::none)
         return std::nullopt;
     auto selected = static_property_selection(*base, marker, handle);
     const auto* property = selected.property;
@@ -1905,7 +1912,7 @@ SystemVerilogClassHirExecution::handle_container_key(
         };
     };
     if (index_type->value_form == TypeForm::string
-        || index_type->target.spelling == "string") {
+        || index_type->builtin == support::SystemVerilogBuiltinType::string) {
         StringEnvironment empty_strings;
         auto& strings = strings_ != nullptr ? *strings_ : empty_strings;
         auto key = evaluate_string(index, strings, handle);
@@ -1952,23 +1959,15 @@ SystemVerilogClassHirExecution::evaluate_handle_container_method(
     PackedEnvironment& environment)
 {
     using semantic::sv::TypeForm;
-    constexpr std::string_view container_method_prefix {
-        "@sv-container-method:"
-    };
     if (call.operands.empty())
         return std::nullopt;
     std::optional<HandleContainerTarget> target;
-    if (call.text.starts_with(container_method_prefix)) {
-        // `obj.q.push_back(h)`: the receiver and the property in the call.
-        const auto operation = std::string_view { call.text }.substr(
-            container_method_prefix.size());
-        const auto separator = operation.find(':');
-        if (separator == std::string_view::npos)
-            return std::nullopt;
+    if (support::sv_container_method_family(call.marker)) {
+        // `obj.q.pop_front()`: the receiver and the property in the call.
         semantic::sv::Expression property;
         property.kind = semantic::sv::ExpressionKind::call;
-        property.text = "@sv-container-property:"
-            + std::string { operation.substr(separator + 1U) };
+        property.marker = support::ExpressionMarker::sv_container_property;
+        property.marker_argument = call.marker_argument;
         property.operands.push_back(call.operands.front());
         target = handle_container_target(property, handle, environment);
     } else if (const auto* container = expression(call.operands.front())) {
@@ -2388,12 +2387,13 @@ SystemVerilogClassHirExecution::variable_reference(
         return std::nullopt;
     // A static property of the specialization the selection names (IEEE
     // 1800-2023 8.9, 8.25.1).
-    constexpr std::string_view static_prefix { "@sv-static-property:" };
+    constexpr auto static_marker
+        = support::ExpressionMarker::sv_static_property;
     if (actual->kind == semantic::sv::ExpressionKind::class_static_property
-        || actual->text.starts_with(static_prefix)) {
+        || actual->marker == static_marker) {
         const auto selected
-            = static_property_selection(*actual, static_prefix, handle);
-        const std::string identity { marker_payload(*actual, static_prefix) };
+            = static_property_selection(*actual, static_marker, handle);
+        const std::string identity { marker_payload(*actual, static_marker) };
         const auto specialization = selected.specialization;
         VariableReference reference;
         reference.string_value = selected.property != nullptr
@@ -2428,9 +2428,9 @@ SystemVerilogClassHirExecution::variable_reference(
         }
         return reference;
     }
-    constexpr std::string_view property_prefix { "@sv-property:" };
+    constexpr auto property_marker = support::ExpressionMarker::sv_property;
     if (actual->kind == semantic::sv::ExpressionKind::class_property
-        || actual->text.starts_with(property_prefix)) {
+        || actual->marker == property_marker) {
         if (actual->operands.size() > 1U)
             return std::nullopt;
         if (actual->operands.size() == 1U) {
@@ -2442,7 +2442,7 @@ SystemVerilogClassHirExecution::variable_reference(
             }
         }
         const auto* property = instance_property(
-            handle, marker_payload(*actual, property_prefix));
+            handle, marker_payload(*actual, property_marker));
         if (property == nullptr) {
             return std::nullopt;
         }
@@ -3083,10 +3083,10 @@ SystemVerilogClassHirExecution::evaluate_string(
             ? read_string_property_(handle, property->canonical_identity)
             : std::nullopt;
     }
-    constexpr std::string_view property_prefix { "@sv-property:" };
+    constexpr auto property_marker = support::ExpressionMarker::sv_property;
     if (value != nullptr && read_string_property_
         && (value->kind == semantic::sv::ExpressionKind::class_property
-            || value->text.starts_with(property_prefix))
+            || value->marker == property_marker)
         && value->operands.size() <= 1U) {
         auto owner = handle;
         if (value->operands.size() == 1U) {
@@ -3100,7 +3100,7 @@ SystemVerilogClassHirExecution::evaluate_string(
             }
         }
         const auto* property = instance_property(
-            owner, marker_payload(*value, property_prefix));
+            owner, marker_payload(*value, property_marker));
         return property != nullptr && is_string(property->type)
             ? read_string_property_(owner, property->canonical_identity)
             : std::nullopt;
@@ -3146,9 +3146,10 @@ SystemVerilogClassHirExecution::evaluate_string(
         && (value->kind == semantic::sv::ExpressionKind::call
             || value->kind == semantic::sv::ExpressionKind::class_method_call
             || value->kind == semantic::sv::ExpressionKind::class_static_method_call
-            || value->text.starts_with("@sv-method:")
-            || value->text.starts_with("@sv-base-method:")
-            || value->text.starts_with("@sv-static-method:"))) {
+            || value->marker == support::ExpressionMarker::sv_method
+            || value->marker == support::ExpressionMarker::sv_base_method
+            || value->marker
+                == support::ExpressionMarker::sv_static_method)) {
         return evaluate_string_call(id, handle, environment);
     }
     return std::nullopt;
@@ -3416,7 +3417,7 @@ SystemVerilogClassHirExecution::evaluate_root_container_call(
     PackedEnvironment& environment)
 {
     using semantic::sv::ExpressionKind;
-    constexpr std::string_view property_prefix { "@sv-property:" };
+    constexpr auto property_marker = support::ExpressionMarker::sv_property;
     const bool find_all = method_name == "find_all";
     // Operand 0 is the receiver; find_all(comp_match, comps[, comp]) and
     // get_children(children) (IEEE 1800.2-2020 13.2.4).
@@ -3467,7 +3468,7 @@ SystemVerilogClassHirExecution::evaluate_root_container_call(
     }
     if (target == nullptr
         || (target->kind != ExpressionKind::class_property
-            && !target->text.starts_with(property_prefix))
+            && target->marker != property_marker)
         || !write_class_handle_queue_) {
         throw std::invalid_argument {
             "uvm_root::" + std::string { method_name }
@@ -3493,7 +3494,7 @@ SystemVerilogClassHirExecution::evaluate_root_container_call(
         return std::nullopt;
     }
     write_class_handle_queue_(
-        owner, marker_payload(*target, property_prefix), *components);
+        owner, marker_payload(*target, property_marker), *components);
     return runtime::PackedLogic4::from_aval_bval(1U, 0U, 0U);
 }
 
@@ -3730,20 +3731,16 @@ SystemVerilogClassHirExecution::evaluate_class_array_query(
         }
     }
 
-    constexpr std::string_view container_property_prefix {
-        "@sv-container-property:"
-    };
-    constexpr std::string_view property_prefix { "@sv-property:" };
-    constexpr std::string_view selected_prefix { "@sv-select:" };
-    constexpr std::string_view static_container_property_prefix {
-        "@sv-static-container-property:"
-    };
-    constexpr std::string_view static_property_prefix {
-        "@sv-static-property:"
-    };
-    constexpr std::string_view indexed_container_prefix {
-        "@sv-container-index:"
-    };
+    constexpr auto container_property_marker
+        = support::ExpressionMarker::sv_container_property;
+    constexpr auto property_marker = support::ExpressionMarker::sv_property;
+    constexpr auto selected_marker = support::ExpressionMarker::sv_select;
+    constexpr auto static_container_property_marker
+        = support::ExpressionMarker::sv_static_container_property;
+    constexpr auto static_property_marker
+        = support::ExpressionMarker::sv_static_property;
+    constexpr auto indexed_container_marker
+        = support::ExpressionMarker::sv_container_index;
     struct QueryTarget {
         semantic::sv::TypeReference type;
         const runtime::SystemVerilogClassPropertyValue* storage { };
@@ -3893,7 +3890,7 @@ SystemVerilogClassHirExecution::evaluate_class_array_query(
         }
 
         if (source->kind == ExpressionKind::call
-            && source->text.starts_with(indexed_container_prefix)) {
+            && source->marker == indexed_container_marker) {
             if (source->operands.size() < 2U)
                 return std::nullopt;
             const auto receiver = evaluate_packed(
@@ -3902,7 +3899,7 @@ SystemVerilogClassHirExecution::evaluate_class_array_query(
                 return std::nullopt;
             const auto owner = receiver->low_word().aval;
             const auto identity = marker_payload(
-                *source, indexed_container_prefix);
+                *source, indexed_container_marker);
             const auto* property = instance_property(owner, identity);
             if (property == nullptr)
                 return std::nullopt;
@@ -3927,17 +3924,17 @@ SystemVerilogClassHirExecution::evaluate_class_array_query(
         }
 
         const bool static_container_property
-            = source->text.starts_with(static_container_property_prefix);
+            = source->marker == static_container_property_marker;
         const bool static_property_expression
             = static_container_property
-            || source->text.starts_with(static_property_prefix)
+            || source->marker == static_property_marker
             || source->kind == ExpressionKind::class_static_property;
         if (static_property_expression) {
             const auto identity = marker_payload(
                 *source,
                 static_container_property
-                    ? static_container_property_prefix
-                    : static_property_prefix);
+                    ? static_container_property_marker
+                    : static_property_marker);
             const auto* property = static_class_property(
                 specializations_, identity,
                 source->referenced_name
@@ -3960,14 +3957,12 @@ SystemVerilogClassHirExecution::evaluate_class_array_query(
         }
 
         if (source->kind == ExpressionKind::call
-            && source->text.starts_with(selected_prefix)
+            && source->marker == selected_marker
             && source->operands.size() == 1U) {
             auto base = self(self, source->operands.front(), active);
             if (!base)
                 return std::nullopt;
-            const auto selected_name
-                = std::string_view { source->text }.substr(
-                    selected_prefix.size());
+            const std::string_view selected_name { source->marker_argument };
             if (selected_name.empty()
                 || selected_name.find_first_of(".:[]")
                     != std::string_view::npos) {
@@ -4039,10 +4034,10 @@ SystemVerilogClassHirExecution::evaluate_class_array_query(
         }
 
         const bool direct_container_property
-            = source->text.starts_with(container_property_prefix);
+            = source->marker == container_property_marker;
         const bool instance_property_expression
             = direct_container_property
-            || source->text.starts_with(property_prefix)
+            || source->marker == property_marker
             || source->kind == ExpressionKind::class_property;
         if (!instance_property_expression)
             return std::nullopt;
@@ -4061,9 +4056,8 @@ SystemVerilogClassHirExecution::evaluate_class_array_query(
             return std::nullopt;
 
         const auto property_identity = direct_container_property
-            ? std::string_view { source->text }.substr(
-                  container_property_prefix.size())
-            : marker_payload(*source, property_prefix);
+            ? std::string_view { source->marker_argument }
+            : marker_payload(*source, property_marker);
         const auto* property = instance_property(owner, property_identity);
         if (property == nullptr)
             return std::nullopt;
@@ -4140,17 +4134,8 @@ SystemVerilogClassHirExecution::evaluate_class_array_query(
         if (reference.packed_range) {
             return extent(*reference.packed_range);
         }
-        const auto builtin = reference.target.spelling;
-        if (builtin == "bit" || builtin == "logic" || builtin == "reg")
-            return 1U;
-        if (builtin == "byte")
-            return 8U;
-        if (builtin == "shortint")
-            return 16U;
-        if (builtin == "int" || builtin == "integer")
-            return 32U;
-        if (builtin == "longint" || builtin == "time")
-            return 64U;
+        if (support::systemverilog_integral(reference.builtin))
+            return support::systemverilog_builtin_width(reference.builtin);
 
         const auto type_id = reference.target.target;
         if (!type_id.valid()
@@ -4379,23 +4364,16 @@ SystemVerilogClassHirExecution::evaluate_class_array_query(
                 std::uint64_t width { };
                 bool signed_value { };
             };
-            const auto builtin_domain = [](const std::string_view spelling)
+            // The width and signing of an integral built-in type (IEEE
+            // 1800-2023 6.11 Table 6-8).
+            const auto builtin_domain
+                = [](const support::SystemVerilogBuiltinType kind)
                 -> std::optional<IntegralIndexDomain> {
-                if (spelling == "bit" || spelling == "logic"
-                    || spelling == "reg") {
-                    return IntegralIndexDomain { 1U, false };
-                }
-                if (spelling == "byte")
-                    return IntegralIndexDomain { 8U, true };
-                if (spelling == "shortint")
-                    return IntegralIndexDomain { 16U, true };
-                if (spelling == "int" || spelling == "integer")
-                    return IntegralIndexDomain { 32U, true };
-                if (spelling == "longint")
-                    return IntegralIndexDomain { 64U, true };
-                if (spelling == "time")
-                    return IntegralIndexDomain { 64U, false };
-                return std::nullopt;
+                const auto width = support::systemverilog_builtin_width(kind);
+                if (width == 0U)
+                    return std::nullopt;
+                return IntegralIndexDomain { width,
+                    support::systemverilog_builtin_default_signed(kind) };
             };
             const auto systemverilog_domain = [&](
                                                   auto&& self,
@@ -4433,8 +4411,7 @@ SystemVerilogClassHirExecution::evaluate_class_array_query(
                     }
                     return std::nullopt;
                 }
-                const auto builtin = builtin_domain(
-                    reference.target.spelling);
+                const auto builtin = builtin_domain(reference.builtin);
                 if (builtin) {
                     return IntegralIndexDomain { builtin->width,
                         reference.signed_value };
@@ -4685,12 +4662,10 @@ SystemVerilogClassHirExecution::evaluate_class_handle_index(
 {
     using semantic::sv::ExpressionKind;
     using semantic::sv::TypeForm;
-    constexpr std::string_view indexed_container_prefix {
-        "@sv-container-index:"
-    };
-    constexpr std::string_view static_container_prefix {
-        "@sv-static-container-property:"
-    };
+    constexpr auto indexed_container_marker
+        = support::ExpressionMarker::sv_container_index;
+    constexpr auto static_container_marker
+        = support::ExpressionMarker::sv_static_container_property;
 
     const semantic::sv::TypeReference* type { };
     const runtime::SystemVerilogClassPropertyValue* storage { };
@@ -4698,7 +4673,7 @@ SystemVerilogClassHirExecution::evaluate_class_handle_index(
     std::vector<semantic::ExpressionId> indices;
 
     if (source.kind == ExpressionKind::call
-        && source.text.starts_with(indexed_container_prefix)
+        && source.marker == indexed_container_marker
         && source.operands.size() >= 2U) {
         const auto receiver = evaluate_packed(
             source.operands.front(), handle, environment);
@@ -4708,7 +4683,7 @@ SystemVerilogClassHirExecution::evaluate_class_handle_index(
         if (owner == 0U || !heap_.contains(owner))
             return std::nullopt;
         const auto identity = marker_payload(
-            source, indexed_container_prefix);
+            source, indexed_container_marker);
         const auto* property = instance_property(owner, identity);
         if (property == nullptr)
             return std::nullopt;
@@ -4720,11 +4695,11 @@ SystemVerilogClassHirExecution::evaluate_class_handle_index(
         && source.operands.size() == 2U) {
         const auto* base = expression(source.operands.front());
         if (base == nullptr
-            || !base->text.starts_with(static_container_prefix)) {
+            || base->marker != static_container_marker) {
             return std::nullopt;
         }
         const auto selected = static_property_selection(
-            *base, static_container_prefix, handle);
+            *base, static_container_marker, handle);
         const auto* property = selected.property;
         if (property == nullptr || !read_static_property_value_)
             return std::nullopt;
@@ -5278,8 +5253,9 @@ SystemVerilogClassHirExecution::evaluate_typed_actual(
         const auto* definition = call_aggregate_definition(type);
         return definition != nullptr
                 && semantic::sv::has_nominal_type_identity(definition->form)
-            ? semantic::sv::nominal_type_identity(definition->id)
-            : std::string { };
+            ? std::optional<std::uint32_t> {
+                  semantic::sv::nominal_type_index(definition->id) }
+            : std::optional<std::uint32_t> { };
     };
     const auto scalar_kind = [this](
                                  const semantic::sv::TypeReference& type) {
@@ -5288,7 +5264,7 @@ SystemVerilogClassHirExecution::evaluate_typed_actual(
         for (;;) {
             using Scalar = runtime::SystemVerilogScalarKind;
             if (const auto kind = frontend::systemverilog_scalar_kind(
-                    current.target.spelling);
+                    current.builtin);
                 kind != Scalar::None) {
                 return kind;
             }
@@ -5393,7 +5369,7 @@ SystemVerilogClassHirExecution::evaluate_typed_actual(
             if (profile.element_kind != ElementKind::Aggregate
                 || profile.union_aggregate
                     != (definition->form == TypeForm::unpacked_union)
-                || profile.element_nominal_type != nominal_identity(type)
+                || profile.element_nominal_type_id != nominal_identity(type)
                 || profile.member_names.size() != definition->members.size()
                 || profile.element_types.size() != definition->members.size()) {
                 return false;
@@ -5443,7 +5419,7 @@ SystemVerilogClassHirExecution::evaluate_typed_actual(
             return false;
         }
         const auto nominal = nominal_identity(type);
-        return nominal.empty() || profile.element_nominal_type == nominal;
+        return !nominal || profile.element_nominal_type_id == nominal;
     };
     const auto storage_shape_matches = [](
         const runtime::simir::ContainerValue& value,
@@ -5659,9 +5635,8 @@ SystemVerilogClassHirExecution::evaluate_typed_actual(
             array.kind = CallValue::Kind::array;
             array.type = type;
 
-            constexpr std::string_view container_prefix {
-                "@sv-container-property:"
-            };
+            constexpr auto container_marker
+                = support::ExpressionMarker::sv_container_property;
             if (value->kind == ExpressionKind::name
                 && value->referenced_name
                 && value->referenced_name->selected) {
@@ -5722,7 +5697,7 @@ SystemVerilogClassHirExecution::evaluate_typed_actual(
                     return array;
                 }
             }
-            if (value->text.starts_with(container_prefix)) {
+            if (value->marker == container_marker) {
                 auto owner = handle;
                 if (value->operands.size() > 1U)
                     return std::nullopt;
@@ -5734,7 +5709,7 @@ SystemVerilogClassHirExecution::evaluate_typed_actual(
                     owner = receiver->low_word().aval;
                 }
                 const auto* property = instance_property(
-                    owner, marker_payload(*value, container_prefix));
+                    owner, marker_payload(*value, container_marker));
                 if (property == nullptr || !heap_.contains(owner))
                     return std::nullopt;
                 if (const auto form = array_form(property->type);
@@ -5843,7 +5818,8 @@ SystemVerilogClassHirExecution::evaluate_typed_actual(
                         association.choices.front());
                     if (choice == nullptr)
                         return std::nullopt;
-                    const auto& name = association.choice_spelling.empty()
+                    const auto& name = (association.choice_spelling.empty()
+                        && association.choice_marker == support::ExpressionMarker::none)
                         ? choice->text : association.choice_spelling;
                     for (std::size_t index = 0U;
                          index < definition->members.size(); ++index) {
@@ -5881,7 +5857,7 @@ SystemVerilogClassHirExecution::evaluate_typed_actual(
         if (!type.class_identity.empty()) {
             if (!value->nominal_type.empty()) {
                 scalar.type.class_identity = value->nominal_type;
-            } else if (value->text != "@sv-null") {
+            } else if (value->marker != support::ExpressionMarker::sv_null) {
                 return std::nullopt;
             }
         }
@@ -6011,15 +5987,15 @@ SystemVerilogClassHirExecution::evaluate_bound_call_value(
         }
         return *actual_member->second;
     }
-    constexpr std::string_view selected_prefix { "@sv-select:" };
+    constexpr auto selected_marker = support::ExpressionMarker::sv_select;
     if (value->kind == semantic::sv::ExpressionKind::call
-        && value->text.starts_with(selected_prefix)
+        && value->marker == selected_marker
         && value->operands.size() == 1U) {
         auto aggregate = evaluate_bound_call_value(
             value->operands.front(), handle, environment);
         if (!aggregate || aggregate->kind != CallValue::Kind::structure)
             return std::nullopt;
-        const auto name = marker_payload(*value, selected_prefix);
+        const auto name = marker_payload(*value, selected_marker);
         const auto member = std::ranges::find(
             aggregate->members, name,
             [](const auto& entry) -> const std::string& { return entry.first; });
@@ -6081,28 +6057,29 @@ SystemVerilogClassHirExecution::evaluate_packed(
     }
     using semantic::sv::ExpressionKind;
     if (value->kind == ExpressionKind::call
-        && value->text.starts_with("@sv-container-index:")) {
+        && value->marker == support::ExpressionMarker::sv_container_index) {
         return evaluate_class_handle_index(*value, handle, environment);
     }
     if ((value->kind == ExpressionKind::class_cast
             || (value->kind == ExpressionKind::call
-                && (value->text == "@sv-dollar-cast"
-                    || value->text.starts_with("@sv-dollar-cast:"))))
+                && (value->marker == support::ExpressionMarker::sv_dollar_cast
+                    || value->marker
+                        == support::ExpressionMarker::sv_dollar_cast_class)))
         && value->operands.size() == 2U) {
         return evaluate_class_cast(*value, handle, environment);
     }
     // `T'(x)`: an integral cast to a built-in, sign or size target, or to a
     // typedef of a packed integral type (IEEE 1800-2017 6.24.1).
-    if (constexpr auto cast_prefix = std::string_view { "@sv-cast:" };
-        value->kind == ExpressionKind::call
-        && value->text.starts_with(cast_prefix)
+    if (value->kind == ExpressionKind::call
+        && value->marker == support::ExpressionMarker::sv_cast
         && value->operands.size() == 1U) {
-        const auto name = std::string_view { value->text }.substr(
-            cast_prefix.size());
+        using CastTarget = support::SystemVerilogCastTarget;
+        using Builtin = support::SystemVerilogBuiltinType;
         const auto* operand_expression = expression(value->operands.front());
         // `void'(f())` calls a function and discards its value (IEEE
         // 1800-2023 6.24.1, 13.4.1); the value may be a string.
-        if (name == "void") {
+        if (value->cast_target == CastTarget::builtin
+            && value->cast_builtin == Builtin::void_type) {
             if (evaluate_packed(value->operands.front(), handle, environment))
                 return runtime::PackedLogic4::from_aval_bval(1U, 0U, 0U);
             StringEnvironment empty_strings;
@@ -6122,28 +6099,28 @@ SystemVerilogClassHirExecution::evaluate_packed(
         const bool operand_signed = operand_expression->signed_value;
         std::optional<std::size_t> target_width;
         bool target_signed = operand_signed;
-        if (name == "byte" || name == "shortint" || name == "int"
-            || name == "longint" || name == "integer") {
-            target_width = name == "byte" ? 8U
-                : name == "shortint"      ? 16U
-                : name == "longint"       ? 64U
-                                          : 32U;
+        const std::string_view name { value->marker_argument };
+        if (value->cast_target == CastTarget::builtin
+            && support::systemverilog_integer_atom(value->cast_builtin)
+            && value->cast_builtin != Builtin::time) {
+            target_width
+                = support::systemverilog_builtin_width(value->cast_builtin);
             target_signed = true;
-        } else if (name == "bit" || name == "logic" || name == "reg") {
+        } else if (value->cast_target == CastTarget::builtin
+            && support::systemverilog_integer_vector(value->cast_builtin)) {
             target_width = 1U;
             target_signed = false;
-        } else if (name == "signed" || name == "unsigned") {
+        } else if (value->cast_target == CastTarget::signed_type
+            || value->cast_target == CastTarget::unsigned_type) {
             target_width = operand->width();
-            target_signed = name == "signed";
-        } else if (!name.empty()
-            && std::ranges::all_of(name, [](const char c) {
-                   return c >= '0' && c <= '9';
-               })) {
+            target_signed = value->cast_target == CastTarget::signed_type;
+        } else if (value->cast_target == CastTarget::size
+            && !name.empty()) {
             target_width = static_cast<std::size_t>(
-                std::strtoull(std::string { name }.c_str(), nullptr, 10));
-        } else if (const auto typedefs
-                   = hir_index().typedefs_by_name.find(name);
-                   typedefs != hir_index().typedefs_by_name.end()) {
+                std::strtoull(value->marker_argument.c_str(), nullptr, 10));
+        } else if (value->cast_target == CastTarget::named
+            && hir_index().typedefs_by_name.contains(name)) {
+            const auto typedefs = hir_index().typedefs_by_name.find(name);
             for (const auto* candidate : typedefs->second) {
                 if (!candidate->type) {
                     continue;
@@ -6586,13 +6563,13 @@ SystemVerilogClassHirExecution::evaluate_packed(
         return apply_context(*literal, value->signed_value, true);
     }
     if (value->kind == ExpressionKind::class_null
-        || value->text == "@sv-null") {
+        || value->marker == support::ExpressionMarker::sv_null) {
         return apply_context(
             runtime::PackedLogic4::from_aval_bval(64U, 0U, 0U), false);
     }
-    constexpr std::string_view property_prefix { "@sv-property:" };
+    constexpr auto property_marker = support::ExpressionMarker::sv_property;
     if (value->kind == ExpressionKind::class_property
-        || value->text.starts_with(property_prefix)) {
+        || value->marker == property_marker) {
         auto owner = handle;
         if (!value->operands.empty()) {
             const auto receiver = evaluate_packed(
@@ -6601,20 +6578,19 @@ SystemVerilogClassHirExecution::evaluate_packed(
                 return std::nullopt;
             owner = receiver->low_word().aval;
         }
-        const auto identity = marker_payload(*value, property_prefix);
+        const auto identity = marker_payload(*value, property_marker);
         const auto packed = read_property_(owner, identity);
         const auto* property = instance_property(owner, identity);
         return apply_context(
             packed, property != nullptr && property->type.signed_value, true);
     }
-    constexpr std::string_view static_property_prefix {
-        "@sv-static-property:"
-    };
+    constexpr auto static_property_marker
+        = support::ExpressionMarker::sv_static_property;
     if (value->kind == ExpressionKind::class_static_property
-        || value->text.starts_with(static_property_prefix)) {
-        const auto identity = marker_payload(*value, static_property_prefix);
+        || value->marker == static_property_marker) {
+        const auto identity = marker_payload(*value, static_property_marker);
         const auto selected = static_property_selection(
-            *value, static_property_prefix, handle);
+            *value, static_property_marker, handle);
         const auto packed = read_static_property_(identity, handle,
             selected.specialization);
         return apply_context(packed,
@@ -6622,27 +6598,29 @@ SystemVerilogClassHirExecution::evaluate_packed(
                 && selected.property->type.signed_value,
             true);
     }
-    constexpr std::string_view method_prefix { "@sv-method:" };
-    constexpr std::string_view base_method_prefix { "@sv-base-method:" };
+    constexpr auto method_marker = support::ExpressionMarker::sv_method;
+    constexpr auto base_method_marker
+        = support::ExpressionMarker::sv_base_method;
     if ((value->kind == ExpressionKind::class_method_call
-            || value->text.starts_with(method_prefix)
-            || value->text.starts_with(base_method_prefix))
+            || value->marker == method_marker
+            || value->marker == base_method_marker)
         && !value->operands.empty()) {
         const auto virtual_dispatch
-            = !value->text.starts_with(base_method_prefix);
+            = value->marker != base_method_marker;
         const auto receiver = evaluate_packed(
             value->operands.front(), handle, environment);
         if (!receiver || receiver->low_word().bval != 0U) {
             return std::nullopt;
         }
         const auto identity = marker_payload(*value,
-            virtual_dispatch ? method_prefix : base_method_prefix);
+            virtual_dispatch ? method_marker : base_method_marker);
         // An inline constraint block needs the compiled call; the method
         // body is not interpreted without it.
         if (identity == "@builtin-randomize"
             && std::ranges::any_of(value->associations,
                 [](const semantic::sv::AssignmentPatternAssociation& item) {
-                    return item.choice_spelling == "@sv-inline-constraint";
+                    return item.choice_marker
+                        == support::ExpressionMarker::sv_inline_constraint;
                 })) {
             return std::nullopt;
         }
@@ -6745,9 +6723,16 @@ SystemVerilogClassHirExecution::evaluate_packed(
         const PendingFrameGuard pending_guard { pending_call_frames_,
             typed_frame };
         const CallSite site { *this, value->source };
+        // `randomize(null)` (IEEE 1800-2023 18.11.1): the only actual is
+        // the null checker argument.
+        const auto* only_actual = actual_count == 1U
+            ? expression(value->operands[1U]) : nullptr;
+        const bool randomize_no_properties = only_actual != nullptr
+            && only_actual->marker
+                == support::ExpressionMarker::randomize_null;
         auto result = invoke_function_(receiver_handle, identity,
             actuals, string_actuals, names, directions, virtual_dispatch,
-            ActualReferences { });
+            randomize_no_properties, ActualReferences { });
         if (typed_frame && !pending_call_frames_.back().consumed) {
             throw std::invalid_argument {
                 "class HIR typed actual did not reach its selected method"
@@ -6759,7 +6744,7 @@ SystemVerilogClassHirExecution::evaluate_packed(
             : std::optional<runtime::PackedLogic4> { result };
     }
     if ((value->kind == ExpressionKind::class_allocation
-            || value->text.starts_with("@sv-new:"))
+            || value->marker == support::ExpressionMarker::sv_new_constructor)
         && construct_ && !value->class_identity.empty()) {
         // `C#(4)::new` constructs the specialization it names; a bare `new`
         // the one of the assignment target's class type (IEEE 1800-2023
@@ -6813,9 +6798,8 @@ SystemVerilogClassHirExecution::evaluate_packed(
             constructed, actuals, string_actuals, names, handle);
         return runtime::PackedLogic4::from_aval_bval(64U, object, 0U);
     }
-    constexpr std::string_view static_method_prefix {
-        "@sv-static-method:"
-    };
+    constexpr auto static_method_marker
+        = support::ExpressionMarker::sv_static_method;
     if (value->kind == ExpressionKind::call
         && (value->text == "$size" || value->text == "$left"
             || value->text == "$right" || value->text == "$low"
@@ -6881,20 +6865,29 @@ SystemVerilogClassHirExecution::evaluate_packed(
                 32U, static_cast<std::uint32_t>(answer), 0U), true, true);
         }
     }
-    constexpr std::string_view container_method_prefix {
-        "@sv-container-method:"
-    };
     if (value->kind == ExpressionKind::call
-        && (value->text.starts_with(container_method_prefix)
+        && (support::sv_container_method_family(value->marker)
             || value->text.starts_with('.'))
         && !value->operands.empty()) {
-        const auto operation = value->text.starts_with(
-                container_method_prefix)
-            ? std::string_view { value->text }.substr(
-                  container_method_prefix.size())
-            : std::string_view { value->text }.substr(1U);
+        // A marked method names its container property in the argument;
+        // the unmarked ones keep the method's name as the node's text.
+        const bool container_query
+            = support::sv_container_method_family(value->marker);
+        const auto operation = std::string_view { value->text }.substr(
+            container_query ? 0U : 1U);
         const auto separator = operation.find(':');
-        const auto method_name = operation.substr(0U, separator);
+        const auto method_name = support::sv_container_query(value->marker)
+            ? container_marker_method_name(value->marker)
+            : container_query ? std::string_view { value->text }
+            : operation.substr(0U, separator);
+        // The property an object's container method names.
+        const auto container_identity = container_query
+            ? std::string_view { value->marker_argument }
+            : separator != std::string_view::npos
+            ? operation.substr(separator + 1U)
+            : std::string_view { };
+        const bool has_container_identity = container_query
+            || separator != std::string_view::npos;
         // A method of an object's or a class's array of handles.
         if (auto result = evaluate_handle_container_method(
                 *value, method_name, handle, environment)) {
@@ -6934,7 +6927,7 @@ SystemVerilogClassHirExecution::evaluate_packed(
         }
         // size() and reductions without a with-clause of an object's array
         // of values (IEEE 1800-2017 7.5.1, 7.12.3).
-        if (!declaration_id && separator != std::string_view::npos
+        if (!declaration_id && has_container_identity
             && value->operands.size() == 1U && read_class_property_container_
             && (method_name == "size" || method_name == "sum"
                 || method_name == "product" || method_name == "and"
@@ -6949,7 +6942,7 @@ SystemVerilogClassHirExecution::evaluate_packed(
                 return std::nullopt;
             }
             const auto stored = read_class_property_container_(
-                word.aval, std::string { operation.substr(separator + 1U) });
+                word.aval, std::string { container_identity });
             if (!stored) {
                 return std::nullopt;
             }
@@ -7003,8 +6996,8 @@ SystemVerilogClassHirExecution::evaluate_packed(
         }
     }
     if (value->kind == ExpressionKind::class_static_method_call
-        || value->text.starts_with(static_method_prefix)) {
-        const auto identity = marker_payload(*value, static_method_prefix);
+        || value->marker == static_method_marker) {
+        const auto identity = marker_payload(*value, static_method_marker);
         const auto call = static_call(value, identity, handle);
         const auto* selected_method = call.method;
         auto names = value->argument_names;
@@ -7120,11 +7113,12 @@ SystemVerilogClassHirExecution::evaluate_packed(
             return query_result;
         }
         if (selected_expression->kind == ExpressionKind::class_property
-            || selected_expression->text.starts_with("@sv-property:")) {
+            || selected_expression->marker
+                == support::ExpressionMarker::sv_property) {
             if (selected_expression->operands.empty()) {
                 const auto* property = instance_property(
-                    handle, marker_payload(
-                        *selected_expression, "@sv-property:"));
+                    handle, marker_payload(*selected_expression,
+                        support::ExpressionMarker::sv_property));
                 if (property != nullptr)
                     return property->type;
             }
@@ -7135,8 +7129,8 @@ SystemVerilogClassHirExecution::evaluate_packed(
                     && receiver->kind == ExpressionKind::name
                     && receiver->text == "this") {
                     const auto* property = instance_property(
-                        handle, marker_payload(
-                            *selected_expression, "@sv-property:"));
+                        handle, marker_payload(*selected_expression,
+                            support::ExpressionMarker::sv_property));
                     if (property != nullptr)
                         return property->type;
                 }
@@ -7144,24 +7138,23 @@ SystemVerilogClassHirExecution::evaluate_packed(
         }
         if (selected_expression->kind
                 == ExpressionKind::class_static_property
-            || selected_expression->text.starts_with(
-                "@sv-static-property:")) {
+            || selected_expression->marker
+                == support::ExpressionMarker::sv_static_property) {
             const auto* property = static_class_property(
-                specializations_, marker_payload(
-                    *selected_expression, "@sv-static-property:"),
+                specializations_, marker_payload(*selected_expression,
+                    support::ExpressionMarker::sv_static_property),
                 selected_expression->referenced_name
                     ? selected_expression->referenced_name->selected
                     : std::nullopt);
             if (property != nullptr)
                 return property->type;
         }
-        constexpr std::string_view static_container_prefix {
-            "@sv-static-container-property:"
-        };
-        if (selected_expression->text.starts_with(static_container_prefix)) {
+        constexpr auto static_container_marker
+            = support::ExpressionMarker::sv_static_container_property;
+        if (selected_expression->marker == static_container_marker) {
             const auto* property = static_class_property(
                 specializations_, marker_payload(
-                    *selected_expression, static_container_prefix),
+                    *selected_expression, static_container_marker),
                 selected_expression->referenced_name
                     ? selected_expression->referenced_name->selected
                     : std::nullopt);
@@ -7178,28 +7171,25 @@ SystemVerilogClassHirExecution::evaluate_packed(
                 return selected->callable->return_type;
             }
         }
-        constexpr std::string_view method_prefix { "@sv-method:" };
-        constexpr std::string_view base_method_prefix {
-            "@sv-base-method:"
-        };
-        constexpr std::string_view static_method_prefix {
-            "@sv-static-method:"
-        };
+        constexpr auto method_marker = support::ExpressionMarker::sv_method;
+        constexpr auto base_method_marker
+            = support::ExpressionMarker::sv_base_method;
+        constexpr auto static_method_marker
+            = support::ExpressionMarker::sv_static_method;
         const bool static_method_call
             = selected_expression->kind
                     == ExpressionKind::class_static_method_call
-            || selected_expression->text.starts_with(static_method_prefix);
+            || selected_expression->marker == static_method_marker;
         const bool instance_method_call
             = selected_expression->kind == ExpressionKind::class_method_call
-            || selected_expression->text.starts_with(method_prefix)
-            || selected_expression->text.starts_with(base_method_prefix);
+            || selected_expression->marker == method_marker
+            || selected_expression->marker == base_method_marker;
         if (static_method_call || instance_method_call) {
             const auto identity = marker_payload(
                 *selected_expression, static_method_call
-                    ? static_method_prefix
-                    : selected_expression->text.starts_with(
-                          base_method_prefix)
-                    ? base_method_prefix : method_prefix);
+                    ? static_method_marker
+                    : selected_expression->marker == base_method_marker
+                    ? base_method_marker : method_marker);
             if (static_method_call) {
                 const auto* selected
                     = static_call(selected_expression, identity, handle).method;
@@ -7592,9 +7582,9 @@ SystemVerilogClassHirExecution::evaluate_packed(
                 && std::ranges::all_of(operand->operands,
                     [&](const auto part) { return self(self, part); });
         }
-        constexpr std::string_view property_prefix { "@sv-property:" };
+        constexpr auto property_marker = support::ExpressionMarker::sv_property;
         if (operand->kind == ExpressionKind::class_property
-            || operand->text.starts_with(property_prefix)) {
+            || operand->marker == property_marker) {
             if (operand->operands.size() == 1U) {
                 const auto* receiver = expression(operand->operands.front());
                 if (receiver == nullptr || receiver->kind != ExpressionKind::name
@@ -7605,7 +7595,7 @@ SystemVerilogClassHirExecution::evaluate_packed(
                 return false;
             }
             const auto* property = instance_property(
-                handle, marker_payload(*operand, property_prefix));
+                handle, marker_payload(*operand, property_marker));
             return property != nullptr && is_string(property->type)
                 && static_cast<bool>(read_string_property_);
         }
@@ -7624,26 +7614,24 @@ SystemVerilogClassHirExecution::evaluate_packed(
                 && selected->callable && selected->callable->function
                 && is_string(selected->callable->return_type);
         }
-        constexpr std::string_view static_prefix {
-            "@sv-static-method:"
-        };
-        constexpr std::string_view method_prefix { "@sv-method:" };
-        constexpr std::string_view base_method_prefix {
-            "@sv-base-method:"
-        };
+        constexpr auto static_marker
+            = support::ExpressionMarker::sv_static_method;
+        constexpr auto method_marker = support::ExpressionMarker::sv_method;
+        constexpr auto base_method_marker
+            = support::ExpressionMarker::sv_base_method;
         const bool static_call
             = operand->kind == ExpressionKind::class_static_method_call
-            || operand->text.starts_with(static_prefix);
+            || operand->marker == static_marker;
         const bool instance_call
             = operand->kind == ExpressionKind::class_method_call
-            || operand->text.starts_with(method_prefix)
-            || operand->text.starts_with(base_method_prefix);
+            || operand->marker == method_marker
+            || operand->marker == base_method_marker;
         if (!static_call && !instance_call)
             return false;
         const auto identity = marker_payload(*operand,
-            static_call ? static_prefix
-                : operand->text.starts_with(base_method_prefix)
-                ? base_method_prefix : method_prefix);
+            static_call ? static_marker
+                : operand->marker == base_method_marker
+                ? base_method_marker : method_marker);
         bool found { };
         for (const auto& specialization : specializations_) {
             for (const auto& method : specialization.methods) {
@@ -8497,12 +8485,8 @@ SystemVerilogClassHirExecution::evaluate_pure_packed(
             if (!target.valid())
                 target = named_type_target(*current, scope);
             if (!target.valid()) {
-                const auto& builtin = current->target.spelling;
-                constexpr std::array<std::string_view, 10> integral {
-                    "", "bit", "logic", "reg", "byte", "shortint", "int",
-                    "integer", "longint", "time"
-                };
-                if (std::ranges::find(integral, builtin) == integral.end())
+                if (!current->target.spelling.empty()
+                    && !support::systemverilog_integral(current->builtin))
                     return std::nullopt;
                 break;
             }
@@ -8785,7 +8769,6 @@ SystemVerilogClassHirExecution::execute(
     const bool constructor,
     const std::optional<std::size_t> return_context_width)
 {
-    constexpr std::string_view base_prefix { "@sv-base-constructor:" };
     const ScopedSlot string_scope { strings_, &string_environment };
     const auto assignment_context_width = [this, handle, &environment](
                                               const semantic::ExpressionId id)
@@ -8805,50 +8788,48 @@ SystemVerilogClassHirExecution::execute(
                 if (selected != nullptr && selected->type)
                     return *selected->type;
             }
-            constexpr std::string_view property_prefix { "@sv-property:" };
+            constexpr auto property_marker
+                = support::ExpressionMarker::sv_property;
             if (value->kind == semantic::sv::ExpressionKind::class_property
-                || value->text.starts_with(property_prefix)) {
+                || value->marker == property_marker) {
                 const auto* property = instance_property(
-                    handle, marker_payload(*value, property_prefix));
+                    handle, marker_payload(*value, property_marker));
                 if (property != nullptr)
                     return property->type;
             }
-            constexpr std::string_view container_index_prefix {
-                "@sv-container-index:"
-            };
+            constexpr auto container_index_marker
+                = support::ExpressionMarker::sv_container_index;
             if (value->kind == semantic::sv::ExpressionKind::call
-                && value->text.starts_with(container_index_prefix)
+                && value->marker == container_index_marker
                 && value->operands.size() >= 2U) {
                 const auto* property = instance_property(
-                    handle, marker_payload(*value, container_index_prefix));
+                    handle, marker_payload(*value, container_index_marker));
                 const auto element = property != nullptr
                     ? call_array_element_type(property->type)
                     : std::nullopt;
                 if (element)
                     return element;
             }
-            constexpr std::string_view static_property_prefix {
-                "@sv-static-property:"
-            };
+            constexpr auto static_property_marker
+                = support::ExpressionMarker::sv_static_property;
             if (value->kind
                     == semantic::sv::ExpressionKind::class_static_property
-                || value->text.starts_with(static_property_prefix)) {
+                || value->marker == static_property_marker) {
                 const auto* property = static_class_property(
                     specializations_,
-                    marker_payload(*value, static_property_prefix),
+                    marker_payload(*value, static_property_marker),
                     value->referenced_name
                         ? value->referenced_name->selected
                         : std::nullopt);
                 if (property != nullptr)
                     return property->type;
             }
-            constexpr std::string_view static_container_prefix {
-                "@sv-static-container-property:"
-            };
-            if (value->text.starts_with(static_container_prefix)) {
+            constexpr auto static_container_marker
+                = support::ExpressionMarker::sv_static_container_property;
+            if (value->marker == static_container_marker) {
                 const auto* property = static_class_property(
                     specializations_,
-                    marker_payload(*value, static_container_prefix),
+                    marker_payload(*value, static_container_marker),
                     value->referenced_name
                         ? value->referenced_name->selected
                         : std::nullopt);
@@ -8868,9 +8849,10 @@ SystemVerilogClassHirExecution::execute(
                 bit.executable_width = 1U;
                 return bit;
             }
-            constexpr std::string_view selected_prefix { "@sv-select:" };
+            constexpr auto selected_marker
+                = support::ExpressionMarker::sv_select;
             if (value->kind == semantic::sv::ExpressionKind::call
-                && value->text.starts_with(selected_prefix)
+                && value->marker == selected_marker
                 && value->operands.size() == 1U) {
                 const auto* indexed = expression(value->operands.front());
                 if (indexed == nullptr
@@ -8891,7 +8873,7 @@ SystemVerilogClassHirExecution::execute(
                 }
                 const auto member = std::ranges::find(
                     structure->members,
-                    marker_payload(*value, selected_prefix),
+                    marker_payload(*value, selected_marker),
                     &semantic::sv::PackedMember::name);
                 return member == structure->members.end()
                     ? std::nullopt
@@ -8933,7 +8915,8 @@ SystemVerilogClassHirExecution::execute(
             throw std::invalid_argument { "class HIR statement is unavailable" };
         }
         if (constructor && item->kind == semantic::sv::StatementKind::task_call
-            && item->task.spelling.starts_with(base_prefix)) {
+            && item->task_marker
+                == support::ExpressionMarker::sv_base_constructor) {
             continue;
         }
         // The statement the running frame executes (IEEE 1800-2023 37.43
@@ -9040,10 +9023,11 @@ SystemVerilogClassHirExecution::execute(
                     }
                 }
             }
-            constexpr std::string_view property_prefix { "@sv-property:" };
+            constexpr auto property_marker
+                = support::ExpressionMarker::sv_property;
             if (write_string_property_
                 && (target->kind == semantic::sv::ExpressionKind::class_property
-                    || target->text.starts_with(property_prefix))
+                    || target->marker == property_marker)
                 && target->operands.size() <= 1U) {
                 auto owner = handle;
                 if (target->operands.size() == 1U) {
@@ -9054,7 +9038,7 @@ SystemVerilogClassHirExecution::execute(
                         : 0U;
                 }
                 const auto* property = instance_property(
-                    owner, marker_payload(*target, property_prefix));
+                    owner, marker_payload(*target, property_marker));
                 if (property != nullptr && is_string(property->type)) {
                     const auto text = evaluate_string(
                         *item->value, string_environment, handle);
@@ -9076,7 +9060,8 @@ SystemVerilogClassHirExecution::execute(
                     *item->value, string_environment, handle);
                 if (!text
                     || !write_static_string_property_(
-                        marker_payload(*target, "@sv-static-property:"),
+                        marker_payload(*target,
+                            support::ExpressionMarker::sv_static_property),
                         static_member_specialization(
                             *target, property->owner_identity, handle),
                         *text)) {
@@ -9092,9 +9077,8 @@ SystemVerilogClassHirExecution::execute(
                     environment, string_environment)) {
                 continue;
             }
-            constexpr std::string_view container_index_prefix {
-                "@sv-container-index:"
-            };
+            constexpr auto container_index_marker
+                = support::ExpressionMarker::sv_container_index;
             // An element of an object's or a class's array of handles: an
             // associative array's by its key, a queue's or dynamic array's
             // by its position (IEEE 1800-2023 7.4.4, 7.8, 7.10.1).
@@ -9108,13 +9092,14 @@ SystemVerilogClassHirExecution::execute(
                     element_index = target->operands.back();
                 }
             } else if (target->kind == semantic::sv::ExpressionKind::call
-                && target->text.starts_with(container_index_prefix)
+                && target->marker == container_index_marker
                 && target->operands.size() == 2U) {
                 semantic::sv::Expression property;
                 property.kind = semantic::sv::ExpressionKind::call;
-                property.text = "@sv-container-property:"
-                    + std::string { marker_payload(
-                        *target, container_index_prefix) };
+                property.marker
+                    = support::ExpressionMarker::sv_container_property;
+                property.marker_argument = std::string { marker_payload(
+                    *target, container_index_marker) };
                 property.operands.push_back(target->operands.front());
                 element_container = handle_container_target(
                     property, handle, environment);
@@ -9202,7 +9187,7 @@ SystemVerilogClassHirExecution::execute(
                 continue;
             }
             if (target->kind == semantic::sv::ExpressionKind::call
-                && target->text.starts_with(container_index_prefix)) {
+                && target->marker == container_index_marker) {
                 using semantic::sv::TypeForm;
                 if (item->assignment_kind
                         != semantic::sv::AssignmentKind::blocking
@@ -9229,7 +9214,7 @@ SystemVerilogClassHirExecution::execute(
                     };
                 }
                 const auto* property = instance_property(
-                    owner, marker_payload(*target, container_index_prefix));
+                    owner, marker_payload(*target, container_index_marker));
                 if (property != nullptr
                     && property->type.container_form == TypeForm::static_array) {
                     const auto& element_type
@@ -9456,7 +9441,7 @@ SystemVerilogClassHirExecution::execute(
                     : (UINT64_C(1) << *index_width) - 1U;
                 write_class_handle_container_(
                     owner,
-                    marker_payload(*target, container_index_prefix),
+                    marker_payload(*target, container_index_marker),
                     std::to_string(converted_index->low_word().aval & mask),
                     value->low_word().aval);
                 continue;
@@ -9496,7 +9481,7 @@ SystemVerilogClassHirExecution::execute(
                 };
             }
             if (target->kind == semantic::sv::ExpressionKind::class_property
-                || target->text.starts_with(property_prefix)) {
+                || target->marker == property_marker) {
                 auto owner = handle;
                 if (!target->operands.empty()) {
                     const auto receiver = evaluate_packed(
@@ -9509,18 +9494,17 @@ SystemVerilogClassHirExecution::execute(
                     owner = receiver->low_word().aval;
                 }
                 write_property_(owner,
-                    marker_payload(*target, property_prefix), *value);
+                    marker_payload(*target, property_marker), *value);
                 continue;
             }
-            constexpr std::string_view static_prefix {
-                "@sv-static-property:"
-            };
+            constexpr auto static_marker
+                = support::ExpressionMarker::sv_static_property;
             if (target->kind
                     == semantic::sv::ExpressionKind::class_static_property
-                || target->text.starts_with(static_prefix)) {
-                const auto identity = marker_payload(*target, static_prefix);
+                || target->marker == static_marker) {
+                const auto identity = marker_payload(*target, static_marker);
                 write_static_property_(identity, *value, handle,
-                    static_property_selection(*target, static_prefix, handle)
+                    static_property_selection(*target, static_marker, handle)
                         .specialization);
                 continue;
             }
@@ -9682,10 +9666,8 @@ SystemVerilogClassHirExecution::execute(
         }
         if (item->kind == semantic::sv::StatementKind::task_call) {
             const auto& spelling = item->task.spelling;
-            constexpr std::string_view package_push_back_prefix {
-                "@sv-container-push-back:"
-            };
-            if (spelling.starts_with(package_push_back_prefix)
+            if (item->task_marker
+                    == support::ExpressionMarker::sv_container_push_back
                 && item->task_arguments.size() == 2U
                 && item->task_arguments[0].actual
                 && item->task_arguments[1].actual
@@ -9743,20 +9725,15 @@ SystemVerilogClassHirExecution::execute(
                     "class method executed " + spelling
                 };
             }
-            constexpr std::string_view task_prefix { "@sv-task:" };
-            constexpr std::string_view static_task_prefix {
-                "@sv-static-task:"
-            };
             // A static method called as a statement runs without an object
             // in the running class's specialization or the base's that
             // declares it (IEEE 1800-2023 8.10, 8.25.1, 13.4.1); the
             // library's native calls (`@uvm-...`) are not class methods.
-            const bool static_task = spelling.starts_with(static_task_prefix)
-                && !std::string_view { spelling }
-                        .substr(static_task_prefix.size())
-                        .starts_with('@');
+            const bool static_task = item->task_marker
+                    == support::ExpressionMarker::sv_static_task
+                && !item->task_marker_argument.starts_with('@');
             if (static_task
-                || (spelling.starts_with(task_prefix)
+                || (item->task_marker == support::ExpressionMarker::sv_task
                     && !item->task_arguments.empty()
                     && item->task_arguments.front().actual)) {
                 const auto* receiver_expression = static_task
@@ -9775,10 +9752,8 @@ SystemVerilogClassHirExecution::execute(
                 const bool virtual_dispatch = !static_task
                     && (receiver_expression == nullptr
                         || receiver_expression->text != "super");
-                const auto method_identity
-                    = std::string_view { spelling }.substr(static_task
-                            ? static_task_prefix.size()
-                            : task_prefix.size());
+                const std::string_view method_identity {
+                    item->task_marker_argument };
                 // `C#(4)::t();` keeps its selection as the statement's
                 // value (IEEE 1800-2023 8.25.1).
                 const auto static_target = static_task
@@ -9946,7 +9921,7 @@ SystemVerilogClassHirExecution::execute(
                     (void)invoke_function_(receiver->low_word().aval,
                         method_identity,
                         actuals, string_actuals, names, directions,
-                        virtual_dispatch, actual_references);
+                        virtual_dispatch, false, actual_references);
                 }
                 if (typed_frame && !pending_call_frames_.back().consumed) {
                     throw std::invalid_argument {
@@ -9991,6 +9966,13 @@ SystemVerilogClassHirExecution::execute(
             continue;
         }
         if (item->kind == semantic::sv::StatementKind::break_loop) {
+            // A break that ends a foreach statement over several dimensions
+            // (12.8) runs in the kernel.
+            if (item->foreach_break) {
+                throw std::invalid_argument {
+                    "class HIR foreach break is not executable"
+                };
+            }
             ExecutionResult result;
             result.broke = true;
             return result;
@@ -10006,7 +9988,8 @@ SystemVerilogClassHirExecution::execute(
             if (loop_condition != nullptr
                 && loop_condition->kind
                     == semantic::sv::ExpressionKind::call
-                && loop_condition->text == "@sv-foreach") {
+                && loop_condition->marker
+                    == support::ExpressionMarker::sv_foreach) {
                 if (loop_condition->operands.size() > 2U) {
                     throw std::invalid_argument {
                         "class HIR multidimensional foreach is not executable"
@@ -10127,6 +10110,15 @@ SystemVerilogClassHirExecution::execute(
                         runtime::PackedLogic4 { 32U }).first;
                 }
                 variable->second = resize_packed(initial, variable->second.width());
+            }
+            // The further for-loop initializations run once, after the first
+            // (12.7.1).
+            if (!item->loop_initializations.empty()) {
+                auto initialization = execute(item->loop_initializations,
+                    handle, environment, string_environment, constructor,
+                    return_context_width);
+                if (initialization.returned)
+                    return initialization;
             }
             const auto holds = [&]() {
                 return !item->condition
@@ -10444,9 +10436,9 @@ bool SystemVerilogClassHirExecution::is_string_expression(
         }
         return element && is_string(*element);
     }
-    constexpr std::string_view selected_prefix { "@sv-select:" };
+    constexpr auto selected_marker = support::ExpressionMarker::sv_select;
     if (value->kind == ExpressionKind::call
-        && value->text.starts_with(selected_prefix)
+        && value->marker == selected_marker
         && value->operands.size() == 1U) {
         const auto* indexed = expression(value->operands.front());
         if (indexed != nullptr
@@ -10460,7 +10452,7 @@ bool SystemVerilogClassHirExecution::is_string_expression(
                 && structure->form
                     == semantic::sv::TypeForm::unpacked_structure) {
                 const auto member_name = marker_payload(
-                    *value, selected_prefix);
+                    *value, selected_marker);
                 const auto member = std::ranges::find(
                     structure->members, member_name,
                     &semantic::sv::PackedMember::name);
@@ -10494,19 +10486,18 @@ bool SystemVerilogClassHirExecution::is_string_expression(
         return is_string_expression(value->operands[1U], handle, strings)
             && is_string_expression(value->operands[2U], handle, strings);
     }
-    constexpr std::string_view property_prefix { "@sv-property:" };
+    constexpr auto property_marker = support::ExpressionMarker::sv_property;
     if (value->kind == ExpressionKind::class_property
-        || value->text.starts_with(property_prefix)) {
+        || value->marker == property_marker) {
         const auto* property = instance_property(
-            handle, marker_payload(*value, property_prefix));
+            handle, marker_payload(*value, property_marker));
         return property != nullptr && is_string(property->type);
     }
-    constexpr std::string_view static_property_prefix {
-        "@sv-static-property:"
-    };
+    constexpr auto static_property_marker
+        = support::ExpressionMarker::sv_static_property;
     if (value->kind == ExpressionKind::class_static_property
-        || value->text.starts_with(static_property_prefix)) {
-        const auto identity = marker_payload(*value, static_property_prefix);
+        || value->marker == static_property_marker) {
+        const auto identity = marker_payload(*value, static_property_marker);
         for (const auto& specialization : specializations_) {
             const auto found = std::ranges::find(
                 specialization.properties, identity,
@@ -10517,27 +10508,25 @@ bool SystemVerilogClassHirExecution::is_string_expression(
         }
         return false;
     }
-    constexpr std::string_view static_method_prefix {
-        "@sv-static-method:"
-    };
+    constexpr auto static_method_marker
+        = support::ExpressionMarker::sv_static_method;
     if (value->kind == ExpressionKind::class_static_method_call
-        || value->text.starts_with(static_method_prefix)) {
+        || value->marker == static_method_marker) {
         const auto* selected = static_call(value,
-            marker_payload(*value, static_method_prefix), handle).method;
+            marker_payload(*value, static_method_marker), handle).method;
         return selected != nullptr && selected->return_type
             && is_string(*selected->return_type);
     }
-    constexpr std::string_view method_prefix { "@sv-method:" };
-    constexpr std::string_view base_method_prefix {
-        "@sv-base-method:"
-    };
+    constexpr auto method_marker = support::ExpressionMarker::sv_method;
+    constexpr auto base_method_marker
+        = support::ExpressionMarker::sv_base_method;
     if (value->kind == ExpressionKind::class_method_call
-        || value->text.starts_with(method_prefix)
-        || value->text.starts_with(base_method_prefix)) {
+        || value->marker == method_marker
+        || value->marker == base_method_marker) {
         const auto identity = marker_payload(*value,
-            value->text.starts_with(base_method_prefix)
-                ? base_method_prefix
-                : method_prefix);
+            value->marker == base_method_marker
+                ? base_method_marker
+                : method_marker);
         bool found { };
         for (const auto& specialization : specializations_) {
             for (const auto& candidate : specialization.methods) {
@@ -10840,11 +10829,11 @@ SystemVerilogClassHirExecution::evaluate_string_call(
         return packed ? result : std::nullopt;
     }
 
-    constexpr std::string_view static_method_prefix {
-        "@sv-static-method:"
-    };
-    constexpr std::string_view method_prefix { "@sv-method:" };
-    constexpr std::string_view base_method_prefix { "@sv-base-method:" };
+    constexpr auto static_method_marker
+        = support::ExpressionMarker::sv_static_method;
+    constexpr auto method_marker = support::ExpressionMarker::sv_method;
+    constexpr auto base_method_marker
+        = support::ExpressionMarker::sv_base_method;
     const semantic::sv::SpecializedClassMethod* selected_method { };
     std::string_view canonical_identity;
     runtime::SystemVerilogClassHandle receiver_handle = handle;
@@ -10853,19 +10842,19 @@ SystemVerilogClassHirExecution::evaluate_string_call(
     bool virtual_dispatch { true };
     std::size_t first_actual { };
     if (value->kind == semantic::sv::ExpressionKind::class_static_method_call
-        || value->text.starts_with(static_method_prefix)) {
+        || value->marker == static_method_marker) {
         static_dispatch = true;
-        canonical_identity = marker_payload(*value, static_method_prefix);
+        canonical_identity = marker_payload(*value, static_method_marker);
         static_target = static_call(value, canonical_identity, handle);
         selected_method = static_target.method;
     } else if ((value->kind
                     == semantic::sv::ExpressionKind::class_method_call
-                || value->text.starts_with(method_prefix)
-                || value->text.starts_with(base_method_prefix))
+                || value->marker == method_marker
+                || value->marker == base_method_marker)
         && !value->operands.empty()) {
-        virtual_dispatch = !value->text.starts_with(base_method_prefix);
+        virtual_dispatch = value->marker != base_method_marker;
         canonical_identity = marker_payload(*value,
-            virtual_dispatch ? method_prefix : base_method_prefix);
+            virtual_dispatch ? method_marker : base_method_marker);
         const auto receiver = evaluate_packed(
             value->operands.front(), handle, environment);
         if (!receiver || receiver->low_word().bval != 0U)
@@ -10995,7 +10984,7 @@ SystemVerilogClassHirExecution::evaluate_string_call(
         if (!invoke_function_)
             return std::nullopt;
         (void)invoke_function_(receiver_handle, canonical_identity, actuals,
-            string_actuals, invocation_names, {}, virtual_dispatch,
+            string_actuals, invocation_names, {}, virtual_dispatch, false,
             actual_references);
     }
     if (typed_frame && !pending_call_frames_.back().consumed) {
@@ -11401,7 +11390,8 @@ runtime::PackedLogic4 SystemVerilogClassHirExecution::invoke_function_body(
     initialize_strings(method, handle, actual_formals, string_actuals,
         strings, string_bindings);
     const auto void_result = method.return_type
-        && method.return_type->target.spelling == "void";
+        && method.return_type->builtin
+            == support::SystemVerilogBuiltinType::void_type;
     // A function's name is a variable holding its result when the body
     // ends without `return` (IEEE 1800-2017 13.4.1).
     const auto result_variable = !void_result && method.return_type
@@ -11624,13 +11614,13 @@ void SystemVerilogClassHirExecution::invoke_constructor_impl(
         return index < method->formal_types.size()
             && is_string(method->formal_types[index]);
     };
-    constexpr std::string_view base_prefix { "@sv-base-constructor:" };
     if (constructor != selected.methods.end()) {
         for (const auto statement_id : constructor->statements) {
             const auto* item = statement(statement_id);
             if (item == nullptr
                 || item->kind != semantic::sv::StatementKind::task_call
-                || !item->task.spelling.starts_with(base_prefix)) {
+                || item->task_marker
+                    != support::ExpressionMarker::sv_base_constructor) {
                 continue;
             }
             std::size_t first { };

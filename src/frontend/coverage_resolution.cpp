@@ -707,19 +707,19 @@ namespace {
     [[nodiscard]] SystemVerilogScalarKind coverage_formal_scalar_kind(
         const std::span<const Token> tokens)
     {
-        if (std::ranges::any_of(tokens, [](const Token& token) {
-                return token.text == "shortreal";
-            })) {
+        // The parser marks the built-in type each formal type token names.
+        const auto names = [&](const support::SystemVerilogBuiltinType kind) {
+            return std::ranges::any_of(tokens, [kind](const Token& token) {
+                return token.systemverilog_builtin == kind;
+            });
+        };
+        if (names(support::SystemVerilogBuiltinType::shortreal)) {
             return SystemVerilogScalarKind::ShortReal;
         }
-        if (std::ranges::any_of(tokens, [](const Token& token) {
-                return token.text == "realtime";
-            })) {
+        if (names(support::SystemVerilogBuiltinType::realtime)) {
             return SystemVerilogScalarKind::Realtime;
         }
-        return std::ranges::any_of(tokens, [](const Token& token) {
-                   return token.text == "real";
-               })
+        return names(support::SystemVerilogBuiltinType::real)
             ? SystemVerilogScalarKind::Real
             : SystemVerilogScalarKind::None;
     }
@@ -727,8 +727,9 @@ namespace {
     [[nodiscard]] bool is_new_expression(const Expression& expression)
     {
         return expression.kind == ExpressionKind::Call
-            && (expression.text == "@sv-new"
-                || expression.text.starts_with("@sv-new:"));
+            && (expression.marker == support::ExpressionMarker::sv_new
+                || expression.marker
+                    == support::ExpressionMarker::sv_new_constructor);
     }
 
     // The variable a covergroup handle expression names: the last component
@@ -763,6 +764,10 @@ namespace {
             }
             if (const auto* found = find_procedural_construction(
                     statement.else_statements, name)) {
+                return found;
+            }
+            if (const auto* found = find_procedural_construction(
+                    statement.loop_initializations, name)) {
                 return found;
             }
             for (const auto& alternative : statement.case_alternatives) {
@@ -1063,17 +1068,20 @@ namespace {
                 != SystemVerilogCovergroupSamplingKind::Event) {
             return;
         }
-        auto task_identity = "@sv-coverage-sample-event:"
-            + instance.runtime_identity;
         const auto contains_task
             = [&](const auto& self, const std::vector<Statement>& statements) -> bool {
             return std::ranges::any_of(
                 statements, [&](const Statement& statement) {
-                    if (statement.task_name == task_identity) {
+                    if (statement.task_marker
+                            == support::ExpressionMarker::
+                                sv_coverage_sample_event
+                        && statement.task_marker_argument
+                            == instance.runtime_identity) {
                         return true;
                     }
                     if (self(self, statement.statements)
-                        || self(self, statement.else_statements)) {
+                        || self(self, statement.else_statements)
+                        || self(self, statement.loop_initializations)) {
                         return true;
                     }
                     return std::ranges::any_of(
@@ -1159,7 +1167,9 @@ namespace {
         }
         Statement sample;
         sample.kind = StatementKind::TaskCall;
-        sample.task_name = std::move(task_identity);
+        sample.task_marker
+            = support::ExpressionMarker::sv_coverage_sample_event;
+        sample.task_marker_argument = instance.runtime_identity;
         sample.task_arguments = std::move(*actuals);
         sample.span = sampling.span;
         if (guard) {
@@ -1272,12 +1282,13 @@ namespace {
             design, owner, covergroup_handle_name(expression.operands.front()));
         if (instance == nullptr)
             return;
-        Expression query { ExpressionKind::Call,
-            std::string { instance_query ? coverage_instance_query_prefix
-                                         : coverage_type_query_prefix }
-                + (instance_query ? instance->runtime_identity
-                                  : instance->declaration_identity),
-            { }, expression.span };
+        auto query = marked_expression(
+            instance_query
+                ? support::ExpressionMarker::sv_coverage_query_instance
+                : support::ExpressionMarker::sv_coverage_query_type,
+            instance_query ? instance->runtime_identity
+                           : instance->declaration_identity,
+            { }, expression.span);
         query.systemverilog_source_order = expression.systemverilog_source_order;
         query.call_result_width = 64;
         query.call_result_domain = ValueDomain::Bit2;
@@ -1370,10 +1381,14 @@ namespace {
                                 "covergroup start/stop methods do not accept actuals",
                                 statement.span);
                         }
-                        statement.task_name = start_call
-                            ? "@sv-coverage-control-start:"
-                            : "@sv-coverage-control-stop:";
-                        statement.task_name += instance->runtime_identity;
+                        statement.task_name.clear();
+                        statement.task_marker = start_call
+                            ? support::ExpressionMarker::
+                                sv_coverage_control_start
+                            : support::ExpressionMarker::
+                                sv_coverage_control_stop;
+                        statement.task_marker_argument
+                            = instance->runtime_identity;
                         statement.task_arguments.clear();
                         statement.task_argument_names.clear();
                         continue;
@@ -1439,16 +1454,22 @@ namespace {
                             statement.task_arguments = std::move(*actuals);
                         }
                     }
-                    statement.task_name = procedural_sample
-                        ? "@sv-coverage-sample-procedural:"
-                        : "@sv-coverage-sample-explicit:";
-                    statement.task_name += instance->runtime_identity;
+                    statement.task_name.clear();
+                    statement.task_marker = procedural_sample
+                        ? support::ExpressionMarker::
+                            sv_coverage_sample_procedural
+                        : support::ExpressionMarker::
+                            sv_coverage_sample_explicit;
+                    statement.task_marker_argument
+                        = instance->runtime_identity;
                 }
             }
             collect_sample_calls(
                 design, owner, statement.statements, entries, diagnostics);
             collect_sample_calls(
                 design, owner, statement.else_statements, entries, diagnostics);
+            collect_sample_calls(design, owner, statement.loop_initializations,
+                entries, diagnostics);
             for (auto& alternative : statement.case_alternatives) {
                 collect_sample_calls(
                     design, owner, alternative.statements, entries, diagnostics);

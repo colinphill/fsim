@@ -80,6 +80,8 @@ namespace {
             const auto& x = *a->vhdl;
             const auto& y = *b->vhdl;
             if (x.kind != y.kind || x.decoded_string != y.decoded_string
+                || x.marker != y.marker
+                || x.marker_argument != y.marker_argument
                 || x.operands.size() != y.operands.size()
                 || x.associations.size() != y.associations.size()
                 || x.argument_names.size() != y.argument_names.size()) {

@@ -1183,6 +1183,29 @@ namespace codec_detail {
         } else if constexpr (std::same_as<T, fsim::semantic::vhdl::ValueDomain>) {
             return value >= fsim::semantic::vhdl::ValueDomain::unknown
                 && value <= fsim::semantic::vhdl::ValueDomain::string;
+        } else if constexpr (std::same_as<T, fsim::support::SystemVerilogBuiltinType>) {
+            return value >= fsim::support::SystemVerilogBuiltinType::none
+                && value <= fsim::support::SystemVerilogBuiltinType::void_type;
+        } else if constexpr (std::same_as<T, fsim::support::SystemVerilogCastTarget>) {
+            return value >= fsim::support::SystemVerilogCastTarget::none
+                && value <= fsim::support::SystemVerilogCastTarget::type_operator;
+        } else if constexpr (std::same_as<T, fsim::support::SystemVerilogTypeWord>) {
+            return value >= fsim::support::SystemVerilogTypeWord::none
+                && value <= fsim::support::SystemVerilogTypeWord::var_keyword;
+        } else if constexpr (std::same_as<T, fsim::support::SystemVerilogStandardClass>) {
+            return value >= fsim::support::SystemVerilogStandardClass::none
+                && value <= fsim::support::SystemVerilogStandardClass::weak_reference;
+        } else if constexpr (std::same_as<T, fsim::support::SystemVerilogNetKind>) {
+            return value >= fsim::support::SystemVerilogNetKind::none
+                && value <= fsim::support::SystemVerilogNetKind::uwire;
+        } else if constexpr (std::same_as<T, fsim::support::ExpressionMarker>) {
+            return fsim::support::expression_marker_valid(value);
+        } else if constexpr (std::same_as<T, fsim::semantic::sv::CallKind>) {
+            return value >= fsim::semantic::sv::CallKind::user
+                && value <= fsim::semantic::sv::CallKind::system;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::ClassMethodHook>) {
+            return value >= fsim::runtime::simir::ClassMethodHook::none
+                && value <= fsim::runtime::simir::ClassMethodHook::last;
         } else {
             // Every enumeration a saved record holds has its range checked
             // when it is read back: one without a branch fails the build.
@@ -1307,10 +1330,11 @@ namespace codec_detail {
     {
         // Every member is listed: one added to the record and not here
         // fails the build (the binding names each member).
-        [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11, m12, m13, m14, m15, m16, m17, m18, m19, m20, m21, m22] = value;
+        [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11, m12, m13, m14, m15, m16, m17, m18, m19, m20, m21, m22, m23] = value;
         return std::tie(
             value.domain, value.spelling, value.systemverilog_scalar,
             value.systemverilog_net_type,
+            value.systemverilog_net_type_kind,
             value.systemverilog_resolution_function, value.packed_range,
             value.is_signed, value.named_type, value.named_type_span,
             value.integer_range, value.integer_base_range,
@@ -1715,6 +1739,8 @@ namespace codec_detail {
                 static_cast<std::int64_t>(right)));
         }
         hasher.add_string(value.element_nominal_type);
+        hasher.add_bool(value.element_nominal_type_id.has_value());
+        hasher.add_u64(value.element_nominal_type_id.value_or(0U));
         hasher.add_bool(value.vhdl_shaped);
         hasher.add_u64(value.vhdl_rank);
         hasher.add_bool(value.sparse);

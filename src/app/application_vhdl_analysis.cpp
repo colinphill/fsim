@@ -130,7 +130,7 @@ void validate_out_access_prefix_read(
     diagnostic::Engine& diagnostics)
 {
     if (expression.kind != vh::ExpressionKind::call
-        || expression.text != "@vhdl-dereference"
+        || expression.marker != support::ExpressionMarker::vhdl_dereference
         || expression.operands.size() != 1U) {
         return;
     }
@@ -1437,6 +1437,7 @@ void validate_vhdl_simulator_api(
       self(self, statement.statements);
       self(self, statement.else_statements);
       self(self, statement.loop_updates);
+      self(self, statement.loop_initializations);
     }
   };
   for (const auto& unit : units) {

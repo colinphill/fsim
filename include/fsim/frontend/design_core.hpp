@@ -4,8 +4,10 @@
 #include "fsim/frontend/source.hpp"
 #include "fsim/frontend/systemverilog_scalars.hpp"
 #include "fsim/frontend/token.hpp"
+#include "fsim/support/expression_marker.hpp"
 #include "fsim/support/rare_vector.hpp"
 #include "fsim/support/sva_marker.hpp"
+#include "fsim/support/systemverilog_builtin_type.hpp"
 #include "fsim/support/uvm_role.hpp"
 #include <cstddef>
 #include <cstdint>
@@ -116,6 +118,10 @@ struct Expression {
     // their source choices in aggregate_choice_expressions. A SystemVerilog
     // default retains one source-spanned DefaultChoice node.
     support::RareVector<std::string> aggregate_choices { };
+    // The synthesized kind of each choice (`key`, the inline-constraint
+    // choices), parallel to aggregate_choices when not empty; read it through
+    // aggregate_choice_marker.
+    support::RareVector<support::ExpressionMarker> aggregate_choice_markers { };
     support::RareVector<std::vector<Expression>>
         aggregate_choice_expressions { };
     // Preserve contextual VHDL nominal typing when enumeration constants or
@@ -147,6 +153,29 @@ struct Expression {
     SystemVerilogPatternKind systemverilog_pattern {
         SystemVerilogPatternKind::none
     };
+    // The target of a cast `target'(value)` (IEEE 1800-2023 6.24.1) and, for
+    // a built-in data type target, its kind; `none` on every other node.
+    support::SystemVerilogCastTarget systemverilog_cast_target {
+        support::SystemVerilogCastTarget::none };
+    support::SystemVerilogBuiltinType systemverilog_cast_builtin {
+        support::SystemVerilogBuiltinType::none };
+    // An identifier that is a built-in data type keyword (IEEE 1800-2023
+    // 6.11), as a pattern key (`'{int: 0}`, 10.9.2) or a type operand
+    // (`$typename(int)`, 20.6.1): the type it names; `none` otherwise.
+    support::SystemVerilogBuiltinType systemverilog_keyword_type {
+        support::SystemVerilogBuiltinType::none };
+    // The kind of a node a parser or resolution pass synthesized (a class
+    // property read, a container method, a streaming slice, a VHDL
+    // dereference) and its payload (a member identity, a unit name, a
+    // width); `none` and empty on a node written in the source. The text of
+    // a marked node is empty.
+    support::ExpressionMarker marker { support::ExpressionMarker::none };
+    std::string marker_argument;
+    // The identity of the class a class-member marker (sv_property,
+    // sv_method, sv_new_constructor, ...) is bound to: the class declaring
+    // the member, or the class itself for a constructor or $cast; empty for
+    // every other marker and for a built-in or library intrinsic payload.
+    std::string marker_owner;
     // The data type of `type(data_type)` (IEEE 1800-2017 6.23); a
     // `type(expression)` keeps its expression as the only operand.
     std::shared_ptr<const Type> systemverilog_type_operand;
@@ -185,6 +214,52 @@ struct Expression {
     }
 };
 
+/// The synthesized kind of aggregate choice `index`; `none` for a choice
+/// written in the source.
+[[nodiscard]] inline support::ExpressionMarker aggregate_choice_marker(
+    const Expression& expression, const std::size_t index) noexcept
+{
+    return index < expression.aggregate_choice_markers.size()
+        ? expression.aggregate_choice_markers[index]
+        : support::ExpressionMarker::none;
+}
+
+/// A synthesized call node of kind `marker` with payload `argument`.
+[[nodiscard]] inline Expression marked_expression(
+    const support::ExpressionMarker marker, std::string argument,
+    std::vector<Expression> operands, SourceSpan span)
+{
+    Expression expression { ExpressionKind::Call, { }, std::move(operands),
+        std::move(span) };
+    expression.marker = marker;
+    expression.marker_argument = std::move(argument);
+    return expression;
+}
+
+/// A cast of `operand` to the built-in data type `kind` (IEEE 1800-2023
+/// 6.24.1), with its typed target.
+[[nodiscard]] inline Expression systemverilog_builtin_cast(
+    const support::SystemVerilogBuiltinType kind, Expression operand,
+    SourceSpan span)
+{
+    auto cast = marked_expression(support::ExpressionMarker::sv_cast, { },
+        { std::move(operand) }, std::move(span));
+    cast.systemverilog_cast_target = support::SystemVerilogCastTarget::builtin;
+    cast.systemverilog_cast_builtin = kind;
+    return cast;
+}
+
+/// A cast of `operand` to the constant size `width` (IEEE 1800-2023 6.24.1),
+/// with its typed target.
+[[nodiscard]] inline Expression systemverilog_size_cast(
+    const std::uint64_t width, Expression operand, SourceSpan span)
+{
+    auto cast = marked_expression(support::ExpressionMarker::sv_cast,
+        std::to_string(width), { std::move(operand) }, std::move(span));
+    cast.systemverilog_cast_target = support::SystemVerilogCastTarget::size;
+    return cast;
+}
+
 /// The frontend represents a SystemVerilog expression-sized cast with its
 /// constant size expression first and the value being cast second.
 [[nodiscard]] inline const Expression* systemverilog_cast_value_operand(
@@ -193,11 +268,11 @@ struct Expression {
     if (expression.kind != ExpressionKind::Call) {
         return nullptr;
     }
-    if (expression.text == "@sv-size-cast:expression"
+    if (expression.marker == support::ExpressionMarker::sv_size_cast
         && expression.operands.size() == 2U) {
         return &expression.operands[1U];
     }
-    if (expression.text.rfind("@sv-cast:", 0U) == 0U
+    if (expression.marker == support::ExpressionMarker::sv_cast
         && expression.operands.size() == 1U) {
         return &expression.operands.front();
     }
@@ -208,7 +283,7 @@ struct Expression {
     const Expression& expression) noexcept
 {
     return expression.kind == ExpressionKind::Call
-            && expression.text == "@sv-size-cast:expression"
+            && expression.marker == support::ExpressionMarker::sv_size_cast
             && expression.operands.size() == 2U
         ? &expression.operands.front()
         : nullptr;
@@ -413,6 +488,10 @@ struct PackedMember {
     // A member of an unpacked structure declared rand or randc (IEEE
     // 1800-2017 18.4).
     bool random { };
+    // The SystemVerilog built-in type `spelling` names (Type's field of the
+    // same name); `none` for VHDL record elements.
+    support::SystemVerilogBuiltinType systemverilog_builtin {
+        support::SystemVerilogBuiltinType::none };
 
     [[nodiscard]] std::optional<std::uint64_t> width() const noexcept;
 };
@@ -588,10 +667,24 @@ struct Type {
     std::shared_ptr<const Expression> systemverilog_type_of;
     SystemVerilogScalarKind systemverilog_scalar { SystemVerilogScalarKind::None };
     std::string systemverilog_net_type;
+    // The built-in net type `systemverilog_net_type` names (IEEE 1800-2023 6.7); `none` when it is empty or names a user-defined nettype (6.6.7).
+    support::SystemVerilogNetKind systemverilog_net_type_kind { support::SystemVerilogNetKind::none };
     // An `interconnect` net, kept as a wire for simulation; the marker only
     // lets the VPI model publish a generic interconnect net or array
     // (IEEE 1800-2023 6.6.8, 37.24).
     bool systemverilog_interconnect { };
+    // The SystemVerilog built-in data type (IEEE 1800-2023 6.11-6.17) and
+    // net type (6.7) whose keyword `spelling` holds, set where the parser
+    // reads the keyword; `none` for every other spelling and for VHDL.
+    support::SystemVerilogBuiltinType systemverilog_builtin {
+        support::SystemVerilogBuiltinType::none };
+    support::SystemVerilogNetKind systemverilog_net_kind {
+        support::SystemVerilogNetKind::none };
+    // The std package class (IEEE 1800-2023 9.7, 15.3, 15.4, 8.30) this
+    // type names, set where the parser resolves the name to the std
+    // declaration; `none` for every other type.
+    support::SystemVerilogStandardClass systemverilog_standard_class {
+        support::SystemVerilogStandardClass::none };
     // Canonical selected function name from a SystemVerilog user-defined
     // nettype. Empty selects the ordinary net resolution for the base type.
     std::string systemverilog_resolution_function;
@@ -747,6 +840,90 @@ struct Type {
 
     [[nodiscard]] std::optional<std::uint64_t> width() const noexcept;
 };
+
+// Makes `type` the SystemVerilog built-in data type `kind` (IEEE 1800-2023
+// 6.11-6.17): the keyword spelling and the kind together.
+inline void set_systemverilog_builtin_type(
+    Type& type, const support::SystemVerilogBuiltinType kind)
+{
+    type.spelling = std::string { support::systemverilog_builtin_type_name(kind) };
+    type.systemverilog_builtin = kind;
+    type.systemverilog_net_kind = support::SystemVerilogNetKind::none;
+}
+
+// The parser's keyword recognition (IEEE 1800-2023 5.6.2): `keyword` is the
+// source token that names the data or net type.
+inline void set_systemverilog_type_keyword(
+    Type& type, const std::string_view keyword)
+{
+    type.spelling = std::string { keyword };
+    type.systemverilog_builtin
+        = support::systemverilog_builtin_type_keyword(keyword);
+    type.systemverilog_net_kind = support::systemverilog_net_kind_keyword(keyword);
+}
+
+// Gives `type` a spelling that names no built-in type (a type name, a
+// placeholder).
+inline void set_systemverilog_type_name(Type& type, std::string spelling)
+{
+    type.spelling = std::move(spelling);
+    type.systemverilog_builtin = support::SystemVerilogBuiltinType::none;
+    type.systemverilog_net_kind = support::SystemVerilogNetKind::none;
+}
+
+// Names the built-in net type `kind` as the net type of `type` (IEEE 1800-2023 6.7).
+inline void set_systemverilog_net_type(
+    Type& type, const support::SystemVerilogNetKind kind)
+{
+    type.systemverilog_net_type
+        = std::string { support::systemverilog_net_kind_name(kind) };
+    type.systemverilog_net_type_kind = kind;
+}
+
+// Names the user-defined nettype `name` as the net type of `type`
+// (IEEE 1800-2023 6.6.7); it has no built-in kind.
+inline void set_systemverilog_user_net_type(Type& type, std::string name)
+{
+    type.systemverilog_net_type = std::move(name);
+    type.systemverilog_net_type_kind = support::SystemVerilogNetKind::none;
+}
+
+// Gives `type` no net type.
+inline void clear_systemverilog_net_type(Type& type)
+{
+    type.systemverilog_net_type.clear();
+    type.systemverilog_net_type_kind = support::SystemVerilogNetKind::none;
+}
+
+// A SystemVerilog built-in data type `kind` of the given shape.
+[[nodiscard]] inline Type systemverilog_builtin_type(const ValueDomain domain,
+    const support::SystemVerilogBuiltinType kind,
+    std::optional<PackedRange> range, const bool is_signed)
+{
+    Type type { domain, { }, std::move(range), is_signed };
+    set_systemverilog_builtin_type(type, kind);
+    return type;
+}
+
+// A SystemVerilog net of the built-in net type `kind` (IEEE 1800-2023 6.7)
+// with an implicit logic data type.
+[[nodiscard]] inline Type systemverilog_net_type(
+    const support::SystemVerilogNetKind kind)
+{
+    Type type { ValueDomain::Logic4,
+        std::string { support::systemverilog_net_kind_name(kind) },
+        std::nullopt, false };
+    type.systemverilog_net_kind = kind;
+    return type;
+}
+
+// Copies the spelling of `source`, with the built-in kinds it names.
+inline void copy_systemverilog_type_spelling(Type& type, const Type& source)
+{
+    type.spelling = source.spelling;
+    type.systemverilog_builtin = source.systemverilog_builtin;
+    type.systemverilog_net_kind = source.systemverilog_net_kind;
+}
 
 /// Canonical representation defaults for a built-in SystemVerilog integral
 /// type. Flexible-width types accept a following packed range; fixed-width
@@ -1755,6 +1932,11 @@ struct Statement {
     // SystemVerilog user-task invocation. Kept separate from expression calls
     // because task formals have direction and copy-out semantics.
     std::string task_name;
+    // A synthesized callee (a class method or static task, a covergroup
+    // sample or control, a container push) and its payload; `task_name` is
+    // empty then.
+    support::ExpressionMarker task_marker { support::ExpressionMarker::none };
+    std::string task_marker_argument;
     support::RareVector<Expression> task_arguments;
     // Procedural assertion-control system tasks retain their exact policy while
     // sharing the ordinary task-call argument representation.
@@ -1789,6 +1971,11 @@ struct Statement {
     // Additional comma-separated SystemVerilog for-loop updates execute in
     // source order after the legacy primary target/value pair.
     support::RareVector<Statement> loop_updates;
+    // Further for-loop initializations (`for (int i = 0, j = i; ...)`),
+    // run in source order after `loop_initial`, once, before the first
+    // condition test; a declared one's variable is in `declarations`, all
+    // in the loop's one implicit scope (IEEE 1800-2023 12.7.1).
+    support::RareVector<Statement> loop_initializations;
     bool loop_descending { };
     // SystemVerilog `<`/`>` loop conditions exclude the retained limit;
     // VHDL discrete ranges and SV `<=`/`>=` include it.
@@ -1964,6 +2151,10 @@ struct Statement {
     support::GeneratedStatementRole generated_role {
         support::GeneratedStatementRole::none
     };
+    // StatementKind::Break: a break in a foreach statement over several
+    // dimensions, which is written as nested loops (12.7.3). It ends the
+    // whole foreach statement, not only the innermost loop (12.8).
+    bool foreach_break { };
     // GeneratedStatementRole::expect: the index of the inline property
     // declaration, among the assertion declarations of the scope that holds
     // the statement's procedure or task, that is the expect statement's

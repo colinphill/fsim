@@ -13,19 +13,23 @@
 #include <stdio.h>
 #include <string.h>
 
-enum { max_changes = 16 };
+enum { max_changes = 16, port_count = 2, kind_count = 2 };
 
 struct Change {
     unsigned time;
     int value;
 };
 
-static struct Change stable_changes[max_changes];
-static struct Change quiet_changes[max_changes];
-static int stable_count;
-static int quiet_count;
-static vhpiHandleT stable_signal;
-static vhpiHandleT quiet_signal;
+// Port p (std_logic) and port v (std_logic_vector); each has a 'STABLE
+// and a 'QUIET signal. Both ports start from SystemVerilog static
+// initializers, which are initialization, not transactions (IEEE 1800-2023
+// 6.8; 1076-2019 14.7.5.2): neither implicit signal changes at time zero.
+static const char* const port_names[port_count] = { "top.u.p", "top.u.v" };
+static const char* const port_labels[port_count] = { "p", "v" };
+static const char* const kind_labels[kind_count] = { "stable", "quiet" };
+static struct Change changes[port_count][kind_count][max_changes];
+static int counts[port_count][kind_count];
+static vhpiHandleT signals[port_count][kind_count];
 
 static int position_of(vhpiHandleT object)
 {
@@ -37,47 +41,53 @@ static int position_of(vhpiHandleT object)
 
 static void changed(const vhpiCbDataT* data)
 {
+    int port;
+    int kind;
     vhpiTimeT now;
-    struct Change* list = data->obj == stable_signal ? stable_changes
-                                                      : quiet_changes;
-    int* count = data->obj == stable_signal ? &stable_count : &quiet_count;
     vhpi_get_time(&now, NULL);
-    if (*count < max_changes) {
-        list[*count].time = (unsigned)now.low;
-        list[*count].value = position_of(data->obj);
-        ++*count;
-    }
-}
-
-static void report(const char* label, const struct Change* list, int count)
-{
-    int index;
-    for (index = 0; index < count; ++index) {
-        printf("#c %s change value=%d at %u\n", label, list[index].value,
-            list[index].time);
+    for (port = 0; port < port_count; ++port) {
+        for (kind = 0; kind < kind_count; ++kind) {
+            int* count = &counts[port][kind];
+            if (data->obj != signals[port][kind] || *count >= max_changes) {
+                continue;
+            }
+            changes[port][kind][*count].time = (unsigned)now.low;
+            changes[port][kind][*count].value = position_of(data->obj);
+            ++*count;
+        }
     }
 }
 
 static void end_of_simulation(const vhpiCbDataT* data)
 {
+    int port;
+    int kind;
+    int index;
     (void)data;
-    report("p'stable", stable_changes, stable_count);
-    report("p'quiet", quiet_changes, quiet_count);
+    for (port = 0; port < port_count; ++port) {
+        for (kind = 0; kind < kind_count; ++kind) {
+            for (index = 0; index < counts[port][kind]; ++index) {
+                printf("#c %s'%s change value=%d at %u\n", port_labels[port],
+                    kind_labels[kind], changes[port][kind][index].value,
+                    changes[port][kind][index].time);
+            }
+        }
+    }
     fflush(stdout);
 }
 
-static void start(const vhpiCbDataT* data)
+static void watch_port(int port)
 {
-    vhpiHandleT port = vhpi_handle_by_name("top.u.p", NULL);
-    vhpiHandleT iterator = vhpi_iterator(vhpiSigAttrs, port);
+    vhpiHandleT handle = vhpi_handle_by_name(port_names[port], NULL);
+    vhpiHandleT iterator = vhpi_iterator(vhpiSigAttrs, handle);
     vhpiHandleT item;
     vhpiCbDataT callback;
-    (void)data;
     while (iterator != NULL && (item = vhpi_scan(iterator)) != NULL) {
         // The letter case of names is not specified.
         const vhpiCharT* name = vhpi_get_str(vhpiNameP, item);
         char lower[64];
         size_t length;
+        int kind;
         if (name == NULL) {
             continue;
         }
@@ -87,20 +97,30 @@ static void start(const vhpiCbDataT* data)
         }
         lower[length] = 0;
         if (strstr(lower, "'stable") != NULL) {
-            stable_signal = item;
+            kind = 0;
         } else if (strstr(lower, "'quiet") != NULL) {
-            quiet_signal = item;
+            kind = 1;
         } else {
             continue;
         }
+        signals[port][kind] = item;
         memset(&callback, 0, sizeof callback);
         callback.reason = vhpiCbValueChange;
         callback.cb_rtn = changed;
         callback.obj = item;
         (void)vhpi_register_cb(&callback, 0);
     }
-    printf("#c stable=%d quiet=%d\n", stable_signal != NULL,
-        quiet_signal != NULL);
+    printf("#c %s stable=%d quiet=%d\n", port_labels[port],
+        signals[port][0] != NULL, signals[port][1] != NULL);
+}
+
+static void start(const vhpiCbDataT* data)
+{
+    int port;
+    (void)data;
+    for (port = 0; port < port_count; ++port) {
+        watch_port(port);
+    }
     fflush(stdout);
 }
 

@@ -514,6 +514,28 @@ SystemVerilogPackageMember VerilogParser::package_member(
   return package_members_.find(package, member, package_member_lookup_);
 }
 
+bool VerilogParser::standard_class_name_visible(
+    const std::string_view name) const {
+  const auto* declaration = find_systemverilog_standard_package_declaration(
+      standard_revision_, name);
+  if (declaration == nullptr
+      || declaration->kind != SystemVerilogStandardPackageMemberKind::class_type) {
+    return false;
+  }
+  // A type of that name still makes the actual a type; the resolver binds
+  // it to the design's type.
+  const std::string key { name };
+  return !unit_value_parameter_names_.contains(key)
+      && !unit_port_names_.contains(key)
+      && !unit_foreach_types_.contains(key)
+      && !non_ansi_ports_.contains(key)
+      && !current_generate_names_.contains(key)
+      && !current_procedural_names_.contains(key)
+      && !unit_container_names_.contains(key)
+      && !unit_string_names_.contains(key)
+      && imported_member(name) != SystemVerilogPackageMember::value;
+}
+
 SystemVerilogPackageMember VerilogParser::imported_member(
     const std::string_view name) const {
   if (const auto scope = name.rfind("::"); scope != std::string_view::npos) {
@@ -813,11 +835,9 @@ void VerilogParser::resolve_implicit_nets(DesignUnit& unit) {
       rejected.insert(reference.name);
       continue;
     }
-    Type type{
-        ValueDomain::Logic4,
-        reference.net_type,
-        std::nullopt,
-        false};
+    // The `default_nettype keyword names the implicit net's type (22.8).
+    Type type = systemverilog_net_type(
+        support::systemverilog_net_kind_keyword(reference.net_type));
     unit.signals.push_back({
         reference.name,
         std::move(type),
@@ -1090,6 +1110,7 @@ DesignUnit VerilogParser::parse_module(
     body_port_declarations_.clear();
     unit_container_names_.clear();
     unit_string_names_.clear();
+    unit_port_names_.clear();
     unit_associative_index_types_.clear();
     unit_foreach_types_.clear();
     generate_dpi_declarations_.clear();
@@ -1175,6 +1196,8 @@ DesignUnit VerilogParser::parse_module(
     active_package_imports_ = unit.systemverilog_imports;
     unit_package_import_count_ = active_package_imports_.size();
     unit.default_nettype = current_default_nettype_;
+    unit.default_net_kind
+        = support::systemverilog_net_kind_keyword(current_default_nettype_);
     unit.default_decay_time = current_default_decay_time_;
     unit.is_cell = current_cell_define_;
     unit.systemverilog_extern = extern_declaration;
@@ -1781,6 +1804,7 @@ DesignUnit VerilogParser::parse_module(
             if (existing != unit.ports.end()) {
                 *existing = std::move(declaration);
             } else {
+                unit_port_names_.insert(declaration.name);
                 unit.ports.push_back(std::move(declaration));
             }
         } else if (is_declaration_start() && !instance_start()) {
@@ -1838,14 +1862,11 @@ DesignUnit VerilogParser::parse_module(
                             || !signal->type.systemverilog_net_type.empty()) {
                             continue;
                         }
-                        const auto spelling
-                            = detail::ascii_lower(signal->type.spelling);
-                        if (spelling == "reg" || spelling == "integer"
-                            || spelling == "time" || spelling == "real"
-                            || spelling == "realtime" || spelling == "logic"
-                            || spelling == "bit" || spelling == "int"
-                            || spelling == "byte" || spelling == "shortint"
-                            || spelling == "longint") {
+                        const auto signal_kind = signal->type.systemverilog_builtin;
+                        if (support::systemverilog_integral(signal_kind)
+                            || signal_kind == support::SystemVerilogBuiltinType::real
+                            || signal_kind
+                                == support::SystemVerilogBuiltinType::realtime) {
                             error(assign_token, "FSIM-SV-SEM-412",
                                 "a continuous assignment with a drive "
                                 "strength must target a net, not variable '"
@@ -2377,14 +2398,6 @@ bool VerilogParser::instance_start() const {
     return false;
   }
   if (keyword_reserved(keyword_set_, current().text)) {
-    return false;
-  }
-  if (const auto* declaration
-          = find_systemverilog_standard_package_declaration(
-              StandardRevision::SystemVerilog2023, current().text);
-      declaration != nullptr
-      && declaration->kind
-          == SystemVerilogStandardPackageMemberKind::class_type) {
     return false;
   }
   if (at(TokenKind::LeftParen, 1)) {

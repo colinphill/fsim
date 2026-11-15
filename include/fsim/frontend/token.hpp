@@ -2,6 +2,7 @@
 #pragma once
 
 #include "fsim/frontend/diagnostic.hpp"
+#include "fsim/support/systemverilog_builtin_type.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -242,6 +243,13 @@ struct Token {
   // directly from a source file leave this empty.
   std::vector<std::string> expansion_stack;
   GeneratedTextKind generated_text { GeneratedTextKind::none };
+  // The SystemVerilog parser's reading of a data-type keyword (IEEE 1800-2023
+  // 5.6.2) on tokens it keeps as source text (DPI prototypes): the built-in
+  // type it names, or another type keyword; `none` on every other token.
+  support::SystemVerilogBuiltinType systemverilog_builtin {
+      support::SystemVerilogBuiltinType::none };
+  support::SystemVerilogTypeWord systemverilog_type_word {
+      support::SystemVerilogTypeWord::none };
 
   friend bool operator==(const Token&, const Token&) = default;
 };

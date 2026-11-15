@@ -477,7 +477,8 @@ bool valid_statement_closure(ClassClosure& closure,
     };
     if (!std::ranges::all_of(statement->statements, validate)
         || !std::ranges::all_of(statement->else_statements, validate)
-        || !std::ranges::all_of(statement->loop_updates, validate)) {
+        || !std::ranges::all_of(statement->loop_updates, validate)
+        || !std::ranges::all_of(statement->loop_initializations, validate)) {
         return false;
     }
     for (const auto& alternative : statement->case_alternatives) {
@@ -1256,20 +1257,21 @@ std::vector<CovergroupInstance>& Hir::mutable_covergroup_instances() noexcept {
     return covergroup_instances_;
 }
 
-bool packed_element_spelling(const std::string_view spelling) noexcept
+namespace {
+
+// An integer type of predefined width is not a packed array, and a
+// non-integral type is no packed element (IEEE 1800-2023 7.4.1).
+bool packed_element_builtin(
+    const support::SystemVerilogBuiltinType builtin) noexcept
 {
-    // An integer type of predefined width is not a packed array, and a
-    // non-integral type is no packed element (IEEE 1800-2023 7.4.1).
-    static constexpr std::array excluded {
-        std::string_view { "byte" }, std::string_view { "shortint" },
-        std::string_view { "int" }, std::string_view { "longint" },
-        std::string_view { "integer" }, std::string_view { "time" },
-        std::string_view { "real" }, std::string_view { "shortreal" },
-        std::string_view { "realtime" }, std::string_view { "string" },
-        std::string_view { "chandle" }, std::string_view { "event" },
-    };
-    return std::ranges::find(excluded, spelling) == excluded.end();
+    using Kind = support::SystemVerilogBuiltinType;
+    return !(support::systemverilog_integer_atom(builtin)
+        || support::systemverilog_real_family(builtin)
+        || builtin == Kind::string || builtin == Kind::chandle
+        || builtin == Kind::event);
 }
+
+} // namespace
 
 NamedPackedDimensions compose_named_packed_dimensions(
     TypeReference& reference, const Hir& hir)
@@ -1330,7 +1332,7 @@ NamedPackedDimensions compose_named_packed_dimensions(
         && (form == TypeForm::enumeration || form == TypeForm::packed_structure
             || form == TypeForm::packed_union
             || (form == TypeForm::packed_integral
-                && packed_element_spelling(shape->target.spelling)
+                && packed_element_builtin(shape->builtin)
                 && (!element.empty()
                     || shape->executable_width.value_or(1U) == 1U)));
     if (!packed_element || reference.packed_dimensions.empty()) {
@@ -1371,7 +1373,8 @@ NamedPackedDimensions compose_named_packed_dimensions(
     if (!aggregate) {
         reference.composed_over = reference.target;
         reference.target.target = { };
-        reference.target.spelling = shape->four_state ? "logic" : "bit";
+        sv::set_builtin_type(reference,
+            shape->four_state ? support::SystemVerilogBuiltinType::logic : support::SystemVerilogBuiltinType::bit);
         reference.named = false;
     } else if (shape->target.target.valid()) {
         reference.target.target = shape->target.target;

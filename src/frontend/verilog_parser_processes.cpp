@@ -535,6 +535,23 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
         // one on an expect statement names the statement (9.3.5, 37.60).
         assertion_label = advance();
         (void)advance();
+    } else if (language_ == Language::SystemVerilog2017
+        && at(TokenKind::Identifier) && at(TokenKind::Colon, 1)
+        && !keyword_reserved(keyword_set_, current().text)
+        && !keyword("restrict", 2)) {
+        // A label on any other statement (9.3.5).
+        const auto label = advance();
+        (void)advance();
+        (void)require_standard("a statement label",
+            StandardRevision::SystemVerilog2005, label, "FSIM-SV-PARSE-347");
+        const bool for_loop = keyword("for");
+        const bool foreach_loop = keyword("foreach");
+        auto labeled = parse_statement_unhoisted();
+        if (!labeled) {
+            return labeled;
+        }
+        return label_statement(
+            label, for_loop, foreach_loop, std::move(*labeled));
     }
     if (const auto required = verilog_system_service_standard(current().text)) {
         note_system_service_standard(current().text, *required, current());
@@ -723,11 +740,9 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
             "FSIM-SV-PARSE-104");
         Statement statement;
         statement.kind = is_break ? StatementKind::Break : StatementKind::Continue;
-        if (is_break && !foreach_break_targets_.empty()
-            && foreach_break_targets_.back().first == current_loop_depth_) {
-            statement.kind = StatementKind::Disable;
-            statement.task_name = foreach_break_targets_.back().second;
-        }
+        statement.foreach_break = is_break
+            && !foreach_break_targets_.empty()
+            && foreach_break_targets_.back() == current_loop_depth_;
         statement.span = span_from(start, previous());
         return statement;
     }
@@ -2132,8 +2147,11 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
         // arguments, as `delete()` does (IEEE 1800-2023 7.5.3, 13.5.5).
         if (auto& value = statement.value;
             value.kind == ExpressionKind::Call
-            && value.text == "@sv-select:delete"
+            && value.marker == support::ExpressionMarker::sv_select
+            && value.marker_argument == "delete"
             && value.operands.size() == 1U) {
+            value.marker = support::ExpressionMarker::none;
+            value.marker_argument.clear();
             value.text = ".delete";
         } else if (value.kind == ExpressionKind::Identifier
             && value.text.ends_with(".delete")
@@ -2538,8 +2556,8 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
             ? parse_expression()
             : parse_lvalue();
         if (target.kind == ExpressionKind::Call
-            && (target.text == "@stream-left"
-                || target.text == "@stream-right")) {
+            && (target.marker == support::ExpressionMarker::stream_left
+                || target.marker == support::ExpressionMarker::stream_right)) {
             // Streaming concatenation as an assignment target unpacks the
             // source (IEEE 1800-2005 8.17; IEEE 1800-2017 11.4.14.3).
             require_sv2005(

@@ -435,12 +435,13 @@ endmodule
         = resolved_instances.design.units[1].processes.front();
     require(
         resolved_process.statements.size() == 3
-            && resolved_process.statements[0].task_name.starts_with(
-                "@sv-coverage-control-stop:")
-            && resolved_process.statements[1].task_name.starts_with(
-                "@sv-coverage-control-start:")
-            && resolved_process.statements[2].task_name.starts_with(
-                "@sv-coverage-sample-procedural:")
+            && resolved_process.statements[0].task_marker
+                == fsim::support::ExpressionMarker::sv_coverage_control_stop
+            && resolved_process.statements[1].task_marker
+                == fsim::support::ExpressionMarker::sv_coverage_control_start
+            && resolved_process.statements[2].task_marker
+                == fsim::support::ExpressionMarker::
+                    sv_coverage_sample_procedural
             && resolved_process.statements[0].task_arguments.empty()
             && resolved_process.statements[1].task_arguments.empty(),
         "covergroup start/stop calls resolve to the stable runtime instance");

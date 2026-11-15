@@ -152,8 +152,7 @@ FunctionDeclaration VerilogParser::parse_function(
       keyword("string") || keyword("byte")
       || keyword("shortint") || keyword("longint")
       || keyword("shortreal") || keyword("real")
-      || keyword("realtime") || keyword("chandle")
-      || keyword("process") || keyword("event")
+      || keyword("realtime") || keyword("chandle") || keyword("event")
       || keyword("time") || keyword("integer") || keyword("int")
       || keyword("logic") || keyword("reg") || keyword("bit")
       || keyword("signed") || keyword("unsigned")
@@ -161,9 +160,9 @@ FunctionDeclaration VerilogParser::parse_function(
   if (constructor) {
     const auto name = advance();
     function.name = name.text;
-    function.return_type.spelling = "constructor";
+    set_systemverilog_type_name(function.return_type, "constructor");
   } else if (qualified_constructor) {
-    function.return_type.spelling = "constructor";
+    set_systemverilog_type_name(function.return_type, "constructor");
     function.name = expect_identifier("constructor owner").text;
     while (match(TokenKind::Scope)) {
       function.name += "::";
@@ -177,7 +176,7 @@ FunctionDeclaration VerilogParser::parse_function(
   } else {
     if (void_result) {
       const auto result = advance();
-      function.return_type.spelling = result.text;
+      set_systemverilog_type_keyword(function.return_type, result.text);
       function.return_type.named_type_span = result.span;
     } else if (keyword("enum")) {
       // An anonymous enumeration return type declares its literals in the
@@ -197,7 +196,7 @@ FunctionDeclaration VerilogParser::parse_function(
       if (function.return_type.implicit_type
           && !function.return_type.packed_range
           && !function.return_type.packed_range_expression) {
-        function.return_type.spelling = "logic";
+        set_systemverilog_builtin_type(function.return_type, support::SystemVerilogBuiltinType::logic);
         function.return_type.domain = ValueDomain::Logic4;
         function.return_type.is_signed = false;
       }
@@ -318,7 +317,7 @@ FunctionDeclaration VerilogParser::parse_function(
     if (language_ == Language::SystemVerilog2017) {
       for (const auto& argument_name : classic_header_arguments) {
         auto type = default_verilog_type();
-        type.spelling = "logic";
+        set_systemverilog_builtin_type(type, support::SystemVerilogBuiltinType::logic);
         function.arguments.push_back(FunctionArgument{
             argument_name, std::move(type), PortDirection::Input,
             span_from(start, previous())});
@@ -508,8 +507,10 @@ FunctionDeclaration VerilogParser::parse_function(
         && argument->type.packed_range && variable.type.packed_range
         && argument->type.packed_range->width()
             == variable.type.packed_range->width()
-        && (variable.type.spelling == "reg"
-            || variable.type.spelling == "logic");
+        && (variable.type.systemverilog_builtin
+                == support::SystemVerilogBuiltinType::reg
+            || variable.type.systemverilog_builtin
+                == support::SystemVerilogBuiltinType::logic);
     if (argument == function.arguments.end()
         || (!argument->type.implicit_type && !same_range)
         || variable.initializer) {
@@ -524,7 +525,7 @@ FunctionDeclaration VerilogParser::parse_function(
   for (auto& argument : function.arguments) {
     if (argument.type.implicit_type) {
       argument.type = default_verilog_type();
-      argument.type.spelling = "logic";
+      set_systemverilog_builtin_type(argument.type, support::SystemVerilogBuiltinType::logic);
     }
   }
   if (!classic_header_arguments.empty()) {
@@ -539,7 +540,7 @@ FunctionDeclaration VerilogParser::parse_function(
       if (found == function.arguments.end()
           && language_ == Language::SystemVerilog2017) {
         auto type = default_verilog_type();
-        type.spelling = "logic";
+        set_systemverilog_builtin_type(type, support::SystemVerilogBuiltinType::logic);
         ordered.push_back(FunctionArgument{
             argument_name, std::move(type), PortDirection::Input,
             function.span});
@@ -580,7 +581,8 @@ FunctionDeclaration VerilogParser::parse_function(
         error(start, "FSIM-SV-SEM-397", message);
       } }.run();
   if (!constructor && !qualified_constructor
-      && function.return_type.spelling != "void") {
+      && function.return_type.systemverilog_builtin
+          != support::SystemVerilogBuiltinType::void_type) {
     validate_function_body(function, start);
   }
 
@@ -661,8 +663,10 @@ void VerilogParser::validate_function_body(
             // slice size.
             const auto stream = [](const Expression& expression) {
               return expression.kind == ExpressionKind::Call
-                  && (expression.text == "@stream-left"
-                      || expression.text == "@stream-right");
+                  && (expression.marker
+                          == support::ExpressionMarker::stream_left
+                      || expression.marker
+                          == support::ExpressionMarker::stream_right);
             };
             std::vector<const Expression*> leaves { &statement.target };
             for (std::size_t index = 0; index < leaves.size(); ++index) {
@@ -688,7 +692,7 @@ void VerilogParser::validate_function_body(
             }
             const bool selected_member_root =
                 root->kind == ExpressionKind::Call
-                && root->text.starts_with("@sv-select:")
+                && root->marker == support::ExpressionMarker::sv_select
                 && root->operands.size() == 1U;
             if (root->kind != ExpressionKind::Identifier
                 && !selected_member_root) {
@@ -850,7 +854,7 @@ VerilogParser::parse_ansi_callable_formals(
         || keyword("shortint") || keyword("longint")
         || keyword("time") || keyword("shortreal")
         || keyword("real") || keyword("realtime")
-        || keyword("chandle") || keyword("process")
+        || keyword("chandle")
         || keyword("event") || keyword("integer")
         || keyword("int") || keyword("logic")
         || keyword("reg") || keyword("bit")
@@ -880,7 +884,7 @@ VerilogParser::parse_ansi_callable_formals(
       // A formal with no data type is `logic`, also as the element type of
       // an unpacked array formal (IEEE 1800-2017 13.3).
       type = default_verilog_type();
-      type.spelling = "logic";
+      set_systemverilog_builtin_type(type, support::SystemVerilogBuiltinType::logic);
       inherited_type = type;
     } else if (var_formal || explicit_direction || explicit_type
         || !have_inherited_formal) {
@@ -1036,7 +1040,7 @@ TaskDeclaration VerilogParser::parse_task(
     if (language_ == Language::SystemVerilog2017) {
       for (const auto& argument_name : classic_header_arguments) {
         auto type = default_verilog_type();
-        type.spelling = "logic";
+        set_systemverilog_builtin_type(type, support::SystemVerilogBuiltinType::logic);
         task.arguments.emplace_back(argument_name, std::move(type),
             PortDirection::Input, span_from(start, previous()));
       }
@@ -1246,7 +1250,7 @@ TaskDeclaration VerilogParser::parse_task(
   for (auto& argument : task.arguments) {
     if (argument.type.implicit_type) {
       argument.type = default_verilog_type();
-      argument.type.spelling = "logic";
+      set_systemverilog_builtin_type(argument.type, support::SystemVerilogBuiltinType::logic);
     }
   }
   task.statements = std::move(body.statements);
@@ -1262,7 +1266,7 @@ TaskDeclaration VerilogParser::parse_task(
       if (found == task.arguments.end()
           && language_ == Language::SystemVerilog2017) {
         auto type = default_verilog_type();
-        type.spelling = "logic";
+        set_systemverilog_builtin_type(type, support::SystemVerilogBuiltinType::logic);
         ordered.push_back(TaskArgument{
             argument_name, std::move(type), PortDirection::Input,
             task.span});
@@ -1442,6 +1446,7 @@ void VerilogParser::validate_task_body(
                   "a const ref task formal is read-only");
             }
           }
+          self(self, statement.loop_initializations);
           self(self, statement.statements);
           self(self, statement.else_statements);
           for (const auto& alternative : statement.case_alternatives) {

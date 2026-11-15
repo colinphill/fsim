@@ -1823,6 +1823,11 @@ struct DesignUnit {
     std::string time_precision;
     // Verilog/SystemVerilog compilation-directive state at unit declaration.
     std::string default_nettype;
+    // The built-in net type `default_nettype` names (IEEE 1800-2023 22.8);
+    // `none` for `default_nettype none.
+    support::SystemVerilogNetKind default_net_kind {
+        support::SystemVerilogNetKind::none
+    };
     // The argument of `default_decay_time in effect at the unit (IEEE
     // 1800-2023 E.2): its spelling, `infinite`, or empty when none.
     std::string default_decay_time;

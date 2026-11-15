@@ -5,6 +5,7 @@
 #include "fsim/runtime/logic.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
 #include "fsim/support/phase_profile.hpp"
+#include "fsim/support/systemverilog_builtin_type.hpp"
 #include "../runtime/simir_process_program.hpp"
 #include "elaboration_targets.hpp"
 #include "elaborator_internal.hpp"
@@ -220,7 +221,8 @@ HierarchyBuilder::rewrite_eligible_element_net_families()
             || type.scalar_kind != frontend::SystemVerilogScalarKind::None
             || type.dimensions.empty()
             || !type.element_types.empty()
-            || !type.element_nominal_type.empty()) {
+            || !type.element_nominal_type.empty()
+            || type.element_nominal_type_id) {
             continue;
         }
 
@@ -273,8 +275,10 @@ HierarchyBuilder::rewrite_eligible_element_net_families()
         }
         const auto& proxy_info = design_.signal_info_[proxy];
         const auto& proxy_signal = design_.signals_[proxy];
-        if ((proxy_info.systemverilog_net_type != "wire"
-                && proxy_info.systemverilog_net_type != "tri"
+        if ((proxy_info.systemverilog_net_kind
+                    != support::SystemVerilogNetKind::wire
+                && proxy_info.systemverilog_net_kind
+                    != support::SystemVerilogNetKind::tri
                 && !nettype_array)
             || (proxy_info.source_domain != frontend::ValueDomain::Logic4
                 && !(nettype_array
@@ -2077,6 +2081,8 @@ void HierarchyBuilder::finish()
             && info.width <= std::numeric_limits<std::uint32_t>::max()
             && (info.vhdl_physical != nullptr || info.integer_range
                 || !info.enumeration_literals.empty()
+                // A net, of a built-in or user-defined net type, keeps the type's
+                // name in systemverilog_net_type; empty means a variable.
                 || (info.source_domain == frontend::ValueDomain::Integer
                     && info.systemverilog_net_type.empty()
                     && info.systemverilog_scalar
@@ -2152,9 +2158,10 @@ void HierarchyBuilder::finish()
 ResolutionKind HierarchyBuilder::native_resolution(
     const SignalInfo& signal)
 {
-    const auto& net_type = signal.systemverilog_net_type.empty()
-        ? signal.type_name
-        : signal.systemverilog_net_type;
+    // The built-in net type (IEEE 1800-2023 6.7); a VHDL or SystemC type
+    // name that spells the same word is not a net type.
+    using NetKind = support::SystemVerilogNetKind;
+    const auto net_type = signal.systemverilog_net_kind;
     if (signal.type_name == "std_logic"
         || signal.type_name == "std_logic_vector") {
         return ResolutionKind::std_logic;
@@ -2176,21 +2183,21 @@ ResolutionKind HierarchyBuilder::native_resolution(
         != frontend::SystemVerilogScalarKind::None) {
         return ResolutionKind::none;
     }
-    if (net_type == "wire"
-        || net_type == "tri"
-        || net_type == "tri0"
-        || net_type == "tri1"
-        || net_type == "trireg"
-        || net_type == "supply0"
-        || net_type == "supply1") {
+    if (net_type == NetKind::wire
+        || net_type == NetKind::tri
+        || net_type == NetKind::tri0
+        || net_type == NetKind::tri1
+        || net_type == NetKind::trireg
+        || net_type == NetKind::supply0
+        || net_type == NetKind::supply1) {
         return ResolutionKind::sv_wire;
     }
-    if (net_type == "wand"
-        || net_type == "triand") {
+    if (net_type == NetKind::wand
+        || net_type == NetKind::triand) {
         return ResolutionKind::sv_wand;
     }
-    if (net_type == "wor"
-        || net_type == "trior") {
+    if (net_type == NetKind::wor
+        || net_type == NetKind::trior) {
         return ResolutionKind::sv_wor;
     }
     // A nonempty name can also be an unresolved user nettype or an
@@ -2217,19 +2224,23 @@ HierarchyBuilder::explicit_resolution(
     if (found == resolver_by_signal_.end()) {
         return std::nullopt;
     }
-    if (found->second == "std_logic") {
+    if (found->second.record_resolution) {
+        return ResolutionKind::user_function;
+    }
+    const auto& designator = found->second.designator;
+    if (designator == "std_logic") {
         return ResolutionKind::std_logic;
     }
-    if (found->second == "sv_wire") {
+    if (designator == "sv_wire") {
         return ResolutionKind::sv_wire;
     }
-    if (const auto user = vhdl_resolution_kinds_.find(found->second);
+    if (const auto user = vhdl_resolution_kinds_.find(designator);
         user != vhdl_resolution_kinds_.end()) {
         return user->second;
     }
     report(
         "FSIM-ELAB-BIND-050",
-        "unknown resolver '" + found->second
+        "unknown resolver '" + designator
             + "'; expected \"std_logic\" or \"sv_wire\"",
         { });
     return ResolutionKind::none;
@@ -2452,6 +2463,8 @@ void HierarchyBuilder::validate_process_drivers()
     for (const auto& alias : design_.container_signal_aliases_) {
         if (alias.writable) {
             writable_container_signals[alias.object].push_back(alias.signal);
+            // A net, of a built-in or user-defined net type, keeps the type's
+            // name in systemverilog_net_type; empty means a variable.
             if (alias.signal < design_.signal_info_.size()
                 && design_.signal_info_[alias.signal]
                        .systemverilog_net_type.empty()) {
@@ -2463,6 +2476,8 @@ void HierarchyBuilder::validate_process_drivers()
     for (const auto& alias : design_.container_element_signal_aliases_) {
         if (alias.writable) {
             writable_container_signals[alias.object].push_back(alias.signal);
+            // A net, of a built-in or user-defined net type, keeps the type's
+            // name in systemverilog_net_type; empty means a variable.
             if (alias.signal < design_.signal_info_.size()
                 && design_.signal_info_[alias.signal]
                        .systemverilog_net_type.empty()) {
@@ -2474,6 +2489,8 @@ void HierarchyBuilder::validate_process_drivers()
     for (const auto& alias : design_.container_aggregate_signal_aliases_) {
         if (alias.writable) {
             writable_container_signals[alias.object].push_back(alias.signal);
+            // A net, of a built-in or user-defined net type, keeps the type's
+            // name in systemverilog_net_type; empty means a variable.
             if (alias.signal < design_.signal_info_.size()
                 && design_.signal_info_[alias.signal]
                        .systemverilog_net_type.empty()) {
@@ -3248,7 +3265,10 @@ void HierarchyBuilder::validate_process_drivers()
             // (IEEE 1800-2017 6.21).
             || info.name.starts_with("$class-static-local:")
             || info.resolution != ResolutionKind::none
-            || ((info.type_name == "reg" || info.type_name == "integer")
+            || ((info.systemverilog_builtin
+                        == support::SystemVerilogBuiltinType::reg
+                    || info.systemverilog_builtin
+                        == support::SystemVerilogBuiltinType::integer)
                 && !variable_container_signals.contains(signal)
                 // A VHDL INTEGER signal is an unresolved signal, not a
                 // Verilog variable.

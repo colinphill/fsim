@@ -3,6 +3,7 @@
 
 #include "fsim/runtime/simir_interpreter.hpp"
 #include "fsim/support/environment.hpp"
+#include "fsim/support/systemverilog_builtin_type.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
 #include "fsim/semantic/compiled_design_specialization.hpp"
 #include "fsim/elaboration/elaborator.hpp"
@@ -192,6 +193,7 @@ SystemVerilogHirFixture systemverilog_hir_fixture(
     parameter_declaration.type.emplace();
     parameter_declaration.type->target.source = unit_source;
     parameter_declaration.type->target.spelling = "bit";
+    parameter_declaration.type->builtin = support::SystemVerilogBuiltinType::bit;
     parameter_declaration.type->executable_width = 1U;
     systemverilog.mutable_declarations().push_back(
         std::move(parameter_declaration));
@@ -213,6 +215,7 @@ SystemVerilogHirFixture systemverilog_hir_fixture(
     q_declaration.type.emplace();
     q_declaration.type->target.source = unit_source;
     q_declaration.type->target.spelling = "logic";
+    q_declaration.type->builtin = support::SystemVerilogBuiltinType::logic;
     q_declaration.type->executable_width = 1U;
     q_declaration.type->four_state = true;
     systemverilog.mutable_declarations().push_back(q_declaration);
@@ -769,6 +772,7 @@ void run_systemverilog_formatted_string_hir_test()
     formatted_record.type.emplace();
     formatted_record.type->target.source = process.source;
     formatted_record.type->target.spelling = "string";
+    formatted_record.type->builtin = support::SystemVerilogBuiltinType::string;
     formatted_record.type->value_form = semantic::sv::TypeForm::string;
     fixture.compiled.systemverilog_hir.mutable_declarations().push_back(
         formatted_record);
@@ -918,6 +922,7 @@ void run_systemverilog_system_function_assignment_test()
     randomized_record.type.emplace();
     randomized_record.type->target.source = source;
     randomized_record.type->target.spelling = "logic";
+    randomized_record.type->builtin = support::SystemVerilogBuiltinType::logic;
     randomized_record.type->executable_width = 3U;
     randomized_record.type->four_state = true;
     randomized_record.type->packed_range.emplace();
@@ -947,6 +952,15 @@ void run_systemverilog_system_function_assignment_test()
         semantic::sv::ExpressionKind::call,
         "std::randomize",
         { randomized_name });
+    // The frontend marks the scope randomize call (IEEE 1800-2023 18.12).
+    const auto scope_randomize_call = std::ranges::find(
+        fixture.compiled.systemverilog_hir.mutable_expressions(),
+        scope_randomize,
+        &semantic::sv::Expression::id);
+    assert(scope_randomize_call
+        != fixture.compiled.systemverilog_hir.mutable_expressions().end());
+    scope_randomize_call->marker
+        = support::ExpressionMarker::sv_std_randomize;
 
     auto& statements
         = fixture.compiled.systemverilog_hir.mutable_statements();
@@ -1107,6 +1121,7 @@ void run_systemverilog_generate_identity_assignment_test()
     iteration_value_record.type.emplace();
     iteration_value_record.type->target.source = source;
     iteration_value_record.type->target.spelling = "int";
+    iteration_value_record.type->builtin = support::SystemVerilogBuiltinType::int_type;
     iteration_value_record.type->executable_width = 32U;
     iteration_value_record.type->signed_value = true;
     hir.mutable_declarations().push_back(
@@ -1201,6 +1216,7 @@ void run_systemverilog_hir_recursive_function_test()
     formal_record.type.emplace();
     formal_record.type->target.source = source;
     formal_record.type->target.spelling = "bit";
+    formal_record.type->builtin = support::SystemVerilogBuiltinType::bit;
     formal_record.type->executable_width = 1U;
     fixture.compiled.systemverilog_hir.mutable_declarations().push_back(
         formal_record);
@@ -1788,6 +1804,7 @@ void run_dynamic_packed_selection_test()
         record.type.emplace();
         record.type->target.source = source;
         record.type->target.spelling = "logic";
+        record.type->builtin = support::SystemVerilogBuiltinType::logic;
         record.type->executable_width = width;
         record.type->four_state = true;
         if (packed) {
@@ -2030,6 +2047,7 @@ void run_local_nonblocking_boundary_test()
     local_declaration.type.emplace();
     local_declaration.type->target.source = process_record.source;
     local_declaration.type->target.spelling = "logic";
+    local_declaration.type->builtin = support::SystemVerilogBuiltinType::logic;
     local_declaration.type->executable_width = 1U;
     local_declaration.type->four_state = true;
     assert(local_declaration.scope == process_record.scope);

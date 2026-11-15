@@ -209,17 +209,15 @@ public:
         // subtype where it is written (6.3, 12.3, 12.4): record what it
         // denotes, so that no later phase resolves its spelling again.
         for (auto& expression : expressions) {
-            constexpr std::string_view qualified { "@vhdl-qualified:" };
-            constexpr std::string_view subtype { "@vhdl-subtype:" };
             const bool is_qualified = expression.kind == ExpressionKind::call
-                && expression.text.starts_with(qualified);
+                && expression.marker
+                    == support::ExpressionMarker::vhdl_qualified;
             const bool is_subtype = expression.kind == ExpressionKind::name
-                && expression.text.starts_with(subtype);
+                && expression.marker == support::ExpressionMarker::vhdl_subtype;
             if (!is_qualified && !is_subtype) {
                 continue;
             }
-            const auto mark = std::string_view { expression.text }.substr(
-                is_qualified ? qualified.size() : subtype.size());
+            const auto mark = std::string_view { expression.marker_argument };
             vhdl::Name name;
             name.spelling = std::string { mark };
             name.canonical = name.spelling;
@@ -1298,7 +1296,9 @@ private:
     {
         return (record.kind == ExpressionKind::call
                    || record.kind == ExpressionKind::name)
-            && record.referenced_name && !record.text.starts_with("@")
+            && record.referenced_name
+            && record.marker == support::ExpressionMarker::none
+            && !record.text.starts_with("@")
             && !record.text.starts_with("'");
     }
 
@@ -1528,7 +1528,7 @@ private:
             return result;
         }
         case ExpressionKind::name: {
-            if (record->text == "@vhdl-null") {
+            if (record->marker == support::ExpressionMarker::vhdl_null) {
                 return { builtin(null_type) };
             }
             if (!record->referenced_name) {
@@ -1537,25 +1537,22 @@ private:
             return name_types(*record);
         }
         case ExpressionKind::call: {
-            constexpr std::string_view physical { "@vhdl-physical:" };
-            constexpr std::string_view qualified { "@vhdl-qualified:" };
             // An external name has the subtype it declares (8.7).
-            if (record->text == "@vhdl-external"
+            if (record->marker == support::ExpressionMarker::vhdl_external
                 && record->operands.size() == 2U) {
-                constexpr std::string_view subtype_prefix { "@vhdl-subtype:" };
                 const auto* subtype = expression(record->operands[1]);
                 if (subtype != nullptr
-                    && subtype->text.starts_with(subtype_prefix)) {
+                    && subtype->marker
+                        == support::ExpressionMarker::vhdl_subtype) {
                     add(result, named_type_key(
-                                    std::string_view { subtype->text }
-                                        .substr(subtype_prefix.size()),
+                                    std::string_view { subtype->marker_argument },
                                     record->scope));
                 }
                 return result;
             }
-            if (record->text.starts_with(physical)) {
-                const auto unit = lowered(std::string_view { record->text }
-                                              .substr(physical.size()));
+            if (record->marker == support::ExpressionMarker::vhdl_physical) {
+                const auto unit = lowered(
+                    std::string_view { record->marker_argument });
                 if (const auto found = physical_units_.find(unit);
                     found != physical_units_.end()) {
                     if (found->second.valid()) {
@@ -1566,21 +1563,19 @@ private:
                 return time_unit(unit) ? std::vector { builtin("time") }
                                        : result;
             }
-            if (record->text.starts_with(qualified)) {
-                add(result, named_type_key(std::string_view { record->text }
-                                               .substr(qualified.size()),
-                    record->scope));
+            if (record->marker == support::ExpressionMarker::vhdl_qualified) {
+                add(result, named_type_key(
+                                std::string_view { record->marker_argument },
+                                record->scope));
                 return result;
             }
             if (record->text.starts_with("'")) {
                 return attribute_types(*record);
             }
             // A record element selected from an indexed or called prefix.
-            if (constexpr std::string_view member { "@vhdl-member:" };
-                record->text.starts_with(member)
+            if (record->marker == support::ExpressionMarker::vhdl_member
                 && record->operands.size() == 1U) {
-                const auto name
-                    = std::string_view { record->text }.substr(member.size());
+                const auto name = std::string_view { record->marker_argument };
                 for (const auto& prefix : candidates(record->operands.front())) {
                     add(result, member_key(prefix, name));
                 }
@@ -2203,7 +2198,7 @@ private:
                 resolve(record->operands[1], argument);
                 return;
             }
-            if (record->text.starts_with("@vhdl-qualified:")
+            if (record->marker == support::ExpressionMarker::vhdl_qualified
                 && !record->operands.empty()) {
                 const auto& types = candidates(id);
                 resolve(record->operands.front(), types.size() == 1U

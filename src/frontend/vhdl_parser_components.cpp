@@ -10,6 +10,8 @@ bool same_expression(
     const Expression& right) {
   return left.kind == right.kind
       && left.text == right.text
+      && left.marker == right.marker
+      && left.marker_argument == right.marker_argument
       && left.operands.size() == right.operands.size()
       && std::ranges::equal(
           left.operands,

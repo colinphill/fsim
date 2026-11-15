@@ -1401,10 +1401,9 @@ void VhdlParser::parse_vhdl_attribute_declaration(DesignUnit &unit,
   if (const auto declared = vhdl_declared_attributes_.find(name);
       declared != vhdl_declared_attributes_.end()
       && !declared->second.empty()) {
-    named_value = Expression{ExpressionKind::Call,
-                             "@vhdl-qualified:" + declared->second,
-                             {value},
-                             value.span};
+    named_value = marked_expression(
+        support::ExpressionMarker::vhdl_qualified, declared->second, {value},
+        value.span);
   }
   for (const auto& specified : entity_names) {
     vhdl_attribute_values_[name].insert_or_assign(specified, named_value);

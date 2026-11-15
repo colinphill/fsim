@@ -9,20 +9,16 @@
 
 namespace fsim::frontend {
 
-/// The call a covergroup variable's `get_inst_coverage()` or `get_coverage()`
-/// (IEEE 1800-2023 19.8) becomes once the variable is bound to its
-/// instance. The text after the prefix is the instance's runtime identity or
-/// the covergroup's declaration identity, and the call has no operands.
-inline constexpr std::string_view coverage_instance_query_prefix
-    = "@sv-coverage-query:instance:";
-inline constexpr std::string_view coverage_type_query_prefix
-    = "@sv-coverage-query:type:";
-
-[[nodiscard]] constexpr bool is_coverage_query_call(
-    const std::string_view text) noexcept
+/// A covergroup variable's `get_inst_coverage()` or `get_coverage()`
+/// (IEEE 1800-2023 19.8) becomes, once the variable is bound to its
+/// instance, a call with no operands marked `sv_coverage_query_instance`
+/// (payload: the instance's runtime identity) or `sv_coverage_query_type`
+/// (payload: the covergroup's declaration identity).
+[[nodiscard]] constexpr bool is_coverage_query(
+    const support::ExpressionMarker marker) noexcept
 {
-    return text.starts_with(coverage_instance_query_prefix)
-        || text.starts_with(coverage_type_query_prefix);
+    return marker == support::ExpressionMarker::sv_coverage_query_instance
+        || marker == support::ExpressionMarker::sv_coverage_query_type;
 }
 
 /// Resolve SystemVerilog covergroup types, coverage references, constructor

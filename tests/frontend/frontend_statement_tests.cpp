@@ -624,7 +624,8 @@ endmodule
             && foreach_statements.front().loop_variable == "index"
             && foreach_statements.front().condition.kind
                 == ExpressionKind::Call
-            && foreach_statements.front().condition.text == "@sv-foreach"
+            && foreach_statements.front().condition.marker
+                == fsim::support::ExpressionMarker::sv_foreach
             && foreach_statements.front().condition.operands.size() == 2
             && foreach_statements.front().statements.size() == 1
             // An array foreach is rewritten into nested loops over each
@@ -799,8 +800,8 @@ endclass
             && selected_foreach.design.systemverilog_classes.front()
                     .methods[1]
                     .statements.front()
-                    .target.text
-                == "@stream-left"
+                    .target.marker
+                == fsim::support::ExpressionMarker::stream_left
             && selected_foreach.design.systemverilog_classes.front()
                     .methods.back()
                     .name
@@ -810,7 +811,14 @@ endclass
                     .statements[2]
                     .condition.operands.front()
                     .aggregate_choices
-                == std::vector<std::string> { "@sv-inline-constraint" }
+                == std::vector<std::string> { "" }
+            && aggregate_choice_marker(
+                   selected_foreach.design.systemverilog_classes.front()
+                       .methods.back()
+                       .statements[2]
+                       .condition.operands.front(),
+                   0U)
+                == fsim::support::ExpressionMarker::sv_inline_constraint
             && inline_randomize.aggregate_choice_expressions.size() == 1
             && inline_randomize.aggregate_choice_expressions.front().size() == 1
             && inline_randomize.aggregate_choice_expressions.front().front().kind
@@ -824,7 +832,14 @@ endclass
                     .statements[3]
                     .condition.operands.front()
                     .aggregate_choices
-                == std::vector<std::string> { "@sv-inline-constraint" }
+                == std::vector<std::string> { "" }
+            && aggregate_choice_marker(
+                   selected_foreach.design.systemverilog_classes.front()
+                       .methods.back()
+                       .statements[3]
+                       .condition.operands.front(),
+                   0U)
+                == fsim::support::ExpressionMarker::sv_inline_constraint
             && empty_inline_randomize.aggregate_choice_expressions.size() == 1
             && empty_inline_randomize.aggregate_choice_expressions.front().empty(),
         "foreach, indexed calls, parameterized statics, class find, and "
@@ -996,7 +1011,9 @@ endclass
             const auto& selected_member = statement.target.operands.front();
             const auto& index = statement.target.operands.back();
             return selected_member.kind == ExpressionKind::Call
-                && selected_member.text == "@sv-select:entries"
+                && selected_member.marker
+                    == fsim::support::ExpressionMarker::sv_select
+                && selected_member.marker_argument == "entries"
                 && selected_member.operands.size() == 1U
                 && selected_member.operands.front().kind == ExpressionKind::Call
                 && selected_member.operands.front().text == "receiver_step"

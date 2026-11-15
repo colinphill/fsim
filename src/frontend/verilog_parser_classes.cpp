@@ -152,8 +152,7 @@ bool VerilogParser::parse_class_property(
   const bool built_in =
       keyword("string") || keyword("byte") || keyword("shortint")
       || keyword("shortreal") || keyword("real")
-      || keyword("realtime") || keyword("chandle")
-      || keyword("process") || keyword("event")
+      || keyword("realtime") || keyword("chandle") || keyword("event")
       || keyword("enum") || keyword("struct") || keyword("union")
       || keyword("longint") || keyword("time") || keyword("integer")
       || keyword("int") || keyword("logic") || keyword("reg")

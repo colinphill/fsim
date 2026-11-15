@@ -614,6 +614,8 @@ Lowerer::hir_vhdl_access_protected_type(
 
 namespace {
 
+// The design finds a protected type's object pool by this name in its
+// container_by_name_ map.
 std::string protected_pool_name(const semantic::vhdl::TypeDefinition& type)
 {
     return "@vhdl-protected-pool:" + std::to_string(type.id.value());
@@ -1347,6 +1349,8 @@ std::vector<Lowerer::HirVhdlGlobalFile> Lowerer::bind_hir_vhdl_global_files(
             : std::nullopt;
         const bool package = unit && unit->vhdl != nullptr
             && unit->vhdl->kind == semantic::vhdl::UnitKind::package;
+        // The design finds a file object's state by this name in its
+        // container_by_name_ map.
         const auto key = std::string { "@vhdl-file:" }
             + (package ? std::string { "package" } : hierarchy_) + "@"
             + std::to_string(declaration_id->value()) + "."
@@ -1494,6 +1498,8 @@ bool Lowerer::materialize_hir_vhdl_global_constant(
     for (const auto instance : instance_path) {
         instance_key += std::to_string(instance.value()) + "/";
     }
+    // The design finds a constant's elaboration state by this name in its
+    // container_by_name_ map.
     const auto key = std::string { "@vhdl-constant:" }
         + (package ? std::string { "package" } : hierarchy_) + "@"
         + instance_key + std::to_string(declaration_id.value()) + "."
@@ -2293,7 +2299,7 @@ Lowerer::lower_hir_vhdl_environment_call_path_container_expression(
     }
     const auto& source = *expression->vhdl;
     if (source.kind == semantic::vhdl::ExpressionKind::call
-        && source.text == "@vhdl-dereference"
+        && source.marker == support::ExpressionMarker::vhdl_dereference
         && source.operands.size() == 1U) {
         return lower_hir_vhdl_environment_call_path_container_expression(
             source.operands.front());
@@ -2340,20 +2346,19 @@ Lowerer::hir_vhdl_environment_call_path_member_selection(
         return std::nullopt;
     }
     if (selected->vhdl->kind == semantic::vhdl::ExpressionKind::call
-        && selected->vhdl->text == "@vhdl-dereference"
+        && selected->vhdl->marker == support::ExpressionMarker::vhdl_dereference
         && selected->vhdl->operands.size() == 1U) {
         selected = specialized_hir_unit_->find_expression(
             selected->vhdl->operands.front());
     }
-    constexpr auto member_prefix = std::string_view { "@vhdl-member:" };
     if (!selected || selected->vhdl == nullptr
         || selected->vhdl->kind != semantic::vhdl::ExpressionKind::call
-        || !selected->vhdl->text.starts_with(member_prefix)
+        || selected->vhdl->marker != support::ExpressionMarker::vhdl_member
         || selected->vhdl->operands.size() != 1U) {
         return std::nullopt;
     }
-    const auto member_name = std::string_view { selected->vhdl->text }
-        .substr(member_prefix.size());
+    const auto member_name
+        = std::string_view { selected->vhdl->marker_argument };
     const auto member = equal_ignoring_ascii_case(member_name, "name") ? 0U
         : equal_ignoring_ascii_case(member_name, "file_name") ? 1U
         : equal_ignoring_ascii_case(member_name, "file_path") ? 2U
@@ -2374,7 +2379,8 @@ Lowerer::hir_vhdl_environment_call_path_member_selection(
     if (base_expression && base_expression->vhdl != nullptr
         && base_expression->vhdl->kind
             == semantic::vhdl::ExpressionKind::call
-        && base_expression->vhdl->text == "@vhdl-dereference"
+        && base_expression->vhdl->marker
+            == support::ExpressionMarker::vhdl_dereference
         && base_expression->vhdl->operands.size() == 1U) {
         base = base_expression->vhdl->operands.front();
     }
@@ -2517,6 +2523,7 @@ Lowerer::hir_vhdl_environment_directory_member(
     if (!name || name->vhdl == nullptr
         || (name->vhdl->kind != semantic::vhdl::ExpressionKind::name
             && (name->vhdl->kind != semantic::vhdl::ExpressionKind::call
+                || name->vhdl->marker != support::ExpressionMarker::none
                 || name->vhdl->text.starts_with('@')))
         || name->vhdl->text.size() <= suffix.size()
         || !equal_ignoring_ascii_case(
@@ -2562,7 +2569,8 @@ Lowerer::lower_hir_vhdl_environment_vector(
         expression_id);
     if (expression && expression->vhdl != nullptr
         && expression->vhdl->kind == semantic::vhdl::ExpressionKind::call
-        && expression->vhdl->text == "@vhdl-dereference"
+        && expression->vhdl->marker
+            == support::ExpressionMarker::vhdl_dereference
         && expression->vhdl->operands.size() == 1U) {
         name_id = expression->vhdl->operands.front();
     }
@@ -2633,7 +2641,7 @@ Lowerer::hir_vhdl_environment_directory_string_selection(
 
     const auto& source = *expression->vhdl;
     if (source.kind == semantic::vhdl::ExpressionKind::call
-        && source.text == "@vhdl-dereference"
+        && source.marker == support::ExpressionMarker::vhdl_dereference
         && source.operands.size() == 1U) {
         const auto directory = directory_name(
             source.operands.front(), ".name");
@@ -2643,7 +2651,7 @@ Lowerer::hir_vhdl_environment_directory_string_selection(
         }
     }
     if (source.kind != semantic::vhdl::ExpressionKind::call
-        || source.text != "@vhdl-dereference"
+        || source.marker != support::ExpressionMarker::vhdl_dereference
         || source.operands.size() != 1U) {
         return std::nullopt;
     }
@@ -2670,7 +2678,8 @@ Lowerer::hir_vhdl_environment_directory_string_selection(
     const auto dereference = specialized_hir_unit_->find_expression(items);
     if (dereference && dereference->vhdl != nullptr
         && dereference->vhdl->kind == semantic::vhdl::ExpressionKind::call
-        && dereference->vhdl->text == "@vhdl-dereference"
+        && dereference->vhdl->marker
+            == support::ExpressionMarker::vhdl_dereference
         && dereference->vhdl->operands.size() == 1U) {
         items = dereference->vhdl->operands.front();
     }
@@ -3796,7 +3805,8 @@ Lowerer::lower_hir_vhdl_environment_string_expression(
         const auto value = specialized_hir_unit_->find_expression(candidate);
         if (!value || value->vhdl == nullptr
             || value->vhdl->kind != semantic::vhdl::ExpressionKind::call
-            || value->vhdl->text != "@vhdl-dereference"
+            || value->vhdl->marker
+                != support::ExpressionMarker::vhdl_dereference
             || value->vhdl->operands.size() != 1U) {
             return candidate;
         }
@@ -4722,14 +4732,12 @@ Lowerer::hir_vhdl_physical_unit_scales(
         if (!scale && unit.scale) {
             const auto scale_expression
                 = specialized_hir_unit_->find_expression(*unit.scale);
-            constexpr std::string_view prefix { "@vhdl-physical:" };
             if (scale_expression && scale_expression->vhdl != nullptr
-                && scale_expression->vhdl->text.starts_with(prefix)
+                && scale_expression->vhdl->marker
+                    == support::ExpressionMarker::vhdl_physical
                 && scale_expression->vhdl->operands.size() == 1U) {
-                const auto referenced = std::string {
-                    std::string_view { scale_expression->vhdl->text }
-                        .substr(prefix.size())
-                };
+                const auto referenced
+                    = scale_expression->vhdl->marker_argument;
                 const auto prior = scales.find(referenced);
                 const auto multiplier
                     = specialized_hir_unit_->evaluate_integral_expression(

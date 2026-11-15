@@ -328,7 +328,9 @@ endmodule
       union_forms.design.units[1].processes[0].statements[0].value;
   require(
       tagged_constructor.kind == ExpressionKind::Call
-          && tagged_constructor.text == "@sv-tagged:narrow"
+          && tagged_constructor.marker
+              == fsim::support::ExpressionMarker::sv_tagged
+          && tagged_constructor.marker_argument == "narrow"
           && tagged_constructor.operands.size() == 1
           && tagged_constructor.operands[0].text == "8'hab",
       "tagged-union construction retains member identity and payload");

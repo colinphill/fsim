@@ -712,15 +712,19 @@ end package body;
               physical.type.vhdl_physical->units[1].scale &&
               physical.type.vhdl_physical->units[1].scale->kind ==
                   ExpressionKind::Call &&
-              physical.type.vhdl_physical->units[1].scale->text ==
-                  "@vhdl-physical:um" &&
+              physical.type.vhdl_physical->units[1].scale->marker ==
+                  fsim::support::ExpressionMarker::vhdl_physical &&
+              physical.type.vhdl_physical->units[1].scale->marker_argument ==
+                  "um" &&
               physical.type.vhdl_physical->units[2].name == "meter",
           "physical HIR retains range direction and ordered unit scales");
   require(declaration.parameters.size() == 1 &&
               declaration.parameters[0].default_value.kind ==
                   ExpressionKind::Call &&
-              declaration.parameters[0].default_value.text ==
-                  "@vhdl-physical:mm",
+              declaration.parameters[0].default_value.marker ==
+                  fsim::support::ExpressionMarker::vhdl_physical &&
+              declaration.parameters[0].default_value.marker_argument ==
+                  "mm",
           "physical literals retain their unit independently from magnitude");
 
   const auto &protected_declaration = declaration.type_aliases[2];
@@ -749,14 +753,17 @@ end package body;
   require(
       body.functions.size() == 1 && body.functions[0].variables.size() == 1 &&
           body.functions[0].variables[0].initializer &&
-          body.functions[0].variables[0].initializer->text == "@vhdl-null" &&
+          body.functions[0].variables[0].initializer->marker ==
+              fsim::support::ExpressionMarker::vhdl_null &&
           body.functions[0].statements.size() == 3 &&
-          body.functions[0].statements[0].value.text == "@vhdl-new-qualified" &&
-          body.functions[0].statements[1].target.text == "@vhdl-dereference" &&
+          body.functions[0].statements[0].value.marker ==
+              fsim::support::ExpressionMarker::vhdl_new_qualified &&
+          body.functions[0].statements[1].target.marker ==
+              fsim::support::ExpressionMarker::vhdl_dereference &&
           body.functions[0].statements[1].value.kind ==
               ExpressionKind::Binary &&
-          body.functions[0].statements[1].value.operands[0].text ==
-              "@vhdl-dereference",
+          body.functions[0].statements[1].value.operands[0].marker ==
+              fsim::support::ExpressionMarker::vhdl_dereference,
       "null, allocators, and dereference reads/writes retain distinct HIR");
 
   const auto malformed = parse_text("invalid_advanced_vhdl_types.vhd",

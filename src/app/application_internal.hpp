@@ -162,6 +162,9 @@ struct SystemVerilogVpiDeferredGenerateScope {
     std::optional<std::uint32_t> unit;
     // The scope's processes, created with it.
     std::vector<SystemVerilogVpiDeferredProcess> processes;
+    // The block scopes of its processes were published with the scope,
+    // for the variables declared in them; only its clocking blocks wait.
+    bool block_scopes_published { };
 };
 
 struct SystemVerilogVpiDeferredChildren {
@@ -479,7 +482,7 @@ void configure_systemverilog_class_constraints(
 
 void configure_systemverilog_randomize_selection(
     runtime::SystemVerilogClassRandomizeRequest& request,
-    std::span<const std::string> selected_names);
+    std::span<const std::string> selected_names, bool no_properties);
 
 
 [[nodiscard]] runtime::PackedLogic4

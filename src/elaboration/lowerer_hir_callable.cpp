@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/elaboration/dpi_c_type.hpp"
 #include "fsim/support/stack_growth.hpp"
+#include "fsim/support/systemverilog_builtin_type.hpp"
 #include "fsim/semantic/compiled_design_normalization.hpp"
 #include "fsim/semantic/systemverilog_class_specialization.hpp"
 #include "fsim/semantic/systemverilog_structure_image.hpp"
@@ -623,6 +624,7 @@ namespace {
             && left.signed_elements == right.signed_elements
             && left.union_aggregate == right.union_aggregate
             && left.element_nominal_type == right.element_nominal_type
+            && left.element_nominal_type_id == right.element_nominal_type_id
             && left.element_types == right.element_types
             && left.member_names == right.member_names;
     }
@@ -760,16 +762,8 @@ std::optional<ContainerType> Lowerer::hir_systemverilog_container_type(
         }
         return result;
     };
-    const auto simple_spelling = [](std::string_view spelling) {
-        const auto separator = spelling.find_last_of(".:$");
-        if (separator != std::string_view::npos) {
-            spelling.remove_prefix(separator + 1U);
-        }
-        return spelling;
-    };
     const auto scalar_kind = [&](const semantic::sv::TypeReference& type) {
-        return frontend::systemverilog_scalar_kind(
-            simple_spelling(type.target.spelling));
+        return frontend::systemverilog_scalar_kind(type.builtin);
     };
     const auto nominal_identity = [&](
                                       const semantic::sv::TypeReference& type,
@@ -780,8 +774,9 @@ std::optional<ContainerType> Lowerer::hir_systemverilog_container_type(
                 && definition->systemverilog != nullptr
                 && semantic::sv::has_nominal_type_identity(
                     definition->systemverilog->form)
-            ? semantic::sv::nominal_type_identity(type.target.target)
-            : std::string { };
+            ? std::optional { semantic::sv::nominal_type_index(
+                  type.target.target) }
+            : std::nullopt;
     };
 
     std::unordered_set<std::uint32_t> visiting;
@@ -822,7 +817,7 @@ std::optional<ContainerType> Lowerer::hir_systemverilog_container_type(
                 result.union_aggregate
                     = source.form == semantic::sv::TypeForm::unpacked_union;
                 result.aggregate_value = box_leaf;
-                result.element_nominal_type = nominal_identity(
+                result.element_nominal_type_id = nominal_identity(
                     candidate, definition);
                 for (const auto& member : source.members) {
                     auto member_type = profile(member.type, true);
@@ -839,10 +834,11 @@ std::optional<ContainerType> Lowerer::hir_systemverilog_container_type(
         }
 
         ContainerType result;
-        result.element_nominal_type = nominal_identity(
+        result.element_nominal_type_id = nominal_identity(
             candidate, definition);
         if (candidate.value_form == semantic::sv::TypeForm::string
-            || simple_spelling(candidate.target.spelling) == "string") {
+            || candidate.builtin
+                == support::SystemVerilogBuiltinType::string) {
             result.element_kind = ContainerElementKind::String;
             result.element_width = 0U;
         } else if (hir_type_is_event(
@@ -925,6 +921,8 @@ std::optional<ContainerType> Lowerer::hir_systemverilog_container_type(
         result.element_width = 0U;
         result.element_nominal_type
             = element_type->element_nominal_type;
+        result.element_nominal_type_id
+            = element_type->element_nominal_type_id;
         result.element_types.push_back(std::move(*element_type));
     } else {
         result.element_kind = element_type->element_kind;
@@ -934,6 +932,8 @@ std::optional<ContainerType> Lowerer::hir_systemverilog_container_type(
         result.signed_elements = element_type->signed_elements;
         result.union_aggregate = element_type->union_aggregate;
         result.element_nominal_type = element_type->element_nominal_type;
+        result.element_nominal_type_id
+            = element_type->element_nominal_type_id;
         result.element_types = std::move(element_type->element_types);
         result.member_names = std::move(element_type->member_names);
     }
@@ -953,10 +953,9 @@ std::optional<ContainerType> Lowerer::hir_systemverilog_container_type(
             index_reference.target = *source.associative_index;
         }
         index_reference = effective_reference(index_reference);
-        const auto resolved_spelling = simple_spelling(
-            index_reference.target.spelling);
+        const auto index_builtin = index_reference.builtin;
         if (index_reference.value_form == semantic::sv::TypeForm::string
-            || resolved_spelling == "string") {
+            || index_builtin == support::SystemVerilogBuiltinType::string) {
             result.index_width = 0U;
             result.two_state_indices = true;
             result.signed_indices = false;
@@ -972,15 +971,18 @@ std::optional<ContainerType> Lowerer::hir_systemverilog_container_type(
             result.index_width = index_width
                 ? static_cast<std::uint32_t>(*index_width)
                 : 32U;
+            // A built-in index type has its own state and signing (IEEE
+            // 1800-2023 6.11, 7.8.4).
             result.two_state_indices
                 = source.associative_index->target.valid()
                 ? !hir_systemverilog_type_four_state(index_reference)
-                : resolved_spelling == "bit";
+                : !support::systemverilog_four_state(index_builtin);
             result.signed_indices
                 = source.associative_index->target.valid()
                 ? index_reference.signed_value
-                : resolved_spelling != "bit"
-                    && resolved_spelling != "time";
+                : index_reference.signed_value
+                    || support::systemverilog_builtin_default_signed(
+                        index_builtin);
         }
     }
     if (result.queue && source.queue_maximum) {
@@ -1643,8 +1645,8 @@ Lowerer::lower_hir_static_container_value(
         && expression->systemverilog != nullptr
         && expression->systemverilog->kind
             == semantic::sv::ExpressionKind::call
-        && !expression->systemverilog->text.starts_with(
-            "@sv-static-container-property:");
+        && expression->systemverilog->marker
+            != support::ExpressionMarker::sv_static_container_property;
     if (!selection_syntax && !callable_syntax) {
         if (const auto binding = hir_container_object_binding(
                 expression_id)) {
@@ -1811,7 +1813,7 @@ Lowerer::lower_hir_static_container_value(
         // A packed value or stream cast to an unpacked array or queue type
         // unpacks into its elements (6.24.3).
         if (source.kind == semantic::sv::ExpressionKind::call
-            && source.text.starts_with("@sv-cast:")
+            && source.marker == support::ExpressionMarker::sv_cast
             && source.operands.size() == 1U
             && !hir_static_container_expression_type(
                 source.operands.front())) {
@@ -2026,7 +2028,8 @@ Lowerer::lower_hir_static_container_actual(
             && constructor->systemverilog->text == "new";
         const bool initialized_new = source.kind
                 == semantic::sv::ExpressionKind::call
-            && source.text == "@new-array" && !source.operands.empty()
+            && source.marker == support::ExpressionMarker::new_array
+            && !source.operands.empty()
             && source.operands.size() <= 2U;
         if ((sized_new || initialized_new) && !formal_type.fixed
             && !formal_type.associative) {
@@ -2051,10 +2054,10 @@ Lowerer::lower_hir_static_container_actual(
             return destination;
         }
         const bool stream = source.kind == semantic::sv::ExpressionKind::call
-            && (source.text == "@stream-left"
-                || source.text == "@stream-right");
+            && (source.marker == support::ExpressionMarker::stream_left
+                || source.marker == support::ExpressionMarker::stream_right);
         const bool cast = source.kind == semantic::sv::ExpressionKind::call
-            && source.text.starts_with("@sv-cast:")
+            && source.marker == support::ExpressionMarker::sv_cast
             && source.operands.size() == 1U
             && !hir_static_container_expression_type(
                 source.operands.front());
@@ -2101,7 +2104,7 @@ Lowerer::lower_hir_static_container_actual(
         // A cast of an array to its own type is that array (IEEE
         // 1800-2017 6.24.1).
         if (source.kind == semantic::sv::ExpressionKind::call
-            && source.text.starts_with("@sv-cast:")
+            && source.marker == support::ExpressionMarker::sv_cast
             && source.operands.size() == 1U) {
             if (const auto operand_type = hir_static_container_expression_type(
                     source.operands.front());
@@ -2741,14 +2744,10 @@ Lowerer::hir_class_property_profile(
     }
     // `obj.x` through a type-parameter-typed handle: the property the
     // specialization's actual class declares (IEEE 1800-2017 8.25).
-    constexpr std::string_view dependent_prefix {
-        "@sv-dependent-property:"
-    };
     if (access.kind == semantic::sv::ExpressionKind::class_property
-        && access.text.starts_with(dependent_prefix)
+        && access.marker == support::ExpressionMarker::sv_dependent_property
         && access.operands.size() == 1U) {
-        const auto name
-            = std::string_view { access.text }.substr(dependent_prefix.size());
+        const std::string_view name { access.marker_argument };
         const auto declaration
             = hir_referenced_declaration(access.operands.front());
         auto& index = class_specializations();
@@ -2803,12 +2802,11 @@ Lowerer::hir_class_property_profile(
     const auto static_access = access.kind
         == semantic::sv::ExpressionKind::class_static_property;
     // A property read in a property initializer carries its identity only
-    // in the access text.
-    constexpr std::string_view property_prefix { "@sv-property:" };
+    // in the access marker.
     const auto member_identity = !access.class_member_identity.empty()
         ? std::string_view { access.class_member_identity }
-        : std::string_view { access.text }.starts_with(property_prefix)
-        ? std::string_view { access.text }.substr(property_prefix.size())
+        : access.marker == support::ExpressionMarker::sv_property
+        ? std::string_view { access.marker_argument }
         : std::string_view { };
     if ((!instance && !static_access)
         || member_identity.empty()
@@ -3174,7 +3172,6 @@ Lowerer::hir_class_property_member(
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
     }
-    constexpr std::string_view selected_prefix { "@sv-select:" };
     std::string path;
     auto current = expression_id;
     for (;;) {
@@ -3185,12 +3182,11 @@ Lowerer::hir_class_property_member(
         }
         const auto& source = *expression->systemverilog;
         if (source.kind != semantic::sv::ExpressionKind::call
-            || !source.text.starts_with(selected_prefix)
+            || source.marker != support::ExpressionMarker::sv_select
             || source.operands.size() != 1U) {
             break;
         }
-        const auto member = std::string_view { source.text }.substr(
-            selected_prefix.size());
+        const std::string_view member { source.marker_argument };
         path = path.empty() ? std::string { member }
                             : std::string { member } + "." + path;
         current = source.operands.front();
@@ -3332,7 +3328,8 @@ Lowerer::hir_class_property_select_path(
                 != semantic::sv::ExpressionKind::class_static_property
             && !(root->systemverilog->kind
                     == semantic::sv::ExpressionKind::call
-                && root->systemverilog->text.starts_with("@sv-select:")))) {
+                && root->systemverilog->marker
+                    == support::ExpressionMarker::sv_select))) {
         return std::nullopt;
     }
     if (auto member = hir_class_property_member(current)) {
@@ -3900,8 +3897,8 @@ Lowerer::hir_inline_constraints(
     }
     const auto marker = std::ranges::find(
         expression->systemverilog->associations,
-        "@sv-inline-constraint",
-        &semantic::sv::AssignmentPatternAssociation::choice_spelling);
+        support::ExpressionMarker::sv_inline_constraint,
+        &semantic::sv::AssignmentPatternAssociation::choice_marker);
     if (marker == expression->systemverilog->associations.end()) {
         return std::vector<runtime::SystemVerilogConstraintTemplate> { };
     }
@@ -3963,27 +3960,26 @@ Lowerer::hir_inline_constraints(
         const auto& x = *a->systemverilog;
         const auto& y = *b->systemverilog;
         // An element of a class array property appears both as
-        // index(@sv-property:P(r), i) and as @sv-container-index:P(r, i).
-        constexpr std::string_view property_prefix = "@sv-property:";
-        constexpr std::string_view element_prefix = "@sv-container-index:";
+        // an index of a property read P(r) with the element i and as a
+        // container-index node of P with operands r and i.
         const auto property_element = [&](const semantic::sv::Expression& raw,
                                           const semantic::sv::Expression& lowered)
             -> std::optional<bool> {
             if (raw.kind != semantic::sv::ExpressionKind::index
                 || raw.operands.size() != 2U
-                || !lowered.text.starts_with(element_prefix)
+                || lowered.marker
+                    != support::ExpressionMarker::sv_container_index
                 || lowered.operands.size() != 2U) {
                 return std::nullopt;
             }
             const auto base = specialized_hir_unit_->find_expression(
                 raw.operands.front());
             if (!base || base->systemverilog == nullptr
-                || !base->systemverilog->text.starts_with(property_prefix)
+                || base->systemverilog->marker
+                    != support::ExpressionMarker::sv_property
                 || base->systemverilog->operands.size() != 1U
-                || std::string_view { base->systemverilog->text }.substr(
-                       property_prefix.size())
-                    != std::string_view { lowered.text }.substr(
-                        element_prefix.size())) {
+                || base->systemverilog->marker_argument
+                    != lowered.marker_argument) {
                 return false;
             }
             return support::with_stack([&] { return self(self, base->systemverilog->operands.front(),
@@ -3997,7 +3993,8 @@ Lowerer::hir_inline_constraints(
         if (const auto matched = property_element(y, x)) {
             return *matched;
         }
-        if (x.kind != y.kind || x.text != y.text
+        if (x.kind != y.kind || x.text != y.text || x.marker != y.marker
+            || x.marker_argument != y.marker_argument
             || x.operands.size() != y.operands.size()) {
             return false;
         }
@@ -4023,8 +4020,8 @@ Lowerer::hir_inline_constraints(
     std::optional<std::set<std::string, std::less<>>> member_names;
     if (const auto names = std::ranges::find(
             expression->systemverilog->associations,
-            "@sv-inline-constraint-names",
-            &semantic::sv::AssignmentPatternAssociation::choice_spelling);
+            support::ExpressionMarker::sv_inline_constraint_names,
+            &semantic::sv::AssignmentPatternAssociation::choice_marker);
         names != expression->systemverilog->associations.end()) {
         auto& listed = member_names.emplace();
         for (const auto choice : names->choices) {
@@ -4130,14 +4127,14 @@ Lowerer::hir_inline_constraints(
         // An array of the calling scope (`x inside {q}`, `q.size()`) joins
         // a std::randomize call with its current elements (18.12, 18.7).
         if (runtime_containers != nullptr) {
-            constexpr std::string_view property_prefix
-                = "@sv-container-property:";
-            constexpr std::string_view static_prefix
-                = "@sv-static-container-property:";
             const bool array_value
                 = (source.kind == semantic::sv::ExpressionKind::call
-                      && (source.text.starts_with(property_prefix)
-                          || source.text.starts_with(static_prefix)))
+                      && (source.marker
+                              == support::ExpressionMarker::
+                                  sv_container_property
+                          || source.marker
+                              == support::ExpressionMarker::
+                                  sv_static_container_property))
                 || (source.kind == semantic::sv::ExpressionKind::name
                     && [&] {
                            const auto binding
@@ -4203,14 +4200,13 @@ Lowerer::hir_inline_constraints(
         }
         // `obj.m` through the randomized object's own handle names its
         // member (IEEE 1800-2017 18.7).
-        constexpr std::string_view property_prefix = "@sv-property:";
         if (source.kind == semantic::sv::ExpressionKind::class_property
-            && source.text.starts_with(property_prefix)
+            && source.marker == support::ExpressionMarker::sv_property
             && source.operands.size() == 1U && randomized_object
             && same_lvalue(same_lvalue, source.operands.front(),
                 *randomized_object, 0U)) {
             output.kind = TemplateKind::Name;
-            output.text = source.text.substr(property_prefix.size());
+            output.text = source.marker_argument;
             return output;
         }
         // A property reached through another handle (`item.addr`) is a
@@ -4276,13 +4272,12 @@ Lowerer::hir_inline_constraints(
         // `a[i].m` of an array the calling scope does not declare keeps the
         // member path in the selection's text (`index.m`).
         // `a[i].m` of an object element arrives as a member selection
-        // (`@sv-select:m`) of the element.
+        // (a select marker with the member) of the element.
         constexpr std::string_view element_path_prefix { "index." };
-        constexpr std::string_view selected_member_prefix { "@sv-select:" };
         const auto selected_element = [&]() -> bool {
             if (source.kind != semantic::sv::ExpressionKind::call
                 || source.operands.size() != 1U
-                || !source.text.starts_with(selected_member_prefix)) {
+                || source.marker != support::ExpressionMarker::sv_select) {
                 return false;
             }
             const auto element = specialized_hir_unit_->find_expression(
@@ -4314,8 +4309,7 @@ Lowerer::hir_inline_constraints(
                 source.operands.front())->systemverilog;
             if (randomized_element(element.operands.front(),
                     element.operands.back())) {
-                const auto member = std::string_view { source.text }
-                    .substr(selected_member_prefix.size());
+                const std::string_view member { source.marker_argument };
                 output.kind = TemplateKind::Name;
                 output.text = std::string { member.substr(0, member.find(':')) };
                 return output;
@@ -4346,8 +4340,7 @@ Lowerer::hir_inline_constraints(
             selection.operands.push_back(std::move(*array));
             selection.operands.push_back(std::move(*position));
             output.kind = TemplateKind::Method;
-            const auto member = std::string_view { source.text }
-                .substr(selected_member_prefix.size());
+            const std::string_view member { source.marker_argument };
             output.text = "@member:"
                 + std::string { member.substr(0, member.find(':')) };
             output.operands.push_back(std::move(selection));
@@ -4394,7 +4387,7 @@ Lowerer::hir_inline_constraints(
             return output;
         }
         if (source.kind == semantic::sv::ExpressionKind::class_property
-            && source.text.starts_with(property_prefix)
+            && source.marker == support::ExpressionMarker::sv_property
             && source.operands.size() == 1U && element_member_root()) {
             auto selection = lower(source.operands.front());
             if (!selection) {
@@ -4406,17 +4399,17 @@ Lowerer::hir_inline_constraints(
                 && selection->operands.size() > 2U) {
                 selection->operands.resize(2U);
             }
-            const auto separator = source.text.rfind("::");
+            const auto separator = source.marker_argument.rfind("::");
             output.kind = TemplateKind::Method;
             output.text = "@member:"
                 + (separator == std::string::npos
-                        ? source.text.substr(property_prefix.size())
-                        : source.text.substr(separator + 2U));
+                        ? source.marker_argument
+                        : source.marker_argument.substr(separator + 2U));
             output.operands.push_back(std::move(*selection));
             return output;
         }
         if (source.kind == semantic::sv::ExpressionKind::class_property
-            && source.text.starts_with(property_prefix)
+            && source.marker == support::ExpressionMarker::sv_property
             && source.operands.size() == 1U && randomized_object
             && !rooted_in_randomized_object()) {
             if (auto value = caller_value(id)) {
@@ -4428,11 +4421,13 @@ Lowerer::hir_inline_constraints(
         // 18.12, 18.7).
         if (!randomized_object && runtime_values != nullptr
             && ((source.kind == semantic::sv::ExpressionKind::class_property
-                    && source.text.starts_with(property_prefix))
+                    && source.marker
+                        == support::ExpressionMarker::sv_property)
                 || source.kind
                     == semantic::sv::ExpressionKind::class_static_property
                 || (source.kind == semantic::sv::ExpressionKind::call
-                    && source.text.starts_with("@sv-static-property:")))) {
+                    && source.marker
+                        == support::ExpressionMarker::sv_static_property))) {
             if (auto value = caller_value(id)) {
                 return value;
             }
@@ -4472,16 +4467,18 @@ Lowerer::hir_inline_constraints(
                     }
                     if (value.kind
                             == semantic::sv::ExpressionKind::class_property
-                        && value.text.starts_with(property_prefix)
+                        && value.marker
+                            == support::ExpressionMarker::sv_property
                         && value.operands.size() == 1U) {
                         const auto receiver = support::with_stack([&] { return self(self,
                             value.operands.front(), depth + 1U); });
-                        const auto separator = value.text.rfind("::");
+                        const auto separator
+                            = value.marker_argument.rfind("::");
                         if (!receiver || separator == std::string::npos) {
                             return std::nullopt;
                         }
                         return *receiver + "."
-                            + value.text.substr(separator + 2U);
+                            + value.marker_argument.substr(separator + 2U);
                     }
                     return std::nullopt;
                 };
@@ -4564,7 +4561,7 @@ Lowerer::hir_inline_constraints(
                 && (source.text == ".size" || source.text == ".sum"
                     || source.text == ".product" || source.text == ".and"
                     || source.text == ".or" || source.text == ".xor"
-                    || source.text.starts_with("@sv-cast:")
+                    || source.marker == support::ExpressionMarker::sv_cast
                     || source.text == "$countones"
                     || source.text == "$onehot"
                     || source.text == "$onehot0")) {
@@ -4641,8 +4638,9 @@ Lowerer::hir_inline_constraints(
                         || support::with_stack([&] { return self(self, argument, depth + 1U); });
                 };
                 if (value.kind == semantic::sv::ExpressionKind::call) {
-                    return !value.text.starts_with('@')
-                        && !value.text.starts_with('$')
+                    return value.marker == support::ExpressionMarker::none
+                        && !value.text.starts_with('@')
+                        && value.call_kind != semantic::sv::CallKind::system
                         && !value.text.starts_with('.')
                         && (depth == 0U
                             || std::ranges::all_of(value.operands, state));
@@ -4671,28 +4669,51 @@ Lowerer::hir_inline_constraints(
             return caller_function ? caller_value(id) : std::nullopt;
         }
         output.kind = *special_kind;
-        // A cast to a named size or type carries its resolved width and
-        // signedness (IEEE 1800-2017 6.24.1).
-        if (constexpr std::string_view cast_prefix { "@sv-cast:" };
-            output.kind == TemplateKind::Method
-            && source.text.starts_with(cast_prefix)
+        // A cast carries its target kind, built-in type and width; a cast to
+        // a named type carries its resolved width and signedness (IEEE
+        // 1800-2017 6.24.1).
+        if (output.kind == TemplateKind::Method
+            && source.marker == support::ExpressionMarker::sv_cast
             && source.operands.size() == 1U) {
-            const auto target = std::string_view { source.text }.substr(
-                cast_prefix.size());
-            const bool runtime_spelling = target == "signed"
-                || target == "unsigned" || target == "int"
-                || target == "integer" || target == "shortint"
-                || target == "longint" || target == "byte" || target == "bit"
-                || target == "logic" || target == "reg"
-                || (!target.empty()
-                    && std::ranges::all_of(target, [](const char value) {
-                           return value >= '0' && value <= '9';
-                       }));
-            if (!runtime_spelling) {
+            using Builtin = support::SystemVerilogBuiltinType;
+            using CastTarget = support::SystemVerilogCastTarget;
+            output.cast_target = source.cast_target;
+            output.cast_builtin = source.cast_builtin;
+            // A size cast's width, or a resolved typedef's width beside its
+            // signedness, is the marker payload.
+            if (!source.marker_argument.empty()
+                && (source.cast_target == CastTarget::size
+                    || source.cast_target == CastTarget::signed_type
+                    || source.cast_target == CastTarget::unsigned_type)) {
+                std::size_t payload_width { };
+                const auto& payload = source.marker_argument;
+                const auto parsed = std::from_chars(payload.data(),
+                    payload.data() + payload.size(), payload_width);
+                if (parsed.ec == std::errc { }
+                    && parsed.ptr == payload.data() + payload.size()) {
+                    output.cast_width = payload_width;
+                }
+            }
+            const bool runtime_target
+                = source.cast_target == CastTarget::signed_type
+                || source.cast_target == CastTarget::unsigned_type
+                || source.cast_target == CastTarget::size
+                || (source.cast_target == CastTarget::builtin
+                    && (source.cast_builtin == Builtin::int_type
+                        || source.cast_builtin == Builtin::integer
+                        || source.cast_builtin == Builtin::shortint
+                        || source.cast_builtin == Builtin::longint
+                        || source.cast_builtin == Builtin::byte
+                        || source.cast_builtin == Builtin::bit
+                        || source.cast_builtin == Builtin::logic
+                        || source.cast_builtin == Builtin::reg));
+            if (!runtime_target) {
                 if (const auto profile = hir_systemverilog_cast_profile(id)) {
-                    output.text = std::string { cast_prefix }
-                        + (profile->signed_value ? "signed:" : "unsigned:")
-                        + std::to_string(profile->width);
+                    output.cast_target = profile->signed_value
+                        ? CastTarget::signed_type
+                        : CastTarget::unsigned_type;
+                    output.cast_builtin = Builtin::none;
+                    output.cast_width = profile->width;
                 }
             }
         }
@@ -4791,8 +4812,8 @@ Lowerer::hir_inline_constraints(
                 value.text = "@inline-value:"
                     + std::to_string(runtime_values->size());
                 value.constant = PackedLogic4::from_aval_bval(32U, 0U, 0U);
-                value.profile = { DomainKind::Integer, 32U, true, "int",
-                    false };
+                value.profile = { DomainKind::Integer, 32U, true, { },
+                    false, support::SystemVerilogBuiltinType::int_type };
                 output.operands.push_back(std::move(value));
                 runtime_values->push_back(id);
             }
@@ -5565,6 +5586,16 @@ Lowerer::hir_class_method_profile(
         result.actuals.reserve(call.operands.size() - 1U);
         for (std::size_t index = 1U;
             index < call.operands.size(); ++index) {
+            // The `null` operand of `randomize(null)` (IEEE 1800-2023
+            // 18.11.1) selects no property and is no actual; the call
+            // carries randomize_no_properties instead.
+            if (const auto operand = specialized_hir_unit_->find_expression(
+                    call.operands[index]);
+                operand && operand->systemverilog != nullptr
+                && operand->systemverilog->marker
+                    == support::ExpressionMarker::randomize_null) {
+                continue;
+            }
             const auto width = hir_expression_width(
                 call.operands[index], process_scope);
             const auto domain = hir_expression_domain(
@@ -5600,7 +5631,7 @@ Lowerer::hir_class_method_profile(
     // A virtual call dispatches to the object's override, so a pure
     // virtual prototype supplies only the signature (IEEE 1800-2017 8.21).
     const auto dispatched = instance_call
-        && !call.text.starts_with("@sv-base-method:");
+        && call.marker != support::ExpressionMarker::sv_base_method;
     if (selected == nullptr
         || selected->kind != semantic::sv::ClassMethodKind::function
         || ((selected->pure || !selected->defined) && !native_uvm
@@ -5645,12 +5676,15 @@ Lowerer::hir_class_method_profile(
     const auto string_result = result_type
         && result_type->value_form == semantic::sv::TypeForm::string;
     const auto container_result = result_type && !class_result
-        && !string_result && result_type->target.spelling != "void"
+        && !string_result && result_type->builtin
+            != support::SystemVerilogBuiltinType::void_type
         && hir_systemverilog_container_type(*result_type).has_value();
     // A void method has no result; its calls discard a one-bit placeholder
     // (IEEE 1800-2017 13.4.1). A string or container result also leaves one.
     const auto result_width = result_type
-            && (result_type->target.spelling == "void" || string_result
+            && (result_type->builtin
+                    == support::SystemVerilogBuiltinType::void_type
+                || string_result
                 || container_result)
         ? std::optional<std::size_t> { 1U }
         : result_type
@@ -5687,7 +5721,7 @@ Lowerer::hir_class_method_profile(
         && result_type->signed_value;
     result.static_method = static_call;
     result.virtual_dispatch = instance_call
-        && !call.text.starts_with("@sv-base-method:");
+        && call.marker != support::ExpressionMarker::sv_base_method;
     result.string_result = string_result;
     result.container_result = container_result;
     if (instance_call) {
@@ -5768,17 +5802,14 @@ Lowerer::hir_class_task_profile(
     if (call.kind != semantic::sv::StatementKind::task_call) {
         return std::nullopt;
     }
-    constexpr auto instance_prefix = std::string_view { "@sv-task:" };
-    constexpr auto static_prefix
-        = std::string_view { "@sv-static-task:" };
-    const auto spelling = std::string_view { call.task.spelling };
-    const auto instance_call = spelling.starts_with(instance_prefix);
-    const auto static_call = spelling.starts_with(static_prefix);
+    const auto instance_call
+        = call.task_marker == support::ExpressionMarker::sv_task;
+    const auto static_call
+        = call.task_marker == support::ExpressionMarker::sv_static_task;
     const auto class_call = instance_call || static_call;
     const auto identity = class_call
-        ? spelling.substr(
-              instance_call ? instance_prefix.size() : static_prefix.size())
-        : spelling;
+        ? std::string_view { call.task_marker_argument }
+        : std::string_view { call.task.spelling };
     if (identity.empty()) {
         return std::nullopt;
     }
@@ -8068,7 +8099,8 @@ bool Lowerer::lower_hir_class_property_initializers(
         // `mailbox #(T) m = new(n);` constructs the property's mailbox or
         // semaphore (IEEE 1800-2017 15.3, 15.4).
         if (kind == ExpressionKind::call
-            && initializer->systemverilog->text.starts_with("@sv-sync-new:")) {
+            && initializer->systemverilog->marker
+                == support::ExpressionMarker::sv_sync_new) {
             const auto synchronization = lower_hir_synchronization_expression(
                 *property.initializer, 64U, &property.type);
             if (!synchronization.handled || !synchronization.succeeded
@@ -8172,7 +8204,8 @@ bool Lowerer::lower_hir_class_static_property_initializer(
     // `static mailbox m = new(n);` constructs the property's mailbox or
     // semaphore (IEEE 1800-2017 15.3, 15.4).
     if (initializer->systemverilog->kind == semantic::sv::ExpressionKind::call
-        && initializer->systemverilog->text.starts_with("@sv-sync-new:")) {
+        && initializer->systemverilog->marker
+            == support::ExpressionMarker::sv_sync_new) {
         const auto synchronization = lower_hir_synchronization_expression(
             *property.initializer, 64U, &property.type);
         if (!synchronization.handled || !synchronization.succeeded
@@ -8310,8 +8343,6 @@ std::optional<std::uint32_t> Lowerer::hir_constructor_base_specialization()
 }
 
 namespace {
-
-constexpr std::string_view base_constructor_prefix { "@sv-base-constructor:" };
 
 // Whether `specialization` is the class of one design element instance,
 // whose body is lowered in that instance's unit and so reads its parameters
@@ -8522,8 +8553,8 @@ bool Lowerer::lower_hir_constructor_prologue(
             return statement && statement->systemverilog != nullptr
                 && statement->systemverilog->kind
                     == semantic::sv::StatementKind::task_call
-                && statement->systemverilog->task.spelling.starts_with(
-                    base_constructor_prefix);
+                && statement->systemverilog->task_marker
+                    == support::ExpressionMarker::sv_base_constructor;
         })) {
         return true;
     }
@@ -8665,20 +8696,18 @@ Lowerer::hir_class_container_place(const semantic::ExpressionId expression_id) c
         return std::nullopt;
     }
     const auto& source = *expression->systemverilog;
-    constexpr std::string_view container_prefix { "@sv-container-property:" };
     if (source.kind == semantic::sv::ExpressionKind::call
-        && source.text.starts_with(container_prefix)) {
+        && source.marker == support::ExpressionMarker::sv_container_property) {
         return HirClassContainerPlace { source.operands.front(),
-            source.text.substr(container_prefix.size()) };
+            source.marker_argument };
     }
-    constexpr std::string_view property_prefix { "@sv-property:" };
     if (source.kind != semantic::sv::ExpressionKind::class_property) {
         return std::nullopt;
     }
     auto identity = !source.class_member_identity.empty()
         ? source.class_member_identity
-        : source.text.starts_with(property_prefix)
-        ? source.text.substr(property_prefix.size())
+        : source.marker == support::ExpressionMarker::sv_property
+        ? source.marker_argument
         : std::string { };
     if (identity.empty() || !hir_class_value_container_type(identity)) {
         return std::nullopt;
@@ -8859,19 +8888,19 @@ std::optional<Lowerer::HirContainerObjectBinding>
 Lowerer::hir_class_static_container_binding(
     const semantic::ExpressionId access_id) const
 {
-    constexpr std::string_view prefix { "@sv-static-container-property:" };
     const auto record = specialized_hir_unit_ != nullptr
         ? specialized_hir_unit_->find_expression(access_id)
         : std::nullopt;
     if (!record || record->systemverilog == nullptr
-        || !record->systemverilog->text.starts_with(prefix)
+        || record->systemverilog->marker
+            != support::ExpressionMarker::sv_static_container_property
         || !record->systemverilog->operands.empty()) {
         return std::nullopt;
     }
     const auto& access = *record->systemverilog;
     const auto member = !access.class_member_identity.empty()
         ? std::string { access.class_member_identity }
-        : access.text.substr(prefix.size());
+        : access.marker_argument;
     const auto* property = hir_resolver().resolve_systemverilog_class_property(
         member, true).unique();
     // A static queue, dynamic, associative or one-dimensional fixed array
@@ -9228,22 +9257,6 @@ Lowerer::lower_hir_class_function_call(
                       std::string_view { "$increment" },
                       std::string_view { "$size" },
                   };
-                  constexpr std::string_view container_property {
-                      "@sv-container-property:"
-                  };
-                  constexpr std::string_view scalar_property {
-                      "@sv-property:"
-                  };
-                  constexpr std::string_view static_container_property {
-                      "@sv-static-container-property:"
-                  };
-                  constexpr std::string_view static_property {
-                      "@sv-static-property:"
-                  };
-                  constexpr std::string_view selected_property { "@sv-select:" };
-                  constexpr std::string_view indexed_property {
-                      "@sv-container-index:"
-                  };
                   for (const auto& source_expression :
                       design.systemverilog_hir.expressions()) {
                       const auto expression
@@ -9289,15 +9302,22 @@ Lowerer::lower_hir_class_function_call(
                               == semantic::sv::ExpressionKind::class_property
                           || property.kind
                               == semantic::sv::ExpressionKind::class_static_property
-                          || property.text.starts_with(container_property)
-                          || property.text.starts_with(scalar_property)
-                          || property.text.starts_with(
-                              static_container_property)
-                          || property.text.starts_with(static_property)
+                          || property.marker
+                              == support::ExpressionMarker::
+                                  sv_container_property
+                          || property.marker
+                              == support::ExpressionMarker::sv_property
+                          || property.marker
+                              == support::ExpressionMarker::
+                                  sv_static_container_property
+                          || property.marker
+                              == support::ExpressionMarker::sv_static_property
                           || (property.kind == semantic::sv::ExpressionKind::call
-                              && (property.text.starts_with(selected_property)
-                                  || property.text.starts_with(
-                                      indexed_property)))
+                              && (property.marker
+                                      == support::ExpressionMarker::sv_select
+                                  || property.marker
+                                      == support::ExpressionMarker::
+                                          sv_container_index))
                           || property.kind
                               == semantic::sv::ExpressionKind::index;
                       if (!class_property) {
@@ -9351,7 +9371,8 @@ Lowerer::lower_hir_class_function_call(
                       const bool indexed_access
                           = property.kind
                               == semantic::sv::ExpressionKind::index
-                          || property.text.starts_with(indexed_property);
+                          || property.marker
+                              == support::ExpressionMarker::sv_container_index;
                       if ((indexed_access && declared_type
                               && declared_type->container_form
                                   != semantic::sv::TypeForm::static_array
@@ -9755,19 +9776,20 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
                     const auto& type = held_containers[slot].type;
                     node.text = std::string { runtime::inline_container_prefix }
                         + std::to_string(held_containers[slot].value);
+                    // An element of a user type keeps its HIR identity; any
+                    // other element is an anonymous packed vector of its width.
                     node.profile = {
-                        type.element_nominal_type == "int"
-                                || type.element_nominal_type == "integer"
-                            ? runtime::SystemVerilogConstraintDomainKind::Integer
-                            : runtime::SystemVerilogConstraintDomainKind::
-                                  BitVector,
+                        runtime::SystemVerilogConstraintDomainKind::BitVector,
                         type.element_width,
                         type.signed_elements,
                         type.element_nominal_type.empty()
+                                && !type.element_nominal_type_id
                             ? std::string { "$inline-element" }
                             : type.element_nominal_type,
                         false,
+                        support::SystemVerilogBuiltinType::none,
                     };
+                    node.profile.nominal_type_id = type.element_nominal_type_id;
                 }
                 return;
             }
@@ -9793,6 +9815,22 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
     }
     const auto destination = allocate_register(
         profile->result_width, profile->result_domain);
+    // `randomize(null)`: the one operand after the object is the marked null.
+    const bool randomize_without_properties = [&] {
+        if (profile->identity != "@builtin-randomize") {
+            return false;
+        }
+        const auto record = specialized_hir_unit_->find_expression(expression);
+        if (!record || record->systemverilog == nullptr
+            || record->systemverilog->operands.size() != 2U) {
+            return false;
+        }
+        const auto operand = specialized_hir_unit_->find_expression(
+            record->systemverilog->operands.back());
+        return operand && operand->systemverilog != nullptr
+            && operand->systemverilog->marker
+                == support::ExpressionMarker::randomize_null;
+    }();
     // The method sees, and may change, this object's container properties.
     flush_hir_class_container_caches();
     if (receiver && !profile->static_method
@@ -9809,6 +9847,8 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
                 profile->virtual_dispatch,
                 actual_kinds,
                 *inline_constraints,
+                ClassMethodHook::none,
+                randomize_without_properties,
             })) {
         reload_hir_class_container_caches();
         if (expected_width != 0U
@@ -9869,6 +9909,7 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
             actual_kinds,
         };
         operation.inline_constraints = std::move(*inline_constraints);
+        operation.randomize_no_properties = randomize_without_properties;
         process_.operations.emplace_back(std::move(operation));
     }
     reload_hir_class_container_caches();
@@ -10048,9 +10089,9 @@ bool Lowerer::lower_hir_randomize_callback(const semantic::SourceSpanId source,
         const auto discarded = allocate_register(
             1U, frontend::ValueDomain::Bit2);
         process_.operations.emplace_back(ClassMethodCall {
-            discarded, object,
-            "@randomize-callback:" + std::string { name },
-            { }, { }, { }, 1U, false,
+            discarded, object, std::string { name },
+            { }, { }, { }, 1U, false, { }, { },
+            ClassMethodHook::randomize_callback,
         });
     };
     std::vector<InstructionIndex> exits;
@@ -10080,20 +10121,22 @@ bool Lowerer::lower_hir_randomize_callback(const semantic::SourceSpanId source,
         } else {
             // The runtime names the callback a run error leaves, as it
             // does for one it runs (18.6.1).
-            const auto marker = [&](std::string method) {
+            const auto marker = [&](const ClassMethodHook hook,
+                                    std::string method) {
                 const auto discarded = allocate_register(
                     1U, frontend::ValueDomain::Bit2);
                 process_.operations.emplace_back(ClassMethodCall {
                     discarded, object, std::move(method),
-                    { }, { }, { }, 1U, false,
+                    { }, { }, { }, 1U, false, { }, { }, hook,
                 });
             };
-            marker("@randomize-callback-enter:" + std::string { name });
+            marker(ClassMethodHook::randomize_callback_enter,
+                std::string { name });
             if (!lower_hir_class_callable_invocation(
                     source, call, object, true)) {
                 return false;
             }
-            marker("@randomize-callback-leave");
+            marker(ClassMethodHook::randomize_callback_leave, { });
         }
         exits.push_back(static_cast<InstructionIndex>(
             process_.operations.size()));
@@ -10160,10 +10203,10 @@ bool Lowerer::lower_hir_randomize_member_callbacks(
         more, branch + 1U, 0U, UnknownBranchPolicy::when_false });
     const auto member = allocate_register(64U, frontend::ValueDomain::Bit2);
     process_.operations.emplace_back(ClassMethodCall {
-        member, receiver, "@randomize-member", { counter },
+        member, receiver, { }, { counter },
         { std::string { } },
         { static_cast<std::uint8_t>(frontend::PortDirection::Input) }, 64U,
-        false, { 0U },
+        false, { 0U }, { }, ClassMethodHook::randomize_member,
     });
     if (!lower_hir_randomize_callback(source, member, classes, name)) {
         return false;
@@ -10215,7 +10258,8 @@ bool Lowerer::lower_hir_randomize_with_callbacks(
     }
     const auto count = allocate_register(32U, frontend::ValueDomain::Bit2);
     process_.operations.emplace_back(ClassMethodCall {
-        count, receiver, "@randomize-begin", { }, { }, { }, 32U, false,
+        count, receiver, { }, { }, { }, { }, 32U, false, { }, { },
+        ClassMethodHook::randomize_begin,
     });
     if (!lower_hir_randomize_member_callbacks(
             source, receiver, count, pre, "pre_randomize")) {
@@ -10251,7 +10295,8 @@ bool Lowerer::lower_hir_randomize_with_callbacks(
     }
     const auto ended = allocate_register(1U, frontend::ValueDomain::Bit2);
     process_.operations.emplace_back(ClassMethodCall {
-        ended, receiver, "@randomize-end", { }, { }, { }, 1U, false,
+        ended, receiver, { }, { }, { }, { }, 1U, false, { }, { },
+        ClassMethodHook::randomize_end,
     });
     class_functions_lowered_ = true;
     return true;
@@ -10367,12 +10412,11 @@ bool Lowerer::ensure_hir_class_static_local(
     const auto& source = *declaration->systemverilog;
     const auto declared = fully_effective_systemverilog_type(
         hir_resolver(), *source.type, source.scope);
-    const auto scalar_kind
-        = frontend::systemverilog_scalar_kind(declared.target.spelling);
+    const auto scalar_kind = frontend::systemverilog_scalar_kind(declared.builtin);
     // Reals, chandles, events and virtual interfaces keep the register
     // path; so does anything whose initializer is not a constant.
     if (declared.virtual_interface || !declared.interface_type.empty()
-        || declared.target.spelling == "event"
+        || declared.builtin == support::SystemVerilogBuiltinType::event
         || (scalar_kind != frontend::SystemVerilogScalarKind::None
             && scalar_kind != frontend::SystemVerilogScalarKind::Time)) {
         return false;
@@ -10468,6 +10512,7 @@ bool Lowerer::ensure_hir_class_static_local(
     info.name = storage_name;
     info.width = *width;
     info.type_name = source.type->target.spelling;
+    info.systemverilog_builtin = source.type->builtin;
     info.source_domain = four_state ? frontend::ValueDomain::Logic4
                                     : frontend::ValueDomain::Bit2;
     info.systemverilog_scalar = scalar_kind;
@@ -10841,8 +10886,8 @@ bool Lowerer::lower_hir_class_task_call(
     if (const auto statement = specialized_hir_unit_->find_statement(
             statement_id);
         statement && statement->systemverilog != nullptr
-        && statement->systemverilog->task.spelling.starts_with(
-            base_constructor_prefix)) {
+        && statement->systemverilog->task_marker
+            == support::ExpressionMarker::sv_base_constructor) {
         return lower_hir_base_constructor_call(statement_id);
     }
     // The native UVM run waits until its run phase ends: the phase ends in
@@ -10850,8 +10895,10 @@ bool Lowerer::lower_hir_class_task_call(
     if (const auto statement = specialized_hir_unit_->find_statement(
             statement_id);
         statement && statement->systemverilog != nullptr
-        && statement->systemverilog->task.spelling
-            == "@sv-static-task:@uvm-run-test-wait") {
+        && statement->systemverilog->task_marker
+            == support::ExpressionMarker::sv_static_task
+        && statement->systemverilog->task_marker_argument
+            == "@uvm-run-test-wait") {
         const auto notifier = hir_class_heap_notifier();
         if (!notifier) {
             return false;
@@ -12764,17 +12811,10 @@ Lowerer::lower_hir_class_callable_invocation(
                     ? specialized_hir_unit_->find_declaration(
                           frame.formals[index])
                     : std::nullopt;
-                const auto spelling = formal && formal->systemverilog
+                return formal && formal->systemverilog
                         && formal->systemverilog->type
-                    ? std::string_view {
-                          formal->systemverilog->type->target.spelling }
-                    : std::string_view { };
-                return spelling == "real"
-                    ? frontend::SystemVerilogScalarKind::Real
-                    : spelling == "shortreal"
-                    ? frontend::SystemVerilogScalarKind::ShortReal
-                    : spelling == "realtime"
-                    ? frontend::SystemVerilogScalarKind::Realtime
+                    ? frontend::systemverilog_scalar_kind(
+                          formal->systemverilog->type->builtin)
                     : frontend::SystemVerilogScalarKind::None;
             }();
             const auto actual_kind = hir_systemverilog_scalar_kind(
@@ -14494,7 +14534,8 @@ std::optional<Lowerer::HirCallableType> Lowerer::hir_callable_type(
         if (result.container) {
             return result;
         }
-        if (source.type->target.spelling == "void") {
+        if (source.type->builtin
+            == support::SystemVerilogBuiltinType::void_type) {
             // A void function has no result; its calls discard a one-bit
             // placeholder (IEEE 1800-2017 13.4.1).
             result.width = 1U;
@@ -20317,7 +20358,8 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
     char result_code = 'T';
     const bool void_function = !result.task
         && declaration.return_type_tokens.size() == 1U
-        && declaration.return_type_tokens.front().text == "void";
+        && declaration.return_type_tokens.front().builtin
+            == support::SystemVerilogBuiltinType::void_type;
     if (result.task || void_function) {
         result.result_void = true;
         result.result_width = 1U;
@@ -21018,34 +21060,38 @@ std::optional<RegisterId> Lowerer::lower_hir_callable_actual(
         };
         const auto declaration = specialized_hir_unit_->find_declaration(
             formal);
-        auto spelling = declaration
-                && declaration->systemverilog != nullptr
-                && declaration->systemverilog->type
-                && !declaration->systemverilog->type->container_form
-            ? declaration->systemverilog->type->target.spelling
-            : std::string { };
-        // A formal of a type alias of a real type is real (6.18).
-        if (!spelling.empty()
-            && frontend::systemverilog_scalar_kind(spelling) == Kind::None) {
-            if (const auto underlying
-                = hir_resolver().underlying_systemverilog_type(
-                    *declaration->systemverilog->type,
-                    declaration->systemverilog->scope)) {
-                spelling = underlying->target.spelling;
+        auto builtin = support::SystemVerilogBuiltinType::none;
+        if (declaration && declaration->systemverilog != nullptr
+            && declaration->systemverilog->type
+            && !declaration->systemverilog->type->container_form) {
+            const auto& formal_type = *declaration->systemverilog->type;
+            builtin = formal_type.builtin;
+            // A formal of a type alias of a real type is real (6.18).
+            if (!formal_type.target.spelling.empty()
+                && frontend::systemverilog_scalar_kind(builtin) == Kind::None) {
+                if (const auto underlying
+                    = hir_resolver().underlying_systemverilog_type(
+                        formal_type, declaration->systemverilog->scope)) {
+                    builtin = underlying->builtin;
+                }
             }
         }
-        const auto formal_kind = spelling == "real" ? Kind::Real
-            : spelling == "realtime"                ? Kind::Realtime
-            : spelling == "shortreal"               ? Kind::ShortReal
-                                                    : Kind::None;
+        const auto formal_kind = builtin == support::SystemVerilogBuiltinType::real
+            ? Kind::Real
+            : builtin == support::SystemVerilogBuiltinType::realtime
+            ? Kind::Realtime
+            : builtin == support::SystemVerilogBuiltinType::shortreal
+            ? Kind::ShortReal
+            : Kind::None;
         const auto actual_kind = hir_systemverilog_scalar_kind(actual);
         const bool integral_formal = declaration
             && declaration->systemverilog != nullptr
             && declaration->systemverilog->type
             && !declaration->systemverilog->type->container_form
             && formal_kind == Kind::None
-            && spelling != "chandle" && spelling != "string"
-            && spelling != "event";
+            && builtin != support::SystemVerilogBuiltinType::chandle
+            && builtin != support::SystemVerilogBuiltinType::string
+            && builtin != support::SystemVerilogBuiltinType::event;
         if (real_kind(formal_kind) && actual_kind == Kind::None) {
             const auto lowered = lower_hir_expression(actual,
                 hir_expression_width(actual, hir_process_scope_)
@@ -21990,8 +22036,8 @@ Lowerer::HirVhdlFunctionActualShapes Lowerer::hir_vhdl_function_actual_shapes(
         if (actual_node && actual_node->vhdl != nullptr
             && actual_node->vhdl->kind
                 == semantic::vhdl::ExpressionKind::call
-            && actual_node->vhdl->text.starts_with(
-                semantic::vhdl::qualified_expression_prefix)
+            && actual_node->vhdl->marker
+                == support::ExpressionMarker::vhdl_qualified
             && actual_node->vhdl->operands.size() == 1U) {
             // The qualification supplies the nominal array identity;
             // its operand still carries the positional association shape
@@ -22191,7 +22237,8 @@ Lowerer::lower_hir_function_call_value(
             && record->systemverilog->callable
             && record->systemverilog->callable->function
             && record->systemverilog->type
-            && record->systemverilog->type->target.spelling == "void") {
+            && record->systemverilog->type->builtin
+                == support::SystemVerilogBuiltinType::void_type) {
             report(
                 "FSIM-ELAB-SVFUNC-014",
                 "void function '" + record->systemverilog->name
@@ -23474,10 +23521,8 @@ Lowerer::lower_hir_function_call_value(
                 && *actual_width > register_width(*packed_copy_outs[index])
                 && !frontend::is_real_scalar_kind(
                     hir_systemverilog_scalar_kind((*actuals)[index]))
-                && formal->systemverilog->type->target.spelling != "real"
-                && formal->systemverilog->type->target.spelling != "shortreal"
-                && formal->systemverilog->type->target.spelling
-                    != "realtime") {
+                && !support::systemverilog_real_family(
+                    formal->systemverilog->type->builtin)) {
                 packed_copy_outs[index] = resize_register(
                     *packed_copy_outs[index], *actual_width, true);
             }
@@ -24729,7 +24774,7 @@ const UserSystemTask* Lowerer::hir_user_system_task(
     if (!expression || expression->systemverilog == nullptr
         || expression->systemverilog->kind
             != semantic::sv::ExpressionKind::call
-        || !expression->systemverilog->text.starts_with('$')) {
+        || expression->systemverilog->call_kind != semantic::sv::CallKind::system) {
         return nullptr;
     }
     const auto* task
@@ -26360,7 +26405,8 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
             && subelements->vhdl->kind
                 == semantic::vhdl::ExpressionKind::aggregate
             && (subelements->vhdl->text.empty()
-                || subelements->vhdl->text == "@vhdl-formal-subelements")
+                || subelements->vhdl->marker
+                    == support::ExpressionMarker::vhdl_formal_subelements)
             && subelements->vhdl->associations.size() == 1U) {
             const auto& association
                 = subelements->vhdl->associations.front();
@@ -26463,7 +26509,8 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
             && actual->vhdl != nullptr
             && actual->vhdl->kind == semantic::vhdl::ExpressionKind::aggregate
             && (actual->vhdl->text.empty()
-                || actual->vhdl->text == "@vhdl-formal-subelements")) {
+                || actual->vhdl->marker
+                    == support::ExpressionMarker::vhdl_formal_subelements)) {
             binding = hir_vhdl_signal_part_binding(
                 formals[index], *formal->vhdl->subtype, *actual->vhdl,
                 signal_actual_binding);
@@ -27614,8 +27661,8 @@ bool Lowerer::lower_hir_callable_return(
             : std::nullopt;
         if (declaration && declaration->systemverilog != nullptr
             && declaration->systemverilog->callable
-            && declaration->systemverilog->callable->return_type.target.spelling
-                == "void") {
+            && declaration->systemverilog->callable->return_type.builtin
+                == support::SystemVerilogBuiltinType::void_type) {
             hir_callable_frames_[index].return_jumps.push_back(
                 static_cast<InstructionIndex>(process_.operations.size()));
             process_.operations.emplace_back(Jump { });
@@ -27714,8 +27761,8 @@ bool Lowerer::lower_hir_callable_return(
         qualified && qualified->vhdl != nullptr
         && qualified->vhdl->kind == semantic::vhdl::ExpressionKind::call
         && qualified->vhdl->operands.size() == 1U
-        && qualified->vhdl->text.starts_with(
-            semantic::vhdl::qualified_expression_prefix)
+        && qualified->vhdl->marker
+            == support::ExpressionMarker::vhdl_qualified
         && (!hir_vhdl_conversion_profile(returned_value, type.width)
             || [&] {
                    const auto root
@@ -28540,11 +28587,15 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
             { },
             frontend::SystemVerilogScalarKind::None,
             string ? DebugLocalStorage::string : DebugLocalStorage::container,
+            function_record.type
+                ? function_record.type->builtin
+                : support::SystemVerilogBuiltinType::none,
         });
     }
     if (initial_frame->function && declaration->systemverilog != nullptr
         && (!declaration->systemverilog->type
-            || declaration->systemverilog->type->target.spelling != "void")
+            || declaration->systemverilog->type->builtin
+                != support::SystemVerilogBuiltinType::void_type)
         && !initial_frame->type.string && !initial_frame->type.container
         && initial_frame->type.width != 0U
         && !initial_frame->debug_name.empty()) {
@@ -28562,6 +28613,10 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
             value_kind(register_domains_[initial_frame->result]),
             { },
             frontend::SystemVerilogScalarKind::None,
+            DebugLocalStorage::packed,
+            function_record.type
+                ? function_record.type->builtin
+                : support::SystemVerilogBuiltinType::logic,
         });
     }
 
@@ -28766,6 +28821,8 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
             value_kind(register_domains_[storage]),
             { },
             frontend::SystemVerilogScalarKind::None,
+            DebugLocalStorage::packed,
+            support::SystemVerilogBuiltinType::none,
         });
     }
     if (initial_frame->type.container
@@ -28925,6 +28982,10 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
                 value_kind(register_domains_[storage]),
                 { },
                 frontend::SystemVerilogScalarKind::None,
+                DebugLocalStorage::packed,
+                record->systemverilog != nullptr && record->systemverilog->type
+                    ? record->systemverilog->type->builtin
+                    : support::SystemVerilogBuiltinType::none,
             });
         } else if (record->vhdl != nullptr && initial_frame->function) {
             // A VHDL function cannot suspend, so its formals are no debug
@@ -29081,6 +29142,10 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
                         value_kind(register_domains_[storage]),
                         { },
                         frontend::SystemVerilogScalarKind::None,
+                        DebugLocalStorage::packed,
+                        source.type
+                            ? source.type->builtin
+                            : support::SystemVerilogBuiltinType::none,
                     });
                 }
             }
@@ -29710,7 +29775,8 @@ Lowerer::hir_vhdl_signal_part_binding(const semantic::DeclarationId formal,
                            const std::size_t base,
                            const std::size_t depth) -> void {
         for (const auto& association : associations.associations) {
-            const auto field = !association.choice_spelling.empty()
+            const auto field = (!association.choice_spelling.empty()
+                || association.choice_marker != support::ExpressionMarker::none)
                     && association.choice_spelling != "@array"
                 ? hir_vhdl_record_field(owner, association.choice_spelling)
                 : std::nullopt;
@@ -29723,7 +29789,8 @@ Lowerer::hir_vhdl_signal_part_binding(const semantic::DeclarationId formal,
                 return;
             }
             if (value->vhdl->kind == semantic::vhdl::ExpressionKind::aggregate
-                && value->vhdl->text == "@vhdl-formal-subelements") {
+                && value->vhdl->marker
+                    == support::ExpressionMarker::vhdl_formal_subelements) {
                 support::with_stack([&] { return self(self, *value->vhdl, field->subtype, base + field->offset,
                     depth + 1U); });
                 if (!valid) {

@@ -440,11 +440,9 @@ std::optional<Statement> VhdlParser::parse_sequential_statement(
           continue;
         }
         const auto span = bound->span;
-        Expression qualified{
-            ExpressionKind::Call,
-            "@vhdl-qualified:" + range_type_mark->text,
-            {std::move(*bound)},
-            span};
+        auto qualified = marked_expression(
+            support::ExpressionMarker::vhdl_qualified, range_type_mark->text,
+            {std::move(*bound)}, span);
         qualified.vhdl_selected_name_spelling =
             range_type_mark->vhdl_selected_name_spelling;
         *bound = std::move(qualified);
@@ -1328,6 +1326,8 @@ std::optional<Statement> VhdlParser::parse_assignment(bool concurrent) {
                                  const Expression& left,
                                  const Expression& right) -> bool {
       return left.kind == right.kind && left.text == right.text
+          && left.marker == right.marker
+          && left.marker_argument == right.marker_argument
           && left.operands.size() == right.operands.size()
           && std::ranges::equal(left.operands, right.operands,
               [&](const Expression& left_operand,
@@ -1371,7 +1371,7 @@ std::optional<Statement> VhdlParser::split_vhdl_aggregate_assignment(
       return std::nullopt;
     }
     if (source->kind == ExpressionKind::Call
-        && source->text.starts_with("@vhdl-qualified:")
+        && source->marker == support::ExpressionMarker::vhdl_qualified
         && source->operands.size() == 1U) {
       source = &source->operands.front();
     }
@@ -1566,13 +1566,10 @@ Expression VhdlParser::parse_vhdl_case_choice() {
   const auto direction = vhdl_name(previous().text);
   auto right = parse_expression();
   const auto span = cover(left.span, right.span);
-  return Expression{
-      ExpressionKind::Call,
-      direction == "downto"
-          ? "@vhdl-case-range-downto"
-          : "@vhdl-case-range-to",
-      {std::move(left), std::move(right)},
-      span};
+  return marked_expression(
+      direction == "downto" ? support::ExpressionMarker::vhdl_case_range_downto
+                            : support::ExpressionMarker::vhdl_case_range_to,
+      {}, {std::move(left), std::move(right)}, span);
 }
 
 Statement VhdlParser::parse_conditional_signal_assignment(Statement assignment) {
@@ -1766,16 +1763,15 @@ Delay VhdlParser::parse_vhdl_delay(const Token& start) {
   Delay delay;
   auto expression = parse_expression(0, false);
   delay.span = cover(start.span, expression.span);
-  constexpr std::string_view physical_prefix{"@vhdl-physical:"};
   if (expression.kind == ExpressionKind::Call
-      && expression.text.starts_with(physical_prefix)
+      && expression.marker == support::ExpressionMarker::vhdl_physical
       && expression.operands.size() == 1
       && expression.operands.front().kind
           == ExpressionKind::IntegerLiteral) {
     if (const auto magnitude =
             decimal_u64(expression.operands.front().text)) {
       delay.magnitude = *magnitude;
-      delay.unit = expression.text.substr(physical_prefix.size());
+      delay.unit = expression.marker_argument;
       return delay;
     }
   }
@@ -1794,31 +1790,26 @@ Expression VhdlParser::parse_lvalue() {
       && (at(TokenKind::LeftParen)
           || (at(TokenKind::Dot) && at(TokenKind::Identifier, 1)
               && vhdl_name(current(1).text) != "all"))) {
-    expression = Expression{ExpressionKind::Call,
-                            "@vhdl-dereference",
-                            {std::move(expression)},
-                            name.span};
+    expression = marked_expression(
+        support::ExpressionMarker::vhdl_dereference, {},
+        {std::move(expression)}, name.span);
   }
   while (match(TokenKind::Dot)) {
     const auto member =
         expect_identifier("selected record element");
     const auto canonical_member = vhdl_name(member.text);
     if (canonical_member == "all") {
-      expression = Expression{
-          ExpressionKind::Call,
-          "@vhdl-dereference",
-          {std::move(expression)},
-          cover(name.span, member.span)};
+      expression = marked_expression(
+          support::ExpressionMarker::vhdl_dereference, {},
+          {std::move(expression)}, cover(name.span, member.span));
     } else if (expression.kind == ExpressionKind::Identifier) {
       expression.text += '.';
       expression.text += canonical_member;
       expression.span = cover(expression.span, member.span);
     } else {
-      expression = Expression{
-          ExpressionKind::Call,
-          "@vhdl-member:" + canonical_member,
-          {std::move(expression)},
-          cover(name.span, member.span)};
+      expression = marked_expression(
+          support::ExpressionMarker::vhdl_member, canonical_member,
+          {std::move(expression)}, cover(name.span, member.span));
     }
   }
   for (;;) {
@@ -1877,17 +1868,13 @@ Expression VhdlParser::parse_lvalue() {
     }
     const auto member = expect_identifier("selected record element");
     if (vhdl_name(member.text) == "all") {
-      expression = Expression{
-          ExpressionKind::Call,
-          "@vhdl-dereference",
-          {std::move(expression)},
-          cover(name.span, member.span)};
+      expression = marked_expression(
+          support::ExpressionMarker::vhdl_dereference, {},
+          {std::move(expression)}, cover(name.span, member.span));
     } else {
-      expression = Expression{
-          ExpressionKind::Call,
-          "@vhdl-member:" + vhdl_name(member.text),
-          {std::move(expression)},
-          cover(name.span, member.span)};
+      expression = marked_expression(
+          support::ExpressionMarker::vhdl_member, vhdl_name(member.text),
+          {std::move(expression)}, cover(name.span, member.span));
     }
   }
   return expression;

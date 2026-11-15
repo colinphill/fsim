@@ -126,7 +126,8 @@ public:
         const std::string& identity);
     /// The vpiClassType of a class named in the source (37.32): a built-in
     /// mailbox, semaphore or process, or a user-defined class.
-    [[nodiscard]] static std::int64_t class_type_of(std::string_view name);
+    [[nodiscard]] static std::int64_t class_type_of(
+        support::SystemVerilogStandardClass standard_class);
 
     /// The class a class typespec names: its declaration identity and its
     /// specialization identity (empty for a lexical typespec); none for any

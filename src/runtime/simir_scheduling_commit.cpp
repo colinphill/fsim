@@ -109,31 +109,85 @@ void insert_force_value(
 } // namespace
 
 bool Interpreter::Impl::settle_declaration_initializer_write(
-    const SignalId signal_id, const PackedLogic4& value,
-    const std::optional<std::size_t> offset)
+    const ProcessId process, const SignalId signal_id,
+    const PackedLogic4& value, const std::optional<std::size_t> offset)
 {
     if (signal_id >= signals.size() || signal_id >= driven_values.size()) {
         return false;
     }
     const auto& signal = signals[signal_id];
-    if (signal.resolution != ResolutionKind::none || signal.event_variable
-        || signal.has_implicit_driver || signal.has_charge_strength
-        || (signal_id < signal_container_aggregate_aliases.size()
-            && signal_container_aggregate_aliases[signal_id])
-        || (signal_id < forced_values.size() && forced_values[signal_id])
-        || (signal_id < forced_masks.size() && forced_masks[signal_id])) {
+    if (signal.event_variable || signal.has_implicit_driver
+        || signal.has_charge_strength) {
         return false;
     }
-    auto& driven = driven_values[signal_id];
+    const auto width = signal.initial_value.width();
     if (offset
-        && (*offset > driven.width()
-            || value.width() > driven.width() - *offset)) {
+        && (*offset > width || value.width() > width - *offset)) {
         return false;
     }
-    auto whole = normalize_signal_value(signal_id,
-        offset ? insert_value(driven, value, *offset) : value);
-    driven = whole;
-    publish_settled(signal_id, std::move(whole));
+    if (signal_id < signal_container_aggregate_aliases.size()
+        && signal_container_aggregate_aliases[signal_id]) {
+        // An aggregate's initializer settles each element signal of its
+        // container; the aggregate's value is their projection.
+        const auto object = *signal_container_aggregate_aliases[signal_id];
+        const auto& aliases = container_element_signal_aliases.at(object);
+        auto replacement = read_container_object_value(object);
+        if (aliases.empty() || aliases.size() != replacement.elements.size()
+            || !std::ranges::all_of(aliases, [&](const auto& alias) {
+                   return alias && alias->writable && alias->readable
+                       && alias->signal < signals.size()
+                       && !(alias->signal < signal_container_aggregate_aliases.size()
+                           && signal_container_aggregate_aliases[alias->signal])
+                       && !signals[alias->signal].event_variable
+                       && !signals[alias->signal].has_implicit_driver
+                       && !signals[alias->signal].has_charge_strength
+                       && signals[alias->signal].resolution
+                           != ResolutionKind::user_function;
+               })) {
+            return false;
+        }
+        auto whole = normalize_signal_value(signal_id,
+            offset ? insert_value(logical_signal_value(signal_id), value, *offset)
+                   : value);
+        unpack_container_signal_value(replacement, whole);
+        for (std::size_t ordinal = 0U; ordinal < aliases.size(); ++ordinal) {
+            if (!settle_declaration_initializer_write(process,
+                    aliases[ordinal]->signal, replacement.elements[ordinal],
+                    std::nullopt)) {
+                throw std::logic_error {
+                    "aggregate initializer element did not settle"
+                };
+            }
+        }
+        invalidate_container_aggregate_extract(object);
+        return true;
+    }
+    if (signal.resolution == ResolutionKind::none) {
+        auto& driven = driven_values[signal_id];
+        auto whole = normalize_signal_value(signal_id,
+            offset ? insert_value(driven, value, *offset) : value);
+        driven = whole;
+        // A force keeps its forced bits; the driven value lies beneath
+        // (IEEE 1800-2023 10.6.2).
+        publish_settled(signal_id, apply_force(signal_id, std::move(whole)));
+        return true;
+    }
+    if (signal.resolution == ResolutionKind::user_function) {
+        // A resolution function's signal (a VHDL resolved signal or a
+        // user-defined nettype, whose time-zero resolution is an update,
+        // IEEE 1800-2023 6.7.3) is never a SystemVerilog variable's own
+        // storage; its writes commit as usual.
+        return false;
+    }
+    // The initializer is the process's initial driving value; the signal's
+    // initial value is the resolution of its drivers' initial values, with
+    // no transaction (IEEE 1076-2019 14.7.3.4, 14.7.5.2 c)).
+    set_driver(process, signal_id,
+        offset ? insert_value(driver_slot(process, signal_id), value, *offset)
+               : value);
+    auto resolved = resolved_driver_value(signal_id);
+    driven_values[signal_id] = resolved;
+    publish_settled(signal_id, apply_force(signal_id, std::move(resolved)));
     return true;
 }
 
@@ -3819,7 +3873,7 @@ void Interpreter::Impl::commit_driver(
     }
     if (declaration_initialization_active
         && settle_declaration_initializer_write(
-            signal_id, value, std::nullopt)) {
+            process, signal_id, value, std::nullopt)) {
         return;
     }
     require_writable_aggregate_signal(signal_id);
@@ -4038,7 +4092,8 @@ void Interpreter::Impl::commit_driver_slice(
         return;
     }
     if (declaration_initialization_active
-        && settle_declaration_initializer_write(signal_id, value, offset)) {
+        && settle_declaration_initializer_write(
+            process, signal_id, value, offset)) {
         return;
     }
     if (!vhdl_disconnected_drivers.empty()) {

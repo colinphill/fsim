@@ -85,7 +85,7 @@ std::optional<Lowerer::HirSvValuePath> Lowerer::hir_class_subarray_element(
             continue;
         }
         if (depth == 0U || source.kind != semantic::sv::ExpressionKind::call
-            || !source.text.starts_with("@sv-container-index:")) {
+            || source.marker != support::ExpressionMarker::sv_container_index) {
             return std::nullopt;
         }
         auto path = hir_sv_value_path(expression_id);
@@ -132,13 +132,11 @@ std::optional<Lowerer::HirSvValuePath> Lowerer::hir_sv_value_path(
             return rejected(__LINE__);
         }
         const auto& source = *expression->systemverilog;
-        constexpr auto select_prefix = std::string_view { "@sv-select:" };
         if (source.kind == semantic::sv::ExpressionKind::call
-            && source.text.starts_with(select_prefix)
+            && source.marker == support::ExpressionMarker::sv_select
             && source.operands.size() == 1U) {
             pending.push_back(PendingStep {
-                std::string_view { source.text }.substr(
-                    select_prefix.size()),
+                std::string_view { source.marker_argument },
                 { } });
             current = source.operands.front();
             continue;
@@ -172,16 +170,15 @@ std::optional<Lowerer::HirSvValuePath> Lowerer::hir_sv_value_path(
         }
         // A value-container property of an object (`obj.v`, `obj.v[i]`)
         // or of a class (`C::v`) roots the path (IEEE 1800-2017 8.4, 8.9).
-        constexpr auto element_prefix
-            = std::string_view { "@sv-container-index:" };
         const auto place = hir_class_container_place(current);
         if (place
             || (source.kind == semantic::sv::ExpressionKind::call
-                && source.text.starts_with(element_prefix)
+                && source.marker
+                    == support::ExpressionMarker::sv_container_index
                 && source.operands.size() >= 2U)) {
             const bool element = !place;
             auto identity = place ? place->identity
-                                  : source.text.substr(element_prefix.size());
+                                  : source.marker_argument;
             auto type = hir_class_value_container_type(identity);
             if (!type) {
                 return rejected(__LINE__);
@@ -206,7 +203,8 @@ std::optional<Lowerer::HirSvValuePath> Lowerer::hir_sv_value_path(
             break;
         }
         if (source.kind == semantic::sv::ExpressionKind::call
-            && source.text.starts_with("@sv-static-container-property:")
+            && source.marker
+                == support::ExpressionMarker::sv_static_container_property
             && source.operands.empty()) {
             root = hir_class_static_container_binding(current);
             break;
@@ -505,7 +503,7 @@ std::optional<Lowerer::HirSvValuePath> Lowerer::hir_sv_value_path(
         if (path.leaf) {
             // Members of a packed structure leaf select its bits (7.2.1).
             if (path.string_leaf || path.packed_tail || !step.member
-                || path.type.element_nominal_type.empty()) {
+                || !path.type.element_nominal_type_id) {
                 return rejected(__LINE__);
             }
             std::string members;
@@ -518,8 +516,8 @@ std::optional<Lowerer::HirSvValuePath> Lowerer::hir_sv_value_path(
                 }
                 members += *pending[rest].member;
             }
-            const auto nominal = semantic::sv::nominal_identity_type(
-                path.type.element_nominal_type);
+            const auto nominal = semantic::sv::nominal_index_type(
+                path.type.element_nominal_type_id);
             if (!nominal) {
                 return rejected(__LINE__);
             }
@@ -1737,7 +1735,8 @@ bool Lowerer::hir_sv_container_stream(
     }
     const auto& source = *expression->systemverilog;
     if (source.kind != semantic::sv::ExpressionKind::call
-        || (source.text != "@stream-left" && source.text != "@stream-right")
+        || (source.marker != support::ExpressionMarker::stream_left
+            && source.marker != support::ExpressionMarker::stream_right)
         || source.operands.size() < 2U) {
         return false;
     }
@@ -1762,7 +1761,8 @@ std::optional<ContainerRegisterId> Lowerer::lower_hir_sv_bitstream(
     }
     const auto& source = *expression->systemverilog;
     if (source.kind != semantic::sv::ExpressionKind::call
-        || (source.text != "@stream-left" && source.text != "@stream-right")
+        || (source.marker != support::ExpressionMarker::stream_left
+            && source.marker != support::ExpressionMarker::stream_right)
         || source.operands.size() < 2U) {
         return std::nullopt;
     }
@@ -1806,7 +1806,7 @@ std::optional<ContainerRegisterId> Lowerer::lower_hir_sv_bitstream(
         }
         process_.operations.emplace_back(append);
     }
-    if (source.text == "@stream-left") {
+    if (source.marker == support::ExpressionMarker::stream_left) {
         ContainerBitstream reverse;
         reverse.operation = ContainerBitstreamOperation::reverse;
         reverse.bits = bits;
@@ -1854,7 +1854,8 @@ std::optional<ContainerRegisterId> Lowerer::lower_hir_sv_bitstream_container(
     }
     const auto& source = *expression->systemverilog;
     const bool stream = source.kind == semantic::sv::ExpressionKind::call
-        && (source.text == "@stream-left" || source.text == "@stream-right");
+        && (source.marker == support::ExpressionMarker::stream_left
+            || source.marker == support::ExpressionMarker::stream_right);
     if (stream) {
         bits = lower_hir_sv_bitstream(expression_id);
     } else {

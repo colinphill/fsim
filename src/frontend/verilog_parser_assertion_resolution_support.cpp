@@ -303,7 +303,7 @@ std::optional<Type> assertion_local_type(
         if (spelling == "byte" || spelling == "shortint"
             || spelling == "int" || spelling == "longint"
             || spelling == "integer" || spelling == "time") {
-            type.spelling = spelling;
+            set_systemverilog_type_keyword(type, spelling);
             type.domain = spelling == "integer" || spelling == "time"
                 ? ValueDomain::Logic4
                 : ValueDomain::Bit2;
@@ -320,7 +320,9 @@ std::optional<Type> assertion_local_type(
         if (spelling == "logic" || spelling == "reg" || spelling == "bit"
             || spelling == "signed" || spelling == "unsigned"
             || tokens.front().kind == TokenKind::LeftBracket) {
-            type.spelling = spelling == "bit" ? "bit" : "logic";
+            set_systemverilog_builtin_type(type, spelling == "bit"
+                    ? support::SystemVerilogBuiltinType::bit
+                    : support::SystemVerilogBuiltinType::logic);
             type.domain = spelling == "bit" ? ValueDomain::Bit2
                                             : ValueDomain::Logic4;
             type.is_signed = spelling == "signed";
@@ -362,7 +364,7 @@ std::optional<Type> assertion_local_type(
             return type;
         }
         if (tokens.front().kind == TokenKind::Identifier) {
-            type.spelling = spelling;
+            set_systemverilog_type_name(type, spelling);
             type.named_type = spelling;
             type.named_type_span = tokens.front().span;
             return type;

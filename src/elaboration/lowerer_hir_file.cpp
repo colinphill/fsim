@@ -243,8 +243,7 @@ Lowerer::hir_systemverilog_scan_value_kind(
     // handles can have scalar storage too. Once aliases are followed, a
     // plain packed-integral form must name a standard integral type.
     if (*form == TypeForm::packed_integral
-        && !frontend::systemverilog_integral_type_descriptor(
-            resolved.target.spelling)) {
+        && !support::systemverilog_integral(resolved.builtin)) {
         return Kind::unsupported;
     }
     const auto domain = hir_expression_domain(expression_id, source.scope);
@@ -1946,11 +1945,11 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
                                         && target_type
                                         && (!target_type->systemverilog_net_type
                                                 .empty()
-                                            || semantic::sv::
-                                                is_builtin_net_kind(target_type
-                                                        ->target.spelling)
-                                            || target_type->target.spelling
-                                                == "interconnect");
+                                            || target_type->net_kind
+                                                != support::
+                                                    SystemVerilogNetKind::none
+                                            || target_type
+                                                   ->systemverilog_interconnect);
                                     const bool writable_port_direction
                                         = direction
                                                 == semantic::sv::Direction::output
@@ -2548,6 +2547,9 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
                 self(self, nested);
             }
             for (const auto nested : source.loop_updates) {
+                self(self, nested);
+            }
+            for (const auto nested : source.loop_initializations) {
                 self(self, nested);
             }
             for (const auto& alternative : source.case_alternatives) {
@@ -4592,10 +4594,10 @@ bool Lowerer::lower_hir_vhdl_file_statement(
                     auto text = expression && expression->vhdl != nullptr
                         ? std::string_view { expression->vhdl->text }
                         : std::string_view { };
-                    constexpr auto physical
-                        = std::string_view { "@vhdl-physical:" };
-                    if (text.starts_with(physical)) {
-                        text.remove_prefix(physical.size());
+                    if (expression && expression->vhdl != nullptr
+                        && expression->vhdl->marker
+                            == support::ExpressionMarker::vhdl_physical) {
+                        text = expression->vhdl->marker_argument;
                     }
                     unit_name = std::string { vhdl_simple_name(text) };
                 }

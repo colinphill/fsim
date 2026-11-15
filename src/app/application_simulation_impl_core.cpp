@@ -784,7 +784,8 @@ void Simulation::Impl::add_constraint_state_variables(
             runtime::SystemVerilogConstraintVariable variable;
             variable.canonical_identity = state.identity + ".size()";
             variable.profile = { runtime::SystemVerilogConstraintDomainKind::Integer,
-                32, true, "int", false };
+                32, true, std::string { }, false,
+                support::SystemVerilogBuiltinType::int_type };
             variable.domain.push_back(runtime::PackedLogic4::from_aval_bval(
                 32, static_cast<std::uint64_t>(size), 0U));
             auto identity = variable.canonical_identity;
@@ -800,6 +801,7 @@ void Simulation::Impl::add_constraint_state_variables(
     const std::span<const runtime::PackedLogic4> actuals,
     const std::span<const runtime::SystemVerilogConstraintTemplate>
         source_constraints,
+    const bool no_properties,
     const std::optional<runtime::simir::ProcessId> calling_process,
     const bool callbacks_lowered)
 {
@@ -971,7 +973,7 @@ void Simulation::Impl::add_constraint_state_variables(
     // random property fails cleanly instead of exhausting memory.
     request.limits.maximum_domain_values = std::size_t { 1U } << 22U;
     application_detail::configure_systemverilog_randomize_selection(
-        request, selected_names);
+        request, selected_names, no_properties);
     request.call_identity = object.specialization_identity
         + "::randomize@source";
     // A random enumerated property takes only its type's values (IEEE
@@ -2008,7 +2010,8 @@ void Simulation::Impl::run_randomize_callback(
         return;
     const auto owner = randomize_callback_owner(*method);
     const auto returns_void = !method->return_type
-        || method->return_type->target.spelling == "void";
+        || method->return_type->builtin
+            == support::SystemVerilogBuiltinType::void_type;
     if (method->kind != semantic::sv::ClassMethodKind::function
         || method->static_method || !method->formals.empty()
         || !returns_void) {
@@ -2068,16 +2071,18 @@ std::string Simulation::Impl::randomize_callback_error(
 runtime::PackedLogic4 Simulation::Impl::invoke_lowered_randomize_step(
     const runtime::simir::ProcessId process,
     const runtime::SystemVerilogClassHandle handle,
+    const runtime::simir::ClassMethodHook hook,
     const std::string_view step,
     const std::span<const runtime::PackedLogic4> actuals)
 {
+    using Hook = runtime::simir::ClassMethodHook;
     const auto done = runtime::PackedLogic4::from_aval_bval(1U, 0U, 0U);
-    if (step.starts_with("@randomize-callback-enter:")) {
-        randomize_callback_contexts.push_back({ process, handle,
-            std::string { step.substr(step.find(':') + 1U) } });
+    if (hook == Hook::randomize_callback_enter) {
+        randomize_callback_contexts.push_back(
+            { process, handle, std::string { step } });
         return done;
     }
-    if (step == "@randomize-callback-leave") {
+    if (hook == Hook::randomize_callback_leave) {
         if (randomize_callback_contexts.empty()
             || randomize_callback_contexts.back().process != process) {
             throw std::logic_error {
@@ -2089,7 +2094,7 @@ runtime::PackedLogic4 Simulation::Impl::invoke_lowered_randomize_step(
     // A kill (IEEE 1800-2023 9.7) that ends the killing process ends the
     // randomize() calls and callbacks it is in: they are set aside before
     // the kill and come back only when the kill returns.
-    if (step == "@process-kill-begin") {
+    if (hook == Hook::none && step == "@process-kill-begin") {
         killing_randomize_state = KilledRandomizeState {
             process,
             std::exchange(lowered_randomize_calls, { }),
@@ -2097,7 +2102,7 @@ runtime::PackedLogic4 Simulation::Impl::invoke_lowered_randomize_step(
         };
         return done;
     }
-    if (step == "@process-kill-end") {
+    if (hook == Hook::none && step == "@process-kill-end") {
         if (!killing_randomize_state
             || killing_randomize_state->process != process) {
             throw std::logic_error { "process kill returned unmatched" };
@@ -2108,7 +2113,7 @@ runtime::PackedLogic4 Simulation::Impl::invoke_lowered_randomize_step(
         killing_randomize_state.reset();
         return done;
     }
-    if (step == "@randomize-begin") {
+    if (hook == Hook::randomize_begin) {
         // The object itself must exist (8.4); the objects reached through
         // its handles are taken after its pre_randomize ran (18.6.1).
         (void)class_heap.object(handle);
@@ -2122,9 +2127,12 @@ runtime::PackedLogic4 Simulation::Impl::invoke_lowered_randomize_step(
         || lowered_randomize_calls.back().handle != handle) {
         throw std::logic_error { "randomize() step outside its lowered call" };
     }
-    if (step == "@randomize-end") {
+    if (hook == Hook::randomize_end) {
         lowered_randomize_calls.pop_back();
         return runtime::PackedLogic4::from_aval_bval(1U, 0U, 0U);
+    }
+    if (hook != Hook::randomize_member) {
+        throw std::logic_error { "unknown lowered randomize() step" };
     }
     const auto& members = lowered_randomize_calls.back().members;
     const auto index = actuals.empty() ? members.size()

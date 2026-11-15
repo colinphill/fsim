@@ -80,8 +80,8 @@ Type VerilogParser::parse_systemverilog_aggregate_type(bool* const complete)
             // A void member of a tagged union carries no value (IEEE
             // 1800-2017 7.3.2); it is held as one unused bit.
             (void)advance();
-            member_type = Type { ValueDomain::Bit2, "bit",
-                PackedRange { 0, 0, true }, false };
+            member_type = systemverilog_builtin_type(ValueDomain::Bit2,
+                support::SystemVerilogBuiltinType::bit, PackedRange { 0, 0, true }, false);
         } else if (keyword("struct") || keyword("union")) {
             member_type = parse_systemverilog_aggregate_type();
         } else if (keyword("enum")) {
@@ -166,7 +166,8 @@ Type VerilogParser::parse_systemverilog_aggregate_type(bool* const complete)
                     cover(member_start.span, previous().span),
                     { },
                     std::move(member_initializer),
-                    random_member
+                    random_member,
+                    declarator_type.systemverilog_builtin
                 };
                 if (!packed || !declarator_type.named_type.empty()
                     || declarator_type.packed_aggregate
@@ -311,11 +312,10 @@ Type VerilogParser::parse_systemverilog_enum_type(
     } else if (keyword("signed") || keyword("unsigned")
         || at(TokenKind::LeftBracket)) {
         type.domain = ValueDomain::Logic4;
-        type.spelling = "logic";
+        set_systemverilog_builtin_type(type, support::SystemVerilogBuiltinType::logic);
         parse_optional_signedness(type);
         parse_optional_range(type);
     } else if (keyword("string") || keyword("chandle")
-        || keyword("process")
         || keyword("shortreal") || keyword("real")
         || keyword("realtime")) {
         const auto unsupported = advance();
@@ -505,8 +505,9 @@ std::optional<Type> VerilogParser::parse_named_packed_array_type()
         || element.systemverilog_container
         || (element.domain != ValueDomain::Logic4
             && element.domain != ValueDomain::Bit2 && !packed_aggregate)
-        || (element.packed_members.empty() && element.spelling != "logic"
-            && element.spelling != "bit" && element.spelling != "reg")) {
+        || (element.packed_members.empty()
+            && !support::systemverilog_integer_vector(
+                element.systemverilog_builtin))) {
         return std::nullopt;
     }
     const auto over = qualified ? current().text + "::" + current(2).text
@@ -726,7 +727,7 @@ void VerilogParser::parse_typedef(
         }
     } else if (keyword("shortreal") || keyword("real")
         || keyword("realtime") || keyword("time") || keyword("event")
-        || keyword("chandle") || keyword("process") || keyword("string")
+        || keyword("chandle") || keyword("string")
         || keyword("logic") || keyword("reg") || keyword("bit")
         || keyword("byte") || keyword("shortint") || keyword("int")
         || keyword("longint") || keyword("integer")) {
@@ -899,7 +900,7 @@ void VerilogParser::parse_nettype(
         return;
     }
 
-    type.systemverilog_net_type = name.text;
+    set_systemverilog_user_net_type(type, name.text);
     type.systemverilog_resolution_function = resolution_function;
     TypeAliasDeclaration declaration {
         name.text,
@@ -1061,7 +1062,7 @@ void VerilogParser::parse_optional_net_type(Type& type)
             "an explicit net data type",
             StandardRevision::SystemVerilog2005,
             data_type);
-        type.spelling = keyword_token.text;
+        set_systemverilog_type_keyword(type, keyword_token.text);
         type.domain = ValueDomain::Logic4;
         if (data_type.text == "integer") {
             type.is_signed = true;
@@ -1073,11 +1074,12 @@ void VerilogParser::parse_optional_net_type(Type& type)
         && keyword_token.text != "supply1"
         && (keyword("shortreal") || keyword("real")
             || keyword("realtime") || keyword("time"))) {
-        type.systemverilog_net_type = keyword_token.text;
+        set_systemverilog_net_type(type,
+            support::systemverilog_net_kind_keyword(keyword_token.text));
         parse_optional_net_type(type);
         return;
     }
-    type.spelling = keyword_token.text;
+    set_systemverilog_type_keyword(type, keyword_token.text);
     if (apply_systemverilog_integral_type(type, keyword_token.text)) {
         return;
     }
@@ -1223,8 +1225,24 @@ bool VerilogParser::parse_optional_container_dimension(Type& type)
                 "FSIM-SV-PARSE-157");
             container.kind = SystemVerilogContainerKind::AssociativeArray;
             container.associative_index_type = std::make_shared<Type>(
-                ValueDomain::Bit2, "bit", PackedRange { 63, 0, true },
-                false);
+                systemverilog_builtin_type(ValueDomain::Bit2,
+                    support::SystemVerilogBuiltinType::bit,
+                    PackedRange { 63, 0, true }, false));
+        } else if (keyword("real") || keyword("shortreal")
+            || keyword("realtime") || keyword("chandle")
+            || keyword("event")) {
+            // A non-integral built-in index type keeps its kind, so that
+            // elaboration rejects it (IEEE 1800-2023 7.8.4).
+            const auto index_keyword = advance();
+            expect(
+                TokenKind::RightBracket,
+                "']' after associative-array index type",
+                "FSIM-SV-PARSE-157");
+            container.kind = SystemVerilogContainerKind::AssociativeArray;
+            Type index_type;
+            set_systemverilog_type_keyword(index_type, index_keyword.text);
+            container.associative_index_type
+                = std::make_shared<Type>(std::move(index_type));
         } else {
             const auto references_before = implicit_net_references_.size();
             auto left = parse_expression();
@@ -1339,14 +1357,12 @@ bool VerilogParser::parse_optional_container_dimension(Type& type)
     }
     // IEEE 1800-2017 6.7.1: a net array has fixed unpacked dimensions; a
     // dynamic array, queue, or associative array is a variable form.
-    const auto net_spelling = type.systemverilog_net_type.empty()
-        ? std::string_view { type.spelling }
-        : std::string_view { type.systemverilog_net_type };
+    const bool net_type = type.systemverilog_net_type.empty()
+        ? type.systemverilog_net_kind != support::SystemVerilogNetKind::none
+        : type.systemverilog_net_type_kind
+            != support::SystemVerilogNetKind::none;
     if (container.kind != SystemVerilogContainerKind::StaticArray
-        && contains_word(
-            { "wire", "tri", "tri0", "tri1", "wand", "triand", "wor",
-                "trior", "trireg", "uwire", "supply0", "supply1" },
-            net_spelling)) {
+        && net_type) {
         error(
             start,
             "FSIM-SV-SEM-398",
@@ -1464,7 +1480,7 @@ std::optional<Type> VerilogParser::parse_type_operator_type()
         result = parse_parameter_type();
     } else {
         auto expression = parse_expression();
-        result.spelling = "@type-of";
+        set_systemverilog_type_name(result, "@type-of");
         result.named_type_span = cover(start.span, expression.span);
         result.systemverilog_type_of
             = std::make_shared<const Expression>(std::move(expression));

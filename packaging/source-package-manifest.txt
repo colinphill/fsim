@@ -578,6 +578,7 @@ include/fsim/support/bounded_bytes.hpp
 include/fsim/support/ctype_whitespace.hpp
 include/fsim/support/design_library.hpp
 include/fsim/support/environment.hpp
+include/fsim/support/expression_marker.hpp
 include/fsim/support/glob_match.hpp
 include/fsim/support/identity128.hpp
 include/fsim/support/index_distance.hpp
@@ -591,6 +592,7 @@ include/fsim/support/sha256.hpp
 include/fsim/support/sqlite_database.hpp
 include/fsim/support/stack_growth.hpp
 include/fsim/support/sva_marker.hpp
+include/fsim/support/systemverilog_builtin_type.hpp
 include/fsim/support/teardown.hpp
 include/fsim/support/uvm_api_methods.hpp
 include/fsim/support/uvm_role.hpp
@@ -2011,6 +2013,7 @@ tests/fixtures/compliance/sv_deferred_assertion_flush_unrun_site.sv
 tests/fixtures/compliance/sv_deferred_assertion_loop_keeps_reports.sv
 tests/fixtures/compliance/sv_deferred_assertion_methods.sv
 tests/fixtures/compliance/sv_deferred_assertion_started_action_runs.sv
+tests/fixtures/compliance/sv_defparam_precedence.sv
 tests/fixtures/compliance/sv_delays_packages_and_classes.sv
 tests/fixtures/compliance/sv_disable_called_task_activations.sv
 tests/fixtures/compliance/sv_display_arguments.sv
@@ -2086,13 +2089,16 @@ tests/fixtures/compliance/sv_runtime_format_and_stream_with_batch89.sv
 tests/fixtures/compliance/sv_sequence_properties.sv
 tests/fixtures/compliance/sv_sformat_packed_output_batch58.sv
 tests/fixtures/compliance/sv_sformatf_array_queries.sv
+tests/fixtures/compliance/sv_sparse_fixed_shapes.sv
 tests/fixtures/compliance/sv_sscanf_hierarchy_batch58.sv
 tests/fixtures/compliance/sv_sscanf_packed_source_batch56.sv
 tests/fixtures/compliance/sv_sscanf_time_batch58.sv
 tests/fixtures/compliance/sv_sscanf_unknown_format_batch58.sv
+tests/fixtures/compliance/sv_statement_labels.sv
 tests/fixtures/compliance/sv_static_callable_storage.sv
 tests/fixtures/compliance/sv_static_interface_storage.sv
 tests/fixtures/compliance/sv_static_sparse_arrays.sv
+tests/fixtures/compliance/sv_std_class_names.sv
 tests/fixtures/compliance/sv_streaming_builtin_slice_batch57.sv
 tests/fixtures/compliance/sv_streaming_unpack.sv
 tests/fixtures/compliance/sv_string_containers.sv
@@ -2852,6 +2858,9 @@ tests/fixtures/foreign/foreign_vpi_sdf_hier_event.sv
 tests/fixtures/foreign/foreign_vpi_start_work.expected
 tests/fixtures/foreign/foreign_vpi_start_work.expected.license
 tests/fixtures/foreign/foreign_vpi_start_work.sv
+tests/fixtures/foreign/foreign_vpi_statement_labels.expected
+tests/fixtures/foreign/foreign_vpi_statement_labels.expected.license
+tests/fixtures/foreign/foreign_vpi_statement_labels.sv
 tests/fixtures/foreign/foreign_vpi_statements.expected
 tests/fixtures/foreign/foreign_vpi_statements.expected.license
 tests/fixtures/foreign/foreign_vpi_statements.sv
@@ -3541,6 +3550,11 @@ tests/fixtures/systemverilog/sv_fork_task_calls/fork_tasks.expected
 tests/fixtures/systemverilog/sv_fork_task_calls/fork_tasks.expected.license
 tests/fixtures/systemverilog/sv_fork_task_calls/fork_tasks.sv
 tests/fixtures/systemverilog/sv_fork_task_calls/run_sv_fork_task_calls.cmake
+tests/fixtures/systemverilog/sv_initializer_targets/initializer_targets.expected
+tests/fixtures/systemverilog/sv_initializer_targets/initializer_targets.expected.license
+tests/fixtures/systemverilog/sv_initializer_targets/initializer_targets.sv
+tests/fixtures/systemverilog/sv_initializer_targets/initializer_targets.vhd
+tests/fixtures/systemverilog/sv_initializer_targets/run_sv_initializer_targets.cmake
 tests/fixtures/systemverilog/sv_nba_rules/automatic_formal.sv
 tests/fixtures/systemverilog/sv_nba_rules/automatic_local.sv
 tests/fixtures/systemverilog/sv_nba_rules/dynamic_element.sv
@@ -4374,6 +4388,7 @@ tests/runtime/foreign_vpi_save_write_plugin.c
 tests/runtime/foreign_vpi_scheduled_plugin.c
 tests/runtime/foreign_vpi_sdf_delays_plugin.c
 tests/runtime/foreign_vpi_start_work_plugin.c
+tests/runtime/foreign_vpi_statement_labels_plugin.c
 tests/runtime/foreign_vpi_statements_plugin.c
 tests/runtime/foreign_vpi_static_initializers_plugin.c
 tests/runtime/foreign_vpi_stmt_instances_plugin.c

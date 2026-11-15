@@ -2322,16 +2322,16 @@ void resolve_linked_systemverilog_types(CompiledDesign& design)
         [&](sv::TypeReference& type, const ScopeId) {
             if (const auto& target = class_targets[next++]) {
                 type.target.target = *target;
+                type.standard_class = support::SystemVerilogStandardClass::none;
             }
         });
     auto& types = design.systemverilog_hir.mutable_types();
     for (const auto& entry : definitions) {
-        if (entry.base) {
-            types[entry.position].base.target.target = entry.target;
-        } else {
-            types[entry.position].members[entry.member].type.target.target
-                = entry.target;
-        }
+        auto& type = entry.base
+            ? types[entry.position].base
+            : types[entry.position].members[entry.member].type;
+        type.target.target = entry.target;
+        type.standard_class = support::SystemVerilogStandardClass::none;
     }
     design.refresh_lookup_indexes();
 }
@@ -3001,15 +3001,14 @@ void append_systemverilog_package_uses(const CompiledDesign& design,
                 self(self, scope, *actual.type);
         }
     };
+    // `task_argument` is the member a marked task callee names; it stands in
+    // for the (empty) spelling then.
     const auto name_use = [&](const ScopeId scope, const sv::Name& name,
-                              const SourceSpanId source) {
-        auto spelling = std::string_view { name.spelling };
-        constexpr auto static_prefix = std::string_view { "@sv-static-task:" };
-        constexpr auto instance_prefix = std::string_view { "@sv-task:" };
-        if (spelling.starts_with(static_prefix))
-            spelling.remove_prefix(static_prefix.size());
-        else if (spelling.starts_with(instance_prefix))
-            spelling.remove_prefix(instance_prefix.size());
+                              const SourceSpanId source,
+                              const std::string_view task_argument = { }) {
+        const auto spelling = task_argument.empty()
+            ? std::string_view { name.spelling }
+            : task_argument;
         symbolic_use(scope, spelling, source);
         const auto declaration_use = [&](const DeclarationId id) {
             if (id.valid() && id.value() < model.declarations().size())
@@ -3025,7 +3024,12 @@ void append_systemverilog_package_uses(const CompiledDesign& design,
             name_use(expression.scope, *expression.referenced_name, expression.source);
     }
     for (const auto& statement : design.systemverilog_hir.statements())
-        name_use(statement.scope, statement.task, statement.source);
+        name_use(statement.scope, statement.task, statement.source,
+            statement.task_marker == support::ExpressionMarker::sv_task
+                    || statement.task_marker
+                        == support::ExpressionMarker::sv_static_task
+                ? std::string_view { statement.task_marker_argument }
+                : std::string_view { });
     for (const auto& declaration : design.systemverilog_hir.declarations()) {
         if (declaration.type)
             type_use(type_use, declaration.scope, *declaration.type);
@@ -3746,7 +3750,8 @@ void resolve_linked_vhdl_binding_maps(CompiledDesign& design)
             return;
         }
         const bool subelements = expression->kind == vhdl::ExpressionKind::aggregate
-            && expression->text == "@vhdl-formal-subelements";
+            && expression->marker
+                == support::ExpressionMarker::vhdl_formal_subelements;
         for (const auto operand : expression->operands) {
             support::with_stack([&] {
                 self(self, operand, locals, local_scope, formals, formal_scope);
@@ -3792,7 +3797,9 @@ void resolve_linked_vhdl_binding_maps(CompiledDesign& design)
                     auto* const group = expression_at(*association.expression);
                     const bool conversion = group != nullptr
                         && group->kind == vhdl::ExpressionKind::aggregate
-                        && group->text == "@vhdl-formal-subelements"
+                        && group->marker
+                            == support::ExpressionMarker::
+                                vhdl_formal_subelements
                         && !group->associations.empty()
                         && association.formal_conversion_calls.size()
                             == group->associations.size()

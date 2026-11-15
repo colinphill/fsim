@@ -1234,6 +1234,15 @@ constexpr std::array<std::pair<std::string_view, double>, 18>
         std::pair { std::string_view { "mathradtodeg" }, 57.29577951308232087680 },
     };
 
+// The name a VHDL call node designates: the type mark of a qualified
+// expression, otherwise the node's text.
+std::string_view vhdl_call_designator(const vhdl::Expression& expression)
+{
+    return expression.marker == support::ExpressionMarker::vhdl_qualified
+        ? std::string_view { expression.marker_argument }
+        : std::string_view { expression.text };
+}
+
 std::string normalized_token(const std::string_view input)
 {
     std::string result;
@@ -1621,7 +1630,9 @@ std::optional<std::uint64_t> systemverilog_expression_width(
         return finish(static_cast<std::uint64_t>(*cast_width));
     }
     if (record.kind == sv::ExpressionKind::call
-        && record.text == "@sv-cast:@type") {
+        && record.marker == support::ExpressionMarker::sv_cast
+        && record.cast_target
+            == support::SystemVerilogCastTarget::type_operator) {
         const auto described = record.type_operand.empty()
             ? std::nullopt
             : describe_systemverilog_type(
@@ -1631,9 +1642,9 @@ std::optional<std::uint64_t> systemverilog_expression_width(
                 : std::nullopt);
     }
     if (record.kind == sv::ExpressionKind::call
-        && record.text.starts_with("@sv-cast:")) {
+        && record.marker == support::ExpressionMarker::sv_cast) {
         const auto cast_width = parse_unsigned(
-            std::string_view { record.text }.substr(9U), 10U);
+            std::string_view { record.marker_argument }, 10U);
         if (cast_width) {
             return finish(cast_width);
         }
@@ -1980,14 +1991,8 @@ public:
     // POSITIVE of STD.STANDARD there (IEEE 1076-2019 12.3, 12.4, 16.3), not
     // a source declaration of the same name.
     [[nodiscard]] bool vhdl_integer_type_mark(
-        std::string_view mark, const ScopeId scope) const
+        const std::string_view mark, const ScopeId scope) const
     {
-        constexpr std::string_view qualified_prefix {
-            vhdl::qualified_expression_prefix
-        };
-        if (mark.starts_with(qualified_prefix)) {
-            mark.remove_prefix(qualified_prefix.size());
-        }
         using Provided = vhdl::ProvidedType;
         const auto provided = CompiledDesignResolver { unit_ }
                                   .resolve_vhdl_provided_type(mark, scope);
@@ -2023,24 +2028,12 @@ public:
         return subtype;
     }
 
-    [[nodiscard]] static std::string_view vhdl_unqualified_mark(
-        std::string_view mark)
-    {
-        constexpr std::string_view qualified_prefix {
-            vhdl::qualified_expression_prefix
-        };
-        if (mark.starts_with(qualified_prefix)) {
-            mark.remove_prefix(qualified_prefix.size());
-        }
-        return mark;
-    }
-
     [[nodiscard]] bool vhdl_real_type_mark(
         const std::string_view mark, const ScopeId scope) const
     {
         return CompiledDesignResolver { unit_ }
                    .resolve_vhdl_provided_type(
-                       vhdl_unqualified_mark(mark), scope)
+                       mark, scope)
             == vhdl::ProvidedType::real;
     }
 
@@ -2050,7 +2043,7 @@ public:
         using Provided = vhdl::ProvidedType;
         switch (CompiledDesignResolver { unit_ }
                     .resolve_vhdl_provided_type(
-                        vhdl_unqualified_mark(mark), scope)) {
+                        mark, scope)) {
         case Provided::std_logic_vector:
         case Provided::std_ulogic_vector:
         case Provided::numeric_std_signed:
@@ -2244,6 +2237,7 @@ public:
         // decides it names an element (IEEE 1076-2008 8.4).
         if ((name.kind == vhdl::ExpressionKind::index
                 || (name.kind == vhdl::ExpressionKind::call
+                    && name.marker == support::ExpressionMarker::none
                     && !name.text.starts_with("@")
                     && !name.text.starts_with("'")))
             && name.operands.size() == 2U) {
@@ -2559,6 +2553,8 @@ public:
             if (!result && view->vhdl->operands.size() == 2U
                 && (view->vhdl->kind == vhdl::ExpressionKind::index
                     || (view->vhdl->kind == vhdl::ExpressionKind::call
+                        && view->vhdl->marker
+                            == support::ExpressionMarker::none
                         && !view->vhdl->text.starts_with('@')
                         && !view->vhdl->text.starts_with('\'')))
                 && declared_bounds()) {
@@ -7398,14 +7394,15 @@ private:
             || source.text.starts_with("'")) {
             return std::nullopt;
         }
-        auto name = normalized_token(source.text);
+        auto name = normalized_token(vhdl_call_designator(source));
         if (const auto separator = name.find_last_of(".:");
             separator != std::string::npos) {
             name.erase(0U, separator + 1U);
         }
         // REAL(x) converts an integer or real value (9.3.6).
         if (name == "real" && source.operands.size() == 1U
-            && vhdl_real_type_mark(source.text, source.scope)) {
+            && vhdl_real_type_mark(
+                vhdl_call_designator(source), source.scope)) {
             if (const auto real = support::with_stack([&] { return vhdl_real_expression(
                     source.operands.front(), depth + 1U); })) {
                 return real;
@@ -7658,13 +7655,10 @@ private:
     [[nodiscard]] std::optional<VhdlConstantValue> evaluate_vhdl_call(
         const vhdl::Expression& expression)
     {
-        auto name = normalized_token(expression.text);
-        constexpr std::string_view qualified_prefix {
-            vhdl::qualified_expression_prefix
-        };
+        auto name = normalized_token(vhdl_call_designator(expression));
         // `T'(aggregate)`: the qualifying type is the aggregate's context
         // (IEEE 1076-2008 9.3.5).
-        if (expression.text.starts_with(qualified_prefix)
+        if (expression.marker == support::ExpressionMarker::vhdl_qualified
             && expression.operands.size() == 1U) {
             const auto operand = unit_.find_expression(
                 expression.operands.front());
@@ -7683,9 +7677,6 @@ private:
                 }
             }
         }
-        if (name.starts_with(qualified_prefix)) {
-            name.erase(0U, qualified_prefix.size());
-        }
         if (const auto separator = name.find_last_of(".:");
             separator != std::string::npos) {
             name.erase(0U, separator + 1U);
@@ -7700,7 +7691,8 @@ private:
         // INTEGER(x) of a REAL value rounds to the nearest integer
         // (IEEE 1076-2008 9.3.6).
         if (expression.operands.size() == 1U
-            && vhdl_integer_type_mark(expression.text, expression.scope)) {
+            && vhdl_integer_type_mark(
+                vhdl_call_designator(expression), expression.scope)) {
             if (const auto real = vhdl_real_expression(
                     expression.operands.front())) {
                 const auto rounded = std::round(*real);
@@ -9733,7 +9725,8 @@ private:
             }
         }
         if (!ambiguous_type_parameter && !type_parameter_id
-            && !type->target.spelling.empty()) {
+            && !type->target.spelling.empty()
+            && !sv::names_builtin_type(*type)) {
             const auto named = resolver.resolve_systemverilog_named_type(
                                            type->target.spelling,
                                            declaration->systemverilog->scope,
@@ -9863,16 +9856,8 @@ private:
             return std::nullopt;
         }
         std::optional<std::size_t> width;
-        if (type.target.spelling == "byte") {
-            width = 8U;
-        } else if (type.target.spelling == "shortint") {
-            width = 16U;
-        } else if (type.target.spelling == "int"
-            || type.target.spelling == "integer") {
-            width = 32U;
-        } else if (type.target.spelling == "longint"
-            || type.target.spelling == "time") {
-            width = 64U;
+        if (support::systemverilog_integer_atom(type.builtin)) {
+            width = support::systemverilog_builtin_width(type.builtin);
         }
         if (!width) {
             return std::nullopt;
@@ -10028,21 +10013,8 @@ private:
             }
             return *packed_extent * *element_width;
         }
-        const auto& spelling = type.target.spelling;
-        if (spelling == "int" || spelling == "integer") {
-            return 32U;
-        }
-        if (spelling == "byte") {
-            return 8U;
-        }
-        if (spelling == "shortint") {
-            return 16U;
-        }
-        if (spelling == "longint" || spelling == "time") {
-            return 64U;
-        }
-        if (spelling == "bit" || spelling == "logic" || spelling == "reg") {
-            return 1U;
+        if (support::systemverilog_integral(type.builtin)) {
+            return support::systemverilog_builtin_width(type.builtin);
         }
         const auto resolver = CompiledDesignResolver { unit_ };
         const auto underlying = resolver.underlying_systemverilog_type(
@@ -10228,21 +10200,8 @@ private:
             }
         }
 
-        const auto& spelling = type.target.spelling;
-        if (spelling == "int" || spelling == "integer") {
-            return 32U;
-        }
-        if (spelling == "byte") {
-            return 8U;
-        }
-        if (spelling == "shortint") {
-            return 16U;
-        }
-        if (spelling == "longint" || spelling == "time") {
-            return 64U;
-        }
-        if (spelling == "bit" || spelling == "logic" || spelling == "reg") {
-            return 1U;
+        if (support::systemverilog_integral(type.builtin)) {
+            return support::systemverilog_builtin_width(type.builtin);
         }
 
         const CompiledDesignResolver resolver { unit_, class_frames_ };
@@ -10286,7 +10245,9 @@ private:
             && view->systemverilog->kind == sv::ExpressionKind::assignment_pattern
             && !std::ranges::all_of(view->systemverilog->associations,
                 [](const auto& association) {
-                    return association.choice_spelling.empty();
+                    return association.choice_spelling.empty()
+                        && association.choice_marker
+                            == support::ExpressionMarker::none;
                 })) {
             std::string bits(*width, 'x');
             std::unordered_set<std::string> assigned;
@@ -10316,7 +10277,9 @@ private:
                     continue;
                 }
                 std::string_view member_name = association.choice_spelling;
-                if (member_name == "@key" && association.choices.size() == 1U) {
+                if (association.choice_marker
+                        == support::ExpressionMarker::key
+                    && association.choices.size() == 1U) {
                     const auto choice
                         = unit_.find_expression(association.choices.front());
                     if (choice && choice->systemverilog != nullptr
@@ -10428,11 +10391,7 @@ private:
             value = (value << 1U) | static_cast<std::uint64_t>(character == '1');
         }
         const bool signed_member = type.signed_value
-            || type.target.spelling == "int"
-            || type.target.spelling == "integer"
-            || type.target.spelling == "byte"
-            || type.target.spelling == "shortint"
-            || type.target.spelling == "longint";
+            || support::systemverilog_builtin_default_signed(type.builtin);
         if (signed_member && *width < 64U
             && (value >> (*width - 1U)) != 0U) {
             value |= ~std::uint64_t { 0 } << *width;
@@ -11266,7 +11225,7 @@ private:
         // A typedef of string names no `string` spelling but carries the
         // form of its definition (IEEE 1800-2023 6.18, 6.16).
         const auto is_string = [](const sv::TypeReference& type) {
-            return type.target.spelling == "string"
+            return type.builtin == support::SystemVerilogBuiltinType::string
                 || (!type.container_form
                     && type.value_form == sv::TypeForm::string);
         };
@@ -11833,14 +11792,12 @@ private:
                     return std::nullopt;
                 }
                 const auto& type = *found->systemverilog->type;
-                const auto& spelling = type.target.spelling;
-                if (spelling == "real" || spelling == "shortreal"
-                    || spelling == "realtime") {
+                if (support::systemverilog_real_family(type.builtin)) {
                     return std::nullopt;
                 }
-                return type.signed_value || spelling == "int"
-                    || spelling == "integer" || spelling == "byte"
-                    || spelling == "shortint" || spelling == "longint";
+                return type.signed_value
+                    || support::systemverilog_builtin_default_signed(
+                        type.builtin);
             }
             return std::nullopt;
         };
@@ -11989,6 +11946,15 @@ private:
                     return StatementFlow::failed;
                 }
             }
+            // The further for-loop initializations run once, after the
+            // first (IEEE 1800-2023 12.7.1).
+            if (const auto initialization
+                = execute(statement.loop_initializations);
+                initialization != StatementFlow::normal) {
+                return initialization == StatementFlow::returned
+                    ? initialization
+                    : StatementFlow::failed;
+            }
             while (consume_constant_work_unit()) {
                 if (!statement.loop_post_test && statement.condition) {
                     const auto condition = evaluate_nonzero(
@@ -12037,7 +12003,10 @@ private:
             return StatementFlow::failed;
         }
         case sv::StatementKind::break_loop:
-            return StatementFlow::broke;
+            // A break that ends a foreach statement over several dimensions
+            // (12.8) is not evaluated here.
+            return statement.foreach_break ? StatementFlow::failed
+                                           : StatementFlow::broke;
         case sv::StatementKind::continue_loop:
             return StatementFlow::continued;
         case sv::StatementKind::return_statement:
@@ -12132,17 +12101,15 @@ private:
             return std::nullopt;
         }
         // A real result or argument is outside integral evaluation.
-        const auto real_spelling = [](const std::string_view spelling) {
-            return spelling == "real" || spelling == "realtime"
-                || spelling == "shortreal";
+        const auto real_type = [](const sv::TypeReference& type) {
+            return support::systemverilog_real_family(type.builtin);
         };
-        if (real_spelling(declaration.callable->return_type.target.spelling)
+        if (real_type(declaration.callable->return_type)
             || std::ranges::any_of(formals, [&](const DeclarationId formal) {
                    const auto view = unit_.find_declaration(formal);
                    return view && view->systemverilog != nullptr
                        && view->systemverilog->type
-                       && real_spelling(
-                           view->systemverilog->type->target.spelling);
+                       && real_type(*view->systemverilog->type);
                })) {
             return std::nullopt;
         }
@@ -12270,9 +12237,7 @@ private:
     {
         if (!type.executable_width || *type.executable_width == 0U
             || *type.executable_width >= 64U
-            || type.target.spelling == "real"
-            || type.target.spelling == "realtime"
-            || type.target.spelling == "shortreal") {
+            || support::systemverilog_real_family(type.builtin)) {
             return value;
         }
         const auto width = static_cast<unsigned>(*type.executable_width);
@@ -12740,7 +12705,7 @@ private:
             return static_cast<std::int64_t>(value.associations.size());
         }
         if (value.kind == vhdl::ExpressionKind::call
-            && value.text.starts_with(vhdl::qualified_expression_prefix)
+            && value.marker == support::ExpressionMarker::vhdl_qualified
             && value.operands.size() == 1U) {
             return support::with_stack([&] { return vhdl_value_shape_length(value.operands.front(), depth + 1U); });
         }
@@ -12814,7 +12779,9 @@ private:
         const bool element = source->vhdl->text == "'element";
         if (source->vhdl->kind != vhdl::ExpressionKind::call
             || source->vhdl->operands.size() != 1U
-            || (!element && !source->vhdl->text.starts_with("@vhdl-member:"))) {
+            || (!element
+                && source->vhdl->marker
+                    != support::ExpressionMarker::vhdl_member)) {
             return std::nullopt;
         }
         const auto owner = support::with_stack([&] { return vhdl_selected_element_subtype(
@@ -12850,8 +12817,7 @@ private:
                     *owner, "", *composite->element_subtype),
                 scope);
         }
-        const auto name = std::string_view { source->vhdl->text }.substr(
-            std::string_view { "@vhdl-member:" }.size());
+        const std::string_view name { source->vhdl->marker_argument };
         const auto member = composite->form == vhdl::TypeForm::record
             ? std::ranges::find_if(composite->record_elements,
                   [&](const vhdl::RecordElement& candidate) {
@@ -13051,6 +13017,7 @@ private:
         const bool indexed_call = prefix->vhdl->kind == vhdl::ExpressionKind::call
             && !prefix->vhdl->operands.empty()
             && !prefix->vhdl->text.starts_with('\'')
+            && prefix->vhdl->marker == support::ExpressionMarker::none
             && !prefix->vhdl->text.starts_with('@');
         if (declaration && declaration->vhdl != nullptr
             && !vhdl_type_declaration_form(declaration->vhdl->form)
@@ -13101,7 +13068,8 @@ private:
         if (prefix->vhdl->kind == vhdl::ExpressionKind::call
             && prefix->vhdl->operands.size() == 1U
             && (prefix->vhdl->text == "'element"
-                || prefix->vhdl->text.starts_with("@vhdl-member:"))) {
+                || prefix->vhdl->marker
+                    == support::ExpressionMarker::vhdl_member)) {
             effective_subtype = vhdl_selected_element_subtype(
                 expression.operands.front(), expression.scope);
             if (!effective_subtype) {
@@ -13727,14 +13695,12 @@ private:
     [[nodiscard]] std::optional<std::int64_t>
     evaluate_vhdl_physical(const vhdl::Expression& expression)
     {
-        constexpr auto prefix = std::string_view { "@vhdl-physical:" };
         if (expression.kind != vhdl::ExpressionKind::call
-            || !expression.text.starts_with(prefix)
+            || expression.marker != support::ExpressionMarker::vhdl_physical
             || expression.operands.size() != 1U) {
             return std::nullopt;
         }
-        const auto unit_name = std::string_view { expression.text }.substr(
-            prefix.size());
+        const std::string_view unit_name { expression.marker_argument };
         if (!expression.scope.valid()) {
             return std::nullopt;
         }
@@ -13894,7 +13860,7 @@ private:
                     : (expression.operands.size() == 1U
                             ? std::optional { expression.operands[0] }
                             : std::nullopt);
-                auto mark = std::string_view { expression.text };
+                auto mark = vhdl_call_designator(expression);
                 if (expression.kind == Kind::index) {
                     const auto designator = unit_.find_expression(
                         expression.operands.front());
@@ -13935,8 +13901,9 @@ private:
                     const auto operand = unit_.find_expression(id);
                     return operand && operand->vhdl != nullptr
                         && ((operand->vhdl->kind == Kind::call
-                                && operand->vhdl->text.starts_with(
-                                    "@vhdl-physical:"))
+                                && operand->vhdl->marker
+                                    == support::ExpressionMarker::
+                                        vhdl_physical)
                             || (operand->vhdl->kind == Kind::integer_literal
                                 && !operand->vhdl->nominal_type.empty()));
                 };
@@ -14446,7 +14413,8 @@ private:
                     const auto record = unit_.find_expression(id);
                     return record && record->systemverilog != nullptr
                         && record->systemverilog->kind == Kind::call
-                        && record->systemverilog->text == "@sv-type";
+                        && record->systemverilog->marker
+                            == support::ExpressionMarker::sv_type;
                 };
                 const auto operation = normalized_token(expression.text);
                 if ((operation == "==" || operation == "!="
@@ -14556,10 +14524,10 @@ private:
             // of either signedness, and reduces an unsigned operand modulo
             // 2**N (IEEE 1800-2017 6.24.1).
             if (systemverilog && expression.kind == Kind::call
-                && expression.text.starts_with("@sv-cast:")
+                && expression.marker == support::ExpressionMarker::sv_cast
                 && expression.operands.size() == 1U) {
                 const auto width = parse_unsigned(
-                    std::string_view { expression.text }.substr(9U), 10U);
+                    std::string_view { expression.marker_argument }, 10U);
                 if (!width || *width == 0U || *width > 63U) {
                     return std::nullopt;
                 }
@@ -14690,9 +14658,6 @@ private:
                 return attribute;
             }
             if (expression.kind == Kind::call) {
-                constexpr std::string_view qualified_prefix {
-                    vhdl::qualified_expression_prefix
-                };
                 const CompiledDeclarationPredicate type_declaration
                     = [](const CompiledDeclarationView& candidate) {
                           return candidate.vhdl != nullptr
@@ -14702,12 +14667,7 @@ private:
                 const auto conversion = named_declaration(
                     detail::ResolutionMemo::NamedDeclaration::type,
                     expression.id, type_declaration);
-                auto conversion_name
-                    = std::string_view { expression.text };
-                if (conversion_name.starts_with(qualified_prefix)) {
-                    conversion_name.remove_prefix(
-                        qualified_prefix.size());
-                }
+                auto conversion_name = vhdl_call_designator(expression);
                 if (const auto separator
                         = conversion_name.find_last_of(".:");
                     separator != std::string_view::npos) {
@@ -14715,12 +14675,11 @@ private:
                 }
                 const bool predefined_scalar_conversion
                     = vhdl_integer_type_mark(
-                        expression.text, expression.scope);
+                        vhdl_call_designator(expression), expression.scope);
                 if (expression.operands.size() == 1U
                     && (conversion
                         || predefined_scalar_conversion
-                        || expression.text.starts_with(
-                            qualified_prefix))) {
+                        || expression.marker == support::ExpressionMarker::vhdl_qualified)) {
                     return evaluate(expression.operands.front());
                 }
                 if (const auto bound = evaluate_vhdl_fixed_bound(expression,
@@ -14754,10 +14713,9 @@ private:
         }
         const auto& record = *view->systemverilog;
         const auto signed_type = [](const sv::TypeReference& type) {
-            const auto& spelling = type.target.spelling;
-            return type.signed_value || spelling == "int"
-                || spelling == "integer" || spelling == "byte"
-                || spelling == "shortint" || spelling == "longint";
+            return type.signed_value
+                || support::systemverilog_builtin_default_signed(
+                    type.builtin);
         };
         if (record.kind == sv::ExpressionKind::integer_literal) {
             return true;
@@ -15079,10 +15037,8 @@ private:
             // A VHDL qualified expression preserves its operand value. Fold
             // only an unconstrained subtype whose resolved declaration proves
             // it is the predefined STD.STANDARD.STRING type.
-            constexpr auto qualified_prefix
-                = vhdl::qualified_expression_prefix;
             if (expression.kind == Kind::call
-                && expression.text.starts_with(qualified_prefix)
+                && expression.marker == support::ExpressionMarker::vhdl_qualified
                 && expression.operands.size() == 1U) {
                 const auto qualified_type = vhdl_marked_subtype(expression);
                 const auto effective_type = qualified_type
@@ -15577,8 +15533,9 @@ private:
             { "is_x", Result::boolean, 1U },
         }};
         if (call.kind != vhdl::ExpressionKind::call || call.operands.empty()
-            || call.text.starts_with('\'') || call.text.starts_with('@')
-            || call.text.starts_with(vhdl::qualified_expression_prefix)
+            || call.text.starts_with('\'')
+            || call.marker != support::ExpressionMarker::none
+            || call.text.starts_with('@')
             || std::ranges::any_of(call.argument_names,
                 [](const std::string& argument) {
                     return !argument.empty();
@@ -15638,7 +15595,7 @@ private:
             return *source.decoded_string;
         }
         if (source.kind == vhdl::ExpressionKind::call
-            && source.text.starts_with(vhdl::qualified_expression_prefix)
+            && source.marker == support::ExpressionMarker::vhdl_qualified
             && source.operands.size() == 1U) {
             return vhdl_logic_vector_string(
                 source.operands.front(), std::move(visited));
@@ -15678,8 +15635,7 @@ private:
         // T'(...): the operand has the type T names (9.3.5), which analysis
         // resolved.
         if (expression->vhdl->kind == vhdl::ExpressionKind::call
-            && expression->vhdl->text.starts_with(
-                vhdl::qualified_expression_prefix)
+            && expression->vhdl->marker == support::ExpressionMarker::vhdl_qualified
             && expression->vhdl->operands.size() == 1U) {
             const auto marked = vhdl_marked_subtype(*expression->vhdl);
             if (!marked) {
@@ -15746,8 +15702,9 @@ private:
             { "is_x", Result::boolean, 1U, false },
         }};
         if (call.kind != vhdl::ExpressionKind::call || call.operands.empty()
-            || call.text.starts_with('\'') || call.text.starts_with('@')
-            || call.text.starts_with(vhdl::qualified_expression_prefix)
+            || call.text.starts_with('\'')
+            || call.marker != support::ExpressionMarker::none
+            || call.text.starts_with('@')
             || std::ranges::any_of(call.argument_names,
                 [](const std::string& argument) {
                     return !argument.empty();
@@ -16851,7 +16808,10 @@ bool append_systemverilog_array_values(const CompiledDesign& design,
             return false;
         }
         for (const auto& association : source.associations) {
-            if (!association.choice_spelling.empty()) {
+            if ((!association.choice_spelling.empty()
+                || association.choice_marker != support::ExpressionMarker::none)
+                || association.choice_marker
+                    != support::ExpressionMarker::none) {
                 return false;
             }
             if (extents.size() > 1U) {
@@ -17031,11 +16991,10 @@ std::optional<std::string> systemverilog_array_identity(
                      : std::nullopt;
     };
     // Real-family and string elements are never read as integers.
-    const auto& spelling = formal_type.target.spelling;
     const bool integral_elements
         = formal_type.value_form != sv::TypeForm::string
-        && spelling != "string" && spelling != "real"
-        && spelling != "shortreal" && spelling != "realtime";
+        && formal_type.builtin != support::SystemVerilogBuiltinType::string
+        && !support::systemverilog_real_family(formal_type.builtin);
     std::vector<std::string> values;
     std::string_view prefix { systemverilog_array_identity_prefix };
     if (!integral_elements
@@ -20568,7 +20527,8 @@ SpecializedHirUnit::systemverilog_type_identity(
     const auto record = find_expression(expression);
     if (!record || record->systemverilog == nullptr
         || record->systemverilog->kind != sv::ExpressionKind::call
-        || record->systemverilog->text != "@sv-type") {
+        || record->systemverilog->marker
+            != support::ExpressionMarker::sv_type) {
         return std::nullopt;
     }
     const auto type = describe_systemverilog_expression_type(

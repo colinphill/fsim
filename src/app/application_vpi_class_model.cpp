@@ -61,11 +61,12 @@ struct SourcePlace {
 }
 
 
-// An internal marker call (`@inside-range`, `@dist-:=`, ...) is no
-// function call.
+// An internal marker call (a cast, a member select, `@inside-range`,
+// `@dist-:=`, ...) is no function call.
 [[nodiscard]] bool marker_call(const sv::ConstraintExpression& expression)
 {
-    return expression.text.starts_with('@');
+    return expression.marker != support::ExpressionMarker::none
+        || expression.text.starts_with('@');
 }
 
 // The operator of an operation leaf (IEEE 1800-2023 37.78 vpiOpType); empty
@@ -115,17 +116,17 @@ struct SourcePlace {
 }
 
 // The member a member select `a[i].m` names (7.2): the HIR keeps it as the
-// marker call `@sv-select:m` of its prefix; none for any other expression.
+// marker call of kind `sv_select` (member `m`) of its prefix; none for any
+// other expression.
 [[nodiscard]] std::optional<std::string_view> selected_member(
     const sv::ConstraintExpression& expression)
 {
-    constexpr std::string_view prefix { "@sv-select:" };
     if (expression.kind != sv::ConstraintExpressionKind::call
         || expression.operands.size() != 1U
-        || !expression.text.starts_with(prefix)) {
+        || expression.marker != support::ExpressionMarker::sv_select) {
         return std::nullopt;
     }
-    return std::string_view { expression.text }.substr(prefix.size());
+    return std::string_view { expression.marker_argument };
 }
 
 } // namespace
@@ -270,7 +271,7 @@ PLI_INT32 VpiClassModel::leaf_type(const sv::ConstraintExpression& expression) c
         if (marker_call(expression)) {
             return vpiOperation;
         }
-        return expression.text.starts_with('$') ? vpiSysFuncCall : vpiFuncCall;
+        return expression.call_kind == semantic::sv::CallKind::system ? vpiSysFuncCall : vpiFuncCall;
     default:
         return vpiOperation;
     }
@@ -684,16 +685,19 @@ std::string VpiClassModel::defn_full_name(const std::size_t declaration) const
     return handle != 0U ? hooks_.full_name(handle) : identity(declaration);
 }
 
-std::int64_t VpiClassModel::class_type_of(const std::string_view name)
+std::int64_t VpiClassModel::class_type_of(
+    const support::SystemVerilogStandardClass standard_class)
 {
-    if (name == "mailbox") {
+    switch (standard_class) {
+    case support::SystemVerilogStandardClass::mailbox:
         return vpiMailboxClass;
-    }
-    if (name == "semaphore") {
+    case support::SystemVerilogStandardClass::semaphore:
         return vpiSemaphoreClass;
-    }
-    if (name == "process") {
+    case support::SystemVerilogStandardClass::process:
         return vpiProcessClass;
+    case support::SystemVerilogStandardClass::weak_reference:
+    case support::SystemVerilogStandardClass::none:
+        break;
     }
     return vpiUserDefinedClass;
 }

@@ -128,23 +128,32 @@ struct SelectedProperty {
     const SystemVerilogClassPropertyValue& property) {
   const auto* random = property.random_state
       ? &*property.random_state : nullptr;
-  // Integer types (`int`, `integer`, `shortint`, ...) have the integer
-  // domain kind, as the constraint lowering gives them.
+  const auto builtin = random != nullptr
+      ? random->builtin
+      : property.kind == SystemVerilogClassPropertyKind::Integer
+          ? support::SystemVerilogBuiltinType::integer
+          : support::SystemVerilogBuiltinType::none;
+  // The integer atoms with an integer domain (`int`, `integer`, `shortint`,
+  // `longint`), as the constraint lowering gives them.
+  using Builtin = support::SystemVerilogBuiltinType;
   const bool integer_type = property.kind == SystemVerilogClassPropertyKind::Integer
-      || (random != nullptr
-          && random->nominal_type.find("int") != std::string::npos);
-  return {
+      || builtin == Builtin::int_type || builtin == Builtin::integer
+      || builtin == Builtin::shortint || builtin == Builtin::longint;
+  SystemVerilogConstraintVariableProfile result{
       integer_type
           ? SystemVerilogConstraintDomainKind::Integer
           : SystemVerilogConstraintDomainKind::BitVector,
       property.packed.width(),
       random != nullptr && random->signed_value,
-      random != nullptr
+      builtin == Builtin::none && random != nullptr
           ? random->nominal_type
-          : property.kind == SystemVerilogClassPropertyKind::Integer
-              ? std::string{"integer"}
-              : std::string{"packed property"},
-      property.kind != SystemVerilogClassPropertyKind::Bit2};
+          : std::string{},
+      property.kind != SystemVerilogClassPropertyKind::Bit2,
+      builtin};
+  // A non-random property joins the solve as state with its storage
+  // profile only (IEEE 1800-2023 18.3).
+  result.state_property = builtin == Builtin::none && random == nullptr;
+  return result;
 }
 
 [[nodiscard]] std::vector<PackedLogic4> complete_domain(
@@ -671,11 +680,12 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
             SystemVerilogClassRandomKind::None,
             property.packed.width(),
             property.kind == SystemVerilogClassPropertyKind::Integer,
-            property.kind == SystemVerilogClassPropertyKind::Integer
-                ? std::string{"int"}
-                : property.kind == SystemVerilogClassPropertyKind::Bit2
-                    ? std::string{"bit"}
-                    : std::string{"logic"},
+            std::string{support::systemverilog_builtin_type_name(
+                property.kind == SystemVerilogClassPropertyKind::Integer
+                    ? support::SystemVerilogBuiltinType::int_type
+                    : property.kind == SystemVerilogClassPropertyKind::Bit2
+                        ? support::SystemVerilogBuiltinType::bit
+                        : support::SystemVerilogBuiltinType::logic)},
             true,
             0,
             0,
@@ -887,7 +897,10 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
     value.random_state = SystemVerilogClassRandomState{
         random ? SystemVerilogClassRandomKind::Rand
                : SystemVerilogClassRandomKind::None,
-        32, true, "int", true, 0, 0, 0, 0, {}};
+        32, true,
+        std::string{support::systemverilog_builtin_type_name(
+            support::SystemVerilogBuiltinType::int_type)},
+        true, 0, 0, 0, 0, {}};
     return value;
   };
   // The name of element `index` of container `c` in the solve.

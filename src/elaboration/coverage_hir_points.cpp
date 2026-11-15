@@ -120,6 +120,7 @@ namespace {
         std::span<const semantic::StatementId> statements;
         std::span<const semantic::StatementId> else_statements;
         std::span<const semantic::StatementId> loop_updates;
+        std::span<const semantic::StatementId> loop_initializations;
         std::vector<CaseArmView> arms;
     };
 
@@ -153,6 +154,7 @@ namespace {
             view.statements = statement.statements;
             view.else_statements = statement.else_statements;
             view.loop_updates = statement.loop_updates;
+            view.loop_initializations = statement.loop_initializations;
             for (const auto& alternative : statement.case_alternatives) {
                 view.arms.push_back({ alternative.source,
                     alternative.is_default, alternative.statements });
@@ -974,6 +976,7 @@ CoverageHirPointResult discover_hir_module_coverage_points(
                 const bool chain = chain_part
                     || statement->conditional_assignment;
                 if (!enqueue(statement->loop_updates, chain)
+                    || !enqueue(statement->loop_initializations, chain)
                     || !enqueue(statement->else_statements, chain)
                     || !enqueue(statement->statements, chain)) {
                     return reject(CoverageHirPointError::ResourceLimit);

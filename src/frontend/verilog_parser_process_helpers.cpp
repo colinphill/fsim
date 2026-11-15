@@ -178,13 +178,13 @@ Statement VerilogParser::parse_case_statement(
             result.systemverilog_pattern = SystemVerilogPatternKind::structure;
             if (!at(TokenKind::RightBrace)) {
                 for (;;) {
-                    std::string choice;
+                    auto choice_marker = support::ExpressionMarker::none;
                     std::vector<Expression> choice_expressions;
                     if (at(TokenKind::Identifier)
                         && at(TokenKind::Colon, 1)) {
                         const auto member = advance();
                         advance();
-                        choice = "@key";
+                        choice_marker = support::ExpressionMarker::key;
                         choice_expressions.push_back(Expression {
                             ExpressionKind::Identifier,
                             member.text,
@@ -192,7 +192,8 @@ Statement VerilogParser::parse_case_statement(
                             member.span });
                     }
                     result.operands.push_back(parse_match_pattern());
-                    result.aggregate_choices.push_back(std::move(choice));
+                    result.aggregate_choices.push_back(std::string { });
+                    result.aggregate_choice_markers.push_back(choice_marker);
                     result.aggregate_choice_expressions.push_back(
                         std::move(choice_expressions));
                     if (!match(TokenKind::Comma)) {
@@ -334,21 +335,43 @@ Statement VerilogParser::parse_procedural_for_statement(const Token& start)
             current_loop_names_.erase(name);
         }
     }
-    if (extra_declarations.empty() && extra_initializations.empty()) {
-        return loop;
-    }
-    // Further initializers (`for (int i = 0, j = 0; ...)`) run once
-    // before the loop in a block that scopes their declarations (12.7.1).
-    Statement block;
-    block.kind = StatementKind::Block;
-    block.span = loop.span;
+    // Further initializers (`for (int i = 0, j = 0; ...)`) run once before
+    // the first iteration, and their variables share the loop's one implicit
+    // scope (12.7.1).
     for (auto& declaration : extra_declarations) {
-        block.declarations.push_back(std::move(declaration));
+        loop.declarations.push_back(std::move(declaration));
     }
     for (auto& initialization : extra_initializations) {
-        block.statements.push_back(std::move(initialization));
+        loop.loop_initializations.push_back(std::move(initialization));
     }
-    block.statements.push_back(std::move(loop));
+    return loop;
+}
+
+Statement VerilogParser::label_statement(const Token& label,
+    const bool for_loop, const bool foreach_loop, Statement statement)
+{
+    // A label on a foreach loop, or on a for loop that declares its
+    // variables, names the implicit block of the loop (9.3.5, 12.7.1,
+    // 12.7.3).
+    const bool names_loop = statement.label.empty()
+        && ((foreach_loop
+                && (statement.foreach_collection.kind
+                        != ExpressionKind::Invalid
+                    || statement.kind == StatementKind::Loop))
+            || (for_loop && statement.kind == StatementKind::Loop
+                && statement.loop_variable_declared));
+    if (names_loop) {
+        statement.label = label.text;
+        statement.span = span_from(label, previous());
+        return statement;
+    }
+    // On any other statement it makes a named begin-end block around the
+    // statement, a scope of its own (9.3.5).
+    Statement block;
+    block.kind = StatementKind::Block;
+    block.label = label.text;
+    block.span = span_from(label, previous());
+    block.statements.push_back(std::move(statement));
     return block;
 }
 
@@ -442,6 +465,7 @@ Statement VerilogParser::parse_procedural_for_statement_body(
             statement.loop_initial = statement.target;
         }
     }
+    bool loop_variable_registered { };
     if (statement.loop_variable.empty()) {
         const auto variable = expect_identifier("procedural loop variable");
         statement.loop_variable = variable.text;
@@ -460,6 +484,11 @@ Statement VerilogParser::parse_procedural_for_statement_body(
             "'=' after procedural loop variable",
             "FSIM-SV-PARSE-096");
         statement.loop_initial = parse_expression();
+        // The loop's implicit block declares every loop variable before the
+        // initializations run in order, so a later initializer reads an
+        // earlier variable (IEEE 1800-2023 12.7.1).
+        ++current_loop_names_[statement.loop_variable];
+        loop_variable_registered = true;
         while (language_ == Language::SystemVerilog2017
             && match(TokenKind::Comma)) {
             const bool typed = keyword("byte") || keyword("shortint")
@@ -497,7 +526,9 @@ Statement VerilogParser::parse_procedural_for_statement_body(
             }
         }
     }
-    ++current_loop_names_[statement.loop_variable];
+    if (!loop_variable_registered) {
+        ++current_loop_names_[statement.loop_variable];
+    }
     expect(
         TokenKind::Semicolon,
         "';' after procedural loop initializer",
@@ -848,12 +879,9 @@ Statement VerilogParser::parse_procedural_foreach_statement(
         "')' after procedural foreach header",
         "FSIM-SV-PARSE-333");
     indices.insert(indices.begin(), statement.target);
-    statement.condition = Expression {
-        ExpressionKind::Call,
-        "@sv-foreach",
-        std::move(indices),
-        span_from(start, previous())
-    };
+    statement.condition = marked_expression(
+        support::ExpressionMarker::sv_foreach, { }, std::move(indices),
+        span_from(start, previous()));
     for (const auto& index_name : index_names) {
         ++current_loop_names_[index_name];
     }
@@ -887,7 +915,8 @@ Statement VerilogParser::parse_procedural_foreach_statement(
     const bool string_collection = collection_type
         ? !collection_type->systemverilog_container
             && (collection_type->domain == ValueDomain::String
-                || collection_type->spelling == "string")
+                || collection_type->systemverilog_builtin
+                    == support::SystemVerilogBuiltinType::string)
         : statement.target.kind == ExpressionKind::Identifier
             && unit_string_names_.contains(statement.target.text);
     const auto container_type = [&]() -> std::optional<Type> {
@@ -965,9 +994,8 @@ Statement VerilogParser::parse_procedural_foreach_statement(
         // Scalar bit/logic/reg declarations have no explicit packed range;
         // unlike integer atoms, the parser's flexible-width descriptors do
         // not attach a default packed storage range to them.
-        if (const auto descriptor =
-                systemverilog_integral_type_descriptor(type.spelling);
-            descriptor && descriptor->fixed_width) {
+        if (support::systemverilog_integer_atom(
+                type.systemverilog_builtin)) {
             return std::nullopt;
         }
         // A user type with no retained range is unresolved here, not a known
@@ -1051,14 +1079,15 @@ Statement VerilogParser::parse_procedural_foreach_statement(
     // (IEEE 1800-2017 7.8.4, 7.8.5, 12.7.3).
     const auto index_spelling = [](const Type& index)
         -> std::optional<std::string> {
-        const auto& spelling = index.spelling;
-        if (index.domain == ValueDomain::String || spelling == "string") {
+        using Kind = support::SystemVerilogBuiltinType;
+        const auto kind = index.systemverilog_builtin;
+        if (index.domain == ValueDomain::String || kind == Kind::string) {
             return std::string { "string" };
         }
-        if (spelling == "int" || spelling == "integer"
-            || spelling == "byte" || spelling == "shortint"
-            || spelling == "longint" || spelling == "*") {
-            return spelling == "*" ? std::string { "int" } : spelling;
+        if (kind == Kind::int_type || kind == Kind::integer
+            || kind == Kind::byte || kind == Kind::shortint
+            || kind == Kind::longint) {
+            return std::string { support::systemverilog_builtin_type_name(kind) };
         }
         if (!index.named_type.empty()) {
             return index.named_type;
@@ -1139,14 +1168,13 @@ Statement VerilogParser::parse_procedural_foreach_statement(
     // Associative positions, innermost last, each closed by a next() loop.
     std::vector<std::size_t> associative_positions;
     // A break in the body jumps out of the entire loop, not just out of the
-    // current dimension (IEEE 1800-2017 12.8): it disables the block that
-    // holds the generated loops.
+    // current dimension (IEEE 1800-2017 12.8): it ends the block that holds
+    // the generated loops, which is the foreach statement.
     const auto loops = static_cast<std::size_t>(std::ranges::count_if(
         dimension_names, [&](const std::string& name) {
             return !(name.empty() && numbered_dimensions);
         }));
-    const auto break_label = "__fsim_fe_brk" + suffix;
-    emit(loops > 1U ? "begin : " + break_label : std::string { "begin" });
+    emit("begin");
     for (std::size_t dimension = 0; dimension < dimension_names.size();
          ++dimension) {
         // An empty index position does not iterate its dimension (IEEE
@@ -1211,8 +1239,7 @@ Statement VerilogParser::parse_procedural_foreach_statement(
     }
     emit("end");
     if (loops > 1U) {
-        foreach_break_targets_.emplace_back(
-            current_loop_depth_ + loops, break_label);
+        foreach_break_targets_.push_back(current_loop_depth_ + loops);
     }
     auto desugared = parse_generated_statement(std::move(out), statement.span);
     if (loops > 1U) {
@@ -1220,6 +1247,28 @@ Statement VerilogParser::parse_procedural_foreach_statement(
     }
     if (!desugared) {
         return statement;
+    }
+    // The generated loops: per iterated dimension an `if` that holds a
+    // `for` loop, or for an associative dimension a block that holds an
+    // `if` and a do-while loop. They are layers, no statements or scopes of
+    // the source; what the innermost loop holds is the body.
+    Statement* level = &*desugared;
+    for (std::size_t count { }; count < loops && level != nullptr; ++count) {
+        auto* layer = level->statements.size() == 1U
+            ? &level->statements.front()
+            : nullptr;
+        while (layer != nullptr && layer->kind != StatementKind::Loop) {
+            layer->generated_role
+                = support::GeneratedStatementRole::foreach_layer;
+            layer = layer->statements.size() == 1U
+                ? &layer->statements.front()
+                : nullptr;
+        }
+        if (layer != nullptr) {
+            layer->generated_role
+                = support::GeneratedStatementRole::foreach_layer;
+        }
+        level = layer;
     }
     // The block keeps the foreach statement's own parts (37.51).
     desugared->foreach_collection = statement.target;

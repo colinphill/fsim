@@ -345,7 +345,7 @@ Expression VerilogParser::parse_lvalue()
             lvalue_base = &lvalue_base->operands.front();
         }
         if (lvalue_base->kind == ExpressionKind::Call
-            && lvalue_base->text.starts_with("@sv-select:")) {
+            && lvalue_base->marker == support::ExpressionMarker::sv_select) {
             // A function or method returning a class handle can be the
             // receiver of a writable member selection. Keep its member and
             // index expressions in the same tree used by ordinary lvalues.
@@ -733,21 +733,16 @@ Expression VerilogParser::parse_primary_impl()
             || at(TokenKind::EndOfFile)) {
             // `tagged Invalid` selects a void member, which has no value
             // (IEEE 1800-2017 11.9).
-            return Expression {
-                ExpressionKind::Call,
-                "@sv-tagged:" + member.text,
+            return marked_expression(
+                support::ExpressionMarker::sv_tagged, member.text,
                 { Expression { ExpressionKind::LogicLiteral, "1'b0", { }, member.span } },
-                cover(tagged.span, member.span)
-            };
+                cover(tagged.span, member.span));
         }
         auto value = parse_unary();
         const auto span = cover(tagged.span, value.span);
-        return Expression {
-            ExpressionKind::Call,
-            "@sv-tagged:" + member.text,
-            { std::move(value) },
-            span
-        };
+        return marked_expression(
+            support::ExpressionMarker::sv_tagged, member.text,
+            { std::move(value) }, span);
     }
     if (match(TokenKind::Apostrophe)) {
         const auto apostrophe = previous();
@@ -806,6 +801,9 @@ Expression VerilogParser::parse_primary_impl()
                         "expected ':' after an assignment-pattern default choice");
                 }
                 pattern.aggregate_choices.push_back("default");
+                pattern.aggregate_choice_markers.resize(
+                    pattern.aggregate_choices.size(),
+                    support::ExpressionMarker::none);
                 pattern.aggregate_choice_expressions.push_back(
                     { std::move(default_choice) });
                 pattern.operands.push_back(parse_pattern_value());
@@ -879,12 +877,24 @@ Expression VerilogParser::parse_primary_impl()
                             }
                         }
                     }
-                    pattern.aggregate_choices.push_back("@key");
+                    // One marker per choice: earlier default and replicated
+                    // choices take `none`.
+                    pattern.aggregate_choice_markers.resize(
+                        pattern.aggregate_choices.size(),
+                        support::ExpressionMarker::none);
+                    pattern.aggregate_choices.push_back(std::string { });
+                    pattern.aggregate_choice_markers.push_back(
+                        support::ExpressionMarker::key);
                     pattern.aggregate_choice_expressions.push_back(
                         { std::move(first) });
                     pattern.operands.push_back(parse_pattern_value());
                 } else {
+                    pattern.aggregate_choice_markers.resize(
+                        pattern.aggregate_choices.size(),
+                        support::ExpressionMarker::none);
                     pattern.aggregate_choices.emplace_back();
+                    pattern.aggregate_choice_markers.push_back(
+                        support::ExpressionMarker::none);
                     pattern.aggregate_choice_expressions.emplace_back();
                     pattern.operands.push_back(std::move(first));
                 }
@@ -931,12 +941,11 @@ Expression VerilogParser::parse_primary_impl()
                 TokenKind::RightParen,
                 "')' after SystemVerilog cast expression",
                 "FSIM-SV-PARSE-220");
-            auto cast = Expression {
-                ExpressionKind::Call,
-                "@sv-cast:" + token.text,
-                { std::move(operand) },
-                span_from(token, previous())
-            };
+            auto cast = marked_expression(
+                support::ExpressionMarker::sv_cast, token.text,
+                { std::move(operand) }, span_from(token, previous()));
+            cast.systemverilog_cast_target
+                = support::SystemVerilogCastTarget::size;
             const auto width = detail::decimal_i64(token.text);
             if (!width || *width <= 0) {
                 error(
@@ -1070,13 +1079,10 @@ Expression VerilogParser::parse_primary_impl()
             // `C::new` names a typed constructor (IEEE 1800-2017 8.8).
             if (keyword("new")) {
                 const auto constructor = advance();
-                Expression typed {
-                    ExpressionKind::Call,
-                    "@sv-new-typed:"
-                        + canonical.substr(0, canonical.size() - 2U),
-                    { },
-                    cover(name.span, constructor.span)
-                };
+                auto typed = marked_expression(
+                    support::ExpressionMarker::sv_new_typed,
+                    canonical.substr(0, canonical.size() - 2U), { },
+                    cover(name.span, constructor.span));
                 if (match(TokenKind::LeftParen)) {
                     bool named { };
                     while (!at_end() && !at(TokenKind::RightParen)) {
@@ -1174,11 +1180,29 @@ Expression VerilogParser::parse_primary_impl()
                 TokenKind::RightParen,
                 "')' after SystemVerilog cast expression",
                 "FSIM-SV-PARSE-220");
-            return parse_postfix(Expression {
-                ExpressionKind::Call,
-                "@sv-cast:" + canonical,
-                { std::move(operand) },
-                span_from(name, previous()) });
+            auto cast = marked_expression(
+                support::ExpressionMarker::sv_cast, { },
+                { std::move(operand) }, span_from(name, previous()));
+            // The cast target's keyword, read here once (IEEE 1800-2023
+            // 5.6.2, 6.24.1); any other name is a type name.
+            const auto cast_builtin
+                = support::systemverilog_builtin_type_keyword(canonical);
+            cast.systemverilog_cast_builtin = cast_builtin;
+            cast.systemverilog_cast_target
+                = cast_builtin != support::SystemVerilogBuiltinType::none
+                ? support::SystemVerilogCastTarget::builtin
+                : canonical == "signed"
+                ? support::SystemVerilogCastTarget::signed_type
+                : canonical == "unsigned"
+                ? support::SystemVerilogCastTarget::unsigned_type
+                : canonical == "const"
+                ? support::SystemVerilogCastTarget::constant
+                : support::SystemVerilogCastTarget::named;
+            if (cast.systemverilog_cast_target
+                == support::SystemVerilogCastTarget::named) {
+                cast.marker_argument = canonical;
+            }
+            return parse_postfix(std::move(cast));
         }
         Expression expression {
             ExpressionKind::Identifier,
@@ -1187,6 +1211,52 @@ Expression VerilogParser::parse_primary_impl()
             cover(name.span, previous().span)
         };
         expression.systemverilog_class_selection = std::move(selection);
+        // `std::randomize(...)`: the std package's one function, the scope
+        // randomize function (IEEE 1800-2023 18.12), resolved here against
+        // the std declaration.
+        bool standard_randomize { };
+        if (std::string_view path { canonical }; path.starts_with("std::")
+            && path.find("::", 5U) == std::string_view::npos) {
+            const auto* declaration
+                = find_systemverilog_standard_package_declaration(
+                    standard_revision_, path.substr(5U));
+            standard_randomize = declaration != nullptr
+                && declaration->kind
+                    == SystemVerilogStandardPackageMemberKind::function;
+        }
+        // A member of the std class process named through its class scope
+        // (IEEE 1800-2023 9.7): the static method self, or a constant of
+        // its state enum, resolved here against the std declaration.
+        std::string_view process_member;
+        if (std::string_view path { canonical }; path.find("::")
+            != std::string_view::npos) {
+            if (path.starts_with("std::")) {
+                path.remove_prefix(5U);
+            }
+            const auto separator = path.find("::");
+            const auto* declaration = separator != std::string_view::npos
+                    && path.find("::", separator + 2U)
+                        == std::string_view::npos
+                ? find_systemverilog_standard_package_declaration(
+                      standard_revision_, path.substr(0U, separator))
+                : nullptr;
+            if (declaration != nullptr
+                && declaration->standard_class
+                    == support::SystemVerilogStandardClass::process) {
+                process_member = path.substr(separator + 2U);
+            }
+        }
+        if (const auto state
+            = systemverilog_process_state_value(process_member)) {
+            expression.marker = support::ExpressionMarker::sv_process_state;
+            expression.marker_argument = std::to_string(*state);
+        }
+        // A built-in data type keyword used as a pattern key or a type
+        // operand, read here once (IEEE 1800-2023 5.6.2, 6.11).
+        if (canonical == name.text) {
+            expression.systemverilog_keyword_type
+                = support::systemverilog_builtin_type_keyword(canonical);
+        }
         if (const auto required = verilog_system_service_standard(canonical)) {
             note_system_service_standard(canonical, *required, name);
         }
@@ -1295,12 +1365,9 @@ Expression VerilogParser::parse_primary_impl()
                     } else if (sampled_value_call && match(TokenKind::At)) {
                         const auto event_start = previous();
                         const auto sensitivities = parse_sensitivity();
-                        Expression event {
-                            ExpressionKind::Call,
-                            "@sv-clocking-event",
-                            { },
-                            event_start.span
-                        };
+                        auto event = marked_expression(
+                            support::ExpressionMarker::sv_clocking_event,
+                            { }, { }, event_start.span);
                         if (sensitivities.size() == 1U
                             && !sensitivities.front().signal.empty()) {
                             event.operands.emplace_back(
@@ -1388,6 +1455,12 @@ Expression VerilogParser::parse_primary_impl()
                 std::move(arguments),
                 cover(name.span, previous().span) };
             expression.call_argument_names = std::move(argument_names);
+            if (process_member == "self") {
+                expression.marker = support::ExpressionMarker::sv_process_self;
+            }
+            if (standard_randomize) {
+                expression.marker = support::ExpressionMarker::sv_std_randomize;
+            }
             expression.systemverilog_class_selection
                 = std::move(class_selection);
             if (canonical == "new") {
@@ -1396,13 +1469,16 @@ Expression VerilogParser::parse_primary_impl()
                         StandardRevision::SystemVerilog2005,
                         name,
                         "FSIM-SV-PARSE-349")) {
-                    expression.text = "@sv-new";
+                    expression.text.clear();
+                    expression.marker = support::ExpressionMarker::sv_new;
                 }
             } else if (canonical == "$cast") {
-                expression.text = "@sv-dollar-cast";
+                expression.text.clear();
+                expression.marker = support::ExpressionMarker::sv_dollar_cast;
             } else if (canonical == "type"
                 && language_ == Language::SystemVerilog2017) {
-                expression.text = "@sv-type";
+                expression.text.clear();
+                expression.marker = support::ExpressionMarker::sv_type;
                 expression.systemverilog_type_operand = type_operand;
                 if (expression.operands.size() != (type_operand ? 0U : 1U)) {
                     error(
@@ -1781,13 +1857,13 @@ Expression VerilogParser::parse_primary_impl()
                     "')' after SystemVerilog cast expression",
                     "FSIM-SV-PARSE-220");
                 const auto span = cover(expression.span, previous().span);
-                if (expression.text == "@sv-type") {
+                if (expression.marker == support::ExpressionMarker::sv_type) {
                     // `type(...)'(x)` casts to the type the operator
                     // denotes (IEEE 1800-2017 6.23, 6.24.1).
                     auto cast_type = expression.systemverilog_type_operand;
                     if (!cast_type && expression.operands.size() == 1U) {
                         Type type_of;
-                        type_of.spelling = "@type-of";
+                        set_systemverilog_type_name(type_of, "@type-of");
                         type_of.named_type_span = expression.span;
                         type_of.systemverilog_type_of
                             = std::make_shared<const Expression>(
@@ -1795,16 +1871,17 @@ Expression VerilogParser::parse_primary_impl()
                         cast_type = std::make_shared<const Type>(
                             std::move(type_of));
                     }
-                    Expression cast { ExpressionKind::Call, "@sv-cast:@type",
-                        { std::move(operand) }, span };
+                    auto cast = marked_expression(
+                        support::ExpressionMarker::sv_cast, { },
+                        { std::move(operand) }, span);
+                    cast.systemverilog_cast_target
+                        = support::SystemVerilogCastTarget::type_operator;
                     cast.systemverilog_type_operand = std::move(cast_type);
                     return parse_postfix(std::move(cast));
                 }
-                return parse_postfix(Expression {
-                    ExpressionKind::Call,
-                    "@sv-size-cast:expression",
-                    { std::move(expression), std::move(operand) },
-                    span });
+                return parse_postfix(marked_expression(
+                    support::ExpressionMarker::sv_size_cast, { },
+                    { std::move(expression), std::move(operand) }, span));
             }
             return parse_postfix(std::move(expression));
         }
@@ -1816,9 +1893,8 @@ Expression VerilogParser::parse_primary_impl()
                     "FSIM-SV-PARSE-349")) {
                 return parse_postfix(std::move(expression));
             }
-            return Expression {
-                ExpressionKind::Call, "@sv-null", { }, name.span
-            };
+            return marked_expression(
+                support::ExpressionMarker::sv_null, { }, { }, name.span);
         }
         if (canonical == "new" && !at(TokenKind::LeftBracket)) {
             if (!require_standard(
@@ -1835,14 +1911,12 @@ Expression VerilogParser::parse_primary_impl()
                     || !keyword_reserved(keyword_set_, current().text))) {
                 auto source = parse_unary();
                 const auto span = cover(name.span, source.span);
-                return Expression {
-                    ExpressionKind::Call, "@sv-shallow-copy",
-                    { std::move(source) }, span
-                };
+                return marked_expression(
+                    support::ExpressionMarker::sv_shallow_copy, { },
+                    { std::move(source) }, span);
             }
-            return Expression {
-                ExpressionKind::Call, "@sv-new", { }, name.span
-            };
+            return marked_expression(
+                support::ExpressionMarker::sv_new, { }, { }, name.span);
         }
         if (canonical == "$urandom" || canonical == "$random"
             || canonical == "$time" || canonical == "$stime"
@@ -1969,11 +2043,10 @@ Expression VerilogParser::parse_primary_impl()
                 TokenKind::RightParen,
                 "')' after SystemVerilog cast expression",
                 "FSIM-SV-PARSE-220");
-            return parse_postfix(Expression {
-                ExpressionKind::Call,
-                "@sv-size-cast:expression",
+            return parse_postfix(marked_expression(
+                support::ExpressionMarker::sv_size_cast, { },
                 { std::move(expression), std::move(operand) },
-                span_from(open, previous()) });
+                span_from(open, previous())));
         }
         return parse_postfix(std::move(expression));
     }
@@ -2099,23 +2172,25 @@ Expression VerilogParser::parse_primary_impl()
                         std::vector<Expression> parts;
                         parts.push_back(std::move(operand));
                         parts.push_back(parse_expression());
-                        std::string text = "@stream-with";
+                        auto with_kind = support::ExpressionMarker::stream_with;
                         if (match(TokenKind::Colon)) {
-                            text = "@stream-with-range";
+                            with_kind
+                                = support::ExpressionMarker::stream_with_range;
                             parts.push_back(parse_expression());
                         } else if (match(TokenKind::PlusColon)) {
-                            text = "@stream-with-plus";
+                            with_kind
+                                = support::ExpressionMarker::stream_with_plus;
                             parts.push_back(parse_expression());
                         } else if (match(TokenKind::MinusColon)) {
-                            text = "@stream-with-minus";
+                            with_kind
+                                = support::ExpressionMarker::stream_with_minus;
                             parts.push_back(parse_expression());
                         }
                         expect(TokenKind::RightBracket,
                             "']' after a streaming with range",
                             "FSIM-SV-PARSE-193");
-                        operand = Expression { ExpressionKind::Call,
-                            std::move(text), std::move(parts),
-                            span_from(with, previous()) };
+                        operand = marked_expression(with_kind, { },
+                            std::move(parts), span_from(with, previous()));
                     }
                     operands.push_back(std::move(operand));
                 } while (match(TokenKind::Comma));
@@ -2128,14 +2203,11 @@ Expression VerilogParser::parse_primary_impl()
                 TokenKind::RightBrace,
                 "'}' after streaming concatenation",
                 "FSIM-SV-PARSE-194");
-            return Expression {
-                ExpressionKind::Call,
+            return marked_expression(
                 direction.kind == TokenKind::ShiftLeft
-                    ? "@stream-left"
-                    : "@stream-right",
-                std::move(operands),
-                span_from(open, previous())
-            };
+                    ? support::ExpressionMarker::stream_left
+                    : support::ExpressionMarker::stream_right,
+                { }, std::move(operands), span_from(open, previous()));
         }
         std::vector<Expression> elements;
         if (!at(TokenKind::RightBrace)) {

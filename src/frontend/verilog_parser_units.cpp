@@ -41,6 +41,7 @@ DesignUnit VerilogParser::parse_package(const Token& start) {
     unit_type_parameter_names_.clear();
     unit_container_names_.clear();
     unit_string_names_.clear();
+    unit_port_names_.clear();
     unit_associative_index_types_.clear();
     unit_foreach_types_.clear();
   port_type_refinements_.clear();
@@ -1297,7 +1298,7 @@ void VerilogParser::parse_generate_declaration(
   }
   if (match_keyword("event")) {
     // A named event of a generate block (IEEE 1800-2017 15.5).
-    type.spelling = "event";
+    set_systemverilog_builtin_type(type, support::SystemVerilogBuiltinType::event);
     type.domain = ValueDomain::Logic4;
   } else if (is_named_type_reference_start()) {
     type = parse_named_type();
@@ -1313,7 +1314,7 @@ void VerilogParser::parse_generate_declaration(
   std::optional<Delay> net_delay;
   if (match(TokenKind::Hash)) {
     net_delay = parse_verilog_delay(previous(), 3);
-    if (type.spelling != "wire") {
+    if (type.systemverilog_net_kind != support::SystemVerilogNetKind::wire) {
       error(
           start,
           "FSIM-SV-SEM-110",
@@ -1406,7 +1407,8 @@ void VerilogParser::parse_generate_declaration(
       ++current_generate_names_[name.text];
       local_names.push_back(name.text);
     }
-    if (initializer && type.spelling == "wire"
+    if (initializer
+        && type.systemverilog_net_kind == support::SystemVerilogNetKind::wire
         && !container_declaration) {
       Statement driver;
       driver.kind = StatementKind::Assignment;
@@ -1576,7 +1578,7 @@ Type VerilogParser::parse_parameter_type() {
         && !keyword_reserved(keyword_set_, current().text)
         && contains_word(
             {"bit", "byte", "chandle", "int", "interconnect", "logic",
-             "longint", "process", "shortint", "shortreal", "signed",
+             "longint", "shortint", "shortreal", "signed",
              "string", "unsigned", "uwire"},
             current().text)) {
       const auto later_type = advance();
@@ -1589,9 +1591,10 @@ Type VerilogParser::parse_parameter_type() {
         type = Type{
             later_type.text == "string" ? ValueDomain::String
                                         : ValueDomain::Logic4,
-            later_type.text,
+            { },
             std::nullopt,
             later_type.text != "unsigned"};
+        set_systemverilog_type_keyword(type, later_type.text);
       }
       const auto descriptor =
           systemverilog_integral_type_descriptor(later_type.text);
@@ -1611,14 +1614,14 @@ Type VerilogParser::parse_parameter_type() {
         true};
     if (keyword("string")) {
       (void)advance();
-      type.spelling = "string";
+      set_systemverilog_builtin_type(type, support::SystemVerilogBuiltinType::string);
       type.domain = ValueDomain::String;
       type.is_signed = false;
       return type;
     }
-    if (keyword("chandle") || keyword("process")) {
+    if (keyword("chandle")) {
       const auto token = advance();
-      type.spelling = token.text;
+      set_systemverilog_type_keyword(type, token.text);
       type.domain = ValueDomain::Bit2;
       type.is_signed = false;
       type.systemverilog_scalar = SystemVerilogScalarKind::Chandle;
@@ -1626,7 +1629,7 @@ Type VerilogParser::parse_parameter_type() {
     }
     if (keyword("event")) {
       (void)advance();
-      type.spelling = "event";
+      set_systemverilog_builtin_type(type, support::SystemVerilogBuiltinType::event);
       type.domain = ValueDomain::Logic4;
       type.is_signed = false;
       return type;
@@ -1634,7 +1637,7 @@ Type VerilogParser::parse_parameter_type() {
     if (keyword("shortreal") || keyword("real")
         || keyword("realtime")) {
       const auto token = advance();
-      type.spelling = token.text;
+      set_systemverilog_type_keyword(type, token.text);
       type.domain = ValueDomain::Bit2;
       type.is_signed = true;
       type.systemverilog_scalar =
@@ -1654,7 +1657,7 @@ Type VerilogParser::parse_parameter_type() {
         keyword("signed") || keyword("unsigned")
         || at(TokenKind::LeftBracket)) {
       const bool signing_only = !at(TokenKind::LeftBracket);
-      type.spelling = "logic";
+      set_systemverilog_builtin_type(type, support::SystemVerilogBuiltinType::logic);
       type.domain = ValueDomain::Logic4;
       type.is_signed = false;
       parse_optional_signedness(type);
@@ -1663,7 +1666,7 @@ Type VerilogParser::parse_parameter_type() {
       // value (IEEE 1800-2017 6.20.2).
       if (signing_only && !type.packed_range && !type.packed_range_expression
           && type.systemverilog_packed_dimensions.empty()) {
-        type.spelling = "implicit";
+        set_systemverilog_type_name(type, "implicit");
         type.implicit_type = true;
         type.domain = ValueDomain::Integer;
         parameter_signing_only_ = true;
@@ -1680,9 +1683,8 @@ Type VerilogParser::parse_parameter_type() {
     }
     parse_optional_signedness(type);
     if (type.implicit_type
-        || type.spelling == "logic"
-        || type.spelling == "reg"
-        || type.spelling == "bit") {
+        || support::systemverilog_integer_vector(
+            type.systemverilog_builtin)) {
       parse_optional_range(type);
     }
     return type;
@@ -1706,8 +1708,7 @@ Type VerilogParser::parse_type_parameter_actual() {
     }
     return named;
   }
-  if (keyword("string") || keyword("chandle")
-      || keyword("process")) {
+  if (keyword("string") || keyword("chandle")) {
     return parse_parameter_type();
   }
   if (keyword("virtual")) {
@@ -1825,7 +1826,7 @@ void VerilogParser::parse_parameter_group(
   const bool signing_only = !type_parameter && !implicit_value_type
       && parameter_signing_only_;
   if (implicit_value_type) {
-    type.spelling = "implicit";
+    set_systemverilog_type_name(type, "implicit");
     type.implicit_type = true;
     type.domain = ValueDomain::Integer;
     type.is_signed = true;
@@ -1973,7 +1974,7 @@ void VerilogParser::parse_parameter_group(
         (class_list
             || (port_list && language_ == Language::SystemVerilog2017))
         && (keyword("type") || keyword("string")
-            || keyword("chandle") || keyword("process")
+            || keyword("chandle")
             || keyword("struct") || keyword("union") || keyword("enum")
             || keyword("int") || keyword("integer") || keyword("logic")
             || keyword("bit") || keyword("byte") || keyword("shortint")

@@ -944,9 +944,11 @@ std::optional<ConstantValue> constant_name_value(
         && declaration->type
         && (!declaration->type->implicit
             || declaration->type->packed_range)) {
-        const auto& spelling = declaration->type->target.spelling;
         // int and integer carry their intrinsic [31:0] range.
-        const bool integer_type = spelling == "int" || spelling == "integer";
+        const auto builtin = declaration->type->builtin;
+        const bool integer_type
+            = builtin == support::SystemVerilogBuiltinType::int_type
+            || builtin == support::SystemVerilogBuiltinType::integer;
         if (!integer_type || value->kind != ConstantKind::integer
             || value->integer < std::numeric_limits<std::int32_t>::min()
             || value->integer > std::numeric_limits<std::int32_t>::max()) {

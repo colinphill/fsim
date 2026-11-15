@@ -3,6 +3,7 @@
 #include "lowerer_driver_regions.hpp"
 #include "lowerer_internal.hpp"
 #include "fsim/support/sha256.hpp"
+#include "fsim/support/systemverilog_builtin_type.hpp"
 
 #include <iostream>
 #include <array>
@@ -919,6 +920,14 @@ bool HierarchyBuilder::instantiate_compiled_udp(
         info.name = name;
         info.width = 1U;
         info.type_name = is_port ? "wire" : "logic";
+        // A UDP port is a wire net (IEEE 1800-2023 29.3); its type text stays
+        // empty as before, only the kind names the net type (6.7).
+        info.systemverilog_net_kind = is_port
+            ? support::SystemVerilogNetKind::wire
+            : support::SystemVerilogNetKind::none;
+        info.systemverilog_builtin = is_port
+            ? support::SystemVerilogBuiltinType::none
+            : support::SystemVerilogBuiltinType::logic;
         info.source_domain = frontend::ValueDomain::Logic4;
         info.is_port = is_port;
         info.direction = direction;

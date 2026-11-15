@@ -53,10 +53,11 @@ namespace {
     return total;
 }
 
-// An integral cast to `type`'s width and signedness, as the constraint
-// lowering spells it; nothing for a type that is not a bounded integral.
-[[nodiscard]] std::optional<std::string> integral_cast_text(
-    const frontend::Type& type)
+// A cast of `operand` to `type`'s width and signedness (6.24.1); nothing
+// for a type that is not a bounded integral.
+[[nodiscard]] std::optional<frontend::Expression> integral_cast(
+    const frontend::Type& type, frontend::Expression operand,
+    frontend::SourceSpan span)
 {
     const auto width = type.width();
     if (!width || *width == 0U || *width > 4096U
@@ -66,8 +67,12 @@ namespace {
         || !type.systemverilog_class_declaration.empty()) {
         return std::nullopt;
     }
-    return std::string { "@sv-cast:" }
-        + (type.is_signed ? "signed:" : "unsigned:") + std::to_string(*width);
+    auto cast = frontend::marked_expression(support::ExpressionMarker::sv_cast,
+        std::to_string(*width), { std::move(operand) }, std::move(span));
+    cast.systemverilog_cast_target = type.is_signed
+        ? support::SystemVerilogCastTarget::signed_type
+        : support::SystemVerilogCastTarget::unsigned_type;
+    return cast;
 }
 
 // The value a function returns when its body is one `return e;` or
@@ -148,7 +153,8 @@ void inline_constraint_functions(frontend::Expression& expression,
     // A function already being inlined is recursive; its call stays.
     if (std::ranges::find(inlining, &*method) != inlining.end()) return;
     const auto* value = single_returned_value(*method);
-    const auto result_cast = integral_cast_text(method->return_type);
+    const auto result_cast
+        = integral_cast(method->return_type, { }, expression.span);
     if (value == nullptr || !result_cast
         || method->arguments.size() < expression.operands.size()
         || names_identifier(*value, method->name)) {
@@ -157,9 +163,8 @@ void inline_constraint_functions(frontend::Expression& expression,
     std::map<std::string, frontend::Expression, std::less<>> actuals;
     for (std::size_t index = 0; index < method->arguments.size(); ++index) {
         const auto& formal = method->arguments[index];
-        const auto formal_cast = integral_cast_text(formal.type);
         if (formal.direction != frontend::PortDirection::Input
-            || formal.reference || !formal_cast) {
+            || formal.reference || !integral_cast(formal.type, { }, { })) {
             return;
         }
         const auto* actual = index < expression.operands.size()
@@ -168,22 +173,15 @@ void inline_constraint_functions(frontend::Expression& expression,
             ? &expression.operands[index]
             : formal.default_value ? &*formal.default_value : nullptr;
         if (actual == nullptr) return;
-        frontend::Expression cast;
-        cast.kind = frontend::ExpressionKind::Call;
-        cast.text = *formal_cast;
-        cast.operands = { *actual };
-        cast.span = actual->span;
-        actuals.emplace(formal.name, std::move(cast));
+        actuals.emplace(formal.name,
+            *integral_cast(formal.type, *actual, actual->span));
     }
     auto body = *value;
     substitute_formals(body, actuals);
     auto inlined_path = inlining;
     inlined_path.push_back(&*method);
     inline_constraint_functions(body, methods, inlined_path);
-    frontend::Expression result;
-    result.kind = frontend::ExpressionKind::Call;
-    result.text = *result_cast;
-    result.span = expression.span;
+    auto result = *result_cast;
     result.operands = { std::move(body) };
     expression = std::move(result);
 }
@@ -505,6 +503,11 @@ sv::ConstraintExpression SystemVerilogHirBuilder::constraint_expression(
     sv::ConstraintExpression output;
     output.kind = constraint_kind(input);
     output.text = input.text;
+    output.marker = input.marker;
+    output.marker_argument = input.marker_argument;
+    output.call_kind = systemverilog_call_kind(input);
+    output.cast_target = input.systemverilog_cast_target;
+    output.cast_builtin = input.systemverilog_cast_builtin;
     output.source = source(input.span);
     for (const auto& operand : input.operands) {
         output.operands.push_back(constraint_expression(operand));
@@ -521,6 +524,18 @@ sv::TypeReference SystemVerilogHirBuilder::class_property_type(
         ? input.spelling
         : input.named_type;
     output.target = { { }, type_source, spelling };
+    // A std package class is a named type (IEEE 1800-2023 9.7, 15.3,
+    // 15.4, 8.30); its kind travels whether or not the name is kept. A
+    // type or class of that name visible here hides the std package's
+    // wildcard import (26.7).
+    output.standard_class = output.target.target.valid()
+            || !input.systemverilog_class_declaration.empty()
+        ? support::SystemVerilogStandardClass::none
+        : input.systemverilog_standard_class;
+    if (input.named_type.empty()) {
+        output.builtin = input.systemverilog_builtin;
+        output.net_kind = input.systemverilog_net_kind;
+    }
     output.signed_value = input.is_signed;
     output.executable_width = input.width();
     output.four_state = input.domain == frontend::ValueDomain::Logic4
@@ -746,6 +761,8 @@ SystemVerilogHirBuilder::dotted_property_binding(
                 if (member->nested_types.empty()) {
                     member_type.domain = member->domain;
                     member_type.spelling = member->spelling;
+                    member_type.systemverilog_builtin
+                        = member->systemverilog_builtin;
                     member_type.packed_range = member->packed_range;
                     member_type.is_signed = member->is_signed;
                 } else {
@@ -1010,52 +1027,78 @@ void SystemVerilogHirBuilder::resolve_constraint_expression(
     }
     // `T'(x)` with a typedef of a packed integral type casts to its width
     // and signedness (IEEE 1800-2017 6.24.1).
-    if (constexpr std::string_view cast_prefix { "@sv-cast:" };
-        expression.kind == sv::ConstraintExpressionKind::call
-        && expression.text.starts_with(cast_prefix)) {
-        const auto target = expression.text.substr(cast_prefix.size());
-        const bool builtin = target == "signed" || target == "unsigned"
-            || target == "byte" || target == "shortint" || target == "int"
-            || target == "longint" || target == "integer" || target == "bit"
-            || target == "logic" || target == "reg" || target == "time"
-            || (!target.empty()
-                && std::ranges::all_of(target, [](const char c) {
-                       return c >= '0' && c <= '9';
-                   }));
-        for (const auto& candidate : hir_.declarations()) {
-            if (builtin
-                || candidate.form != sv::DeclarationForm::typedef_declaration
-                || candidate.name != target || !candidate.type
-                || candidate.type->packed_dimensions.size() > 1U) {
-                continue;
+    if (expression.kind == sv::ConstraintExpressionKind::call
+        && expression.marker == support::ExpressionMarker::sv_cast
+        && expression.cast_target == support::SystemVerilogCastTarget::named) {
+        const auto& target = expression.marker_argument;
+        // T is the typedef visible from the class (IEEE 1800-2023 23.9): a
+        // declaration of the class's scope or an enclosing one, else one a
+        // package import of the enclosing design element makes visible
+        // (26.3).
+        const sv::Declaration* found = nullptr;
+        if (const auto class_scope
+            = class_scopes_.find(declaration.canonical_identity);
+            class_scope != class_scopes_.end()) {
+            if (const auto lexical
+                = name(target, { }, class_scope->second).selected) {
+                found = hir_.find_declaration(*lexical);
             }
-            const auto& type = *candidate.type;
-            const auto& spelling = type.target.spelling;
+            const auto unit_id = scope_unit(class_scope->second);
+            const auto unit = std::ranges::find(
+                hir_.units(), unit_id, &sv::Unit::id);
+            if (found == nullptr && unit != hir_.units().end()) {
+                for (const auto& imported : unit->imports) {
+                    if (!imported.wildcard
+                        && (!imported.member
+                            || imported.member->spelling != target)) {
+                        continue;
+                    }
+                    const auto package = std::ranges::find_if(hir_.units(),
+                        [&](const sv::Unit& candidate) {
+                            return candidate.kind == sv::UnitKind::package
+                                && candidate.name == imported.package.spelling;
+                        });
+                    if (package == hir_.units().end()) {
+                        continue;
+                    }
+                    for (const auto id : package->declarations) {
+                        const auto* candidate = hir_.find_declaration(id);
+                        if (candidate != nullptr
+                            && candidate->scope == package->scope
+                            && candidate->name == target) {
+                            found = candidate;
+                            break;
+                        }
+                    }
+                    if (found != nullptr) {
+                        break;
+                    }
+                }
+            }
+        }
+        if (found != nullptr
+            && found->form == sv::DeclarationForm::typedef_declaration
+            && found->type && found->type->packed_dimensions.size() <= 1U) {
+            const auto& type = *found->type;
             std::optional<std::uint64_t> width;
             if (type.packed_range && type.packed_range->left
                 && type.packed_range->right
-                && (spelling == "bit" || spelling == "logic"
-                    || spelling == "reg")) {
+                && support::systemverilog_integer_vector(type.builtin)) {
                 const auto left = *type.packed_range->left;
                 const auto right = *type.packed_range->right;
                 width = static_cast<std::uint64_t>(
                     (left > right ? left - right : right - left) + 1);
-            } else if (!type.packed_range) {
-                width = spelling == "byte" ? 8U
-                    : spelling == "shortint" ? 16U
-                    : spelling == "int" || spelling == "integer" ? 32U
-                    : spelling == "longint" ? 64U
-                    : spelling == "bit" || spelling == "logic"
-                        || spelling == "reg"
-                    ? std::optional<std::uint64_t> { 1U }
-                    : std::nullopt;
+            } else if (!type.packed_range
+                && support::systemverilog_integral(type.builtin)) {
+                // Every integral atom, `time` (64 bits, 6.11) among them.
+                width = support::systemverilog_builtin_width(type.builtin);
             }
             if (width && *width != 0U && *width <= 4096U) {
-                expression.text = std::string { cast_prefix }
-                    + (type.signed_value ? "signed:" : "unsigned:")
-                    + std::to_string(*width);
+                expression.cast_target = type.signed_value
+                    ? support::SystemVerilogCastTarget::signed_type
+                    : support::SystemVerilogCastTarget::unsigned_type;
+                expression.marker_argument = std::to_string(*width);
             }
-            break;
         }
     }
     // A member of a packed union property (`u.a`) is a constant
@@ -1192,7 +1235,8 @@ void SystemVerilogHirBuilder::resolve_constraint_expression(
                     = specialization.specialization_identity;
                 local.canonical_identity = declaration.canonical_identity
                     + "::$foreach::" + expression.text;
-                local.type.target = { { }, expression.source, "int" };
+                local.type.target = { { }, expression.source, { } };
+                sv::set_builtin_type(local.type, support::SystemVerilogBuiltinType::int_type);
                 local.type.value_form = sv::TypeForm::packed_integral;
                 local.type.signed_value = true;
                 local.type.executable_width = 32;

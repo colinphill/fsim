@@ -212,6 +212,8 @@ VerilogCoveragePointResult discover_verilog_statement_points(
             if (!enqueue(current.statement->else_statements,
                     current.depth + 1U)
                 || !enqueue(current.statement->statements,
+                    current.depth + 1U)
+                || !enqueue(current.statement->loop_initializations,
                     current.depth + 1U)) {
                 return reject(
                     VerilogCoveragePointError::ResourceLimit, current_index);

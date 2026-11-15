@@ -2,8 +2,10 @@
 #pragma once
 
 #include "fsim/semantic/model.hpp"
+#include "fsim/support/expression_marker.hpp"
 #include "fsim/support/rare_vector.hpp"
 #include "fsim/support/sva_marker.hpp"
+#include "fsim/support/systemverilog_builtin_type.hpp"
 #include "fsim/support/uvm_role.hpp"
 
 #include <charconv>
@@ -79,7 +81,8 @@ enum class TypeForm : std::uint8_t {
 };
 
 /// Container profiles name the nominal element type of an enumeration,
-/// structure or union as "@sv-type:<type index>".
+/// structure or union by its type index (the profile's
+/// element_nominal_type_id).
 [[nodiscard]] constexpr bool has_nominal_type_identity(
     const TypeForm form) noexcept
 {
@@ -89,30 +92,17 @@ enum class TypeForm : std::uint8_t {
         || form == TypeForm::unpacked_union || form == TypeForm::tagged_union;
 }
 
-inline constexpr std::string_view nominal_type_identity_prefix {
-    "@sv-type:"
-};
-
-[[nodiscard]] inline std::string nominal_type_identity(const TypeId type)
+/// The profile index of nominal type `type`.
+[[nodiscard]] inline std::uint32_t nominal_type_index(const TypeId type) noexcept
 {
-    return std::string { nominal_type_identity_prefix }
-    + std::to_string(type.value());
+    return type.value();
 }
 
-/// The type a nominal identity names, if `identity` is one.
-[[nodiscard]] inline std::optional<TypeId> nominal_identity_type(
-    std::string_view identity) noexcept
+/// The type a profile's nominal type index names, if it has one.
+[[nodiscard]] inline std::optional<TypeId> nominal_index_type(
+    const std::optional<std::uint32_t> index) noexcept
 {
-    if (!identity.starts_with(nominal_type_identity_prefix)) {
-        return std::nullopt;
-    }
-    identity.remove_prefix(nominal_type_identity_prefix.size());
-    std::uint32_t index { };
-    const auto [end, error] = std::from_chars(
-        identity.data(), identity.data() + identity.size(), index);
-    return error == std::errc { } && end == identity.data() + identity.size()
-        ? std::optional { TypeId::from_index(index) }
-        : std::nullopt;
+    return index ? std::optional { TypeId::from_index(*index) } : std::nullopt;
 }
 
 enum class ModportMemberKind : std::uint8_t {
@@ -303,6 +293,14 @@ enum class PatternKind : std::uint8_t {
     unsupported,
 };
 
+// Whether a call names a system task or function (a system_tf_identifier,
+// IEEE 1800-2023 5.6.3, 20, 21) or a user one; read once where the HIR is
+// built.
+enum class CallKind : std::uint8_t {
+    user,
+    system,
+};
+
 enum class GeneratedTextKind : std::uint8_t {
     none,
     systemverilog_file_macro,
@@ -346,11 +344,15 @@ struct AssignmentPatternAssociation {
     std::string choice_spelling;
     ExpressionId value;
     SourceSpanId source;
+    // A synthesized choice (`key`, the inline-constraint choices); the
+    // spelling is empty then.
+    support::ExpressionMarker choice_marker { support::ExpressionMarker::none };
 
     /// A positional pattern item has no key.
     [[nodiscard]] bool positional() const noexcept
     {
-        return choices.empty() && choice_spelling.empty();
+        return choices.empty() && choice_spelling.empty()
+            && choice_marker == support::ExpressionMarker::none;
     }
 };
 
@@ -387,6 +389,23 @@ struct Expression {
     bool folded { };
     GeneratedTextKind generated_text { GeneratedTextKind::none };
     PatternKind pattern { PatternKind::none };
+    // The target of a cast `target'(value)` (IEEE 1800-2023 6.24.1) and, for
+    // a built-in data type target, its kind; `none` on every other node.
+    support::SystemVerilogCastTarget cast_target {
+        support::SystemVerilogCastTarget::none };
+    support::SystemVerilogBuiltinType cast_builtin {
+        support::SystemVerilogBuiltinType::none };
+    // The kind of a synthesized node and its payload (frontend
+    // Expression::marker); `none` and empty on a source node.
+    support::ExpressionMarker marker { support::ExpressionMarker::none };
+    std::string marker_argument;
+    // A name that is a built-in data type keyword (frontend
+    // Expression::systemverilog_keyword_type); `none` otherwise.
+    support::SystemVerilogBuiltinType keyword_type {
+        support::SystemVerilogBuiltinType::none };
+    // `system` when the node names a system_tf_identifier: a system task or
+    // function call, or a system function named without arguments (20.3).
+    CallKind call_kind { CallKind::user };
     // Exact semantic type selected for an explicitly typed assignment pattern.
     // Invalid or unresolved names leave this disengaged.
     std::optional<TypeId> nominal_type_target;
@@ -402,14 +421,11 @@ struct Expression {
 /// size expression first and its value operand second. Keep that source shape
 /// in one place so HIR consumers do not accidentally treat the size as the
 /// value being cast.
-inline constexpr std::string_view expression_size_cast_text
-    = "@sv-size-cast:expression";
-
 [[nodiscard]] inline bool is_expression_size_cast(
     const Expression& expression) noexcept
 {
     return expression.kind == ExpressionKind::call
-        && expression.text == expression_size_cast_text
+        && expression.marker == support::ExpressionMarker::sv_size_cast
         && expression.operands.size() == 2U;
 }
 
@@ -422,7 +438,7 @@ systemverilog_cast_value_operand(const Expression& expression) noexcept
     if (is_expression_size_cast(expression)) {
         return expression.operands[1U];
     }
-    if (expression.text.starts_with("@sv-cast:")
+    if (expression.marker == support::ExpressionMarker::sv_cast
         && expression.operands.size() == 1U) {
         return expression.operands.front();
     }
@@ -538,6 +554,12 @@ struct Statement {
     std::optional<ExpressionId> value;
     std::optional<ExpressionId> condition;
     Name task;
+    // A synthesized callee and its payload (frontend
+    // Statement::task_marker); `task` is empty then.
+    support::ExpressionMarker task_marker { support::ExpressionMarker::none };
+    std::string task_marker_argument;
+    // The kind of the task a task call names.
+    CallKind task_call_kind { CallKind::user };
     std::vector<TaskAssociation> task_arguments;
     std::string loop_variable;
     bool loop_variable_declared { };
@@ -545,6 +567,9 @@ struct Statement {
     std::optional<ExpressionId> loop_limit;
     std::optional<ExpressionId> loop_update_target;
     std::vector<StatementId> loop_updates;
+    // Further for-loop initializations, run after loop_initial once before
+    // the first condition test (12.7.1).
+    std::vector<StatementId> loop_initializations;
     bool loop_descending { };
     bool loop_limit_exclusive { };
     bool loop_repeat { };
@@ -643,6 +668,10 @@ struct Statement {
     support::GeneratedStatementRole generated_role {
         support::GeneratedStatementRole::none
     };
+    // StatementKind::break_loop: a break in a foreach statement over several
+    // dimensions, which is written as nested loops (12.7.3). It ends the
+    // whole foreach statement, not only the innermost loop (12.8).
+    bool foreach_break { };
     std::optional<ExpectPropertyReference> expect_property;
     // Imports are owned by a block statement and apply only within its
     // nested lexical scope.
@@ -714,6 +743,9 @@ struct AssociativeIndexTypeReference {
     std::string interface_type;
     std::string interface_modport;
     std::string systemverilog_net_type;
+    // The built-in net type `systemverilog_net_type` names (IEEE 1800-2023 6.7);
+    // `none` when it is empty or names a user-defined nettype (6.6.7).
+    support::SystemVerilogNetKind net_type_kind { support::SystemVerilogNetKind::none };
     std::string systemverilog_resolution_function;
     std::optional<PackedRange> packed_range;
     std::vector<PackedRange> packed_dimensions;
@@ -723,6 +755,9 @@ struct AssociativeIndexTypeReference {
     std::optional<std::uint64_t> executable_width;
     bool four_state { };
     std::uint64_t source_order { };
+    // TypeReference::builtin of the index type.
+    support::SystemVerilogBuiltinType builtin {
+        support::SystemVerilogBuiltinType::none };
 
     friend bool operator==(
         const AssociativeIndexTypeReference&,
@@ -746,6 +781,20 @@ struct TypeReference {
     std::string interface_modport;
     std::vector<ActualAssociation> interface_parameter_actuals;
     std::string systemverilog_net_type;
+    // The built-in net type `systemverilog_net_type` names (IEEE 1800-2023 6.7);
+    // `none` when it is empty or names a user-defined nettype (6.6.7).
+    support::SystemVerilogNetKind net_type_kind { support::SystemVerilogNetKind::none };
+    // The built-in data type (IEEE 1800-2023 6.11-6.17) and net type (6.7)
+    // a keyword target spelling names; `none` for a named or inline type.
+    // A typedef chain is followed by the resolver, never by spelling.
+    support::SystemVerilogBuiltinType builtin {
+        support::SystemVerilogBuiltinType::none };
+    support::SystemVerilogNetKind net_kind {
+        support::SystemVerilogNetKind::none };
+    // The std package class (IEEE 1800-2023 9.7, 15.3, 15.4, 8.30) the
+    // type names, carried from the parser; `none` for every other type.
+    support::SystemVerilogStandardClass standard_class {
+        support::SystemVerilogStandardClass::none };
     // An `interconnect` net (IEEE 1800-2023 6.6.8); VPI publishes it as an
     // interconnect net or array (37.24).
     bool systemverilog_interconnect { };
@@ -789,6 +838,23 @@ struct TypeReference {
     friend bool operator==(
         const TypeReference&, const TypeReference&) = default;
 };
+
+/// Whether a type reference is a built-in data type written as its keyword
+/// (IEEE 1800-2023 6.11), whose spelling no declaration names.
+[[nodiscard]] inline bool names_builtin_type(const TypeReference& type) noexcept
+{
+    return type.builtin != support::SystemVerilogBuiltinType::none;
+}
+
+// Makes `reference` the built-in data type `kind` (IEEE 1800-2023
+// 6.11-6.17): its keyword spelling and its kind together.
+inline void set_builtin_type(
+    TypeReference& reference, const support::SystemVerilogBuiltinType kind)
+{
+    reference.target.spelling
+        = std::string { support::systemverilog_builtin_type_name(kind) };
+    reference.builtin = kind;
+}
 
 /// A container of class handles whose elements are containers themselves
 /// (`C q[int][bit]`, IEEE 1800-2017 7.4.5, 7.8): an object holds it as a
@@ -855,6 +921,7 @@ inline AssociativeIndexTypeReference make_associative_index_metadata(
     output.interface_type = type.interface_type;
     output.interface_modport = type.interface_modport;
     output.systemverilog_net_type = type.systemverilog_net_type;
+    output.net_type_kind = type.net_type_kind;
     output.systemverilog_resolution_function
         = type.systemverilog_resolution_function;
     output.packed_range = type.packed_range;
@@ -865,6 +932,7 @@ inline AssociativeIndexTypeReference make_associative_index_metadata(
     output.executable_width = type.executable_width;
     output.four_state = type.four_state;
     output.source_order = type.source_order;
+    output.builtin = type.builtin;
     return output;
 }
 
@@ -879,6 +947,7 @@ inline TypeReference type_reference_from_associative_index_metadata(
     output.interface_type = type.interface_type;
     output.interface_modport = type.interface_modport;
     output.systemverilog_net_type = type.systemverilog_net_type;
+    output.net_type_kind = type.net_type_kind;
     output.systemverilog_resolution_function
         = type.systemverilog_resolution_function;
     output.packed_range = type.packed_range;
@@ -889,6 +958,7 @@ inline TypeReference type_reference_from_associative_index_metadata(
     output.executable_width = type.executable_width;
     output.four_state = type.four_state;
     output.source_order = type.source_order;
+    output.builtin = type.builtin;
     return output;
 }
 
@@ -999,6 +1069,21 @@ struct ConstraintBinding {
 struct ConstraintExpression {
     ConstraintExpressionKind kind { ConstraintExpressionKind::invalid };
     std::string text;
+    // A synthesized call (a cast, a container method): its kind and payload,
+    // with an empty text, as on Expression.
+    support::ExpressionMarker marker { support::ExpressionMarker::none };
+    std::string marker_argument;
+    // As Expression::call_kind.
+    CallKind call_kind { CallKind::user };
+    // A cast `T'(e)` (6.24.1): what T is. A cast to a typedef of a packed
+    // integral type is resolved to signed_type/unsigned_type with the width
+    // in marker_argument.
+    support::SystemVerilogCastTarget cast_target {
+        support::SystemVerilogCastTarget::none
+    };
+    support::SystemVerilogBuiltinType cast_builtin {
+        support::SystemVerilogBuiltinType::none
+    };
     std::string resolved_identity;
     SourceSpanId source;
     std::vector<ConstraintExpression> operands;
@@ -1686,6 +1771,12 @@ struct SourceToken {
     std::string text;
     SourceSpanId source;
     GeneratedTextKind generated_text { GeneratedTextKind::none };
+    // The data-type keyword the parser read on this token (frontend::Token's
+    // fields of the same names).
+    support::SystemVerilogBuiltinType builtin {
+        support::SystemVerilogBuiltinType::none };
+    support::SystemVerilogTypeWord type_word {
+        support::SystemVerilogTypeWord::none };
 };
 
 enum class CovergroupOwnerKind : std::uint8_t {
@@ -2022,6 +2113,10 @@ struct CompilationContext {
     std::string time_unit;
     std::string time_precision;
     std::string default_nettype;
+    // The built-in net type `default_nettype` names (IEEE 1800-2023 22.8).
+    support::SystemVerilogNetKind default_net_kind {
+        support::SystemVerilogNetKind::none
+    };
     bool cell { };
 };
 
@@ -2783,10 +2878,6 @@ enum class NamedPackedDimensions : std::uint8_t {
     not_packed,
 };
 
-/// Whether a type spelled this way may be a packed array element: the
-/// predefined-width integer types and the non-integral types may not.
-[[nodiscard]] bool packed_element_spelling(std::string_view spelling) noexcept;
-
 /// Applies the dimensions of a reference marked packed_over_named_type (its
 /// packed_dimensions, with packed_range spanning them and the named type) to
 /// the shape its target selects: the declared dimensions come first, then
@@ -2824,20 +2915,5 @@ struct TopLevelHirView {
     std::span<const Declaration> declarations,
     std::span<const Statement> statements,
     std::span<const ClassDeclaration> classes);
-
-/// Whether a type spelling is a built-in net type keyword
-/// (IEEE 1800-2017 6.7.1).
-[[nodiscard]] constexpr bool is_builtin_net_kind(
-    const std::string_view spelling) noexcept
-{
-    for (const std::string_view kind : { "wire", "tri", "tri0", "tri1",
-             "wand", "triand", "wor", "trior", "trireg", "uwire", "supply0",
-             "supply1" }) {
-        if (spelling == kind) {
-            return true;
-        }
-    }
-    return false;
-}
 
 } // namespace fsim::semantic::sv

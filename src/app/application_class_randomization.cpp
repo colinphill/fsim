@@ -5,17 +5,15 @@ namespace fsim::app::application_detail {
 
 void configure_systemverilog_randomize_selection(
     runtime::SystemVerilogClassRandomizeRequest& request,
-    const std::span<const std::string> selected_names) {
-  constexpr std::string_view no_properties{"@randomize-null"};
-  const auto checker_call = selected_names.size() == 1U
-      && selected_names.front() == no_properties;
-  if (!checker_call
-      && std::ranges::find(selected_names, no_properties)
-          != selected_names.end()) {
-    throw std::invalid_argument{
-        "class randomize checker marker must be the only selection"};
-  }
-  if (checker_call) {
+    const std::span<const std::string> selected_names,
+    const bool no_properties) {
+  // `randomize(null)` is the checker call (18.11.1): it names nothing else.
+  if (no_properties) {
+    if (std::ranges::any_of(selected_names,
+            [](const std::string& name) { return !name.empty(); })) {
+      throw std::invalid_argument{
+          "class randomize checker marker must be the only selection"};
+    }
     request.selection =
         runtime::SystemVerilogClassRandomizeSelection::NoProperties;
     return;

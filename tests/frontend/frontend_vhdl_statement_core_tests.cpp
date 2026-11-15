@@ -703,12 +703,12 @@ end architecture;)",
             && range_case.case_alternatives[0].choices.size() == 2
             && range_case.case_alternatives[0].choices[1].kind
                 == ExpressionKind::Call
-            && range_case.case_alternatives[0].choices[1].text
-                == "@vhdl-case-range-to"
+            && range_case.case_alternatives[0].choices[1].marker
+                == fsim::support::ExpressionMarker::vhdl_case_range_to
             && range_case.case_alternatives[0].choices[1].operands.size() == 2
             && range_case.case_alternatives[1].choices.size() == 2
-            && range_case.case_alternatives[1].choices[0].text
-                == "@vhdl-case-range-downto"
+            && range_case.case_alternatives[1].choices[0].marker
+                == fsim::support::ExpressionMarker::vhdl_case_range_downto
             && range_case.case_alternatives[2].is_default,
         "grouped ascending, descending, null, and others choices are retained");
 

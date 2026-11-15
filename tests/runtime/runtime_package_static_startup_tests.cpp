@@ -5,6 +5,7 @@
 #include "fsim/runtime/simir.hpp"
 #include "fsim/runtime/simir_interpreter.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <functional>
@@ -1315,6 +1316,229 @@ namespace {
         }
     }
 
+    // A static variable's declaration initializer is initialization, not a
+    // transaction (IEEE 1800-2023 6.8; 1076-2019 14.7.5.2; owner 11-15):
+    // whatever the target, its value settles before the first cycle with
+    // no transaction and no event that a time-zero process could see.
+    [[nodiscard]] Process declaration_initializer_process(
+        const ProcessId id, const SignalId target, PackedLogic4 value)
+    {
+        Process process;
+        process.id = id;
+        process.name = "declaration_initializer_test";
+        process.register_count = 1U;
+        process.operations = {
+            LoadConstant { 0U, std::move(value) },
+            WriteBlocking { target, 0U },
+            Halt { },
+        };
+        process.driver_regions.push_back({ target, 0U, 0U, true });
+        process.scheduling_domain = ProcessSchedulingDomain::systemverilog;
+        process.startup_phase = ProcessStartupPhase::declaration_initializer;
+        return process;
+    }
+
+    // Counts the transactions the scheduler records on the watched signals,
+    // and the value changes it records inside a scheduler phase. Settling
+    // an initial value is logged as a change outside every phase.
+    struct InitializerTraceCount {
+        std::vector<SignalId> watched;
+        std::size_t records { };
+
+        static void receive(
+            void* const context, const SchedulerTraceRecord& record) noexcept
+        {
+            auto& count = *static_cast<InitializerTraceCount*>(context);
+            if (std::ranges::find(count.watched, record.signal)
+                    == count.watched.end()) {
+                return;
+            }
+            if (record.kind == SchedulerTraceKind::signal_transaction
+                || (record.kind == SchedulerTraceKind::signal_change
+                    && record.phase.has_value())) {
+                ++count.records;
+            }
+        }
+    };
+
+    // An ordinary time-zero process that records whether `target` had a
+    // transaction ('ACTIVE) or an event ('EVENT) in the first cycle.
+    struct FirstCycleObserver {
+        SignalId active { };
+        SignalId event { };
+    };
+
+    [[nodiscard]] FirstCycleObserver add_first_cycle_observer(
+        Interpreter& interpreter, const ProcessId id, const SignalId target)
+    {
+        FirstCycleObserver observer {
+            interpreter.add_signal({ "observer.active",
+                PackedLogic4::from_msb_string("x") }),
+            interpreter.add_signal({ "observer.event",
+                PackedLogic4::from_msb_string("x") }),
+        };
+        Process process;
+        process.id = id;
+        process.name = "first_cycle_observer";
+        process.register_count = 2U;
+        process.operations = {
+            SignalActive { 0U, target },
+            WriteBlocking { observer.active, 0U },
+            SignalEvent { 1U, target },
+            WriteBlocking { observer.event, 1U },
+            Halt { },
+        };
+        process.scheduling_domain = ProcessSchedulingDomain::systemverilog;
+        (void)interpreter.add_process(std::move(process));
+        return observer;
+    }
+
+    void require_quiet_first_cycle(Interpreter& interpreter,
+        const FirstCycleObserver& observer,
+        const InitializerTraceCount& trace, const char* const message)
+    {
+        require(interpreter.run().status == RunStatus::completed, message);
+        require(interpreter.signal_value(observer.active)
+                == PackedLogic4::from_msb_string("0"),
+            message);
+        require(interpreter.signal_value(observer.event)
+                == PackedLogic4::from_msb_string("0"),
+            message);
+        require(trace.records == 0U, message);
+    }
+
+    void verify_declaration_initializer_settles_resolved_target()
+    {
+        // A resolved target: the initializer is its process's initial
+        // driving value and the signal settles to the resolution.
+        Interpreter interpreter;
+        const auto target = interpreter.add_signal({ "top.resolved",
+            PackedLogic4::from_msb_string("zz"), ResolutionKind::std_logic });
+        const auto initializer = interpreter.add_process(
+            declaration_initializer_process(0U, target,
+                PackedLogic4::from_msb_string("10")));
+        const auto observer
+            = add_first_cycle_observer(interpreter, 1U, target);
+        InitializerTraceCount trace { { target } };
+        interpreter.scheduler().set_trace_hook(
+            &trace, &InitializerTraceCount::receive);
+        interpreter.start();
+        require(interpreter.signal_value(target)
+                    == PackedLogic4::from_msb_string("10")
+                && interpreter.driver_value(initializer, target)
+                    == PackedLogic4::from_msb_string("10"),
+            "a resolved initializer target settles to its driver's value");
+        require_quiet_first_cycle(interpreter, observer, trace,
+            "a resolved initializer target has no time-zero transaction");
+        interpreter.scheduler().set_trace_hook(nullptr, nullptr);
+    }
+
+    // What a time-zero observer and the scheduler trace see of `target`.
+    struct FirstCycleView {
+        PackedLogic4 active { 0U, Logic4::zero };
+        PackedLogic4 event { 0U, Logic4::zero };
+        std::size_t records { };
+        friend bool operator==(const FirstCycleView&, const FirstCycleView&)
+            = default;
+    };
+
+    void verify_declaration_initializer_keeps_force()
+    {
+        // A forced target keeps its forced bits; the initializer's value
+        // lies beneath and shows once the force is released (10.6.2). The
+        // force itself is a time-zero change, so the run is compared with
+        // the same run without the initializer: the initializer adds no
+        // transaction and no event.
+        const auto run = [&](const bool with_initializer,
+                             PackedLogic4& visible, PackedLogic4& stored,
+                             PackedLogic4& released) {
+            Interpreter interpreter;
+            const auto target = interpreter.add_signal({ "top.forced",
+                PackedLogic4::from_msb_string("0000") });
+            if (with_initializer) {
+                (void)interpreter.add_process(declaration_initializer_process(
+                    0U, target, PackedLogic4::from_msb_string("1010")));
+            }
+            const auto observer = add_first_cycle_observer(
+                interpreter, with_initializer ? 1U : 0U, target);
+            interpreter.force_signal(
+                target, PackedLogic4::from_msb_string("0110"));
+            InitializerTraceCount trace { { target } };
+            interpreter.scheduler().set_trace_hook(
+                &trace, &InitializerTraceCount::receive);
+            interpreter.start();
+            visible = interpreter.signal_value(target);
+            stored = interpreter.stored_signal_value(target);
+            require(interpreter.run().status == RunStatus::completed,
+                "the forced initializer run completes");
+            interpreter.scheduler().set_trace_hook(nullptr, nullptr);
+            FirstCycleView view { interpreter.signal_value(observer.active),
+                interpreter.signal_value(observer.event), trace.records };
+            interpreter.release_signal(target);
+            released = interpreter.signal_value(target);
+            return view;
+        };
+        PackedLogic4 visible { 0U, Logic4::zero };
+        PackedLogic4 stored { 0U, Logic4::zero };
+        PackedLogic4 released { 0U, Logic4::zero };
+        const auto baseline = run(false, visible, stored, released);
+        const auto initialized = run(true, visible, stored, released);
+        require(visible == PackedLogic4::from_msb_string("0110")
+                && stored == PackedLogic4::from_msb_string("1010"),
+            "a forced initializer target keeps the force over its value");
+        require(initialized == baseline,
+            "a forced initializer target adds no time-zero transaction");
+        require(released == PackedLogic4::from_msb_string("1010"),
+            "releasing the force shows the initializer's value");
+    }
+
+    void verify_declaration_initializer_settles_aggregate_alias()
+    {
+        // An aggregate whose elements are signals: each element settles,
+        // and the aggregate reads their projection.
+        Interpreter interpreter;
+        const auto zeros = PackedLogic4::from_msb_string("0000");
+        const auto first = interpreter.add_signal({ "top.words[1]", zeros,
+            ResolutionKind::sv_wire });
+        const auto second = interpreter.add_signal({ "top.words[0]", zeros,
+            ResolutionKind::sv_wire });
+        const auto proxy = interpreter.add_signal({ "top.words",
+            PackedLogic4::from_msb_string("00000000"),
+            ResolutionKind::sv_wire });
+        ContainerType type;
+        type.fixed = true;
+        type.element_width = 4U;
+        type.index_left = 1;
+        type.index_right = 0;
+        type.dimensions = { { 1, 0 } };
+        const auto object = interpreter.add_container_object({ "top.words",
+            ContainerValue { type, { zeros, zeros }, { } }, std::nullopt });
+        interpreter.add_container_element_signal_alias(
+            { object, 0U, first, true, true });
+        interpreter.add_container_element_signal_alias(
+            { object, 1U, second, true, true });
+        interpreter.add_container_aggregate_signal_alias(
+            { object, proxy, true, true });
+        (void)interpreter.add_process(declaration_initializer_process(0U,
+            proxy, PackedLogic4::from_msb_string("10100101")));
+        const auto observer
+            = add_first_cycle_observer(interpreter, 1U, first);
+        InitializerTraceCount trace { { first, second, proxy } };
+        interpreter.scheduler().set_trace_hook(
+            &trace, &InitializerTraceCount::receive);
+        interpreter.start();
+        require(interpreter.signal_value(first)
+                    == PackedLogic4::from_msb_string("1010")
+                && interpreter.signal_value(second)
+                    == PackedLogic4::from_msb_string("0101")
+                && interpreter.signal_value(proxy)
+                    == PackedLogic4::from_msb_string("10100101"),
+            "an aggregate initializer settles each element signal");
+        require_quiet_first_cycle(interpreter, observer, trace,
+            "an aggregate initializer has no time-zero transaction");
+        interpreter.scheduler().set_trace_hook(nullptr, nullptr);
+    }
+
     void verify_empty_startup_phase_query()
     {
         Interpreter interpreter;
@@ -1402,6 +1626,9 @@ void test_package_static_startup_runtime()
     verify_execution_context_slice_forces_are_rejected();
     verify_empty_startup_phase_query();
     verify_suspended_and_deferred_actions_fail_closed();
+    verify_declaration_initializer_settles_resolved_target();
+    verify_declaration_initializer_keeps_force();
+    verify_declaration_initializer_settles_aggregate_alias();
 }
 
 } // namespace fsim::tests::runtime

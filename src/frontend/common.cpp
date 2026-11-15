@@ -355,7 +355,7 @@ bool apply_systemverilog_integral_type(
     if (!descriptor) {
         return false;
     }
-    type.spelling = spelling;
+    set_systemverilog_type_keyword(type, spelling);
     type.domain = descriptor->domain;
     type.is_signed = descriptor->default_signed;
     type.systemverilog_scalar = descriptor->scalar_kind;
@@ -371,7 +371,7 @@ bool apply_systemverilog_integral_type(
 bool is_systemverilog_simple_integral_type(const Type& type) noexcept
 {
     const bool builtin =
-        systemverilog_integral_type_descriptor(type.spelling).has_value();
+        support::systemverilog_integral(type.systemverilog_builtin);
     const bool integral_domain = type.domain == ValueDomain::Bit2
         || type.domain == ValueDomain::Logic4;
     const bool integral_scalar =
@@ -411,6 +411,8 @@ namespace {
     const Expression& left, const Expression& right) noexcept
 {
     if (left.kind != right.kind || left.text != right.text
+        || left.marker != right.marker
+        || left.marker_argument != right.marker_argument
         || left.operands.size() != right.operands.size()) {
         return false;
     }
@@ -872,7 +874,7 @@ namespace {
 
     bool same_expression_shape(const Expression& left, const Expression& right)
     {
-        if (left.kind != right.kind || left.text != right.text || left.nominal_type != right.nominal_type || left.aggregate_choices != right.aggregate_choices || left.operands.size() != right.operands.size() || left.aggregate_choice_expressions.size() != right.aggregate_choice_expressions.size()) {
+        if (left.kind != right.kind || left.text != right.text || left.marker != right.marker || left.marker_argument != right.marker_argument || left.aggregate_choice_markers != right.aggregate_choice_markers || left.nominal_type != right.nominal_type || left.aggregate_choices != right.aggregate_choices || left.operands.size() != right.operands.size() || left.aggregate_choice_expressions.size() != right.aggregate_choice_expressions.size()) {
             return false;
         }
         for (std::size_t index = 0; index < left.operands.size(); ++index) {

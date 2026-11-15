@@ -167,13 +167,13 @@ class VhdlExecutableBuilder final {
       output.origin = expression_origin;
       output.nominal_type = input.nominal_type;
       if (input.kind == frontend::ExpressionKind::Call
-          && input.text == "@vhdl-external"
+          && input.marker == support::ExpressionMarker::vhdl_external
           && input.operands.size() == 2U
           && input.operands[1].call_result_width != 0U) {
-          output.nominal_type = "@fsim-vhdl-external:"
-              + std::to_string(input.operands[1].call_result_width) + ":"
-              + std::to_string(static_cast<unsigned>(
-                  input.operands[1].call_result_domain));
+          output.external_width = static_cast<std::uint32_t>(
+              input.operands[1].call_result_width);
+          output.external_domain = static_cast<std::uint8_t>(
+              input.operands[1].call_result_domain);
       }
       output.decoded_string = input.decoded_string;
       if (input.kind == frontend::ExpressionKind::Identifier
@@ -181,11 +181,10 @@ class VhdlExecutableBuilder final {
           || input.kind == frontend::ExpressionKind::Call
           || input.kind == frontend::ExpressionKind::Unary
           || input.kind == frontend::ExpressionKind::Binary) {
-          constexpr auto qualified_prefix
-              = semantic::vhdl::qualified_expression_prefix;
-          auto spelling = input.text.starts_with(qualified_prefix)
-              ? std::string { std::string_view { input.text }.substr(
-                    qualified_prefix.size()) }
+          // A qualified expression T'(e) names its type mark T (9.3.5).
+          auto spelling
+              = input.marker == support::ExpressionMarker::vhdl_qualified
+              ? input.marker_argument
               : input.text;
           if (input.selected_operator_prefix) {
               spelling = *input.selected_operator_prefix + "." + input.text;
@@ -197,6 +196,8 @@ class VhdlExecutableBuilder final {
           }
       }
       output.operator_symbol_call = input.vhdl_operator_symbol_call;
+      output.marker = input.marker;
+      output.marker_argument = input.marker_argument;
       output.argument_names = input.call_argument_names;
       for (const auto& operand : input.operands) {
           if (const auto operand_id = expression(
@@ -214,6 +215,8 @@ class VhdlExecutableBuilder final {
               if (index < input.aggregate_choices.size()) {
                   association.choice_spelling = input.aggregate_choices[index];
               }
+              association.choice_marker
+                  = frontend::aggregate_choice_marker(input, index);
               if (index < input.aggregate_choice_expressions.size()) {
                   for (const auto& choice :
                       input.aggregate_choice_expressions[index]) {

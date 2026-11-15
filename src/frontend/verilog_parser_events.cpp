@@ -435,7 +435,7 @@ void VerilogParser::parse_clocking_block(
     const auto guard_span = guard->span;
     Type tick_type;
     tick_type.domain = ValueDomain::Bit2;
-    tick_type.spelling = "bit";
+    set_systemverilog_builtin_type(tick_type, support::SystemVerilogBuiltinType::bit);
     auto& signals = generated_body != nullptr
         ? generated_body->signals
         : unit.signals;

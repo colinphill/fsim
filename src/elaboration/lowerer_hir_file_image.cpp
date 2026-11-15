@@ -231,12 +231,12 @@ Lowerer::HirVhdlFileImageResult Lowerer::lower_hir_vhdl_file_image(
                 }
                 if (!scale && unit.scale) {
                     const auto expression = specialized_hir_unit_->find_expression(*unit.scale);
-                    constexpr std::string_view prefix { "@vhdl-physical:" };
                     if (expression && expression->vhdl != nullptr
-                        && expression->vhdl->text.starts_with(prefix)
+                        && expression->vhdl->marker
+                            == support::ExpressionMarker::vhdl_physical
                         && expression->vhdl->operands.size() == 1U) {
                         const auto referenced = lower_case(
-                            std::string_view { expression->vhdl->text }.substr(prefix.size()));
+                            std::string_view { expression->vhdl->marker_argument });
                         const auto prior = std::ranges::find_if(leaf.units,
                             [&](const auto& candidate) { return candidate.first == referenced; });
                         const auto multiplier = specialized_hir_unit_->evaluate_integral_expression(

@@ -29,6 +29,26 @@ namespace sv = semantic::sv;
 
 // Copy effective type properties for a named typedef use while retaining the
 // selected typedef identity in reference.target.
+// The kind of the callee `name` of a source call or task call: a system
+// task or function when it is a system_tf_identifier, which begins with `$`
+// (IEEE 1800-2023 5.6.3). Read here once, where the HIR is built.
+[[nodiscard]] inline sv::CallKind systemverilog_call_kind(
+    const std::string_view name) noexcept
+{
+    return name.starts_with('$') ? sv::CallKind::system : sv::CallKind::user;
+}
+
+// The callee kind of `input`: `system` for an unmarked node whose name is a
+// system_tf_identifier (a call, or a system function named without an
+// argument list, 20.3), `user` otherwise.
+[[nodiscard]] inline sv::CallKind systemverilog_call_kind(
+    const frontend::Expression& input) noexcept
+{
+    return input.marker == support::ExpressionMarker::none
+        ? systemverilog_call_kind(input.text)
+        : sv::CallKind::user;
+}
+
 inline void inherit_named_systemverilog_type_shape(
     sv::TypeReference& reference, const sv::Hir& hir)
 {
@@ -70,6 +90,7 @@ inline void inherit_named_systemverilog_type_shape(
             reference.interface_type = base.interface_type;
             reference.interface_modport = base.interface_modport;
             reference.systemverilog_net_type = base.systemverilog_net_type;
+            reference.net_type_kind = base.net_type_kind;
             reference.systemverilog_resolution_function
                 = base.systemverilog_resolution_function;
             reference.packed_range = base.packed_range;
@@ -129,26 +150,22 @@ inline void inherit_named_systemverilog_type_shape(
     return sv::TypeForm::packed_integral;
 }
 
-// Records the class member a class-operation call (@sv-new:, @sv-method:,
-// ...) names, and the member's class when the expression has none.
-inline void bind_systemverilog_class_operation(
-    sv::Expression& output, const std::string_view text)
+// Records the class member a class-operation call (sv_new_constructor,
+// sv_method, ...) names, and the member's class when the expression has
+// none.
+inline void bind_systemverilog_class_operation(sv::Expression& output,
+    const frontend::Expression& input)
 {
-    for (const std::string_view prefix : { "@sv-new:", "@sv-dollar-cast:",
-             "@sv-property:", "@sv-static-property:", "@sv-base-method:",
-             "@sv-method:", "@sv-static-method:" }) {
-        if (!text.starts_with(prefix)) {
-            continue;
-        }
-        const auto payload = text.substr(prefix.size());
-        output.class_member_identity = std::string { payload };
-        if (output.class_identity.empty()) {
-            output.class_identity
-                = std::string { payload.substr(0, payload.rfind("::")) };
-        }
+    if (!support::sv_class_member_operation(input.marker)) {
+        output.class_member_identity.clear();
         return;
     }
-    output.class_member_identity.clear();
+    output.class_member_identity = input.marker_argument;
+    // The class the frontend bound the operation to (IEEE 1800-2023 8.5,
+    // 8.7, 8.16), carried with the marker.
+    if (output.class_identity.empty()) {
+        output.class_identity = input.marker_owner;
+    }
 }
 
 [[nodiscard]] inline std::optional<sv::DecimalLiteral>
@@ -228,7 +245,8 @@ inline std::vector<bool> omit_systemverilog_call_arguments(
 {
     std::vector<bool> omitted(input.operands.size());
     if (input.kind != frontend::ExpressionKind::Call
-        || input.text.starts_with('$') || !referenced_name
+        || systemverilog_call_kind(input) == sv::CallKind::system
+        || !referenced_name
         || referenced_name->overloads.size() != 1U
         || std::ranges::none_of(input.operands,
             [](const frontend::Expression& operand) {

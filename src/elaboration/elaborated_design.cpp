@@ -1305,6 +1305,12 @@ bool ElaboratedDesign::storage_alias_path(const std::string_view path) const
     return storage_alias_paths_.contains(path);
 }
 
+bool ElaboratedDesign::root_relative_alias_path(
+    const std::string_view path) const
+{
+    return root_relative_alias_paths_.contains(path);
+}
+
 std::vector<std::pair<std::string, runtime::simir::SignalId>>
 ElaboratedDesign::signal_paths() const
 {

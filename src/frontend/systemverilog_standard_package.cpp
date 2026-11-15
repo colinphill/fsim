@@ -7,22 +7,33 @@ namespace fsim::frontend {
 namespace {
 
 using Kind = SystemVerilogStandardPackageMemberKind;
+using Class = support::SystemVerilogStandardClass;
 
 // This is an independently authored semantic inventory. Keep the 2023-only
 // declaration last so earlier profiles are zero-allocation prefix views.
 constexpr std::array<SystemVerilogStandardPackageDeclaration, 5>
     kDeclarations { {
         { "mailbox", Kind::class_type,
-            StandardRevision::SystemVerilog2005, true, false, false },
+            StandardRevision::SystemVerilog2005, true, false, false,
+            Class::mailbox },
         { "process", Kind::class_type,
-            StandardRevision::SystemVerilog2005, false, true, true },
+            StandardRevision::SystemVerilog2005, false, true, true,
+            Class::process },
         { "semaphore", Kind::class_type,
-            StandardRevision::SystemVerilog2005, false, false, false },
+            StandardRevision::SystemVerilog2005, false, false, false,
+            Class::semaphore },
         { "randomize", Kind::function,
-            StandardRevision::SystemVerilog2005, false, false, false },
+            StandardRevision::SystemVerilog2005, false, false, false,
+            Class::none },
         { "weak_reference", Kind::class_type,
-            StandardRevision::SystemVerilog2023, true, false, false },
+            StandardRevision::SystemVerilog2023, true, false, false,
+            Class::weak_reference },
     } };
+
+// The constants of process's `state` enum in declaration order (9.7).
+constexpr std::array<std::string_view, 5> kProcessStates {
+    "FINISHED", "RUNNING", "WAITING", "SUSPENDED", "KILLED",
+};
 
 struct Identity {
     StandardRevision standard;
@@ -80,6 +91,17 @@ find_systemverilog_standard_package_declaration(
         package->declarations, name,
         &SystemVerilogStandardPackageDeclaration::name);
     return found == package->declarations.end() ? nullptr : &*found;
+}
+
+std::optional<std::uint32_t>
+systemverilog_process_state_value(const std::string_view member) noexcept
+{
+    for (std::size_t index = 0; index < kProcessStates.size(); ++index) {
+        if (kProcessStates[index] == member) {
+            return static_cast<std::uint32_t>(index);
+        }
+    }
+    return std::nullopt;
 }
 
 } // namespace fsim::frontend

@@ -703,7 +703,8 @@ void VhdlHirBuilder::add_design(const frontend::ParsedDesign& parsed)
         if (!connection.port
             || connection.kind != frontend::PortActualKind::Expression
             || group.kind != frontend::ExpressionKind::Aggregate
-            || group.text != "@vhdl-formal-subelements"
+            || group.marker
+                != support::ExpressionMarker::vhdl_formal_subelements
             || group.operands.empty()
             || group.aggregate_choice_expressions.size()
                 != group.operands.size()) {

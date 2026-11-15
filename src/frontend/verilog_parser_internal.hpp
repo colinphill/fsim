@@ -133,6 +133,10 @@ enum class SystemVerilogAnnexConstruct {
 [[nodiscard]] bool is_system_verilog_2012_keyword(std::string_view word);
 [[nodiscard]] bool keyword_reserved(
     KeywordSet set, std::string_view word);
+// Reads the data-type keywords of `token`, kept as source text, under the
+// keyword set `set` (IEEE 1800-2023 5.6.2): the built-in type or other type
+// keyword it names; any other token is left unmarked.
+void mark_type_keyword_token(Token& token, KeywordSet set);
 [[nodiscard]] std::optional<KeywordSet> parse_keyword_set(
     std::string_view spelling);
 
@@ -1064,6 +1068,9 @@ class VerilogParser final : private detail::ParserBase {
       std::string_view package, std::string_view member) const;
   // What a type name (`p::t`, or `t` through an import in effect) names
   // in a package; none when it names no package member.
+  // Whether `name` names a std package class that no value declared so
+  // far in this unit hides (IEEE 1800-2023 26.7).
+  [[nodiscard]] bool standard_class_name_visible(std::string_view name) const;
   [[nodiscard]] SystemVerilogPackageMember imported_member(
       std::string_view name) const;
   // Whether the identifier at `cursor` (`t` or `p::t`) is followed by a
@@ -1198,6 +1205,9 @@ class VerilogParser final : private detail::ParserBase {
       std::vector<Statement>& extra_initializations);
 
   Statement parse_procedural_foreach_statement(const Token& start);
+  // A statement label (9.3.5) on a parsed statement other than a block.
+  Statement label_statement(const Token& label, bool for_loop,
+                            bool foreach_loop, Statement statement);
 
   Statement parse_repeat_statement(const Token& start);
 
@@ -1479,6 +1489,8 @@ class VerilogParser final : private detail::ParserBase {
   // Module-level string variables, for `foreach (s[i])` (IEEE 1800-2023
   // 12.7.3).
   std::unordered_set<std::string> unit_string_names_;
+  // Port names of the unit being parsed.
+  std::unordered_set<std::string> unit_port_names_;
   // Index types of the unit's associative arrays, for foreach.
   std::unordered_map<std::string, Type> unit_associative_index_types_;
   // Associative-array properties of the class being parsed.
@@ -1513,9 +1525,9 @@ class VerilogParser final : private detail::ParserBase {
   std::unordered_map<std::string, std::size_t>
       current_loop_names_;
   std::size_t current_loop_depth_{};
-  // Named blocks around desugared multi-dimensional foreach loops, with the
-  // loop depth of their bodies: a break leaves the whole loop (12.8).
-  std::vector<std::pair<std::size_t, std::string>> foreach_break_targets_;
+  // The loop depth of each desugared multi-dimensional foreach body: a break
+  // there leaves the whole foreach statement (12.8).
+  std::vector<std::size_t> foreach_break_targets_;
   // A hoisted nested unit's enclosing unit, by the nested unit's name, and
   // the names each enclosing unit declares.
   std::unordered_map<std::string, std::string> nested_unit_parents_;

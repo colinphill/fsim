@@ -188,13 +188,20 @@ Expression VerilogParser::parse_postfix(Expression expression)
                 auto constraints = parse_constraint_block_expressions(
                     "'}' after randomize with constraint block",
                     "FSIM-SV-PARSE-335");
-                expression.aggregate_choices.push_back(
-                    "@sv-inline-constraint");
+                // The inline constraint choices carry a marker and no
+                // spelling; the marker vector stays parallel to the choices.
+                expression.aggregate_choice_markers.resize(
+                    expression.aggregate_choices.size(),
+                    support::ExpressionMarker::none);
+                expression.aggregate_choices.push_back(std::string { });
+                expression.aggregate_choice_markers.push_back(
+                    support::ExpressionMarker::sv_inline_constraint);
                 expression.aggregate_choice_expressions.push_back(
                     std::move(constraints));
                 if (member_names) {
-                    expression.aggregate_choices.push_back(
-                        "@sv-inline-constraint-names");
+                    expression.aggregate_choices.push_back(std::string { });
+                    expression.aggregate_choice_markers.push_back(
+                        support::ExpressionMarker::sv_inline_constraint_names);
                     expression.aggregate_choice_expressions.push_back(
                         std::move(*member_names));
                 }
@@ -343,7 +350,8 @@ Expression VerilogParser::parse_postfix(Expression expression)
                        return found != current_procedural_types_.end()
                            ? !found->second.systemverilog_container
                                && (found->second.domain == ValueDomain::String
-                                   || found->second.spelling == "string")
+                                   || found->second.systemverilog_builtin
+                                       == support::SystemVerilogBuiltinType::string)
                            : unit_string_names_.contains(expression.text);
                    }()
                 && (member.text == "len" || member.text == "toupper"
@@ -797,12 +805,9 @@ Expression VerilogParser::parse_postfix(Expression expression)
                 expression.text += member.text;
                 expression.span = selected_span;
             } else {
-                expression = Expression {
-                    ExpressionKind::Call,
-                    "@sv-select:" + member.text,
-                    { std::move(expression) },
-                    selected_span
-                };
+                expression = marked_expression(
+                    support::ExpressionMarker::sv_select, member.text,
+                    { std::move(expression) }, selected_span);
             }
         } else if (match(TokenKind::LeftBracket)) {
             Expression first = parse_expression();
@@ -861,10 +866,9 @@ Expression VerilogParser::parse_postfix(Expression expression)
                     previous(), "FSIM-SV-SEM-128",
                     "new[size](initializer) requires exactly one initializer");
             }
-            expression = Expression {
-                ExpressionKind::Call, "@new-array", std::move(operands),
-                cover(expression_span, previous().span)
-            };
+            expression = marked_expression(
+                support::ExpressionMarker::new_array, { },
+                std::move(operands), cover(expression_span, previous().span));
         } else if (match(TokenKind::PlusPlus)
             || match(TokenKind::MinusMinus)) {
             const auto operation = previous();

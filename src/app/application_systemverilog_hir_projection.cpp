@@ -102,7 +102,9 @@ namespace {
         if (!type.systemverilog_net_type.empty()) {
             return true;
         }
-        return semantic::sv::is_builtin_net_kind(type.spelling);
+        // A net of an implicit data type is spelled by its net-type keyword
+        // (IEEE 1800-2023 6.7).
+        return type.systemverilog_net_kind != support::SystemVerilogNetKind::none;
     }
 
 } // namespace
@@ -193,6 +195,18 @@ void SystemVerilogHirBuilder::apply_named_type_dimensions(
     output.source_order = input.systemverilog_source_order;
     output.implicit = input.implicit_type;
     output.named = !input.named_type.empty();
+    // A std package class is a named type (IEEE 1800-2023 9.7, 15.3,
+    // 15.4, 8.30); its kind travels whether or not the name is kept. A
+    // type or class of that name visible here hides the std package's
+    // wildcard import (26.7).
+    output.standard_class = output.target.target.valid()
+            || !input.systemverilog_class_declaration.empty()
+        ? support::SystemVerilogStandardClass::none
+        : input.systemverilog_standard_class;
+    if (!output.named) {
+        output.builtin = input.systemverilog_builtin;
+        output.net_kind = input.systemverilog_net_kind;
+    }
     // A named typedef base uses the declaration selected in this lexical
     // scope. The frontend cache can retain a different visible typedef's
     // packed shape; explicit use-site dimensions have an inline type instead.
@@ -218,6 +232,7 @@ void SystemVerilogHirBuilder::apply_named_type_dimensions(
                 return expression(value, scope, parent);
             });
     output.systemverilog_net_type = input.systemverilog_net_type;
+    output.net_type_kind = input.systemverilog_net_type_kind;
     output.systemverilog_interconnect = input.systemverilog_interconnect;
     output.systemverilog_resolution_function
         = input.systemverilog_resolution_function;
@@ -581,6 +596,7 @@ void SystemVerilogHirBuilder::add_packed_members(
         frontend::Type member_type;
         member_type.domain = member.domain;
         member_type.spelling = member.spelling;
+        member_type.systemverilog_builtin = member.systemverilog_builtin;
         member_type.packed_range = member.packed_range;
         member_type.is_signed = member.is_signed;
         member_type.packed_range_expression = member.packed_range_expression;
@@ -1241,7 +1257,9 @@ template <typename Input>
         static_cast<std::uint16_t>(input.kind),
         input.text,
         source(input.span),
-        static_cast<sv::GeneratedTextKind>(input.generated_text)
+        static_cast<sv::GeneratedTextKind>(input.generated_text),
+        input.systemverilog_builtin,
+        input.systemverilog_type_word
     };
 }
 

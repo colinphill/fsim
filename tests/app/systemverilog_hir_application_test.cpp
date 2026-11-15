@@ -3092,13 +3092,20 @@ endmodule
     // cast to the function's type (IEEE 1800-2017 18.5.12).
     assert(valid_choice.expressions.back().operands[1].kind
         == fsim::semantic::sv::ConstraintExpressionKind::call);
-    assert(valid_choice.expressions.back().operands[1].text
-        == "@sv-cast:signed:32");
+    assert(valid_choice.expressions.back().operands[1].marker
+        == fsim::support::ExpressionMarker::sv_cast);
+    assert(valid_choice.expressions.back().operands[1].cast_target
+        == fsim::support::SystemVerilogCastTarget::signed_type);
+    assert(valid_choice.expressions.back().operands[1].marker_argument
+        == "32");
     // `limit`, a local static constant, reads the class's static property.
     assert(valid_choice.expressions.back().operands[1].operands.front().kind
         == fsim::semantic::sv::ConstraintExpressionKind::call);
-    assert(valid_choice.expressions.back().operands[1].operands.front().text
-        == "@sv-static-property:work::$unit::HirObject::limit");
+    assert(valid_choice.expressions.back().operands[1].operands.front().marker
+        == fsim::support::ExpressionMarker::sv_static_property);
+    assert(valid_choice.expressions.back().operands[1].operands.front()
+            .marker_argument
+        == "work::$unit::HirObject::limit");
     assert(valid_choice.expressions.front().source
         != valid_choice.source);
     assert(hir_object->constraints.back().pure

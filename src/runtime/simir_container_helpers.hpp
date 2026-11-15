@@ -28,6 +28,15 @@ namespace fsim::runtime::simir {
     result.dimensions.clear();
     result.index_left = 0;
     result.index_right = 0;
+    // An element value is indexed by nothing: the owning array's index
+    // profile (an associative key type, IEEE 1800-2023 7.8) is not part of
+    // the element's type, so `m[k] <= s` matches a plain structure `s`
+    // whatever the key type of `m`.
+    const ContainerType unindexed { };
+    result.index_width = unindexed.index_width;
+    result.two_state_indices = unindexed.two_state_indices;
+    result.signed_indices = unindexed.signed_indices;
+    result.string_indices = unindexed.string_indices;
     return result;
 }
 
@@ -255,6 +264,35 @@ template <typename Container>
         type.index_left >= type.index_right
             ? static_cast<std::int64_t>(type.index_left) - index
             : static_cast<std::int64_t>(index) - type.index_left);
+}
+
+// The ordinal a read of a sparse static array addresses, or none for an
+// unknown, negative or out-of-range index (the read yields the element
+// type's invalid-index value, IEEE 1800-2023 7.4.6).
+[[nodiscard]] inline std::optional<std::uint64_t> sparse_read_ordinal(
+    const ProcessId process,
+    const InstructionIndex instruction,
+    const ContainerType& type,
+    const PackedLogic4& value,
+    const bool linear_index)
+{
+    const auto index = value.known_signed_value();
+    if (!index) {
+        return std::nullopt;
+    }
+    std::optional<std::uint64_t> ordinal;
+    if (linear_index) {
+        if (*index >= 0) {
+            ordinal = static_cast<std::uint64_t>(*index);
+        }
+    } else if (*index >= std::min(type.index_left, type.index_right)
+        && *index <= std::max(type.index_left, type.index_right)) {
+        ordinal = sparse_offset(process, instruction, type, value);
+    }
+    if (ordinal && *ordinal >= sparse_container_element_count(type)) {
+        return std::nullopt;
+    }
+    return ordinal;
 }
 
 inline void require_same_type(

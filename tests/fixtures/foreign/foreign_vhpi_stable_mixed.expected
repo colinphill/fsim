@@ -1,4 +1,5 @@
-#c stable=1 quiet=1
+#c p stable=1 quiet=1
+#c v stable=1 quiet=1
 #c p'stable change value=0 at 5000000
 #c p'stable change value=1 at 5000000
 #c p'stable change value=0 at 12000000
@@ -7,3 +8,7 @@
 #c p'quiet change value=1 at 5000000
 #c p'quiet change value=0 at 12000000
 #c p'quiet change value=1 at 12000000
+#c v'stable change value=0 at 12000000
+#c v'stable change value=1 at 12000000
+#c v'quiet change value=0 at 12000000
+#c v'quiet change value=1 at 12000000

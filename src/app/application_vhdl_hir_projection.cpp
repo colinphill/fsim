@@ -115,13 +115,13 @@ std::optional<std::int64_t> VhdlHirBuilder::static_integer(
     output.origin = expression_origin;
     output.nominal_type = value.nominal_type;
     if (value.kind == frontend::ExpressionKind::Call
-        && value.text == "@vhdl-external"
+        && value.marker == support::ExpressionMarker::vhdl_external
         && value.operands.size() == 2U
         && value.operands[1].call_result_width != 0U) {
-        output.nominal_type = "@fsim-vhdl-external:"
-            + std::to_string(value.operands[1].call_result_width) + ":"
-            + std::to_string(static_cast<unsigned>(
-                value.operands[1].call_result_domain));
+        output.external_width = static_cast<std::uint32_t>(
+            value.operands[1].call_result_width);
+        output.external_domain = static_cast<std::uint8_t>(
+            value.operands[1].call_result_domain);
     }
     output.decoded_string = value.decoded_string;
     if (value.kind == frontend::ExpressionKind::Identifier
@@ -129,11 +129,10 @@ std::optional<std::int64_t> VhdlHirBuilder::static_integer(
         || value.kind == frontend::ExpressionKind::Call
         || value.kind == frontend::ExpressionKind::Unary
         || value.kind == frontend::ExpressionKind::Binary) {
-        constexpr auto qualified_prefix
-            = semantic::vhdl::qualified_expression_prefix;
-        auto spelling = value.text.starts_with(qualified_prefix)
-            ? std::string { std::string_view { value.text }.substr(
-                  qualified_prefix.size()) }
+        // A qualified expression T'(e) names its type mark T (9.3.5).
+        auto spelling
+            = value.marker == support::ExpressionMarker::vhdl_qualified
+            ? value.marker_argument
             : value.text;
         if (value.selected_operator_prefix) {
             spelling = *value.selected_operator_prefix + "." + value.text;
@@ -145,6 +144,8 @@ std::optional<std::int64_t> VhdlHirBuilder::static_integer(
         }
     }
     output.operator_symbol_call = value.vhdl_operator_symbol_call;
+    output.marker = value.marker;
+    output.marker_argument = value.marker_argument;
     output.argument_names = value.call_argument_names;
     for (const auto& operand : value.operands) {
         if (const auto operand_id = expression(
@@ -162,6 +163,8 @@ std::optional<std::int64_t> VhdlHirBuilder::static_integer(
             if (index < value.aggregate_choices.size()) {
                 association.choice_spelling = value.aggregate_choices[index];
             }
+            association.choice_marker
+                = frontend::aggregate_choice_marker(value, index);
             if (index < value.aggregate_choice_expressions.size()) {
                 for (const auto& choice :
                     value.aggregate_choice_expressions[index]) {
@@ -1405,15 +1408,15 @@ predefined_subtype_attribute(
                     if (member_dimensions == 0U) {
                         continue;
                     }
-                    const frontend::Expression prefix {
-                        frontend::ExpressionKind::Call, "@vhdl-member:" + name,
+                    const auto prefix = frontend::marked_expression(
+                        support::ExpressionMarker::vhdl_member, name,
                         { frontend::Expression {
                             frontend::ExpressionKind::Call, "'element",
                             { frontend::Expression {
                                 frontend::ExpressionKind::Identifier,
                                 type.vhdl_object_subtype, { }, span } },
                             span } },
-                        span };
+                        span);
                     vh::ElementConstraint constraint;
                     constraint.path = { std::string { }, member.name };
                     constraint.constraints

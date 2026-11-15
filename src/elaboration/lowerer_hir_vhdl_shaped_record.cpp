@@ -17,8 +17,6 @@
 namespace fsim::elaboration {
 namespace {
 
-constexpr std::string_view member_prefix { "@vhdl-member:" };
-
 // Names why a shaped record operation was not lowered, under
 // FSIM_HIR_LOWER_TRACE_FAILURES.
 template <typename Result>
@@ -229,10 +227,10 @@ Lowerer::hir_vhdl_shaped_record_path(
             std::move(*root));
         return path;
     };
-    if (source.text == "@vhdl-dereference") {
+    if (source.marker == support::ExpressionMarker::vhdl_dereference) {
         return designated(source.operands.front());
     }
-    if (!source.text.starts_with(member_prefix)) {
+    if (source.marker != support::ExpressionMarker::vhdl_member) {
         return std::nullopt;
     }
     auto path = hir_vhdl_shaped_record_path(source.operands.front());
@@ -241,7 +239,7 @@ Lowerer::hir_vhdl_shaped_record_path(
     }
     if (!path
         || !select_hir_vhdl_shaped_record_element(*path,
-            std::string_view { source.text }.substr(member_prefix.size()))) {
+            std::string_view { source.marker_argument })) {
         return std::nullopt;
     }
     return path;
@@ -530,8 +528,8 @@ std::optional<ContainerRegisterId> Lowerer::lower_hir_vhdl_shaped_materialize(
         const auto qualified = specialized_hir_unit_->find_expression(value);
         if (!qualified || qualified->vhdl == nullptr
             || qualified->vhdl->kind != semantic::vhdl::ExpressionKind::call
-            || !qualified->vhdl->text.starts_with(
-                semantic::vhdl::qualified_expression_prefix)
+            || qualified->vhdl->marker
+                != support::ExpressionMarker::vhdl_qualified
             || qualified->vhdl->operands.size() != 1U) {
             break;
         }

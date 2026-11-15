@@ -2,6 +2,7 @@
 #pragma once
 
 #include "fsim/semantic/model.hpp"
+#include "fsim/support/expression_marker.hpp"
 #include "fsim/support/rare_vector.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
 
@@ -452,11 +453,14 @@ struct AggregateAssociation {
     std::string choice_spelling;
     ExpressionId value;
     SourceSpanId source;
+    // A synthesized choice; the spelling is empty then.
+    support::ExpressionMarker choice_marker { support::ExpressionMarker::none };
 
     /// A positional element association has no choices.
     [[nodiscard]] bool positional() const noexcept
     {
-        return choices.empty() && choice_spelling.empty();
+        return choices.empty() && choice_spelling.empty()
+            && choice_marker == support::ExpressionMarker::none;
     }
 };
 
@@ -475,6 +479,16 @@ struct Expression {
     std::optional<std::string> decoded_string;
     // An operator symbol written as a function call (`"not"(s)`).
     bool operator_symbol_call { };
+    // The kind of a synthesized node (a dereference, a record member, a
+    // physical literal's unit) and its payload (frontend
+    // Expression::marker); `none` and empty on a source node.
+    support::ExpressionMarker marker { support::ExpressionMarker::none };
+    std::string marker_argument;
+    // An external name (marker vhdl_external, IEEE 1076-2008 8.7): the
+    // static width and value domain (frontend::ValueDomain) of its declared
+    // subtype; width 0 when the subtype has no static width.
+    std::uint32_t external_width { };
+    std::uint8_t external_domain { };
     // VHDL-2019 unspecified interface types are inferred from associated
     // typed actuals. These identities are populated only when exactly one
     // callable profile yields one consistent type per implicit formal.
@@ -1245,11 +1259,6 @@ struct Unit {
 
 /// Spelling prefix of a compiler-supplied (built-in) declaration name.
 inline constexpr std::string_view builtin_prefix = "@builtin:";
-
-/// Call text prefix of a qualified expression `T'(e)`; the call's single
-/// operand is `e` and the text after the prefix names `T`.
-inline constexpr std::string_view qualified_expression_prefix
-    = "@vhdl-qualified:";
 
 /// `spelling` without a leading builtin_prefix.
 [[nodiscard]] constexpr std::string_view without_builtin_prefix(

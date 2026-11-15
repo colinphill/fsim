@@ -41,7 +41,9 @@ bool VerilogParser::reads_sequence_endpoint(const DesignUnit& unit,
             return true;
         }
         if (expression.kind == ExpressionKind::Call
-            && expression.text == "@sv-select:triggered" && expression.operands.size() == 1U
+            && expression.marker == support::ExpressionMarker::sv_select
+            && expression.marker_argument == "triggered"
+            && expression.operands.size() == 1U
             && expression.operands.front().kind == ExpressionKind::Call
             && sequences.contains(expression.operands.front().text)) {
             return true;
@@ -72,7 +74,7 @@ bool VerilogParser::reads_sequence_endpoint(const DesignUnit& unit,
             }
         }
         for (const auto& list : { &statement.statements, &statement.else_statements,
-                 &statement.loop_updates }) {
+                 &statement.loop_updates, &statement.loop_initializations }) {
             if (std::ranges::any_of(*list, [&](const Statement& child) {
                     return self(self, child);
                 })) {
@@ -114,7 +116,8 @@ void VerilogParser::resolve_generate_assertion_references(DesignUnit& unit)
                           return std::ranges::any_of(signals,
                               [&](const SignalDeclaration& signal) {
                                   return signal.name == name
-                                      && signal.type.spelling == "event";
+                                      && signal.type.systemverilog_builtin
+                                          == support::SystemVerilogBuiltinType::event;
                               });
                       };
                 return event_variable(body.signals)
@@ -530,7 +533,8 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             return std::ranges::any_of(unit.signals,
                        [&](const SignalDeclaration& signal) {
                            return signal.name == name
-                               && signal.type.spelling == "event";
+                               && signal.type.systemverilog_builtin
+                                          == support::SystemVerilogBuiltinType::event;
                        })
                 || std::ranges::any_of(unit.systemverilog_clocking_blocks,
                     [&](const SystemVerilogClockingBlock& block) {

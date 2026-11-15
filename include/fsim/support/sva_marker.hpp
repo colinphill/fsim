@@ -131,13 +131,17 @@ enum class GeneratedStatementRole : std::uint8_t {
     // condition a vpiMatchOp of e and p (37.72, Annex M), its default
     // item's statement the else statement.
     if_matches,
+    // A loop or block of the nested loops a foreach statement is written as
+    // (12.7.3): no statement or scope of the source. Its contents belong to
+    // the foreach statement's implicit block.
+    foreach_layer,
 };
 
 [[nodiscard]] constexpr bool generated_statement_role_valid(
     const GeneratedStatementRole role) noexcept
 {
     return role >= GeneratedStatementRole::none
-        && role <= GeneratedStatementRole::if_matches;
+        && role <= GeneratedStatementRole::foreach_layer;
 }
 
 } // namespace fsim::support

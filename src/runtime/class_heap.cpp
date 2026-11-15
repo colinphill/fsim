@@ -207,7 +207,9 @@ namespace {
     }
     if (descriptor_property.random_kind
         != SystemVerilogClassRandomKind::None) {
-      if (descriptor_property.nominal_type.empty()) {
+      if (descriptor_property.nominal_type.empty()
+          && descriptor_property.builtin
+              == support::SystemVerilogBuiltinType::none) {
         throw std::invalid_argument{
             "random class property requires an exact nominal type"};
       }
@@ -232,7 +234,9 @@ namespace {
           0,
           0,
           0,
-          {}};
+          {},
+          0,
+          descriptor_property.builtin};
     }
     object.property_names.push_back(descriptor_property.name);
     object.properties.push_back(std::move(property));
@@ -664,7 +668,8 @@ void SystemVerilogClassHeap::commit_randc_states(
     if (!current || current->kind != SystemVerilogClassRandomKind::Randc
         || update.state.kind != SystemVerilogClassRandomKind::Randc
         || update.state.width != current->width
-        || update.state.nominal_type != current->nominal_type) {
+        || update.state.nominal_type != current->nominal_type
+        || update.state.builtin != current->builtin) {
       throw std::invalid_argument{"randc state update does not match its property"};
     }
     std::set<std::uint64_t> used;

@@ -276,15 +276,23 @@ void Interpreter::Impl::StaticKernel::prepare_behavioral()
     slot_wait_seen_.assign(slots_.size(), Logic4::x);
     slot_waiters_.resize(slots_.size());
     input_waiters_.resize(inputs_.size());
+}
+
+void Interpreter::Impl::StaticKernel::arm_behavioral()
+{
+    // The edge baseline of every waited slot is the value the declaration
+    // initializers left (they ran before this): an initializer is
+    // initialization, not an event (IEEE 1800-2023 6.8).
     for (std::uint32_t slot = 0U; slot < slots_.size(); ++slot) {
         if (slot_waitable_[slot] != 0U) {
             slot_wait_seen_[slot] = slot_edge_bit(slot);
         }
     }
     // A process that begins at its static wait is armed before any other
-    // time-zero process runs, as the host scheduler arms its processes
+    // time-zero procedure runs, as the host scheduler arms its processes
     // (Interpreter::start): it then sees the changes the once members
-    // (declaration initializers, initial blocks) make. This is the one
+    // (initial blocks) make, but not the declaration initializers, which
+    // ran before it is armed (IEEE 1800-2023 6.8, 6.21). This is the one
     // fixed order fsim uses for that time-zero race (IEEE 1800-2023 4.7,
     // 9.2; engine-v4-semantics S18). A VHDL process that begins at its wait
     // (a port conversion that is not evaluated at initialization) is armed
@@ -348,6 +356,9 @@ void Interpreter::Impl::StaticKernel::run_behavioral_initializers()
     }
     std::ranges::stable_sort(initializers, std::less { },
         [&](const std::uint32_t member) { return members_[member].process; });
+    // Their writes are initialization, no transaction and no event
+    // (settle_declaration_initializer_write).
+    const InitializationWriteScope initialization { impl_ };
     for (const auto index : initializers) {
         if (trace_) {
             std::cerr << "fsim-kernel-trace: initialize "

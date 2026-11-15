@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <limits>
 #include <utility>
 
 namespace fsim::runtime::simir {
@@ -75,21 +76,33 @@ std::size_t container_value_size(const ContainerValue& value) noexcept {
 }
 
 bool sparse_container_eligible(const ContainerType& type) noexcept {
-  return type.fixed && type.dimensions.size() <= 1U
+  return type.fixed && !type.associative && !type.queue
       && (type.element_kind == ContainerElementKind::Packed
-          || type.element_kind == ContainerElementKind::Scalar)
+          || type.element_kind == ContainerElementKind::Scalar
+          || type.element_kind == ContainerElementKind::String)
       && !type.aggregate_value && !type.vhdl_shaped;
 }
 
 std::uint64_t sparse_container_element_count(
     const ContainerType& type) noexcept {
-  const auto [left, right] = type.dimensions.empty()
-      ? std::pair { type.index_left, type.index_right }
-      : type.dimensions.front();
-  const auto distance = left >= right
-      ? static_cast<std::int64_t>(left) - right
-      : static_cast<std::int64_t>(right) - left;
-  return static_cast<std::uint64_t>(distance) + 1U;
+  const auto extent = [](const std::int32_t left, const std::int32_t right) {
+    const auto distance = left >= right
+        ? static_cast<std::int64_t>(left) - right
+        : static_cast<std::int64_t>(right) - left;
+    return static_cast<std::uint64_t>(distance) + 1U;
+  };
+  if (type.dimensions.empty()) {
+    return extent(type.index_left, type.index_right);
+  }
+  std::uint64_t result = 1U;
+  for (const auto& [left, right] : type.dimensions) {
+    const auto count = extent(left, right);
+    if (result > std::numeric_limits<std::uint64_t>::max() / count) {
+      return std::numeric_limits<std::uint64_t>::max();
+    }
+    result *= count;
+  }
+  return result;
 }
 
 namespace {
@@ -103,46 +116,40 @@ namespace {
       });
 }
 
-}  // namespace
-
-PackedLogic4 read_sparse_container_element(
-    const ContainerValue& value, const std::uint64_t ordinal) {
+void require_sparse_ordinal(
+    const ContainerValue& value, const std::uint64_t ordinal,
+    const ContainerElementKind kind) {
   if (!value.type.sparse
       || ordinal >= sparse_container_element_count(value.type)) {
     throw std::out_of_range{"sparse SimIR array ordinal is out of range"};
   }
-  const auto key = sparse_key_position(value, ordinal);
-  if (key != value.keys.end() && key->known_unsigned_value() == ordinal) {
-    return value.elements[static_cast<std::size_t>(
-        key - value.keys.begin())];
-  }
-  return initial_packed_element(value.type);
-}
-
-bool write_sparse_container_element(
-    ContainerValue& value, const std::uint64_t ordinal,
-    PackedLogic4 element) {
-  if (!value.type.sparse
-      || ordinal >= sparse_container_element_count(value.type)) {
-    throw std::out_of_range{"sparse SimIR array ordinal is out of range"};
-  }
-  if (element.width() != value.type.element_width) {
+  const bool packed = value.type.element_kind == ContainerElementKind::Packed
+      || value.type.element_kind == ContainerElementKind::Scalar;
+  if (packed != (kind != ContainerElementKind::String)) {
     throw std::invalid_argument{
         "sparse SimIR array element does not match its type"};
   }
+}
+
+// Store `element` at `ordinal` in the sorted (keys, stored) pairs, keeping
+// only elements that differ from `background`, so equal values have one
+// representation. Returns whether the element changed.
+template <typename Element>
+bool write_sparse_element(
+    ContainerValue& value, std::vector<Element>& stored_elements,
+    const std::uint64_t ordinal, Element element,
+    const Element& background) {
   const auto key = sparse_key_position(value, ordinal);
   const auto position = key - value.keys.begin();
-  const auto stored = value.elements.begin() + position;
+  const auto stored = stored_elements.begin() + position;
   const bool present
       = key != value.keys.end() && key->known_unsigned_value() == ordinal;
-  // Only elements that differ from the initial value are stored, so equal
-  // values have one representation.
-  if (element == initial_packed_element(value.type)) {
+  if (element == background) {
     if (!present) {
       return false;
     }
     value.keys.erase(key);
-    value.elements.erase(stored);
+    stored_elements.erase(stored);
     return true;
   }
   if (present) {
@@ -152,13 +159,62 @@ bool write_sparse_container_element(
     *stored = std::move(element);
     return true;
   }
-  if (value.elements.size() >= maximum_container_elements(value.type)) {
+  if (stored_elements.size() >= maximum_container_elements(value.type)) {
     throw std::length_error{
         "sparse SimIR array exceeds its owning-storage budget"};
   }
   value.keys.insert(key, PackedLogic4::from_aval_bval(32U, ordinal, 0U));
-  value.elements.insert(stored, std::move(element));
+  stored_elements.insert(stored, std::move(element));
   return true;
+}
+
+}  // namespace
+
+PackedLogic4 read_sparse_container_element(
+    const ContainerValue& value, const std::uint64_t ordinal) {
+  require_sparse_ordinal(value, ordinal, ContainerElementKind::Packed);
+  const auto key = sparse_key_position(value, ordinal);
+  if (key != value.keys.end() && key->known_unsigned_value() == ordinal) {
+    return value.elements[static_cast<std::size_t>(
+        key - value.keys.begin())];
+  }
+  return value.associative_default.value_or(
+      initial_packed_element(value.type));
+}
+
+bool write_sparse_container_element(
+    ContainerValue& value, const std::uint64_t ordinal,
+    PackedLogic4 element) {
+  require_sparse_ordinal(value, ordinal, ContainerElementKind::Packed);
+  if (element.width() != value.type.element_width) {
+    throw std::invalid_argument{
+        "sparse SimIR array element does not match its type"};
+  }
+  const auto background = value.associative_default.value_or(
+      initial_packed_element(value.type));
+  return write_sparse_element(
+      value, value.elements, ordinal, std::move(element), background);
+}
+
+std::string read_sparse_container_string(
+    const ContainerValue& value, const std::uint64_t ordinal) {
+  require_sparse_ordinal(value, ordinal, ContainerElementKind::String);
+  const auto key = sparse_key_position(value, ordinal);
+  if (key != value.keys.end() && key->known_unsigned_value() == ordinal) {
+    return value.string_elements[static_cast<std::size_t>(
+        key - value.keys.begin())];
+  }
+  return value.associative_default_text.value_or(std::string { });
+}
+
+bool write_sparse_container_string(
+    ContainerValue& value, const std::uint64_t ordinal,
+    std::string element) {
+  require_sparse_ordinal(value, ordinal, ContainerElementKind::String);
+  const auto background
+      = value.associative_default_text.value_or(std::string { });
+  return write_sparse_element(
+      value, value.string_elements, ordinal, std::move(element), background);
 }
 
 std::size_t container_value_storage_bytes(const ContainerValue& value) {

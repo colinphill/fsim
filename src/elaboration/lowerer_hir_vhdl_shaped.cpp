@@ -102,6 +102,8 @@ std::optional<std::size_t> Lowerer::hir_vhdl_symbolic_slice_length(
         const auto b = specialized_hir_unit_->find_expression(right);
         if (!a || !b || a->vhdl == nullptr || b->vhdl == nullptr
             || a->vhdl->kind != b->vhdl->kind || a->vhdl->text != b->vhdl->text
+            || a->vhdl->marker != b->vhdl->marker
+            || a->vhdl->marker_argument != b->vhdl->marker_argument
             || a->vhdl->operands.size() != b->vhdl->operands.size()
             || hir_referenced_declaration(left)
                 != hir_referenced_declaration(right)) {
@@ -1494,7 +1496,7 @@ Lowerer::hir_vhdl_shaped_value_profile(
     }
     const auto& source = *expression->vhdl;
     if (source.kind == semantic::vhdl::ExpressionKind::call
-        && source.text.starts_with(semantic::vhdl::qualified_expression_prefix)
+        && source.marker == support::ExpressionMarker::vhdl_qualified
         && source.operands.size() == 1U) {
         return hir_vhdl_shaped_value_profile(source.operands.front());
     }
@@ -1585,7 +1587,7 @@ Lowerer::lower_hir_vhdl_shaped_container(
     }
     const auto& source = *expression->vhdl;
     if (source.kind == semantic::vhdl::ExpressionKind::call
-        && source.text.starts_with(semantic::vhdl::qualified_expression_prefix)
+        && source.marker == support::ExpressionMarker::vhdl_qualified
         && source.operands.size() == 1U) {
         return lower_hir_vhdl_shaped_container(source.operands.front(), span);
     }
@@ -1967,7 +1969,7 @@ const Lowerer::HirVhdlShapedLocal* Lowerer::hir_vhdl_shaped_heap_view(
     }
     std::optional<semantic::ExpressionId> handle;
     if (source.kind == semantic::vhdl::ExpressionKind::call
-        && source.text == "@vhdl-dereference"
+        && source.marker == support::ExpressionMarker::vhdl_dereference
         && source.operands.size() == 1U) {
         handle = source.operands.front();
     } else if (prefix && source.kind == semantic::vhdl::ExpressionKind::name) {
@@ -2149,8 +2151,8 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_shaped_allocator(
                 value_id);
             if (!qualified || qualified->vhdl == nullptr
                 || qualified->vhdl->kind != semantic::vhdl::ExpressionKind::call
-                || !qualified->vhdl->text.starts_with(
-                    semantic::vhdl::qualified_expression_prefix)
+                || qualified->vhdl->marker
+                    != support::ExpressionMarker::vhdl_qualified
                 || qualified->vhdl->operands.size() != 1U) {
                 break;
             }

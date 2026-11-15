@@ -1300,12 +1300,13 @@ std::unique_ptr<TraceState> attach_trace(
         }
         // A variable of an unnamed block has no hierarchical name, so no
         // trace scope declares it (a VCD scope has an identifier, IEEE
-        // 1800-2023 21.7.2.3).
+        // 1800-2023 21.7.2.3); nor is a root-relative lookup name one.
         for (const auto& object : simulation.design_ir().objects()) {
             if (!design_object_is_signal_bearing(object)
                 || object.runtime_index
                     > std::numeric_limits<SignalId>::max()
-                || object.no_hierarchical_name) {
+                || object.no_hierarchical_name
+                || object.root_relative_alias) {
                 continue;
             }
             const auto signal_id = static_cast<SignalId>(object.runtime_index);
@@ -1370,7 +1371,8 @@ std::unique_ptr<TraceState> attach_trace(
                     throw std::invalid_argument(
                         "FST string trace lacks DesignIR ownership");
                 }
-                if (design_object->second->no_hierarchical_name) {
+                if (design_object->second->no_hierarchical_name
+                    || design_object->second->root_relative_alias) {
                     continue;
                 }
                 const auto fst_object = canonical_fst_trace_object(

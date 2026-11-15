@@ -25,15 +25,42 @@ namespace {
 [[nodiscard]] const auto* inline_constraint_of(const auto& record)
 {
     const auto found = std::ranges::find(record.associations,
-        std::string_view { "@sv-inline-constraint" },
+        support::ExpressionMarker::sv_inline_constraint,
         &std::remove_cvref_t<
-            decltype(record.associations.front())>::choice_spelling);
+            decltype(record.associations.front())>::choice_marker);
     return found == record.associations.end() ? nullptr : &*found;
 }
 
 namespace sv = semantic::sv;
 using runtime::Logic4;
 using runtime::PackedLogic4;
+
+// The casting type of a cast `T'(e)` as written (IEEE 1800-2023 6.24.1): a
+// built-in type's keyword, `signed`, `unsigned` or `const`, a size's digits
+// or a type name; none for `type(...)'(e)` and for a node that is no cast.
+[[nodiscard]] std::optional<std::string> cast_type_text(
+    const sv::Expression& record)
+{
+    using Target = support::SystemVerilogCastTarget;
+    switch (record.cast_target) {
+    case Target::builtin:
+        return std::string {
+            support::systemverilog_builtin_type_name(record.cast_builtin) };
+    case Target::signed_type:
+        return std::string { "signed" };
+    case Target::unsigned_type:
+        return std::string { "unsigned" };
+    case Target::constant:
+        return std::string { "const" };
+    case Target::size:
+    case Target::named:
+        return record.marker_argument;
+    case Target::none:
+    case Target::type_operator:
+        break;
+    }
+    return std::nullopt;
+}
 
 // The statement list an implicit block holds: a process's, a callable's,
 // a statement's then or else branch, or case item `aux - body_case`.
@@ -84,21 +111,33 @@ constexpr std::uint32_t body_case = 4U;
         : (increment ? vpiPostIncOp : vpiPostDecOp);
 }
 
-// The leading word of a type's spelling: "logic [3:0]" gives "logic".
-[[nodiscard]] std::string type_word(const sv::TypeReference& type)
+// A type written without a data-type word (implicit, 6.8): neither a built-in
+// kind nor a named type.
+[[nodiscard]] bool type_implicit(const sv::TypeReference& type)
 {
-    const auto& text = type.target.spelling;
-    const auto begin = text.find_first_not_of(" \t");
-    if (begin == std::string::npos) {
-        return { };
+    return type.builtin == support::SystemVerilogBuiltinType::none
+        && type.target.spelling.find_first_not_of(" \t") == std::string::npos;
+}
+
+// The built-in types a typespec of a declared type names (37.41); `reg` is
+// the `logic` typespec and an implicit type is `logic`.
+[[nodiscard]] support::SystemVerilogBuiltinType declared_builtin(
+    const sv::TypeReference& type)
+{
+    using Kind = support::SystemVerilogBuiltinType;
+    if (type.builtin == Kind::reg || type_implicit(type)) {
+        return Kind::logic;
     }
-    auto end = begin;
-    while (end < text.size()
-        && (std::isalnum(static_cast<unsigned char>(text[end])) != 0
-            || text[end] == '_')) {
-        ++end;
-    }
-    return text.substr(begin, end - begin);
+    return type.builtin;
+}
+
+[[nodiscard]] bool declared_builtin_typespec(
+    const support::SystemVerilogBuiltinType kind)
+{
+    using Kind = support::SystemVerilogBuiltinType;
+    return kind == Kind::logic || kind == Kind::bit || kind == Kind::string
+        || (support::systemverilog_integral(kind) && kind != Kind::reg)
+        || support::systemverilog_real_family(kind);
 }
 
 [[nodiscard]] std::optional<std::int64_t> range_extent(
@@ -117,24 +156,26 @@ constexpr std::uint32_t body_case = 4U;
 [[nodiscard]] std::optional<std::int64_t> type_width(
     const sv::TypeReference& type)
 {
-    const auto word = type_word(type);
-    if (word == "void") {
+    using Kind = support::SystemVerilogBuiltinType;
+    const auto kind = type.builtin;
+    if (kind == Kind::void_type) {
         return 0;
     }
-    if (word == "int" || word == "integer" || word == "shortreal") {
+    if (kind == Kind::int_type || kind == Kind::integer
+        || kind == Kind::shortreal) {
         return 32;
     }
-    if (word == "byte") {
+    if (kind == Kind::byte) {
         return 8;
     }
-    if (word == "shortint") {
+    if (kind == Kind::shortint) {
         return 16;
     }
-    if (word == "longint" || word == "time" || word == "real"
-        || word == "realtime") {
+    if (kind == Kind::longint || kind == Kind::time || kind == Kind::real
+        || kind == Kind::realtime) {
         return 64;
     }
-    if (word.empty() || word == "bit" || word == "logic" || word == "reg") {
+    if (type_implicit(type) || support::systemverilog_integer_vector(kind)) {
         if (type.container_form || !type.unpacked_dimensions.empty()) {
             return std::nullopt;
         }
@@ -183,14 +224,10 @@ constexpr std::uint32_t body_case = 4U;
         named.modport_name = type.interface_modport;
         return named;
     }
-    auto word = type_word(type);
-    if (word == "reg" || word.empty()) {
-        word = "logic";
-    }
-    static const std::set<std::string, std::less<>> built_in { "logic", "bit",
-        "byte", "shortint", "int", "longint", "integer", "time", "real",
-        "realtime", "shortreal", "string" };
-    if (!built_in.contains(word) && word != "void" && !type.container_form
+    const auto kind = declared_builtin(type);
+    const bool built_in = declared_builtin_typespec(kind);
+    if (!built_in && kind != support::SystemVerilogBuiltinType::void_type
+        && !type.container_form
         && type.unpacked_dimensions.empty() && type.packed_dimensions.empty()
         && !type.packed_range && type.class_identity.empty()
         && !type.virtual_interface && !type.type_of
@@ -237,7 +274,12 @@ constexpr std::uint32_t body_case = 4U;
             base = type.container_element_types.front();
         }
         if (associative && type.associative_index) {
-            array.index_word = type.associative_index->spelling;
+            if (type.associative_index_metadata) {
+                array.index_builtin = type.associative_index_metadata->builtin;
+            }
+            if (array.index_builtin == support::SystemVerilogBuiltinType::none) {
+                array.index_word = type.associative_index->spelling;
+            }
         }
         const auto element = declared_type_of(base);
         if (!element) {
@@ -246,12 +288,12 @@ constexpr std::uint32_t body_case = 4U;
         array.element.push_back(*element);
         return array;
     }
-    if (!built_in.contains(word) || type.container_form
+    if (!built_in || type.container_form
         || !type.unpacked_dimensions.empty()) {
         return std::nullopt;
     }
     VpiStatementModel::DeclaredType result;
-    result.word = word;
+    result.builtin = kind;
     result.is_signed = type_signed(type);
     const auto add = [&](const sv::PackedRange& range) {
         if (!range.left || !range.right) {
@@ -271,7 +313,8 @@ constexpr std::uint32_t body_case = 4U;
     }
     // An integer atom (`int`, `byte`, ...) carries its implicit packed range
     // in the HIR; its typespec has no dimensions (37.25).
-    if (!result.ranges.empty() && word != "logic" && word != "bit") {
+    if (!result.ranges.empty() && kind != support::SystemVerilogBuiltinType::logic
+        && kind != support::SystemVerilogBuiltinType::bit) {
         result.ranges.clear();
     }
     return result;
@@ -287,15 +330,19 @@ declared_type_of_tokens(const std::vector<sv::SourceToken>& tokens,
     if (!dimension_tokens.empty()) {
         return std::nullopt;
     }
+    using Builtin = support::SystemVerilogBuiltinType;
+    using TypeWord = support::SystemVerilogTypeWord;
     VpiStatementModel::DeclaredType result;
     std::optional<bool> sign;
     for (std::size_t index = 0U; index < tokens.size(); ++index) {
-        const auto& text = tokens[index].text;
-        if (text == "signed" || text == "unsigned") {
-            sign = text == "signed";
-        } else if (text == "const" || text == "var") {
+        const auto& token = tokens[index];
+        if (token.type_word == TypeWord::signed_keyword
+            || token.type_word == TypeWord::unsigned_keyword) {
+            sign = token.type_word == TypeWord::signed_keyword;
+        } else if (token.type_word == TypeWord::const_keyword
+            || token.type_word == TypeWord::var_keyword) {
             continue;
-        } else if (text == "[") {
+        } else if (token.text == "[") {
             if (index + 4U >= tokens.size() || tokens[index + 2U].text != ":"
                 || tokens[index + 4U].text != "]") {
                 return std::nullopt;
@@ -307,45 +354,48 @@ declared_type_of_tokens(const std::vector<sv::SourceToken>& tokens,
                 return std::nullopt;
             }
             index += 4U;
-        } else if (result.word.empty()) {
-            result.word = text;
+        } else if (result.builtin == Builtin::none
+            && token.builtin != Builtin::none) {
+            result.builtin = token.builtin;
         } else {
+            // A second word, or a word that is no built-in type (a named
+            // type): none.
             return std::nullopt;
         }
     }
-    if (result.word.empty() || result.word == "reg") {
-        result.word = "logic";
+    if (result.builtin == Builtin::none || result.builtin == Builtin::reg) {
+        result.builtin = Builtin::logic;
     }
-    static const std::set<std::string, std::less<>> built_in { "logic", "bit",
-        "byte", "shortint", "int", "longint", "integer", "time", "real",
-        "realtime", "shortreal", "string" };
-    if (!built_in.contains(result.word)
-        || (!result.ranges.empty() && result.word != "logic"
-            && result.word != "bit")) {
+    const auto kind = result.builtin;
+    const bool vector = kind == Builtin::logic || kind == Builtin::bit;
+    if (!(vector || support::systemverilog_integer_atom(kind)
+            || support::systemverilog_real_family(kind)
+            || kind == Builtin::string)
+        || (!result.ranges.empty() && !vector)) {
         return std::nullopt;
     }
-    const auto& word = result.word;
-    result.is_signed = sign.value_or(word == "int" || word == "integer"
-        || word == "byte" || word == "shortint" || word == "longint");
+    result.is_signed = sign.value_or(
+        support::systemverilog_builtin_default_signed(kind));
     return result;
 }
 
 // The vpiFuncType of a function returning `type` (IEEE 1800-2023 37.41).
 [[nodiscard]] PLI_INT32 function_type(const sv::TypeReference& type)
 {
-    const auto word = type_word(type);
-    if (word == "int" || word == "integer") {
+    using Kind = support::SystemVerilogBuiltinType;
+    const auto kind = type.builtin;
+    if (kind == Kind::int_type || kind == Kind::integer) {
         return vpiIntFunc;
     }
-    if (word == "real" || word == "realtime" || word == "shortreal") {
+    if (support::systemverilog_real_family(kind)) {
         return vpiRealFunc;
     }
-    if (word == "time") {
+    if (kind == Kind::time) {
         return vpiTimeFunc;
     }
-    if (word.empty() || word == "byte" || word == "shortint"
-        || word == "longint" || word == "bit" || word == "logic"
-        || word == "reg") {
+    if (type_implicit(type) || kind == Kind::byte || kind == Kind::shortint
+        || kind == Kind::longint
+        || support::systemverilog_integer_vector(kind)) {
         return type_signed(type) ? vpiSizedSignedFunc : vpiSizedFunc;
     }
     return vpiOtherFunc;
@@ -359,35 +409,34 @@ declared_type_of_tokens(const std::vector<sv::SourceToken>& tokens,
         && type.unpacked_dimensions.empty()) {
         return vpiVirtualInterfaceVar;
     }
-    const auto word = type_word(type);
-    if (word == "int") {
+    using Kind = support::SystemVerilogBuiltinType;
+    switch (type.builtin) {
+    case Kind::int_type:
         return vpiIntVar;
-    }
-    if (word == "integer") {
+    case Kind::integer:
         return vpiIntegerVar;
-    }
-    if (word == "byte") {
+    case Kind::byte:
         return vpiByteVar;
-    }
-    if (word == "shortint") {
+    case Kind::shortint:
         return vpiShortIntVar;
-    }
-    if (word == "longint") {
+    case Kind::longint:
         return vpiLongIntVar;
-    }
-    if (word == "time") {
+    case Kind::time:
         return vpiTimeVar;
-    }
-    if (word == "real" || word == "realtime") {
+    case Kind::real:
+    case Kind::realtime:
         return vpiRealVar;
-    }
-    if (word == "shortreal") {
+    case Kind::shortreal:
         return vpiShortRealVar;
+    case Kind::string:
+        return vpiStringVar;
+    default:
+        break;
     }
-    if (type.value_form == sv::TypeForm::string || word == "string") {
+    if (type.value_form == sv::TypeForm::string) {
         return vpiStringVar;
     }
-    return word == "bit" ? vpiBitVar : vpiReg;
+    return type.builtin == Kind::bit ? vpiBitVar : vpiReg;
 }
 
 // The vpiType of a local variable of a property or sequence declaration, from
@@ -395,37 +444,32 @@ declared_type_of_tokens(const std::vector<sv::SourceToken>& tokens,
 [[nodiscard]] PLI_INT32 assertion_variable_type(
     const std::vector<sv::SourceToken>& tokens)
 {
-    const std::string_view word = tokens.empty()
-        ? std::string_view { }
-        : std::string_view { tokens.front().text };
-    if (word == "int") {
+    using Kind = support::SystemVerilogBuiltinType;
+    switch (tokens.empty() ? Kind::none : tokens.front().builtin) {
+    case Kind::int_type:
         return vpiIntVar;
-    }
-    if (word == "integer") {
+    case Kind::integer:
         return vpiIntegerVar;
-    }
-    if (word == "byte") {
+    case Kind::byte:
         return vpiByteVar;
-    }
-    if (word == "shortint") {
+    case Kind::shortint:
         return vpiShortIntVar;
-    }
-    if (word == "longint") {
+    case Kind::longint:
         return vpiLongIntVar;
-    }
-    if (word == "time") {
+    case Kind::time:
         return vpiTimeVar;
-    }
-    if (word == "real" || word == "realtime") {
+    case Kind::real:
+    case Kind::realtime:
         return vpiRealVar;
-    }
-    if (word == "shortreal") {
+    case Kind::shortreal:
         return vpiShortRealVar;
-    }
-    if (word == "string") {
+    case Kind::string:
         return vpiStringVar;
+    case Kind::bit:
+        return vpiBitVar;
+    default:
+        return vpiReg;
     }
-    return word == "bit" ? vpiBitVar : vpiReg;
 }
 
 [[nodiscard]] Logic4 digit_logic(const char digit) noexcept
@@ -605,14 +649,22 @@ struct DpiTokenShape {
     const std::vector<sv::SourceToken>& tokens)
 {
     DpiTokenShape shape;
+    using Word = support::SystemVerilogTypeWord;
     std::optional<bool> sign;
-    std::string_view word;
+    // The first token that is no modifier or range names the type; a named
+    // type has no built-in kind.
+    bool have_word { };
+    support::SystemVerilogBuiltinType word {
+        support::SystemVerilogBuiltinType::none };
     std::int64_t elements { 1 };
     for (std::size_t index = 0U; index < tokens.size(); ++index) {
         const auto& text = tokens[index].text;
-        if (text == "signed" || text == "unsigned") {
-            sign = text == "signed";
-        } else if (text == "const" || text == "var") {
+        const auto type_word = tokens[index].type_word;
+        if (type_word == Word::signed_keyword
+            || type_word == Word::unsigned_keyword) {
+            sign = type_word == Word::signed_keyword;
+        } else if (type_word == Word::const_keyword
+            || type_word == Word::var_keyword) {
             continue;
         } else if (text == "[") {
             // `[ left : right ]` with integer literals.
@@ -629,39 +681,41 @@ struct DpiTokenShape {
             } else {
                 elements = 0;
             }
-        } else if (word.empty()) {
-            word = text;
+        } else if (!have_word) {
+            have_word = true;
+            word = tokens[index].builtin;
         }
     }
+    using Kind = support::SystemVerilogBuiltinType;
     const auto fixed = [&](const std::int64_t size, const bool signed_value,
                            const PLI_INT32 variable) {
         shape.size = size;
         shape.is_signed = sign.value_or(signed_value);
         shape.variable = variable;
     };
-    if (word == "int") {
+    if (word == Kind::int_type) {
         fixed(32, true, vpiIntVar);
-    } else if (word == "integer") {
+    } else if (word == Kind::integer) {
         fixed(32, true, vpiIntegerVar);
-    } else if (word == "byte") {
+    } else if (word == Kind::byte) {
         fixed(8, true, vpiByteVar);
-    } else if (word == "shortint") {
+    } else if (word == Kind::shortint) {
         fixed(16, true, vpiShortIntVar);
-    } else if (word == "longint") {
+    } else if (word == Kind::longint) {
         fixed(64, true, vpiLongIntVar);
-    } else if (word == "time") {
+    } else if (word == Kind::time) {
         fixed(64, false, vpiTimeVar);
-    } else if (word == "bit" || word == "logic" || word == "reg") {
+    } else if (support::systemverilog_integer_vector(word)) {
         if (elements > 0) {
-            fixed(elements, false, word == "bit" ? vpiBitVar : vpiReg);
+            fixed(elements, false, word == Kind::bit ? vpiBitVar : vpiReg);
         }
-    } else if (word == "real" || word == "realtime") {
+    } else if (word == Kind::real || word == Kind::realtime) {
         fixed(64, true, vpiRealVar);
-    } else if (word == "shortreal") {
+    } else if (word == Kind::shortreal) {
         fixed(32, true, vpiShortRealVar);
-    } else if (word == "string") {
+    } else if (word == Kind::string) {
         shape.variable = vpiStringVar;
-    } else if (word == "chandle") {
+    } else if (word == Kind::chandle) {
         shape.variable = vpiChandleVar;
     }
     return shape;
@@ -725,35 +779,40 @@ VpiDpiResult vpi_dpi_result(const sv::DpiDeclaration& declaration)
     // native callable's declared type.
     if (!declaration.resolved_profile
         || !declaration.resolved_profile->return_type) {
+        using Kind = support::SystemVerilogBuiltinType;
+        using Word = support::SystemVerilogTypeWord;
         std::optional<bool> sign;
-        std::string_view word;
+        bool have_word { };
+        Kind word { Kind::none };
         for (const auto& token : declaration.return_type_tokens) {
-            if (token.text == "signed" || token.text == "unsigned") {
-                sign = token.text == "signed";
-            } else if (word.empty()) {
-                word = token.text;
+            if (token.type_word == Word::signed_keyword
+                || token.type_word == Word::unsigned_keyword) {
+                sign = token.type_word == Word::signed_keyword;
+            } else if (!have_word) {
+                have_word = true;
+                word = token.builtin;
             }
         }
         const auto sized = [&](const std::int64_t size, const bool signed_value) {
             result.size = size;
             result.is_signed = sign.value_or(signed_value);
-            result.func_type = word == "int" ? vpiIntFunc
-                : result.is_signed            ? vpiSizedSignedFunc
-                                              : vpiSizedFunc;
+            result.func_type = word == Kind::int_type ? vpiIntFunc
+                : result.is_signed                    ? vpiSizedSignedFunc
+                                                      : vpiSizedFunc;
         };
-        if (word == "int") {
+        if (word == Kind::int_type) {
             sized(32, true);
-        } else if (word == "byte") {
+        } else if (word == Kind::byte) {
             sized(8, true);
-        } else if (word == "shortint") {
+        } else if (word == Kind::shortint) {
             sized(16, true);
-        } else if (word == "longint") {
+        } else if (word == Kind::longint) {
             sized(64, true);
-        } else if (word == "bit" || word == "logic") {
+        } else if (word == Kind::bit || word == Kind::logic) {
             sized(1, false);
-        } else if (word == "real" || word == "shortreal") {
+        } else if (word == Kind::real || word == Kind::shortreal) {
             result.func_type = vpiRealFunc;
-            result.size = word == "real" ? 64 : 32;
+            result.size = word == Kind::real ? 64 : 32;
             result.is_signed = true;
         }
         return result;
@@ -1327,17 +1386,18 @@ std::optional<std::string> VpiStatementModel::decompile(
             }
             return *size + "'(" + *value + ")";
         }
-        if (record->text.starts_with("@sv-cast:")
+        if (record->marker == support::ExpressionMarker::sv_cast
             && record->operands.size() == 1U) {
-            const auto type = std::string_view { record->text }.substr(
-                std::string_view { "@sv-cast:" }.size());
+            const auto type = cast_type_text(*record);
             auto value = decompile(record->operands[0], nullptr);
-            if (!value || type.starts_with('@')) {
+            if (!value || !type) {
                 return std::nullopt;
             }
-            return std::string { type } + "'(" + *value + ")";
+            return *type + "'(" + *value + ")";
         }
-        if (record->text.empty() || record->text.starts_with('@')) {
+        if (record->text.empty()
+            || record->marker != support::ExpressionMarker::none
+            || record->text.starts_with('@')) {
             return std::nullopt;
         }
         auto arguments = list(0U);
@@ -1346,7 +1406,7 @@ std::optional<std::string> VpiStatementModel::decompile(
         }
         // A call with no arguments keeps its parentheses only for a user
         // function (13.4.1); `$time` is written without them.
-        if (record->operands.empty() && record->text.starts_with('$')) {
+        if (record->operands.empty() && record->call_kind == semantic::sv::CallKind::system) {
             return record->text;
         }
         return record->text + "(" + *arguments + ")";
@@ -2334,7 +2394,8 @@ std::optional<fsim_vpi_handle_v1> VpiStatementModel::scope_relation(
         }
         if (callable->form != sv::DeclarationForm::function
             || !callable->callable
-            || type_word(callable->callable->return_type) == "void") {
+            || callable->callable->return_type.builtin
+                == support::SystemVerilogBuiltinType::void_type) {
             return fsim_vpi_handle_v1 { };
         }
         return node(Kind::return_variable, callable->id.value(),
@@ -2442,7 +2503,8 @@ fsim_vpi_handle_v1 VpiStatementModel::dpi_result(const std::uint32_t unit,
     // 1-3).
     if (dpi == nullptr || dpi->callable_kind != sv::DpiCallableKind::function
         || (dpi->return_type_tokens.size() == 1U
-            && dpi->return_type_tokens.front().text == "void")) {
+            && dpi->return_type_tokens.front().builtin
+                == support::SystemVerilogBuiltinType::void_type)) {
         return fsim_vpi_handle_v1 { };
     }
     return node(Kind::dpi_return_variable, unit, (index << 16U) | 0xffffU,
@@ -3075,8 +3137,10 @@ std::vector<fsim_vpi_handle_v1> VpiStatementModel::connections(
                     }
                 }
                 auto inner = within;
+                // A labeled loop names its implicit block (9.3.5).
                 if ((record->kind == Statement::block
-                        || record->kind == Statement::fork)
+                        || record->kind == Statement::fork
+                        || record->kind == Statement::loop)
                     && !record->label.empty()) {
                     if (const auto named
                         = hooks_.child_scope(within, record->label)) {
@@ -3090,6 +3154,7 @@ std::vector<fsim_vpi_handle_v1> VpiStatementModel::connections(
                 }
                 walk(record->statements, inner, self);
                 walk(record->else_statements, inner, self);
+                walk(record->loop_initializations, inner, self);
                 walk(record->loop_updates, inner, self);
                 for (const auto& alternative : record->case_alternatives) {
                     walk(alternative.statements, inner, self);
@@ -3205,8 +3270,10 @@ std::vector<VpiStatementModel::ForceSite> VpiStatementModel::force_sites(
                     continue;
                 }
                 auto inner = within;
+                // A labeled loop names its implicit block (9.3.5).
                 if ((record->kind == Statement::block
-                        || record->kind == Statement::fork)
+                        || record->kind == Statement::fork
+                        || record->kind == Statement::loop)
                     && !record->label.empty()) {
                     if (const auto named
                         = hooks_.child_scope(within, record->label)) {
@@ -3277,8 +3344,10 @@ std::vector<fsim_vpi_handle_v1> VpiStatementModel::immediate_assertions(
                     found.push_back(self);
                 }
                 auto inner = within;
+                // A labeled loop names its implicit block (9.3.5).
                 if ((record->kind == Statement::block
-                        || record->kind == Statement::fork)
+                        || record->kind == Statement::fork
+                        || record->kind == Statement::loop)
                     && !record->label.empty()) {
                     if (const auto named
                         = hooks_.child_scope(within, record->label)) {
@@ -3434,8 +3503,9 @@ fsim_vpi_handle_v1 VpiStatementModel::method_return(
         || !record->callable) {
         return fsim_vpi_handle_v1 { };
     }
-    const auto word = type_word(record->callable->return_type);
-    if (word.empty() || word == "void") {
+    const auto& return_type = record->callable->return_type;
+    if (type_implicit(return_type)
+        || return_type.builtin == support::SystemVerilogBuiltinType::void_type) {
         return fsim_vpi_handle_v1 { };
     }
     return node(
@@ -3802,7 +3872,7 @@ PLI_INT32 VpiStatementModel::statement_type(const sv::Statement& record) const
     case return_statement:
         return vpiReturn;
     case task_call:
-        return record.task.spelling.starts_with('$') ? vpiSysTaskCall
+        return record.task_call_kind == semantic::sv::CallKind::system ? vpiSysTaskCall
                                                      : vpiTaskCall;
     case assertion:
         return record.immediate_directive
@@ -3921,7 +3991,8 @@ std::optional<std::string> VpiStatementModel::system_task_name(
 static bool streaming_operator(const sv::Expression& record)
 {
     return record.kind == sv::ExpressionKind::call
-        && (record.text == "@stream-left" || record.text == "@stream-right");
+        && (record.marker == support::ExpressionMarker::stream_left
+            || record.marker == support::ExpressionMarker::stream_right);
 }
 
 PLI_INT32 VpiStatementModel::expression_type(
@@ -3942,7 +4013,7 @@ PLI_INT32 VpiStatementModel::expression_type(
             || streaming_operator(record)) {
             return vpiOperation;
         }
-        return record.text.starts_with('$') ? vpiSysFuncCall : vpiFuncCall;
+        return record.call_kind == semantic::sv::CallKind::system ? vpiSysFuncCall : vpiFuncCall;
     case class_method_call:
     case class_static_method_call:
         return vpiMethodFuncCall;
@@ -4549,10 +4620,10 @@ std::optional<std::int64_t> VpiStatementModel::property(
                     : record->text == "pre--"      ? vpiPreDecOp
                                                    : vpiPostDecOp;
             case call:
-                if (record->text == "@stream-right") {
+                if (record->marker == support::ExpressionMarker::stream_right) {
                     return vpiStreamLROp;
                 }
-                if (record->text == "@stream-left") {
+                if (record->marker == support::ExpressionMarker::stream_left) {
                     return vpiStreamRLOp;
                 }
                 return record->text == "?:" ? vpiConditionOp : vpiCastOp;
@@ -6022,6 +6093,16 @@ std::optional<std::vector<fsim_vpi_handle_v1>> VpiStatementModel::iterate_of(
                         found.push_back(handle);
                     }
                 }
+            } else {
+                // Each further initialization of the for statement, in
+                // source order (12.7.1, 37.68 vpiForInitStmt).
+                for (const auto initialization :
+                    record->loop_initializations) {
+                    if (const auto handle = statement_handle(
+                            initialization, entry.scope, self)) {
+                        found.push_back(handle);
+                    }
+                }
             }
         } else if (type == vpiVariables && statement_type(*record) == vpiFor
             && record->loop_variable_declared) {
@@ -6539,8 +6620,19 @@ std::optional<VpiStatementModel::CastTarget> VpiStatementModel::cast_target(
             = expression_handle(*size, entry.scope, hooks_.handle(serial));
         return target;
     }
-    constexpr std::string_view prefix { "@sv-cast:" };
-    target.type = record->text.substr(prefix.size());
+    target.target = record->cast_target;
+    target.builtin = record->cast_builtin;
+    // A literal size is the marker payload's digits.
+    if (record->cast_target == support::SystemVerilogCastTarget::size) {
+        std::size_t literal_width { };
+        const auto& payload = record->marker_argument;
+        const auto parsed = std::from_chars(
+            payload.data(), payload.data() + payload.size(), literal_width);
+        if (!payload.empty() && parsed.ec == std::errc { }
+            && parsed.ptr == payload.data() + payload.size()) {
+            target.literal_size = literal_width;
+        }
+    }
     return target;
 }
 

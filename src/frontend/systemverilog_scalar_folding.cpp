@@ -222,7 +222,7 @@ std::optional<SystemVerilogScalarConstant> evaluate(
     return std::nullopt;
   }
   if (expression.kind == ExpressionKind::Call
-      && expression.text == "@sv-null") {
+      && expression.marker == support::ExpressionMarker::sv_null) {
     return SystemVerilogScalarConstant{
         SystemVerilogScalarKind::Chandle, 0};
   }
@@ -269,8 +269,12 @@ std::optional<SystemVerilogScalarConstant> evaluate(
       // evaluator applies the cast width after checking it as a constant.
       return operand;
     }
-    const auto name = std::string_view{expression.text}.substr(9);
-    const auto target = systemverilog_scalar_kind(name);
+    // The parser typed the cast target (IEEE 1800-2023 6.24.1).
+    const auto target = systemverilog_scalar_kind(
+        expression.systemverilog_cast_target
+                == support::SystemVerilogCastTarget::builtin
+            ? expression.systemverilog_cast_builtin
+            : support::SystemVerilogBuiltinType::none);
     return convert_systemverilog_scalar_constant(*operand, target, error);
   }
   if (expression.kind != ExpressionKind::Binary
@@ -420,8 +424,8 @@ std::string SystemVerilogScalarConstant::canonical() const {
 Expression SystemVerilogScalarConstant::expression(
     const SourceSpan& use_span) const {
   if (kind == SystemVerilogScalarKind::Chandle) {
-    Expression value{
-        ExpressionKind::Call, "@sv-null", {}, use_span};
+    auto value = marked_expression(
+        support::ExpressionMarker::sv_null, {}, {}, use_span);
     value.systemverilog_scalar_kind = SystemVerilogScalarKind::Chandle;
     return value;
   }
@@ -429,8 +433,8 @@ Expression SystemVerilogScalarConstant::expression(
     Expression literal{
         ExpressionKind::IntegerLiteral, std::to_string(*value), {}, use_span};
     if (kind == SystemVerilogScalarKind::None) return literal;
-    Expression result{
-        ExpressionKind::Call, "@sv-cast:time", {std::move(literal)}, use_span};
+    Expression result = systemverilog_builtin_cast(
+        support::SystemVerilogBuiltinType::time, std::move(literal), use_span);
     result.systemverilog_scalar_kind = kind;
     return result;
   }
@@ -441,13 +445,13 @@ Expression SystemVerilogScalarConstant::expression(
       ExpressionKind::IntegerLiteral, spelling, {}, use_span};
   literal.systemverilog_decimal_literal = decimal_payload(spelling);
   literal.systemverilog_scalar_kind = SystemVerilogScalarKind::Real;
-  Expression result{
-      ExpressionKind::Call,
+  Expression result = systemverilog_builtin_cast(
       kind == SystemVerilogScalarKind::ShortReal
-          ? "@sv-cast:shortreal"
+          ? support::SystemVerilogBuiltinType::shortreal
           : kind == SystemVerilogScalarKind::Realtime
-              ? "@sv-cast:realtime" : "@sv-cast:real",
-      {std::move(literal)}, use_span};
+              ? support::SystemVerilogBuiltinType::realtime
+              : support::SystemVerilogBuiltinType::real,
+      std::move(literal), use_span);
   result.systemverilog_scalar_kind = kind;
   if (!negative) return result;
   Expression negated{
@@ -508,7 +512,7 @@ bool propagate_systemverilog_scalar_types(
       expression.systemverilog_scalar_kind = found->second;
     }
   } else if (expression.kind == ExpressionKind::Call
-             && expression.text == "@sv-null") {
+             && expression.marker == support::ExpressionMarker::sv_null) {
     expression.systemverilog_scalar_kind = SystemVerilogScalarKind::Chandle;
   } else if (expression.kind == ExpressionKind::Unary
              && expression.operands.size() == 1) {
@@ -576,8 +580,11 @@ bool propagate_systemverilog_scalar_types(
       expression.systemverilog_scalar_kind
           = value_operand->systemverilog_scalar_kind;
     } else {
-      const auto name = std::string_view{expression.text}.substr(9);
-      expression.systemverilog_scalar_kind = systemverilog_scalar_kind(name);
+      expression.systemverilog_scalar_kind = systemverilog_scalar_kind(
+          expression.systemverilog_cast_target
+                  == support::SystemVerilogCastTarget::builtin
+              ? expression.systemverilog_cast_builtin
+              : support::SystemVerilogBuiltinType::none);
     }
   }
   return true;

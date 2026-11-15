@@ -88,8 +88,10 @@ std::string compiled_systemverilog_integral_identity(
             : '0';
     }
     const auto integer_domain
-        = declaration.type->target.spelling == "int"
-        || declaration.type->target.spelling == "integer";
+        = declaration.type->builtin
+            == support::SystemVerilogBuiltinType::int_type
+        || declaration.type->builtin
+            == support::SystemVerilogBuiltinType::integer;
     const auto domain = integer_domain
         ? frontend::ValueDomain::Integer
         : declaration.type->four_state
@@ -125,18 +127,18 @@ bool compiled_systemverilog_string_declaration(
         && !declaration.type->container_form
         && (declaration.type->value_form
                 == semantic::sv::TypeForm::string
-            || declaration.type->target.spelling == "string");
+            || declaration.type->builtin
+                == support::SystemVerilogBuiltinType::string);
 }
 
-bool systemverilog_named_type_spelling(const std::string_view spelling)
+bool systemverilog_named_type(const semantic::sv::TypeReference& type)
 {
-    static constexpr std::string_view builtin[] {
-        "logic", "bit", "reg", "int", "integer", "byte", "shortint",
-        "longint", "real", "shortreal", "realtime", "time", "wire",
-        "event", "chandle", "void", "signed", "unsigned",
-    };
-    return !spelling.empty() && std::ranges::find(builtin, spelling)
-        == std::ranges::end(builtin);
+    // `string` is resolved by the caller's string check.
+    const bool builtin
+        = (type.builtin != support::SystemVerilogBuiltinType::none
+              && type.builtin != support::SystemVerilogBuiltinType::string)
+        || type.net_kind == support::SystemVerilogNetKind::wire;
+    return !type.target.spelling.empty() && !builtin;
 }
 
 bool compiled_systemverilog_string_declaration(
@@ -146,15 +148,15 @@ bool compiled_systemverilog_string_declaration(
     if (compiled_systemverilog_string_declaration(declaration)) return true;
     if (!declaration.type || declaration.type->container_form
         || declaration.type->value_form == semantic::sv::TypeForm::class_handle
-        || !systemverilog_named_type_spelling(
-            declaration.type->target.spelling)) {
+        || !systemverilog_named_type(*declaration.type)) {
         return false;
     }
     const auto effective = semantic::CompiledDesignResolver { specialization }
         .effective_systemverilog_type(*declaration.type, declaration.scope);
     return effective && !effective->container_form
         && (effective->value_form == semantic::sv::TypeForm::string
-            || effective->target.spelling == "string");
+            || effective->builtin
+                == support::SystemVerilogBuiltinType::string);
 }
 
 std::string compiled_systemverilog_type_identity(
@@ -449,16 +451,15 @@ HierarchyBuilder::resolve_compiled_systemverilog_parameters(
             parameter_bindings.bindings,
             override_binding.formal,
             &semantic::SpecializedHirAssociationBinding::formal);
+        // A defparam takes precedence over the instance's parameter value
+        // assignment (IEEE 1800-2023 23.10), and of several defparams for
+        // one parameter the last one applies (23.10.1). The replaced
+        // override keeps its own VPI object (37.28).
         if (duplicate != parameter_bindings.bindings.end()) {
-            add_diagnostic(
-                "FSIM-ELAB-DEFPARAM-003",
-                "duplicate or conflicting override for defparam target '"
-                    + defparam.target_path + "."
-                    + defparam.parameter + "'",
-                defparam.source);
-            continue;
+            *duplicate = override_binding;
+        } else {
+            parameter_bindings.bindings.push_back(override_binding);
         }
-        parameter_bindings.bindings.push_back(override_binding);
         // The defparam's VPI object, held by the scope of the statement
         // (37.28 vpiDefParam): the parameter it sets, in the instance or a
         // named block of it, and its value seen from that scope.
@@ -572,8 +573,8 @@ HierarchyBuilder::resolve_compiled_systemverilog_parameters(
                 }
                 identity_value = scalar->canonical();
             } else if (!formal->systemverilog->type
-                || formal->systemverilog->type->target.spelling
-                    != "string") {
+                || formal->systemverilog->type->builtin
+                    != support::SystemVerilogBuiltinType::string) {
                 // A string formal keeps the string identity of its actual
                 // (IEEE 1800-2017 6.16).
                 std::string constant_error;

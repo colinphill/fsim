@@ -9,25 +9,19 @@
 namespace fsim::elaboration {
 namespace {
 
+using StandardClass = support::SystemVerilogStandardClass;
+
 [[nodiscard]] bool synchronization_type(
     const semantic::sv::TypeReference* type,
-    const std::string_view spelling)
+    const support::SystemVerilogStandardClass standard_class)
 {
-    if (type == nullptr) {
-        return false;
-    }
-    auto name = std::string_view { type->target.spelling };
-    if (const auto separator = name.rfind("::");
-        separator != std::string_view::npos) {
-        name.remove_prefix(separator + 2U);
-    }
-    return name == spelling;
+    return type != nullptr && type->standard_class == standard_class;
 }
 
 [[nodiscard]] const semantic::sv::TypeReference* mailbox_element_type(
     const semantic::sv::TypeReference* type)
 {
-    if (!synchronization_type(type, "mailbox")
+    if (!synchronization_type(type, StandardClass::mailbox)
         || type->interface_parameter_actuals.size() != 1U) {
         return nullptr;
     }
@@ -43,12 +37,7 @@ namespace {
     if (type.value_form == semantic::sv::TypeForm::string) {
         return true;
     }
-    auto name = std::string_view { type.target.spelling };
-    if (const auto separator = name.rfind("::");
-        separator != std::string_view::npos) {
-        name.remove_prefix(separator + 2U);
-    }
-    return name == "string";
+    return type.builtin == support::SystemVerilogBuiltinType::string;
 }
 
 } // namespace
@@ -64,7 +53,7 @@ std::optional<Lowerer::HirMailboxElement> Lowerer::hir_mailbox_element(
     auto element_scope = hir_process_scope_;
     // A typedef name actual (`mailbox #(my_t)`) parses as an expression;
     // it denotes the type the typedef names (IEEE 1800-2017 15.4, 6.18).
-    if (element == nullptr && synchronization_type(mailbox_type, "mailbox")
+    if (element == nullptr && synchronization_type(mailbox_type, StandardClass::mailbox)
         && mailbox_type->interface_parameter_actuals.size() == 1U) {
         const auto& actual = mailbox_type->interface_parameter_actuals.front();
         const auto expression = actual.kind == semantic::sv::ActualKind::expression
@@ -94,6 +83,7 @@ std::optional<Lowerer::HirMailboxElement> Lowerer::hir_mailbox_element(
         const auto alias = definition && definition->systemverilog != nullptr
             ? std::optional { definition->systemverilog->declaration }
             : !element->target.spelling.empty()
+                && !semantic::sv::names_builtin_type(*element)
             ? resolver.resolve_systemverilog_named_type(
                   element->target.spelling, hir_process_scope_).unique()
             : std::nullopt;
@@ -231,8 +221,8 @@ Lowerer::hir_synchronization_task_profile(
             && declaration->systemverilog->type
         ? &*declaration->systemverilog->type
         : nullptr;
-    const bool mailbox = synchronization_type(type, "mailbox");
-    if (mailbox || synchronization_type(type, "semaphore")) {
+    const bool mailbox = synchronization_type(type, StandardClass::mailbox);
+    if (mailbox || synchronization_type(type, StandardClass::semaphore)) {
         // A property named in a method (`mb.put(x)`) is the object's.
         auto property = hir_named_class_property(
             receiver_name, process_scope, 0U);
@@ -257,9 +247,9 @@ Lowerer::hir_synchronization_task_profile(
         return std::nullopt;
     }
     const bool property_mailbox
-        = synchronization_type(property->type, "mailbox");
+        = synchronization_type(property->type, StandardClass::mailbox);
     if (!property_mailbox
-        && !synchronization_type(property->type, "semaphore")) {
+        && !synchronization_type(property->type, StandardClass::semaphore)) {
         return std::nullopt;
     }
     return HirSynchronizationTaskProfile {
@@ -457,12 +447,11 @@ Lowerer::lower_hir_synchronization_expression(
         return { };
     }
 
-    if (source.text.starts_with("@sv-sync-new:")) {
-        const auto kind = std::string_view { source.text }.substr(13U);
-        const bool mailbox = kind == "mailbox"
-            && synchronization_type(expected_type, "mailbox");
-        const bool semaphore = kind == "semaphore"
-            && synchronization_type(expected_type, "semaphore");
+    if (source.marker == support::ExpressionMarker::sv_sync_new) {
+        const bool mailbox
+            = synchronization_type(expected_type, StandardClass::mailbox);
+        const bool semaphore
+            = synchronization_type(expected_type, StandardClass::semaphore);
         if ((!mailbox && !semaphore) || expected_width != 64U
             || source.operands.size() > 1U) {
             report(
@@ -532,8 +521,8 @@ Lowerer::lower_hir_synchronization_expression(
             receiver_type = &property_receiver->type;
         }
     }
-    const bool mailbox = synchronization_type(receiver_type, "mailbox");
-    const bool semaphore = synchronization_type(receiver_type, "semaphore");
+    const bool mailbox = synchronization_type(receiver_type, StandardClass::mailbox);
+    const bool semaphore = synchronization_type(receiver_type, StandardClass::semaphore);
     if (!mailbox && !semaphore) {
         return { };
     }

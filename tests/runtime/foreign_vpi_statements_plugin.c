@@ -386,6 +386,8 @@ static void for_scope(char* name)
     vpiHandle const lhs = init != NULL ? vpi_handle(vpiLhs, init) : NULL;
     vpiHandle variables;
     vpiHandle variable;
+    vpiHandle inits;
+    vpiHandle each;
     if (loop == NULL) {
         vpi_printf("#c for %s: missing\n", name);
         return;
@@ -407,6 +409,16 @@ static void for_scope(char* name)
             lhs == NULL ? "none"
                 : vpi_compare_objects(lhs, variable) ? "variable"
                 : text(vpiType, lhs));
+    }
+    inits = vpi_iterate(vpiForInitStmt, loop);
+    while (inits != NULL && (each = vpi_scan(inits)) != NULL) {
+        vpiHandle const target = vpi_handle(vpiLhs, each);
+        vpiHandle const parent = vpi_handle(vpiParent, each);
+        vpi_printf("#c for init %s lhs=%s parent=%s\n", text(vpiType, each),
+            target == NULL ? "none" : text(vpiName, target),
+            parent == NULL ? "none"
+                : vpi_compare_objects(parent, loop) ? "loop"
+                : text(vpiType, parent));
     }
 }
 
@@ -467,6 +479,7 @@ static PLI_INT32 start(p_cb_data data)
     display_arguments("top.shown");
     display_arguments("top.shown_file");
     for_scope("top.counted");
+    for_scope("top.paired");
     task = vpi_handle_by_name("top.matching", NULL);
     if (task != NULL) {
         vpi_printf("#c task %s\n", text(vpiFullName, task));

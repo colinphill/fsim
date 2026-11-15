@@ -29,16 +29,30 @@ using namespace hierarchy_sv_parameters_detail;
 
 namespace {
 
-// A built-in data type or net type, named by its keyword.
-[[nodiscard]] bool builtin_type_spelling(const std::string_view spelling)
+// An assignment pattern item with no choice at all (positional); a `key`
+// choice has an empty spelling too and is told apart by its marker.
+[[nodiscard]] bool unkeyed_choice(
+    const semantic::sv::AssignmentPatternAssociation& association) noexcept
 {
-    return spelling.empty() || spelling == "logic" || spelling == "bit"
-        || spelling == "reg" || spelling == "byte" || spelling == "shortint"
-        || spelling == "int" || spelling == "longint" || spelling == "integer"
-        || spelling == "time" || spelling == "real" || spelling == "shortreal"
-        || spelling == "realtime" || spelling == "string"
-        || spelling == "event" || spelling == "chandle"
-        || semantic::sv::is_builtin_net_kind(spelling);
+    return association.choice_spelling.empty()
+        && association.choice_marker == support::ExpressionMarker::none;
+}
+
+// The `default:` item of an assignment pattern (IEEE 1800-2023 10.9.1).
+[[nodiscard]] bool default_choice(
+    const semantic::sv::AssignmentPatternAssociation& association) noexcept
+{
+    return association.choice_spelling == "default";
+}
+
+// A built-in data type or net type (`void` excluded), or an implicit type.
+[[nodiscard]] bool builtin_type_reference(
+    const semantic::sv::TypeReference& type)
+{
+    return type.target.spelling.empty()
+        || (type.builtin != support::SystemVerilogBuiltinType::none
+            && type.builtin != support::SystemVerilogBuiltinType::void_type)
+        || type.net_kind != support::SystemVerilogNetKind::none;
 }
 
 // The declared type of a structure, union, enumeration or packed array of
@@ -51,8 +65,7 @@ vpi_declared_aggregate(const semantic::SpecializedHirUnit& specialization,
     const semantic::sv::TypeReference& type, const std::uint64_t width)
 {
     using Kind = runtime::SystemVerilogVpiDescriptorKind;
-    const auto& spelling = type.target.spelling;
-    if (!type.target.target.valid() && builtin_type_spelling(spelling)) {
+    if (!type.target.target.valid() && builtin_type_reference(type)) {
         return nullptr;
     }
     auto declared = hierarchy_sv_type_layout_detail::
@@ -90,7 +103,7 @@ std::shared_ptr<const runtime::SystemVerilogVpiTypespec> vpi_typespec(
     // A virtual interface variable's type is an interface typespec (IEEE
     // 1800-2023 37.29, 37.30), which the typespec builder derives.
     if (!type.virtual_interface && !type.target.target.valid()
-        && builtin_type_spelling(type.target.spelling)
+        && builtin_type_reference(type)
         && type.packed_dimensions.size() <= 1U
         && type.unpacked_dimensions.empty() && !type.container_form) {
         return nullptr;
@@ -269,7 +282,7 @@ std::shared_ptr<const runtime::SystemVerilogVpiTypespec> vpi_typespec(
             for (const auto& association : pattern->systemverilog->associations) {
                 // `default: value` is the array's default, the value a read
                 // of a key with no entry returns (7.9.11, 7.8.6).
-                if (association.choice_spelling == "default") {
+                if (default_choice(association)) {
                     if (type.element_kind == ContainerElementKind::String) {
                         const auto text
                             = specialization.evaluate_string_expression(
@@ -288,7 +301,8 @@ std::shared_ptr<const runtime::SystemVerilogVpiTypespec> vpi_typespec(
                     }
                     continue;
                 }
-                if (association.choice_spelling != "@key"
+                if (association.choice_marker
+                        != support::ExpressionMarker::key
                     || association.choices.size() != 1U) {
                     return std::nullopt;
                 }
@@ -428,9 +442,9 @@ std::shared_ptr<const runtime::SystemVerilogVpiTypespec> vpi_typespec(
                     box.nested_elements.size());
                 std::size_t position { };
                 for (const auto& association : associations) {
-                    if (association.choice_spelling == "default") {
+                    if (default_choice(association)) {
                         fallback = association.value;
-                    } else if (association.choice_spelling.empty()) {
+                    } else if (unkeyed_choice(association)) {
                         if (position >= members.size()) {
                             return false;
                         }
@@ -438,7 +452,8 @@ std::shared_ptr<const runtime::SystemVerilogVpiTypespec> vpi_typespec(
                     } else {
                         // `name: value`, kept as a keyed choice expression.
                         auto member_name = association.choice_spelling;
-                        if (member_name == "@key"
+                        if (association.choice_marker
+                                == support::ExpressionMarker::key
                             && association.choices.size() == 1U) {
                             const auto choice = specialization.find_expression(
                                 association.choices.front());
@@ -474,9 +489,9 @@ std::shared_ptr<const runtime::SystemVerilogVpiTypespec> vpi_typespec(
             std::optional<semantic::ExpressionId> fallback;
             std::vector<semantic::ExpressionId> positional;
             for (const auto& association : items) {
-                if (association.choice_spelling == "default") {
+                if (default_choice(association)) {
                     fallback = association.value;
-                } else if (association.choice_spelling.empty()) {
+                } else if (unkeyed_choice(association)) {
                     positional.push_back(association.value);
                 } else {
                     return std::nullopt;
@@ -504,7 +519,10 @@ std::shared_ptr<const runtime::SystemVerilogVpiTypespec> vpi_typespec(
             return std::nullopt;
         }
         std::optional<std::size_t> leaf_count;
-        if (type.fixed) {
+        if (type.sparse) {
+            leaf_count = static_cast<std::size_t>(
+                sparse_container_element_count(type));
+        } else if (type.fixed) {
             std::size_t product = 1U;
             for (const auto& [left, right] : type.dimensions) {
                 const auto extent = static_cast<std::size_t>(
@@ -526,6 +544,187 @@ std::shared_ptr<const runtime::SystemVerilogVpiTypespec> vpi_typespec(
         const auto* const initializer_source = initializer_expression
             ? initializer_expression->systemverilog
             : nullptr;
+        // The constant value of element expression `id`, stored as element
+        // `at` of `into` (a value of `type`'s element kind).
+        std::string element_error;
+        const auto leaf_value = [&](ContainerValue& into,
+                                    const semantic::ExpressionId id,
+                                    const std::size_t at) -> bool {
+            if (type.element_kind == ContainerElementKind::String) {
+                const auto text = specialization.evaluate_string_expression(id);
+                if (!text) {
+                    return false;
+                }
+                into.string_elements[at] = *text;
+                return true;
+            }
+            if (type.element_kind == ContainerElementKind::Scalar) {
+                auto scalar = evaluate_hir_systemverilog_scalar_constant(
+                    specialization, id, element_error);
+                if (scalar) {
+                    scalar = frontend::convert_systemverilog_scalar_constant(
+                        *scalar, type.scalar_kind, element_error);
+                }
+                if (!scalar) {
+                    return false;
+                }
+                into.elements[at] = PackedLogic4::from_aval_bval(
+                    type.element_width, scalar->bits, 0U);
+                return true;
+            }
+            auto constant = evaluate_hir_systemverilog_constant(
+                specialization, id, element_error);
+            // A keyed pattern for a packed structure element takes the
+            // element type's layout (10.9.2).
+            if ((!constant || constant->unbounded) && element_type != nullptr) {
+                std::string typed_error;
+                constant = evaluate_hir_systemverilog_typed_constant(
+                    specialization, id, *element_type, typed_error);
+            }
+            if (!constant || constant->unbounded) {
+                // A string literal is its characters, eight bits each,
+                // right-justified in the element (5.9).
+                const auto literal = specialization.find_expression(id);
+                if (!literal || literal->systemverilog == nullptr
+                    || literal->systemverilog->kind
+                        != ExpressionKind::string_literal) {
+                    return false;
+                }
+                const auto text = specialization.evaluate_string_expression(id);
+                if (!text) {
+                    return false;
+                }
+                PackedLogic4 element(type.element_width, Logic4::zero);
+                for (std::size_t character = 0; character < text->size();
+                    ++character) {
+                    const auto byte = static_cast<unsigned char>(
+                        (*text)[text->size() - 1U - character]);
+                    for (std::size_t bit = 0; bit < 8U; ++bit) {
+                        const auto position = character * 8U + bit;
+                        if (position < type.element_width) {
+                            element.set(position, ((byte >> bit) & 1U) != 0U
+                                    ? Logic4::one
+                                    : Logic4::zero);
+                        }
+                    }
+                }
+                into.elements[at] = std::move(element);
+                return true;
+            }
+            PackedLogic4 element(type.element_width,
+                type.two_state ? Logic4::zero : Logic4::x);
+            const auto fill = constant->signed_value && constant->width != 0U
+                ? constant->packed.get(constant->width - 1U)
+                : Logic4::zero;
+            for (std::size_t bit = 0; bit < type.element_width; ++bit) {
+                auto state = bit < constant->packed.width()
+                    ? runtime::to_logic4(constant->packed.get_logic9(bit))
+                    : fill;
+                if (type.two_state
+                    && state != Logic4::zero && state != Logic4::one) {
+                    state = Logic4::zero;
+                }
+                element.set(bit, state);
+            }
+            into.elements[at] = std::move(element);
+            return true;
+        };
+        // An array too large to hold densely keeps only the elements that
+        // differ from its background: the pattern's `default:` value, the
+        // element type's initial value without one (10.9.1). Keyed items of
+        // a one-dimensional array and leading positional items set
+        // elements.
+        if (type.sparse) {
+            if (initializer_source == nullptr
+                || initializer_source->kind
+                    != ExpressionKind::assignment_pattern) {
+                return std::nullopt;
+            }
+            auto element_type_value = type;
+            element_type_value.sparse = false;
+            element_type_value.dimensions = { { 0, 0 } };
+            element_type_value.index_left = 0;
+            element_type_value.index_right = 0;
+            auto element = default_container_value(element_type_value);
+            const bool text
+                = type.element_kind == ContainerElementKind::String;
+            auto value = default_container_value(type);
+            const auto& associations = initializer_source->associations;
+            for (const auto& association : associations) {
+                if (!default_choice(association)) {
+                    continue;
+                }
+                if (!leaf_value(element, association.value, 0U)) {
+                    return std::nullopt;
+                }
+                if (text) {
+                    value.associative_default_text
+                        = element.string_elements.front();
+                } else {
+                    value.associative_default = element.elements.front();
+                }
+            }
+            std::uint64_t position { };
+            for (const auto& association : associations) {
+                if (default_choice(association)) {
+                    continue;
+                }
+                std::uint64_t ordinal = position++;
+                if (association.choice_marker
+                    == support::ExpressionMarker::key) {
+                    if (type.dimensions.size() > 1U
+                        || association.choices.size() != 1U) {
+                        return std::nullopt;
+                    }
+                    const auto [left, right] = type.dimensions.empty()
+                        ? ContainerDimension { type.index_left,
+                              type.index_right }
+                        : type.dimensions.front();
+                    const auto key = evaluate_hir_systemverilog_constant(
+                        specialization, association.choices.front(),
+                        element_error);
+                    // An unsigned key such as 4'd8 keeps its unsigned value.
+                    const auto unsigned_key = key && !key->unbounded
+                            && !key->signed_value
+                        ? key->packed.known_unsigned_value()
+                        : std::nullopt;
+                    const auto index = key && !key->unbounded
+                        ? (key->signed_value
+                              ? key->packed.known_signed_value()
+                              : unsigned_key
+                                  && *unsigned_key
+                                      <= static_cast<std::uint64_t>(
+                                          std::numeric_limits<
+                                              std::int64_t>::max())
+                              ? std::optional<std::int64_t> {
+                                    static_cast<std::int64_t>(*unsigned_key) }
+                              : std::nullopt)
+                        : std::nullopt;
+                    if (!index || *index < std::min(left, right)
+                        || *index > std::max(left, right)) {
+                        return std::nullopt;
+                    }
+                    ordinal = static_cast<std::uint64_t>(left >= right
+                            ? left - *index
+                            : *index - left);
+                } else if (!unkeyed_choice(association)
+                    || type.dimensions.size() > 1U) {
+                    return std::nullopt;
+                }
+                if (ordinal >= *leaf_count
+                    || !leaf_value(element, association.value, 0U)) {
+                    return std::nullopt;
+                }
+                if (text) {
+                    static_cast<void>(write_sparse_container_string(
+                        value, ordinal, element.string_elements.front()));
+                } else {
+                    static_cast<void>(write_sparse_container_element(
+                        value, ordinal, element.elements.front()));
+                }
+            }
+            return value;
+        }
         // An array parameter, an array-valued constant function call or a
         // slice of one gives its elements from the left bound (7.6, 13.4).
         if (initializer_source != nullptr && type.fixed
@@ -597,7 +796,8 @@ std::shared_ptr<const runtime::SystemVerilogVpiTypespec> vpi_typespec(
                 return std::nullopt;
             }
             if (initializer_source->kind == ExpressionKind::call
-                && initializer_source->text == "@new-array"
+                && initializer_source->marker
+                    == support::ExpressionMarker::new_array
                 && (initializer_source->operands.size() == 1U
                     || initializer_source->operands.size() == 2U)) {
                 return initializer_source->operands.front();
@@ -648,7 +848,8 @@ std::shared_ptr<const runtime::SystemVerilogVpiTypespec> vpi_typespec(
             && initializer_source->kind == ExpressionKind::assignment_pattern
             && std::ranges::any_of(initializer_source->associations,
                 [](const auto& association) {
-                    return association.choice_spelling == "@key";
+                    return association.choice_marker
+                        == support::ExpressionMarker::key;
                 })) {
             const auto [left, right] = type.dimensions.front();
             std::vector<std::optional<semantic::ExpressionId>> slots(
@@ -656,11 +857,12 @@ std::shared_ptr<const runtime::SystemVerilogVpiTypespec> vpi_typespec(
             std::optional<semantic::ExpressionId> keyed_default;
             std::string key_error;
             for (const auto& association : initializer_source->associations) {
-                if (association.choice_spelling == "default") {
+                if (default_choice(association)) {
                     keyed_default = association.value;
                     continue;
                 }
-                if (association.choice_spelling != "@key"
+                if (association.choice_marker
+                        != support::ExpressionMarker::key
                     || association.choices.size() != 1U) {
                     return std::nullopt;
                 }
@@ -757,14 +959,14 @@ std::shared_ptr<const runtime::SystemVerilogVpiTypespec> vpi_typespec(
             if (source.kind == ExpressionKind::assignment_pattern
                 && depth < nested_dimensions) {
                 for (const auto& association : source.associations) {
-                    if (association.choice_spelling == "default") {
+                    if (default_choice(association)) {
                         if (depth != 0U || default_value) {
                             valid = false;
                         }
                         default_value = association.value;
                         continue;
                     }
-                    if (!association.choice_spelling.empty()) {
+                    if (!unkeyed_choice(association)) {
                         valid = false;
                         return;
                     }
@@ -798,88 +1000,6 @@ std::shared_ptr<const runtime::SystemVerilogVpiTypespec> vpi_typespec(
         }
         auto value = default_container_value(type);
         const auto count = type.fixed ? *leaf_count : leaves.size();
-        std::string error;
-        const auto leaf_value = [&](const semantic::ExpressionId id,
-                                    const std::size_t at) -> bool {
-            if (type.element_kind == ContainerElementKind::String) {
-                const auto text = specialization.evaluate_string_expression(id);
-                if (!text) {
-                    return false;
-                }
-                value.string_elements[at] = *text;
-                return true;
-            }
-            if (type.element_kind == ContainerElementKind::Scalar) {
-                auto scalar = evaluate_hir_systemverilog_scalar_constant(
-                    specialization, id, error);
-                if (scalar) {
-                    scalar = frontend::convert_systemverilog_scalar_constant(
-                        *scalar, type.scalar_kind, error);
-                }
-                if (!scalar) {
-                    return false;
-                }
-                value.elements[at] = PackedLogic4::from_aval_bval(
-                    type.element_width, scalar->bits, 0U);
-                return true;
-            }
-            auto constant = evaluate_hir_systemverilog_constant(
-                specialization, id, error);
-            // A keyed pattern for a packed structure element takes the
-            // element type's layout (10.9.2).
-            if ((!constant || constant->unbounded) && element_type != nullptr) {
-                std::string typed_error;
-                constant = evaluate_hir_systemverilog_typed_constant(
-                    specialization, id, *element_type, typed_error);
-            }
-            if (!constant || constant->unbounded) {
-                // A string literal is its characters, eight bits each,
-                // right-justified in the element (5.9).
-                const auto literal = specialization.find_expression(id);
-                if (!literal || literal->systemverilog == nullptr
-                    || literal->systemverilog->kind
-                        != ExpressionKind::string_literal) {
-                    return false;
-                }
-                const auto text = specialization.evaluate_string_expression(id);
-                if (!text) {
-                    return false;
-                }
-                PackedLogic4 element(type.element_width, Logic4::zero);
-                for (std::size_t character = 0; character < text->size();
-                    ++character) {
-                    const auto byte = static_cast<unsigned char>(
-                        (*text)[text->size() - 1U - character]);
-                    for (std::size_t bit = 0; bit < 8U; ++bit) {
-                        const auto position = character * 8U + bit;
-                        if (position < type.element_width) {
-                            element.set(position, ((byte >> bit) & 1U) != 0U
-                                    ? Logic4::one
-                                    : Logic4::zero);
-                        }
-                    }
-                }
-                value.elements[at] = std::move(element);
-                return true;
-            }
-            PackedLogic4 element(type.element_width,
-                type.two_state ? Logic4::zero : Logic4::x);
-            const auto fill = constant->signed_value && constant->width != 0U
-                ? constant->packed.get(constant->width - 1U)
-                : Logic4::zero;
-            for (std::size_t bit = 0; bit < type.element_width; ++bit) {
-                auto state = bit < constant->packed.width()
-                    ? runtime::to_logic4(constant->packed.get_logic9(bit))
-                    : fill;
-                if (type.two_state
-                    && state != Logic4::zero && state != Logic4::one) {
-                    state = Logic4::zero;
-                }
-                element.set(bit, state);
-            }
-            value.elements[at] = std::move(element);
-            return true;
-        };
         if (!type.fixed) {
             if (type.element_kind == ContainerElementKind::String) {
                 value.string_elements.assign(count, std::string { });
@@ -892,7 +1012,7 @@ std::shared_ptr<const runtime::SystemVerilogVpiTypespec> vpi_typespec(
         for (std::size_t at = 0; at < count; ++at) {
             const auto source = at < leaves.size() ? leaves[at]
                                                     : *default_value;
-            if (!leaf_value(source, at)) {
+            if (!leaf_value(value, source, at)) {
                 return std::nullopt;
             }
         }
@@ -1144,10 +1264,14 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_static_storage(
         auto nested_path = scope_path;
         // A block is a scope of its own when it is named or declares items
         // (IEEE 1800-2023 9.3.5, 37.12 detail 1); an unnamed one is named
-        // by its HIR scope. Its static variables are storage (6.21).
+        // by its HIR scope. Its static variables are storage (6.21). The
+        // loops a foreach statement is written as are no scopes (12.7.3).
         if (statement.nested_scope
+            && statement.generated_role
+                != support::GeneratedStatementRole::foreach_layer
             && (!statement.label.empty() || !scope_path.empty()
-                || !statement.declarations.empty())) {
+                || !statement.declarations.empty()
+                || statement.foreach_collection)) {
             const auto name = !statement.label.empty()
                 ? statement.label
                 : "$block_" + std::to_string(statement.nested_scope->value());
@@ -1313,7 +1437,8 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
         if (declaration.callable->function
             && declaration.callable->lifetime != semantic::sv::Lifetime::automatic
             && declaration.type
-            && declaration.type->target.spelling != "void"
+            && declaration.type->builtin
+                != support::SystemVerilogBuiltinType::void_type
             && (compiled_systemverilog_string_declaration(
                     working_specialization, declaration)
                 || hierarchy_sv_type_layout_detail::systemverilog_container_type(
@@ -1360,6 +1485,21 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
             packed_type_resolver, packed_default_resolver,
             packed_fallback_resolver);
     }
+    // The net type a declaration names (IEEE 1800-2023 6.7): `kind` is the
+    // built-in net type, `none` for a variable and for a user-defined
+    // nettype (6.6.7), whose name stays in `text` with every other
+    // net-type text.
+    struct DeclaredNetType final {
+        std::string_view text;
+        support::SystemVerilogNetKind kind {
+            support::SystemVerilogNetKind::none
+        };
+
+        [[nodiscard]] bool empty() const noexcept
+        {
+            return text.empty();
+        }
+    };
     const auto net_type_for = [](const semantic::sv::Declaration& value,
                                   const semantic::sv::TypeReference& type) {
         const auto explicit_net_type = [](
@@ -1367,17 +1507,15 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
             auto* current = &candidate;
             while (true) {
                 if (!current->systemverilog_net_type.empty()) {
-                    return std::string_view {
-                        current->systemverilog_net_type
-                    };
+                    return DeclaredNetType { current->systemverilog_net_type,
+                        current->net_type_kind };
                 }
-                const auto spelling
-                    = std::string_view { current->target.spelling };
-                if (semantic::sv::is_builtin_net_kind(spelling)) {
-                    return spelling;
+                if (current->net_kind != support::SystemVerilogNetKind::none) {
+                    return DeclaredNetType { current->target.spelling,
+                        current->net_kind };
                 }
                 if (current->container_element_types.size() != 1U) {
-                    return std::string_view { };
+                    return DeclaredNetType { };
                 }
                 current = &current->container_element_types.front();
             }
@@ -1387,14 +1525,16 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
         return !declared.empty() ? declared
             : !effective.empty() ? effective
             : value.form == Form::net
-            ? std::string_view { value.type->target.spelling }
-            : std::string_view { };
+            ? DeclaredNetType { value.type->target.spelling,
+                value.type->net_kind }
+            : DeclaredNetType { };
     };
     const auto configure_net_signal = [](
                                           Signal& signal,
                                           const semantic::sv::Declaration& value,
-                                          const std::string_view net_type) {
-        if (net_type == "trireg") {
+                                          const support::SystemVerilogNetKind net_type) {
+        using Kind = support::SystemVerilogNetKind;
+        if (net_type == Kind::trireg) {
             signal.charge_strength = value.charge_strength
                 ? static_cast<StrengthRank>(*value.charge_strength)
                 : StrengthRank::medium;
@@ -1403,13 +1543,13 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                     = value.charge_decay->primary.magnitude;
             }
         }
-        if (net_type == "tri0" || net_type == "tri1") {
-            signal.implicit_driver = net_type == "tri0"
+        if (net_type == Kind::tri0 || net_type == Kind::tri1) {
+            signal.implicit_driver = net_type == Kind::tri0
                 ? Logic4::zero
                 : Logic4::one;
-        } else if (net_type == "supply0"
-            || net_type == "supply1") {
-            signal.implicit_driver = net_type == "supply0"
+        } else if (net_type == Kind::supply0
+            || net_type == Kind::supply1) {
+            signal.implicit_driver = net_type == Kind::supply0
                 ? Logic4::zero
                 : Logic4::one;
             signal.implicit_drive_strength = {
@@ -1419,11 +1559,12 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
     };
     const auto net_initial_for = [](
                                      const frontend::ValueDomain domain,
-                                     const std::string_view net_type) {
-        if (net_type == "tri0" || net_type == "supply0") {
+                                     const support::SystemVerilogNetKind net_type) {
+        using Kind = support::SystemVerilogNetKind;
+        if (net_type == Kind::tri0 || net_type == Kind::supply0) {
             return Logic4::zero;
         }
-        if (net_type == "tri1" || net_type == "supply1") {
+        if (net_type == Kind::tri1 || net_type == Kind::supply1) {
             return Logic4::one;
         }
         return domain == frontend::ValueDomain::Logic4
@@ -1535,10 +1676,10 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
         return true;
     }
     const auto builtin_net_kind = declaration.type
-        ? net_type_for(declaration, *declaration.type)
-        : std::string_view { };
+        ? net_type_for(declaration, *declaration.type).kind
+        : support::SystemVerilogNetKind::none;
     if (declaration.type
-        && semantic::sv::is_builtin_net_kind(builtin_net_kind)) {
+        && builtin_net_kind != support::SystemVerilogNetKind::none) {
         struct BuiltinNetTypeProperties final {
             bool packed_integral { };
             bool four_state { };
@@ -1584,12 +1725,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
             if (form == semantic::sv::TypeForm::unresolved
                 || (form == semantic::sv::TypeForm::enumeration
                     && !resolved.target.target.valid())) {
-                const auto& spelling = resolved.target.spelling;
-                if (spelling == "bit" || spelling == "logic"
-                    || spelling == "reg" || spelling == "byte"
-                    || spelling == "shortint" || spelling == "int"
-                    || spelling == "integer" || spelling == "longint"
-                    || spelling == "time") {
+                if (support::systemverilog_integral(resolved.builtin)) {
                     form = semantic::sv::TypeForm::packed_integral;
                 }
             }
@@ -1742,13 +1878,9 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
 
             if (form == semantic::sv::TypeForm::packed_integral) {
                 bool four_state = resolved.four_state;
-                const auto& spelling = resolved.target.spelling;
-                if (spelling == "logic" || spelling == "reg"
-                    || spelling == "integer" || spelling == "time") {
+                if (support::systemverilog_four_state(resolved.builtin)) {
                     four_state = true;
-                } else if (spelling == "bit" || spelling == "byte"
-                    || spelling == "shortint" || spelling == "int"
-                    || spelling == "longint") {
+                } else if (support::systemverilog_integral(resolved.builtin)) {
                     four_state = false;
                 }
                 return { true, four_state, four_state };
@@ -1883,6 +2015,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
             info.name = element_name;
             info.width = 1U;
             info.type_name = "event";
+            info.systemverilog_builtin = support::SystemVerilogBuiltinType::event;
             info.source_domain = frontend::ValueDomain::Logic4;
             info.declaration_span = span;
             {
@@ -1921,11 +2054,11 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
             design_.signal_by_name_.insert_or_assign(
                 element_name, signal_id);
             if (design_.roots_.size() == 1U) {
-                design_.signal_by_name_.insert_or_assign(
+                note_root_relative_name(design_.signal_by_name_,
                     source_name, signal_id);
                 const auto root_prefix = active_root_ + ".";
                 if (materialized_path.starts_with(root_prefix)) {
-                    design_.signal_by_name_.insert_or_assign(
+                    note_root_relative_name(design_.signal_by_name_,
                         materialized_path.substr(root_prefix.size())
                             + "." + source_name,
                         signal_id);
@@ -1986,7 +2119,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                     full_name, alias->second);
                 if (design_.roots_.size() == 1U
                     && materialized_path == active_root_) {
-                    design_.container_by_name_.insert_or_assign(
+                    note_root_relative_name(design_.container_by_name_,
                         declaration.name, alias->second);
                 }
                 if (compiled_port_direction(declaration)
@@ -2067,8 +2200,14 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                 == semantic::sv::TypeForm::associative_array
             && declaration.type->associative_index) {
             semantic::sv::TypeReference index_reference;
-            index_reference.target
-                = *declaration.type->associative_index;
+            if (declaration.type->associative_index_metadata) {
+                index_reference
+                    = semantic::sv::type_reference_from_associative_index_metadata(
+                        *declaration.type->associative_index_metadata);
+            } else {
+                index_reference.target
+                    = *declaration.type->associative_index;
+            }
             const semantic::CompiledDesignResolver type_resolver {
                 working_specialization
             };
@@ -2077,14 +2216,14 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                                    index_reference,
                                    working_specialization.scope())
                       .value_or(index_reference);
-            const auto spelling = index_type.target.spelling.empty()
-                ? declaration.type->associative_index->spelling
-                : index_type.target.spelling;
             const auto form = index_type.value_form.value_or(
                 semantic::sv::TypeForm::unresolved);
+            // A real or chandle index type is not integral (IEEE 1800-2023
+            // 7.8.4).
             const bool nonintegral_scalar
-                = spelling == "shortreal" || spelling == "real"
-                || spelling == "realtime" || spelling == "chandle";
+                = support::systemverilog_real_family(index_type.builtin)
+                || index_type.builtin
+                    == support::SystemVerilogBuiltinType::chandle;
             const bool invalid_form
                 = form == semantic::sv::TypeForm::unpacked_structure
                 || form == semantic::sv::TypeForm::tagged_union
@@ -2303,8 +2442,8 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
         design_.container_by_name_.emplace(full_name, id);
         if (design_.roots_.size() == 1U
             && materialized_path == active_root_) {
-            design_.container_by_name_.emplace(
-                declaration.name, id);
+            note_root_relative_name(
+                design_.container_by_name_, declaration.name, id, false);
         }
         const auto declared_net_type = net_type_for(
             declaration, *declaration.type);
@@ -2358,14 +2497,16 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                 : frontend::ValueDomain::Logic4;
             const auto net_type = net_bridge
                 ? net_type_for(declaration, effective_type)
-                : std::string_view { };
+                : DeclaredNetType { };
             SignalInfo info;
             info.id = signal_id;
             info.name = full_name;
             info.width = *bridge_width;
             info.type_name = declaration.type->target.spelling;
+            info.systemverilog_builtin = declaration.type->builtin;
             info.source_domain = domain;
-            info.systemverilog_net_type = net_type;
+            info.systemverilog_net_type = std::string { net_type.text };
+            info.systemverilog_net_kind = net_type.kind;
             info.is_signed = type->signed_elements;
             info.declaration_span = compiled_source_span(
                 *compiled_, declaration.source);
@@ -2382,7 +2523,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                 vpi_typespec(
                     working_specialization, declaration, *declaration.type));
             const auto initial_value = net_bridge && !user_nettype_net
-                ? net_initial_for(domain, net_type)
+                ? net_initial_for(domain, net_type.kind)
                 : domain == frontend::ValueDomain::Logic4
                 ? Logic4::x
                 : Logic4::zero;
@@ -2410,7 +2551,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                 frontend::SystemVerilogScalarKind::None,
             };
             if (net_bridge) {
-                configure_net_signal(signal, declaration, net_type);
+                configure_net_signal(signal, declaration, net_type.kind);
             }
             info.hir_declaration = declaration_id;
             design_.signal_info_.push_back(std::move(info));
@@ -2422,11 +2563,11 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
             design_.signal_by_name_.insert_or_assign(
                 full_name, signal_id);
             if (design_.roots_.size() == 1U) {
-                design_.signal_by_name_.insert_or_assign(
+                note_root_relative_name(design_.signal_by_name_,
                     declaration.name, signal_id);
                 const auto root_prefix = active_root_ + ".";
                 if (materialized_path.starts_with(root_prefix)) {
-                    design_.signal_by_name_.insert_or_assign(
+                    note_root_relative_name(design_.signal_by_name_,
                         materialized_path.substr(root_prefix.size())
                             + "." + declaration.name,
                         signal_id);
@@ -2552,8 +2693,8 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
         design_.signal_by_name_.insert_or_assign(full_name, *alias);
         if (design_.roots_.size() == 1U
             && materialized_path == active_root_) {
-            design_.signal_by_name_.insert_or_assign(
-                declaration.name, *alias);
+            note_root_relative_name(
+                design_.signal_by_name_, declaration.name, *alias);
         }
         if (variable_input_port()) {
             read_only_signals.insert(*alias);
@@ -2586,8 +2727,8 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
         ? frontend::ValueDomain::Logic4
         : frontend::ValueDomain::Bit2;
     const bool event_variable
-        = declaration.type->target.spelling == "event"
-        || effective_type.target.spelling == "event";
+        = declaration.type->builtin == support::SystemVerilogBuiltinType::event
+        || effective_type.builtin == support::SystemVerilogBuiltinType::event;
     auto direction = compiled_port_direction(declaration);
     SignalInfo info;
     info.id = id;
@@ -2596,13 +2737,16 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
     info.type_name = event_variable
         ? "event"
         : declaration.type->target.spelling;
+    info.systemverilog_builtin = event_variable
+        ? support::SystemVerilogBuiltinType::event
+        : declaration.type->builtin;
     info.source_domain = domain;
     auto scalar_kind = frontend::systemverilog_scalar_kind(
-        effective_type.target.spelling);
+        effective_type.builtin);
     if (scalar_kind
         == frontend::SystemVerilogScalarKind::None) {
         scalar_kind = frontend::systemverilog_scalar_kind(
-            declaration.type->target.spelling);
+            declaration.type->builtin);
     }
     if (declaration.type->virtual_interface
         || !declaration.interface_type.empty()
@@ -2612,7 +2756,8 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
     info.systemverilog_scalar = scalar_kind;
     const auto net_type = net_type_for(
         declaration, effective_type);
-    info.systemverilog_net_type = net_type;
+    info.systemverilog_net_type = std::string { net_type.text };
+    info.systemverilog_net_kind = net_type.kind;
     info.is_signed = declaration.type->signed_value
         || effective_type.signed_value;
     if (declaration.type->container_form
@@ -2685,7 +2830,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                 || (declaration.form == Form::port
                     && direction == frontend::PortDirection::Input
                     && !net_type.empty()))
-        ? net_initial_for(domain, net_type)
+        ? net_initial_for(domain, net_type.kind)
         : four_state
         ? Logic4::x
         : Logic4::zero;
@@ -2911,7 +3056,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
         scalar_kind,
     };
     signal.event_variable = event_variable;
-    configure_net_signal(signal, declaration, net_type);
+    configure_net_signal(signal, declaration, net_type.kind);
     info.hir_declaration = declaration_id;
     design_.signal_info_.push_back(std::move(info));
     design_.signals_.push_back(std::move(signal));
@@ -2924,13 +3069,14 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
     signals.emplace(full_name, id);
     design_.signal_by_name_.emplace(full_name, id);
     if (design_.roots_.size() == 1U) {
-        design_.signal_by_name_.emplace(declaration.name, id);
+        note_root_relative_name(
+            design_.signal_by_name_, declaration.name, id, false);
         const auto root_prefix = active_root_ + ".";
         if (materialized_path.starts_with(root_prefix)) {
-            design_.signal_by_name_.emplace(
+            note_root_relative_name(design_.signal_by_name_,
                 materialized_path.substr(root_prefix.size())
                     + "." + declaration.name,
-                id);
+                id, false);
         }
     }
     register_resolution(id);

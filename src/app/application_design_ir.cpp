@@ -778,6 +778,8 @@ class DesignIrBuilder final {
       result_.mutable_objects()[object.value()].no_hierarchical_name
           = result_.objects()[base->second.value()].no_hierarchical_name
           || elaborated_.storage_alias_path(path);
+      result_.mutable_objects()[object.value()].root_relative_alias
+          = elaborated_.root_relative_alias_path(path);
       object_by_path_[paths_.intern(path)] = object;
       if (declaration_id
           && model_.declarations()[declaration_id->value()].kind
@@ -851,6 +853,8 @@ class DesignIrBuilder final {
       result_.mutable_objects()[object.value()].no_hierarchical_name
           = result_.objects()[base->second.value()].no_hierarchical_name
           || elaborated_.storage_alias_path(path);
+      result_.mutable_objects()[object.value()].root_relative_alias
+          = elaborated_.root_relative_alias_path(path);
       object_by_path_[paths_.intern(path)] = object;
       if (declaration_id
           && model_.declarations()[declaration_id->value()].kind
@@ -1611,13 +1615,23 @@ UnnamedScopeDeclarations::UnnamedScopeDeclarations(
     : hir_ { &hir }, model_ { &model }
 {
     for (const auto& statement : hir.statements()) {
-        if ((statement.kind == semantic::sv::StatementKind::block
-                || statement.kind == semantic::sv::StatementKind::fork)
-            && statement.label.empty() && statement.nested_scope
-            && !statement.declarations.empty()
-            && !statement.foreach_collection
-            && statement.generated_role
-                == support::GeneratedStatementRole::none) {
+        if (!statement.label.empty() || !statement.nested_scope
+            || statement.generated_role
+                != support::GeneratedStatementRole::none) {
+            continue;
+        }
+        // An unnamed block that declares items, and the implicit block of an
+        // unlabeled foreach loop or for loop that declares its variables
+        // (9.3.5, 12.7.1, 12.7.3), are unnamed scopes.
+        const bool block
+            = (statement.kind == semantic::sv::StatementKind::block
+                  || statement.kind == semantic::sv::StatementKind::fork)
+            && !statement.declarations.empty();
+        const bool loop = statement.foreach_collection.has_value()
+            || (statement.kind == semantic::sv::StatementKind::loop
+                && statement.loop_variable_declared
+                && !statement.loop_repeat && !statement.loop_post_test);
+        if (block || loop) {
             scopes_.insert(statement.nested_scope->value());
         }
     }

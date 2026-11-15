@@ -741,25 +741,23 @@ private:
 
     // The real type (`real`, `shortreal` or `realtime`) a parameter type is
     // after typedef resolution, also through a type parameter the class's
-    // environment binds (IEEE 1800-2023 6.12, 6.18, 6.20.2, 8.25); empty for
+    // environment binds (IEEE 1800-2023 6.12, 6.18, 6.20.2, 8.25); `none` for
     // any other type.
-    std::string_view real_family(
+    support::SystemVerilogBuiltinType real_family(
         const TypeReference& type, const Environment& environment) const
     {
         std::set<TypeId> active;
         const TypeReference* current = &type;
         for (;;) {
             if (!current->target.target.valid()) {
-                const std::string_view spelling { current->target.spelling };
-                if (spelling == "real" || spelling == "shortreal"
-                    || spelling == "realtime") {
-                    return spelling;
+                if (support::systemverilog_real_family(current->builtin)) {
+                    return current->builtin;
                 }
-                return { };
+                return support::SystemVerilogBuiltinType::none;
             }
             const auto id = current->target.target;
             if (!active.insert(id).second) {
-                return { };
+                return support::SystemVerilogBuiltinType::none;
             }
             if (const auto bound = environment.types.find(id);
                 bound != environment.types.end()) {
@@ -768,7 +766,7 @@ private:
             }
             const auto* definition = record_for(types_, id);
             if (definition == nullptr) {
-                return { };
+                return support::SystemVerilogBuiltinType::none;
             }
             current = &definition->base;
         }
@@ -936,7 +934,7 @@ private:
         // conversions of 20.5 are constant functions (11.2.1) when their
         // arguments are constant.
         if (expression->kind == ExpressionKind::call
-            && expression->text.starts_with('$')
+            && expression->call_kind == semantic::sv::CallKind::system
             && !expression->operands.empty()
             && expression->operands.size() <= 2U) {
             static const std::map<std::string_view, double (*)(double)>
@@ -1116,17 +1114,23 @@ private:
                 resolved.context.insert(resolved.context.end(),
                     item->context.begin(), item->context.end());
                 std::string key { association.choice_spelling };
-                if (key == "@key" && association.choices.size() == 1U) {
+                if (association.choice_marker
+                        == support::ExpressionMarker::key
+                    && association.choices.size() == 1U) {
                     const auto* choice = record_for(
                         expressions_, association.choices.front());
-                    key = choice != nullptr ? "@key:" + choice->text
-                                            : std::string { };
+                    key = choice != nullptr ? choice->text : std::string { };
                     if (key.empty()) {
                         release();
                         return std::nullopt;
                     }
                 }
-                items += encoded(key) + '=' + encoded(item->canonical) + ';';
+                // The choice's kind keeps a keyed choice apart from a named
+                // one of the same text.
+                items += std::to_string(static_cast<unsigned>(
+                             association.choice_marker))
+                    + ':' + encoded(key) + '=' + encoded(item->canonical)
+                    + ';';
             }
             resolved.canonical = "pattern:{" + items + "}";
             release();
@@ -1136,20 +1140,27 @@ private:
         // `byte'(8)`, `4'(9)`) is a constant expression of its operand's
         // value converted to that type (IEEE 1800-2023 6.24.1, 8.25).
         if (expression->kind == ExpressionKind::call
-            && expression->text.starts_with("@sv-cast:")
+            && expression->marker == support::ExpressionMarker::sv_cast
             && expression->operands.size() == 1U) {
-            const auto name = std::string_view { expression->text }.substr(
-                std::string_view { "@sv-cast:" }.size());
+            const std::string_view name { expression->marker_argument };
+            using Builtin = support::SystemVerilogBuiltinType;
+            const auto builtin = expression->cast_target
+                    == support::SystemVerilogCastTarget::builtin
+                ? expression->cast_builtin
+                : Builtin::none;
             std::optional<std::pair<unsigned, bool>> target;
-            if (name == "byte") {
+            if (builtin == Builtin::byte) {
                 target = std::pair { 8U, true };
-            } else if (name == "shortint") {
+            } else if (builtin == Builtin::shortint) {
                 target = std::pair { 16U, true };
-            } else if (name == "int" || name == "integer") {
+            } else if (builtin == Builtin::int_type
+                || builtin == Builtin::integer) {
                 target = std::pair { 32U, true };
-            } else if (name == "longint") {
+            } else if (builtin == Builtin::longint) {
                 target = std::pair { 64U, true };
-            } else if (!name.empty()
+            } else if (expression->cast_target
+                    == support::SystemVerilogCastTarget::size
+                && !name.empty()
                 && std::ranges::all_of(name, [](const char character) {
                        return character >= '0' && character <= '9';
                    })
@@ -1209,11 +1220,11 @@ private:
         if (target == nullptr) {
             return std::nullopt;
         }
-        constexpr std::string_view prefix { "@sv-static-property:" };
         const auto member = !expression.class_member_identity.empty()
             ? std::string_view { expression.class_member_identity }
-            : std::string_view { expression.text }.starts_with(prefix)
-            ? std::string_view { expression.text }.substr(prefix.size())
+            : expression.marker
+                == support::ExpressionMarker::sv_static_property
+            ? std::string_view { expression.marker_argument }
             : std::string_view { };
         const auto property = std::ranges::find(target->properties, member,
             &ClassProperty::canonical_identity);
@@ -1876,18 +1887,17 @@ private:
         // A predefined integral or real type (`integer` through a typedef,
         // IEEE 1800-2017 6.11, 6.12).
         if (!type.target.target.valid()) {
-            static constexpr std::array<std::pair<std::string_view,
-                std::size_t>, 12> predefined {{
-                { "bit", 1U }, { "logic", 1U }, { "reg", 1U },
-                { "byte", 8U }, { "shortint", 16U }, { "int", 32U },
-                { "integer", 32U }, { "longint", 64U }, { "time", 64U },
-                { "real", 64U }, { "realtime", 64U }, { "shortreal", 32U },
-            }};
-            const auto found = std::ranges::find(predefined,
-                std::string_view { type.target.spelling },
-                &std::pair<std::string_view, std::size_t>::first);
-            if (found != predefined.end()) {
-                return found->second;
+            if (support::systemverilog_integral(type.builtin)) {
+                return support::systemverilog_builtin_width(type.builtin);
+            }
+            switch (type.builtin) {
+            case support::SystemVerilogBuiltinType::real:
+            case support::SystemVerilogBuiltinType::realtime:
+                return 64U;
+            case support::SystemVerilogBuiltinType::shortreal:
+                return 32U;
+            default:
+                break;
             }
         }
         if (!type.target.target.valid()
@@ -2076,15 +2086,16 @@ private:
                 // nearest double, a shortreal the nearest float.
                 const auto real_kind = parameter.type
                     ? real_family(*parameter.type, result.environment)
-                    : std::string_view { };
-                if (!real_kind.empty()) {
+                    : support::SystemVerilogBuiltinType::none;
+                if (real_kind != support::SystemVerilogBuiltinType::none) {
                     if (!resolved->real && resolved->integer) {
                         resolved->real
                             = static_cast<double>(*resolved->integer);
                         resolved->integer.reset();
                     }
                     if (resolved->real) {
-                        if (real_kind == "shortreal") {
+                        if (real_kind
+                            == support::SystemVerilogBuiltinType::shortreal) {
                             resolved->real = static_cast<double>(
                                 static_cast<float>(*resolved->real));
                         }
@@ -2112,24 +2123,23 @@ private:
                         ? type(*parameter.type, result.environment, identity,
                               parameter.source)
                         : std::nullopt;
-                    const auto& spelling = declared
-                        ? declared->type.target.spelling
-                        : std::string { };
                     const bool integral = declared
                         && !declared->type.container_form
                         && declared->type.unpacked_dimensions.empty()
                         && declared->type.value_form != TypeForm::class_handle
                         && declared->type.value_form != TypeForm::string
-                        && spelling != "real" && spelling != "shortreal"
-                        && spelling != "realtime" && spelling != "string";
+                        && !support::systemverilog_real_family(
+                            declared->type.builtin)
+                        && declared->type.builtin
+                            != support::SystemVerilogBuiltinType::string;
                     const auto width = integral
                         ? storage_width(declared->type)
                         : std::nullopt;
                     // The predefined integer types are signed (6.11).
                     const bool signed_type = declared
-                        && (declared->type.signed_value || spelling == "int"
-                            || spelling == "integer" || spelling == "shortint"
-                            || spelling == "longint" || spelling == "byte");
+                        && (declared->type.signed_value
+                            || support::systemverilog_builtin_default_signed(
+                                declared->type.builtin));
                     if (width && *width != 0U && *width <= 64U) {
                         auto value = *bits;
                         if (*width < 64U) {
@@ -2474,10 +2484,12 @@ private:
             // the class the specialization binds; anything else names a
             // property or method.
             const auto& member = expression->class_member_identity;
-            const bool construction = expression->text.starts_with("@sv-new:");
+            const bool construction = expression->marker
+                == support::ExpressionMarker::sv_new_constructor;
             valid = valid
                 && (((construction
-                         || expression->text.starts_with("@sv-dollar-cast:"))
+                         || expression->marker
+                             == support::ExpressionMarker::sv_dollar_cast_class)
                         && classes_.contains(member))
                     || (construction
                         && type_parameter_names_.contains(member))
@@ -2598,6 +2610,7 @@ private:
             return statement_references_resolve(child, active);
         };
         valid = valid && std::ranges::all_of(statement->loop_updates, nested)
+            && std::ranges::all_of(statement->loop_initializations, nested)
             && std::ranges::all_of(statement->statements, nested)
             && std::ranges::all_of(statement->else_statements, nested);
         for (const auto& alternative : statement->case_alternatives) {
@@ -3758,7 +3771,8 @@ std::vector<ClassInstanceActual> class_instance_actuals(
         // A call of a user constant function (IEEE 1800-2023 13.4.3) folds
         // in the instance, where the function's body is available.
         if (expression.kind == ExpressionKind::call
-            && !expression.text.empty() && expression.text.front() != '$'
+            && !expression.text.empty() && expression.call_kind != semantic::sv::CallKind::system
+            && expression.marker == support::ExpressionMarker::none
             && expression.text.front() != '@'
             && expression.text.front() != '.') {
             return true;

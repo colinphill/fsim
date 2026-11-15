@@ -120,6 +120,10 @@ void VerilogParser::structure_assertion_formals(
         formal.type_tokens.assign(
             item.begin() + static_cast<std::ptrdiff_t>(type_start),
             item.begin() + static_cast<std::ptrdiff_t>(name_index));
+        // The type stays source text; its keywords are read here once.
+        for (auto& token : formal.type_tokens) {
+            mark_type_keyword_token(token, keyword_set_);
+        }
         if (formal.type_tokens.empty() && type_start == 0U && explicitly_typed
             && explicitly_typed->local) {
             formal.local = true;

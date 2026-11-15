@@ -10169,7 +10169,32 @@ void Interpreter::Impl::StaticKernel::initialize()
     }
     if (behavioral_) {
         prepare_behavioral();
-        run_behavioral_initializers();
+    }
+    // A static variable's declaration initializer runs before every
+    // procedure starts or is armed (IEEE 1800-2023 6.8, 6.21, 10.5): the
+    // thread members among them, then the once members, in process order.
+    // Their writes are initialization, no transaction and no event
+    // (settle_declaration_initializer_write); a process armed at its wait
+    // afterwards takes their values as its baseline.
+    std::vector<bool> initializer_ran;
+    {
+        const InitializationWriteScope initialization { impl_ };
+        if (behavioral_) {
+            run_behavioral_initializers();
+        }
+        for (std::uint32_t index = 0U; index < members_.size(); ++index) {
+            if (members_[index].kind == StaticKernelMemberKind::once
+                && !members_[index].vhdl
+                && member_program(index).startup_phase()
+                    == ProcessStartupPhase::declaration_initializer) {
+                initializer_ran.resize(members_.size(), false);
+                initializer_ran[index] = true;
+                run(index);
+            }
+        }
+    }
+    if (behavioral_) {
+        arm_behavioral();
     }
     // The reference queues time zero's ordinary processes in stable order
     // (Interpreter::start; IEEE 1800-2023 4.7). A once member (an initial
@@ -10187,24 +10212,6 @@ void Interpreter::Impl::StaticKernel::initialize()
                     && impl_.get_signal(write->signal).event_variable;
             });
     };
-    // A static variable's declaration initializer runs before every
-    // procedure (IEEE 1800-2023 6.8, 10.5): those once members run first.
-    // Their writes are initialization, no transaction and no event
-    // (settle_declaration_initializer_write).
-    std::vector<bool> initializer_ran;
-    {
-        const InitializationWriteScope initialization { impl_ };
-        for (std::uint32_t index = 0U; index < members_.size(); ++index) {
-            if (members_[index].kind == StaticKernelMemberKind::once
-                && !members_[index].vhdl
-                && member_program(index).startup_phase()
-                    == ProcessStartupPhase::declaration_initializer) {
-                initializer_ran.resize(members_.size(), false);
-                initializer_ran[index] = true;
-                run(index);
-            }
-        }
-    }
     for (std::uint32_t index = 0U; index < members_.size(); ++index) {
         if (members_[index].kind == StaticKernelMemberKind::once) {
             if (index < initializer_ran.size() && initializer_ran[index]) {

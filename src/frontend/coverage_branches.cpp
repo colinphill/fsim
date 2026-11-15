@@ -306,6 +306,8 @@ CoverageBranchResult discover_coverage_branch_points(
             if (!enqueue(current.statement->else_statements,
                     current.depth + 1U)
                 || !enqueue(current.statement->statements,
+                    current.depth + 1U)
+                || !enqueue(current.statement->loop_initializations,
                     current.depth + 1U)) {
                 return reject(
                     CoverageBranchError::ResourceLimit, current_index);

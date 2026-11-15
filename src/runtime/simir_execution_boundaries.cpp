@@ -60,6 +60,20 @@
 namespace fsim::runtime::simir {
 namespace {
 
+// The solver profile of a std::randomize variable: the kind of a built-in
+// declared type, the identity and name of a user type.
+[[nodiscard]] SystemVerilogConstraintVariableProfile scope_randomize_profile(
+    const SystemVerilogConstraintDomainKind kind, const std::size_t width,
+    const bool signed_value, const std::string& nominal_type,
+    const support::SystemVerilogBuiltinType builtin,
+    const std::optional<std::uint32_t> nominal_type_id)
+{
+    SystemVerilogConstraintVariableProfile result { kind, width, signed_value,
+        nominal_type, false, builtin };
+    result.nominal_type_id = nominal_type_id;
+    return result;
+}
+
 constexpr std::size_t vhdl_time_record_width = 515U;
 
 struct VhdlCalendarFields {
@@ -512,7 +526,8 @@ void Interpreter::Impl::run_scope_randomize(RandomizeStorage& storage,
         }
         request.variables.push_back({
             target.canonical_identity,
-            { target.domain_kind == ScopeRandomizeDomainKind::enumeration
+            scope_randomize_profile(
+                target.domain_kind == ScopeRandomizeDomainKind::enumeration
                     ? SystemVerilogConstraintDomainKind::Enumeration
                     : target.domain_kind
                         == ScopeRandomizeDomainKind::integer
@@ -520,7 +535,9 @@ void Interpreter::Impl::run_scope_randomize(RandomizeStorage& storage,
                     : SystemVerilogConstraintDomainKind::BitVector,
                 target.width,
                 target.signed_value,
-                target.nominal_type },
+                target.nominal_type,
+                target.builtin,
+                target.nominal_type_id),
             target.domain,
             &staged_targets[target_index] });
     }
@@ -547,7 +564,7 @@ void Interpreter::Impl::run_scope_randomize(RandomizeStorage& storage,
                 "std::randomize array elements do not match their profile"
             };
         }
-        const SystemVerilogConstraintVariableProfile element_profile {
+        const auto element_profile = scope_randomize_profile(
             container.domain_kind == ScopeRandomizeDomainKind::enumeration
                 ? SystemVerilogConstraintDomainKind::Enumeration
                 : container.domain_kind == ScopeRandomizeDomainKind::integer
@@ -556,7 +573,8 @@ void Interpreter::Impl::run_scope_randomize(RandomizeStorage& storage,
             container.element_width,
             container.signed_value,
             container.nominal_type,
-        };
+            support::SystemVerilogBuiltinType::none,
+            container.nominal_type_id);
         // A fixed-size multidimensional array is nested arrays: element
         // `a[i][j]` in row-major order, with each subarray `a[i]` holding
         // its count in `a[i][]` (IEEE 1800-2017 7.4.5).
@@ -617,7 +635,8 @@ void Interpreter::Impl::run_scope_randomize(RandomizeStorage& storage,
                     container.canonical_identity
                         + element_name(index, level) + "[]",
                     { SystemVerilogConstraintDomainKind::Integer, 32U, true,
-                        "int" },
+                        std::string { }, false,
+                        support::SystemVerilogBuiltinType::int_type },
                     { container_elements.back() },
                     &container_elements.back() });
             }
@@ -627,7 +646,9 @@ void Interpreter::Impl::run_scope_randomize(RandomizeStorage& storage,
             0U));
         request.variables.push_back({
             container.canonical_identity + "[]",
-            { SystemVerilogConstraintDomainKind::Integer, 32U, true, "int" },
+            { SystemVerilogConstraintDomainKind::Integer, 32U, true,
+                std::string { }, false,
+                support::SystemVerilogBuiltinType::int_type },
             { container_elements.back() },
             &container_elements.back() });
         staged_containers.push_back({ container.container, std::move(value),
@@ -970,14 +991,14 @@ const char* Interpreter::Impl::run_class_operation(
             return access.read_container(id);
         });
     auto result = class_method_call_context_hook(process, handle,
-        operation.method_identity, actuals, string_actuals,
+        operation.method_identity, operation.hook, actuals, string_actuals,
         operation.actual_names, operation.actual_directions,
         bound_constraints
             ? std::span<const SystemVerilogConstraintTemplate> {
                   *bound_constraints }
             : std::span<const SystemVerilogConstraintTemplate> {
                   operation.inline_constraints },
-        operation.virtual_dispatch);
+        operation.virtual_dispatch, operation.randomize_no_properties);
     access.write(operation.destination, std::move(result));
     for (std::size_t index = 0; index < actuals.size(); ++index) {
         const auto string_actual = !operation.actual_kinds.empty()
@@ -3029,6 +3050,7 @@ void Interpreter::Impl::handle_boundary(
                           process.id,
                           handle,
                           method->method_identity,
+                          method->hook,
                           actuals,
                           string_actuals,
                           method->actual_names,
@@ -3038,7 +3060,8 @@ void Interpreter::Impl::handle_boundary(
                                     *bound_constraints }
                               : std::span<const SystemVerilogConstraintTemplate> {
                                     method->inline_constraints },
-                          method->virtual_dispatch),
+                          method->virtual_dispatch,
+                          method->randomize_no_properties),
                 method->result_width));
         for (std::size_t index = 0; index < actuals.size(); ++index) {
             const auto string_actual = !method->actual_kinds.empty()

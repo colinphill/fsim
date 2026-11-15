@@ -397,11 +397,96 @@ std::optional<std::vector<DpiDimension>> dpi_unpacked_dimensions(
 
 namespace {
 
+using Builtin = support::SystemVerilogBuiltinType;
+
+// The built-in types a DPI argument can have (IEEE 1800-2023 H.7.4): no
+// `event`, no `void` (a result only).
+[[nodiscard]] bool dpi_builtin_kind(const Builtin kind) noexcept
+{
+    return support::systemverilog_integral(kind)
+        || support::systemverilog_real_family(kind) || kind == Builtin::chandle
+        || kind == Builtin::string;
+}
+
+struct DpiBuiltinShape final {
+    Builtin base { Builtin::none };
+    bool explicit_signed { };
+    bool explicit_unsigned { };
+    std::size_t packed_width { 1U };
+    bool open_packed { };
+    bool sized_packed { };
+    // A packed range was written, even one of one bit.
+    bool bracketed { };
+};
+
+std::optional<DpiCType> dpi_builtin_shape_c_type(const DpiBuiltinShape& shape)
+{
+    DpiCType result;
+    const auto base = shape.base;
+    const auto explicit_signed = shape.explicit_signed;
+    const auto explicit_unsigned = shape.explicit_unsigned;
+    const auto packed_width = shape.packed_width;
+    const auto open_packed = shape.open_packed;
+    const auto sized_packed = shape.sized_packed;
+    result.string = base == Builtin::string;
+    if (result.string) {
+        result.code = 'z';
+        return packed_width == 1U && !open_packed && !sized_packed
+                && !explicit_signed && !explicit_unsigned
+            ? std::optional<DpiCType> { result }
+            : std::nullopt;
+    }
+    const bool ranged = packed_width != 1U || shape.bracketed;
+    if (ranged && !support::systemverilog_integer_vector(base)) {
+        return std::nullopt;
+    }
+    result.code = base == Builtin::byte ? 'c'
+        : base == Builtin::shortint     ? 's'
+        : base == Builtin::int_type     ? 'i'
+        : base == Builtin::longint      ? 'l'
+        : base == Builtin::real || base == Builtin::realtime ? 'd'
+        : base == Builtin::shortreal    ? 'f'
+        : base == Builtin::chandle      ? 'p'
+        : base == Builtin::integer || base == Builtin::time ? 'V'
+        : base == Builtin::bit          ? (ranged ? 'B' : 'b')
+                                        : (ranged ? 'V' : 'g');
+    if (explicit_unsigned
+        && (result.code == 'c' || result.code == 's' || result.code == 'i'
+            || result.code == 'l')) {
+        result.code = static_cast<char>(result.code - 'a' + 'A');
+    }
+    result.scalar = result.code == 'd' ? frontend::SystemVerilogScalarKind::Real
+        : result.code == 'f' ? frontend::SystemVerilogScalarKind::ShortReal
+        : result.code == 'p' ? frontend::SystemVerilogScalarKind::Chandle
+                             : frontend::SystemVerilogScalarKind::None;
+    const auto base_width = support::systemverilog_integral(base)
+        ? support::systemverilog_builtin_width(base)
+        : base == Builtin::shortreal ? 32U
+                                     : 64U;
+    if (packed_width > std::numeric_limits<std::size_t>::max()
+            / base_width) {
+        return std::nullopt;
+    }
+    result.width = packed_width * base_width;
+    if (open_packed) {
+        result.open_packed = true;
+        result.width = 0U;
+    }
+    result.domain = support::systemverilog_four_state(base)
+        ? frontend::ValueDomain::Logic4
+        : support::systemverilog_integer_atom(base)
+            ? frontend::ValueDomain::Integer
+            : frontend::ValueDomain::Bit2;
+    result.signed_value = explicit_signed
+        || (!explicit_unsigned
+            && support::systemverilog_builtin_default_signed(base));
+    return result;
+}
+
 std::optional<DpiCType> dpi_builtin_c_type(
     const std::span<const SourceToken> tokens, const DpiTypeContext& context)
 {
-    DpiCType result;
-    std::string_view base;
+    Builtin base { Builtin::none };
     bool explicit_signed { };
     bool explicit_unsigned { };
     std::size_t packed_width = 1U;
@@ -409,11 +494,15 @@ std::optional<DpiCType> dpi_builtin_c_type(
     bool sized_packed { };
     for (std::size_t index = 0U; index < tokens.size(); ++index) {
         const auto text = std::string_view { tokens[index].text };
-        if (text == "signed") {
+        // The parser read the prototype's type keywords (IEEE 1800-2023
+        // 5.6.2, 35.5.6).
+        if (tokens[index].type_word
+            == support::SystemVerilogTypeWord::signed_keyword) {
             explicit_signed = true;
             continue;
         }
-        if (text == "unsigned") {
+        if (tokens[index].type_word
+            == support::SystemVerilogTypeWord::unsigned_keyword) {
             explicit_unsigned = true;
             continue;
         }
@@ -459,85 +548,23 @@ std::optional<DpiCType> dpi_builtin_c_type(
             index = *close;
             continue;
         }
-        if (text == "bit" || text == "logic" || text == "reg"
-            || text == "byte" || text == "shortint" || text == "int"
-            || text == "integer" || text == "longint" || text == "time"
-            || text == "chandle" || text == "shortreal"
-            || text == "real" || text == "realtime" || text == "string") {
-            if (!base.empty()) {
+        if (const auto kind = tokens[index].builtin; dpi_builtin_kind(kind)) {
+            if (base != Builtin::none) {
                 return std::nullopt;
             }
-            base = text;
+            base = kind;
             continue;
         }
         return std::nullopt;
     }
-    if (base.empty() || (explicit_signed && explicit_unsigned)) {
+    if (base == Builtin::none || (explicit_signed && explicit_unsigned)) {
         return std::nullopt;
     }
-    result.string = base == "string";
-    if (result.string) {
-        result.code = 'z';
-        return packed_width == 1U && !open_packed && !sized_packed
-                && !explicit_signed && !explicit_unsigned
-            ? std::optional<DpiCType> { result }
-            : std::nullopt;
-    }
-    const bool ranged = packed_width != 1U
-        || std::ranges::any_of(tokens, [](const auto& token) {
-               return token.text == "[";
-           });
-    if (ranged && base != "bit" && base != "logic" && base != "reg") {
-        return std::nullopt;
-    }
-    result.code = base == "byte" ? 'c'
-        : base == "shortint"     ? 's'
-        : base == "int"          ? 'i'
-        : base == "longint"      ? 'l'
-        : base == "real" || base == "realtime" ? 'd'
-        : base == "shortreal"    ? 'f'
-        : base == "chandle"      ? 'p'
-        : base == "integer" || base == "time" ? 'V'
-        : base == "bit"          ? (ranged ? 'B' : 'b')
-                                 : (ranged ? 'V' : 'g');
-    if (explicit_unsigned
-        && (result.code == 'c' || result.code == 's' || result.code == 'i'
-            || result.code == 'l')) {
-        result.code = static_cast<char>(result.code - 'a' + 'A');
-    }
-    result.scalar = result.code == 'd' ? frontend::SystemVerilogScalarKind::Real
-        : result.code == 'f' ? frontend::SystemVerilogScalarKind::ShortReal
-        : result.code == 'p' ? frontend::SystemVerilogScalarKind::Chandle
-                             : frontend::SystemVerilogScalarKind::None;
-    const auto base_width = base == "byte" ? 8U
-        : base == "shortint" ? 16U
-        : base == "int" || base == "integer" || base == "shortreal"
-            ? 32U
-        : base == "longint" || base == "time" || base == "chandle"
-                || base == "real" || base == "realtime"
-            ? 64U
-            : 1U;
-    if (packed_width > std::numeric_limits<std::size_t>::max()
-            / base_width) {
-        return std::nullopt;
-    }
-    result.width = packed_width * base_width;
-    if (open_packed) {
-        result.open_packed = true;
-        result.width = 0U;
-    }
-    result.domain = base == "logic" || base == "reg"
-            || base == "integer" || base == "time"
-        ? frontend::ValueDomain::Logic4
-        : base == "byte" || base == "shortint" || base == "int"
-                || base == "longint"
-            ? frontend::ValueDomain::Integer
-            : frontend::ValueDomain::Bit2;
-    const auto implicitly_signed = base == "byte" || base == "shortint"
-        || base == "int" || base == "integer" || base == "longint";
-    result.signed_value = explicit_signed
-        || (!explicit_unsigned && implicitly_signed);
-    return result;
+    return dpi_builtin_shape_c_type({ base, explicit_signed, explicit_unsigned,
+        packed_width, open_packed, sized_packed,
+        std::ranges::any_of(tokens, [](const auto& token) {
+            return token.text == "[";
+        }) });
 }
 
 }  // namespace
@@ -550,22 +577,6 @@ std::optional<DpiCType> dpi_c_type(
 
 namespace {
 
-
-bool dpi_builtin_keyword(const std::string_view text)
-{
-    return text == "bit" || text == "logic" || text == "reg"
-        || text == "byte" || text == "shortint" || text == "int"
-        || text == "integer" || text == "longint" || text == "time"
-        || text == "chandle" || text == "shortreal" || text == "real"
-        || text == "realtime" || text == "string";
-}
-
-semantic::sv::SourceToken dpi_token(std::string text)
-{
-    semantic::sv::SourceToken token;
-    token.text = std::move(text);
-    return token;
-}
 
 std::optional<std::pair<std::int64_t, std::int64_t>> dpi_range_bounds(
     const semantic::sv::PackedRange& range, const DpiTypeContext& context)
@@ -743,39 +754,18 @@ std::optional<DpiCType> dpi_reference_c_type_impl(
         || !type.class_identity.empty()) {
         return std::nullopt;
     }
-    std::vector<semantic::sv::SourceToken> tokens;
-    for (std::size_t start = 0U; start < type.target.spelling.size();) {
-        const auto end = type.target.spelling.find(' ', start);
-        const auto word = type.target.spelling.substr(start,
-            end == std::string::npos ? std::string::npos : end - start);
-        if (!word.empty()) {
-            tokens.push_back(dpi_token(word));
-        }
-        start = end == std::string::npos ? type.target.spelling.size()
-                                         : end + 1U;
-    }
-    if (!tokens.empty() && dpi_builtin_keyword(tokens.front().text)) {
-        // A built-in type keeps its keyword, its signedness and its
-        // packed dimensions, flattened to one range; the dimensions come
-        // from the reference, not from the spelling.
-        std::erase_if(tokens, [](const auto& token) {
-            return !dpi_builtin_keyword(token.text) && token.text != "signed"
-                && token.text != "unsigned";
-        });
-        const auto base = tokens.front().text;
-        const bool integral = base != "chandle" && base != "shortreal"
-            && base != "real" && base != "realtime" && base != "string";
-        const bool explicit_sign = std::ranges::any_of(tokens,
-            [](const auto& token) {
-                return token.text == "signed" || token.text == "unsigned";
-            });
-        if (integral && !explicit_sign) {
-            tokens.push_back(dpi_token(
-                type.signed_value ? "signed" : "unsigned"));
-        }
+    if (dpi_builtin_kind(type.builtin)) {
+        // A built-in type keeps its kind, its signedness and its packed
+        // dimensions, flattened to one range; the dimensions come from the
+        // reference.
+        const auto base = type.builtin;
+        DpiBuiltinShape shape;
+        shape.base = base;
+        const bool integral = support::systemverilog_integral(base);
+        shape.explicit_signed = integral && type.signed_value;
+        shape.explicit_unsigned = integral && !type.signed_value;
         // An integer atom's own width is no packed dimension.
-        const bool vector_base
-            = base == "bit" || base == "logic" || base == "reg";
+        const bool vector_base = support::systemverilog_integer_vector(base);
         const auto extent = vector_base ? dpi_packed_extent(type, context)
                                         : std::optional<std::uint64_t> { 1U };
         if (!extent || *extent == 0U) {
@@ -783,13 +773,11 @@ std::optional<DpiCType> dpi_reference_c_type_impl(
         }
         if (vector_base
             && (type.packed_range || type.packed_dimensions.size() > 1U)) {
-            tokens.push_back(dpi_token("["));
-            tokens.push_back(dpi_token(std::to_string(*extent - 1U)));
-            tokens.push_back(dpi_token(":"));
-            tokens.push_back(dpi_token("0"));
-            tokens.push_back(dpi_token("]"));
+            shape.packed_width = static_cast<std::size_t>(*extent);
+            shape.sized_packed = true;
+            shape.bracketed = true;
         }
-        return dpi_c_type(tokens);
+        return dpi_builtin_shape_c_type(shape);
     }
     if (!type.target.target.valid() || !context.definition) {
         return std::nullopt;
@@ -1271,7 +1259,8 @@ std::optional<DpiCSignature> dpi_c_signature(
         if (task) {
             result = "int";
         } else if (!profile.return_type
-            || profile.return_type->target.spelling == "void") {
+            || profile.return_type->builtin
+                == support::SystemVerilogBuiltinType::void_type) {
             result = "void";
         } else {
             const auto type = dpi_c_result(
@@ -1313,7 +1302,8 @@ std::optional<DpiCSignature> dpi_c_signature(
             // A task returns its disable status (IEEE 1800-2023 35.9).
             result = "int";
         } else if (declaration.return_type_tokens.size() == 1U
-            && declaration.return_type_tokens.front().text == "void") {
+            && declaration.return_type_tokens.front().builtin
+                == support::SystemVerilogBuiltinType::void_type) {
             result = "void";
         } else {
             const auto type = dpi_c_result(

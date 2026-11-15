@@ -1093,6 +1093,9 @@ std::vector<SignalId> Lowerer::hir_statement_signal_dependencies(
                 }
             }
         }
+        for (const auto child : source.loop_initializations) {
+            self(self, child);
+        }
         for (const auto child : source.loop_updates) {
             self(self, child);
         }
@@ -1239,6 +1242,13 @@ void Lowerer::add_hir_process_loop_parameter(
     std::string type_name, const RegisterId storage,
     const semantic::SourceSpanId source)
 {
+    const auto record = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_declaration(declaration)
+        : std::nullopt;
+    const auto builtin = record && record->systemverilog != nullptr
+            && record->systemverilog->type
+        ? record->systemverilog->type->builtin
+        : support::SystemVerilogBuiltinType::none;
     auto result = "@loop." + std::string { name };
     if (!frame_local_names_.emplace(result).second) {
         result += "@" + std::to_string(process_.frame_locals.size());
@@ -1255,6 +1265,8 @@ void Lowerer::add_hir_process_loop_parameter(
         value_kind(register_domains_[storage]),
         { },
         frontend::SystemVerilogScalarKind::None,
+        runtime::simir::DebugLocalStorage::packed,
+        builtin,
     });
     frame_local_simple_names_.emplace_back(name);
     const runtime::simir::FrameLocalBinding binding {
@@ -1295,6 +1307,13 @@ void Lowerer::add_hir_frame_local(const std::size_t callable,
     if (result.empty()) {
         return;
     }
+    const auto record = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_declaration(declaration)
+        : std::nullopt;
+    const auto builtin = record && record->systemverilog != nullptr
+            && record->systemverilog->type
+        ? record->systemverilog->type->builtin
+        : support::SystemVerilogBuiltinType::none;
     process_.frame_locals.push_back(DebugLocal {
         std::move(result),
         std::move(type_name),
@@ -1306,6 +1325,8 @@ void Lowerer::add_hir_frame_local(const std::size_t callable,
         value_kind(register_domains_[storage]),
         { },
         frontend::SystemVerilogScalarKind::None,
+        runtime::simir::DebugLocalStorage::packed,
+        builtin,
     });
     frame_local_simple_names_.emplace_back(name);
     bind_hir_frame_local(
@@ -1776,7 +1797,8 @@ bool Lowerer::initialize_hir_declarations(
                 if (constructor != nullptr && !type->fixed && !type->queue
                     && !type->associative) {
                     if (constructor->kind == semantic::sv::ExpressionKind::call
-                        && constructor->text == "@new-array"
+                        && constructor->marker
+                            == support::ExpressionMarker::new_array
                         && constructor->operands.size() == 1U) {
                         constructed_size = constructor->operands.front();
                     } else if (constructor->kind
@@ -2408,6 +2430,8 @@ bool Lowerer::initialize_hir_declarations(
             return false;
         }
         std::string type_name;
+        support::SystemVerilogBuiltinType builtin_type {
+            support::SystemVerilogBuiltinType::none };
         semantic::SourceSpanId source;
         std::optional<semantic::ExpressionId> initializer;
         std::optional<semantic::ExpressionId> file_open_kind;
@@ -2424,6 +2448,7 @@ bool Lowerer::initialize_hir_declarations(
             initializer = input.initializer;
             if (input.type) {
                 type_name = input.type->target.spelling;
+                builtin_type = input.type->builtin;
             }
         } else {
             const auto& input = *declaration->vhdl;
@@ -2678,9 +2703,10 @@ bool Lowerer::initialize_hir_declarations(
                 && initializer_expression->vhdl != nullptr
                 && initializer_expression->vhdl->kind
                     == semantic::vhdl::ExpressionKind::call
-                && (initializer_expression->vhdl->text == "@vhdl-new"
-                    || initializer_expression->vhdl->text
-                        == "@vhdl-new-qualified");
+                && (initializer_expression->vhdl->marker
+                        == support::ExpressionMarker::vhdl_new
+                    || initializer_expression->vhdl->marker
+                        == support::ExpressionMarker::vhdl_new_qualified);
             const auto vhdl_aggregate
                 = declaration->vhdl != nullptr
                 && declaration->vhdl->subtype
@@ -2695,8 +2721,8 @@ bool Lowerer::initialize_hir_declarations(
                     && initializer_expression->systemverilog != nullptr
                     && initializer_expression->systemverilog->kind
                         == semantic::sv::ExpressionKind::call
-                    && initializer_expression->systemverilog->text
-                        .starts_with("@sv-sync-new:")
+                    && initializer_expression->systemverilog->marker
+                        == support::ExpressionMarker::sv_sync_new
                 ? lower_hir_synchronization_expression(
                       *initializer,
                       binding->width,
@@ -2840,6 +2866,8 @@ bool Lowerer::initialize_hir_declarations(
                 value_kind(binding->domain),
                 std::move(enumeration_literals),
                 frontend::SystemVerilogScalarKind::None,
+                runtime::simir::DebugLocalStorage::packed,
+                builtin_type,
             });
         }
     }
@@ -4676,8 +4704,10 @@ bool Lowerer::lower_hir_output_actual_write(
     if (expression && expression->systemverilog != nullptr
         && expression->systemverilog->kind
             == semantic::sv::ExpressionKind::call
-        && (expression->systemverilog->text == "@stream-left"
-            || expression->systemverilog->text == "@stream-right")
+        && (expression->systemverilog->marker
+                == support::ExpressionMarker::stream_left
+            || expression->systemverilog->marker
+                == support::ExpressionMarker::stream_right)
         && expression->systemverilog->operands.size() >= 2U
         && !hir_sv_container_stream(target)) {
         const auto& stream = *expression->systemverilog;
@@ -4699,7 +4729,8 @@ bool Lowerer::lower_hir_output_actual_write(
             total += *width;
         }
         const auto slice = static_cast<std::size_t>(*slice_size);
-        const bool reversed = stream.text == "@stream-left" && slice < total;
+        const bool reversed = stream.marker == support::ExpressionMarker::stream_left
+            && slice < total;
         if (reversed && total % slice != 0U) {
             return false;
         }
@@ -6065,15 +6096,13 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
         auto actual = *description.input_actual;
         auto actual_expression
             = specialized_hir_unit_->find_expression(actual);
-        constexpr auto qualified_prefix
-            = semantic::vhdl::qualified_expression_prefix;
         if (description.input_actual_vhdl_context
             && actual_expression
             && actual_expression->vhdl != nullptr
             && actual_expression->vhdl->kind
                 == semantic::vhdl::ExpressionKind::call
-            && actual_expression->vhdl->text.starts_with(
-                qualified_prefix)
+            && actual_expression->vhdl->marker
+                == support::ExpressionMarker::vhdl_qualified
             && actual_expression->vhdl->operands.size() == 1U) {
             actual = actual_expression->vhdl->operands.front();
             actual_expression
@@ -6472,7 +6501,8 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
                        *description.output_actual);
             subelements && subelements->vhdl != nullptr
             && subelements->vhdl->kind == semantic::vhdl::ExpressionKind::aggregate
-            && subelements->vhdl->text == "@vhdl-formal-subelements") {
+            && subelements->vhdl->marker
+                == support::ExpressionMarker::vhdl_formal_subelements) {
             // An output formal associated part by part (IEEE 1076-2008
             // 6.5.7.1): each actual receives its part of the formal, an
             // element or slice of an array or an element of a record.
@@ -6487,7 +6517,8 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
             const auto part_place = [&](
                 const semantic::vhdl::AggregateAssociation& association)
                 -> std::optional<PartPlace> {
-                if (!association.choice_spelling.empty()
+                if ((!association.choice_spelling.empty()
+                    || association.choice_marker != support::ExpressionMarker::none)
                     && association.choice_spelling != "@array") {
                     const auto member = std::ranges::find_if(
                         signal.packed_members,

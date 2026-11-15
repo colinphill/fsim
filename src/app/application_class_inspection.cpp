@@ -27,13 +27,24 @@ runtime::SystemVerilogClassPropertyDescriptor class_property_descriptor(
         : runtime::SystemVerilogClassRandomKind::None;
   }
   result.signed_value = property.type.signed_value;
+  // A built-in type is its kind; a user type keeps its name (a class
+  // handle its class identity). An implicit packed type is `logic` or `bit`
+  // by its state count (IEEE 1800-2023 6.11).
+  using Builtin = support::SystemVerilogBuiltinType;
+  result.builtin = !property.type.class_identity.empty()
+      ? Builtin::none
+      : property.type.builtin != Builtin::none
+      ? property.type.builtin
+      : !property.type.target.spelling.empty()
+      ? Builtin::none
+      : property.type.value_form == semantic::sv::TypeForm::string
+      ? Builtin::string
+      : property.type.four_state ? Builtin::logic : Builtin::bit;
   result.nominal_type = !property.type.class_identity.empty()
       ? property.type.class_identity
-      : !property.type.target.spelling.empty()
+      : result.builtin == Builtin::none
       ? property.type.target.spelling
-      : property.type.value_form == semantic::sv::TypeForm::string
-      ? "string"
-      : property.type.four_state ? "logic" : "bit";
+      : std::string { };
 
   const auto container_form = property.type.container_form;
   if (semantic::sv::nested_class_handle_container(property.type)) {
@@ -124,20 +135,17 @@ runtime::SystemVerilogClassPropertyDescriptor class_property_descriptor(
       container.reserve_maximum_storage = false;
       // The key type orders and names the elements (IEEE 1800-2017 7.8).
       if (const auto& index = property.type.associative_index_metadata) {
-        std::string_view spelling{index->target.spelling};
-        if (const auto separator = spelling.find_last_of(".:$");
-            separator != std::string_view::npos) {
-          spelling.remove_prefix(separator + 1U);
-        }
-        container.string_keys = spelling == "string"
+        using Kind = support::SystemVerilogBuiltinType;
+        const auto key = index->builtin;
+        container.string_keys = key == Kind::string
             || index->value_form == semantic::sv::TypeForm::string;
-        const bool signed_keyword = spelling == "int" || spelling == "integer"
-            || spelling == "byte" || spelling == "shortint"
-            || spelling == "longint";
+        const bool signed_keyword = key == Kind::int_type
+            || key == Kind::integer || key == Kind::byte
+            || key == Kind::shortint || key == Kind::longint;
         container.signed_keys = index->signed_value || signed_keyword;
-        const auto keyword_width = spelling == "byte" ? 8U
-            : spelling == "shortint" ? 16U
-            : spelling == "longint" || spelling == "time" ? 64U : 32U;
+        const auto keyword_width = key == Kind::byte ? 8U
+            : key == Kind::shortint ? 16U
+            : key == Kind::longint || key == Kind::time ? 64U : 32U;
         container.key_width = index->executable_width
             ? static_cast<std::size_t>(*index->executable_width)
             : keyword_width;

@@ -127,10 +127,10 @@ PortActualResult normalize_port_actual(
             }
         }
         // `ifc[i].mp`: a modport of an interface array element (25.5).
-        constexpr auto select_prefix = std::string_view { "@sv-select:" };
         if (actual_name.empty() && interface_formal
             && actual_expression.kind == semantic::sv::ExpressionKind::call
-            && actual_expression.text.starts_with(select_prefix)
+            && actual_expression.marker
+                == support::ExpressionMarker::sv_select
             && actual_expression.operands.size() == 1U) {
             const auto element = specialization.find_expression(
                 actual_expression.operands.front());
@@ -145,7 +145,7 @@ PortActualResult normalize_port_actual(
                 if (base && base->systemverilog != nullptr && index) {
                     actual_name = base->systemverilog->text + "["
                         + std::to_string(*index) + "]."
-                        + actual_expression.text.substr(select_prefix.size());
+                        + actual_expression.marker_argument;
                 }
             }
         }
@@ -233,10 +233,8 @@ namespace {
             if (!current->systemverilog_net_type.empty()) {
                 return current->systemverilog_net_type;
             }
-            const auto spelling
-                = std::string_view { current->target.spelling };
-            if (semantic::sv::is_builtin_net_kind(spelling)) {
-                return spelling;
+            if (current->net_kind != support::SystemVerilogNetKind::none) {
+                return std::string_view { current->target.spelling };
             }
             if (current->container_element_types.size() != 1U) {
                 return { };
@@ -268,11 +266,9 @@ bool hierarchy_sv_ports_detail::is_simple_variable_output_port(
         || !explicit_systemverilog_net_type(effective_type).empty()) {
         return false;
     }
-    return frontend::systemverilog_scalar_kind(
-               declaration.type->target.spelling)
+    return frontend::systemverilog_scalar_kind(declaration.type->builtin)
             == frontend::SystemVerilogScalarKind::None
-        && frontend::systemverilog_scalar_kind(
-               effective_type.target.spelling)
+        && frontend::systemverilog_scalar_kind(effective_type.builtin)
             == frontend::SystemVerilogScalarKind::None;
 }
 
@@ -610,7 +606,9 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                         && left.signed_elements
                         == right.signed_elements
                         && left.element_nominal_type
-                        == right.element_nominal_type;
+                        == right.element_nominal_type
+                        && left.element_nominal_type_id
+                        == right.element_nominal_type_id;
                 };
                 if (sliced) {
                     if (!expected->fixed || !selected_type.fixed
@@ -1387,14 +1385,12 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                 }
                 // Net arrays are kept as containers; only Verilog variable
                 // types are variables here (IEEE 1364-2005 4.2).
-                auto spelling = declaration->systemverilog->type->target.spelling;
-                for (auto& character : spelling) {
-                    character = static_cast<char>(std::tolower(
-                        static_cast<unsigned char>(character)));
-                }
-                return spelling == "reg" || spelling == "integer"
-                        || spelling == "time" || spelling == "real"
-                        || spelling == "realtime"
+                using Builtin = support::SystemVerilogBuiltinType;
+                const auto builtin
+                    = declaration->systemverilog->type->builtin;
+                return builtin == Builtin::reg || builtin == Builtin::integer
+                        || builtin == Builtin::time || builtin == Builtin::real
+                        || builtin == Builtin::realtime
                     ? std::optional { declaration->systemverilog->name }
                     : std::nullopt;
             };
@@ -1528,11 +1524,10 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                 // and unions equivalent when their representation matches.
                 // Keep enum identity strict because it is not in that rule.
                 const auto is_packed_aggregate_nominal =
-                    [](const std::string_view nominal_type,
+                    [](const ContainerType& profile,
                         const semantic::SpecializedHirUnit& specialization) {
-                        const auto type
-                            = semantic::sv::nominal_identity_type(
-                                nominal_type);
+                        const auto type = semantic::sv::nominal_index_type(
+                            profile.element_nominal_type_id);
                         const auto definition = type
                             ? specialization.find_type(*type)
                             : std::nullopt;
@@ -1561,19 +1556,24 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                             return false;
                         }
                         if (left.element_nominal_type
-                            == right.element_nominal_type) {
+                                == right.element_nominal_type
+                            && left.element_nominal_type_id
+                                == right.element_nominal_type_id) {
                             return true;
                         }
-                        if (!left.element_nominal_type.empty()
+                        const auto has_nominal = [](const ContainerType&
+                                                        profile) {
+                            return !profile.element_nominal_type.empty()
+                                || profile.element_nominal_type_id;
+                        };
+                        if (has_nominal(left)
                             && !is_packed_aggregate_nominal(
-                                left.element_nominal_type,
-                                working_specialization)) {
+                                left, working_specialization)) {
                             return false;
                         }
-                        return right.element_nominal_type.empty()
+                        return !has_nominal(right)
                             || is_packed_aggregate_nominal(
-                                right.element_nominal_type,
-                                *child_interface_specialization);
+                                right, *child_interface_specialization);
                     };
                 if (!formal_element_profile
                     || formal_element_profile->element_kind
@@ -1700,7 +1700,8 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
             // The unresolved uwire form remains single-driver checked by
             // validate_process_drivers(); it does not acquire a resolver.
             const auto single_driver_uwire
-                = actual_info.systemverilog_net_type == "uwire";
+                = actual_info.systemverilog_net_kind
+                == support::SystemVerilogNetKind::uwire;
             const auto formal_width
                 = hierarchy_sv_type_layout_detail::
                     systemverilog_declaration_width(
@@ -1714,6 +1715,8 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
             // A resolved VHDL std_logic signal reached through SystemVerilog
             // port nets is a net as well: each of its sources is one driver
             // (IEEE 1076-2019 14.7.3.2), so a variable port drives it once.
+            // A net, of a built-in or user-defined net type, keeps the type's
+            // name in systemverilog_net_type; empty means a variable.
             const auto vhdl_resolved_actual
                 = actual_native_resolution != ResolutionKind::none
                 && actual_info.systemverilog_net_type.empty()
@@ -1804,13 +1807,12 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                 info.source_domain = domain;
                 info.systemverilog_scalar
                     = frontend::systemverilog_scalar_kind(
-                        effective_type.target.spelling);
+                        effective_type.builtin);
                 if (info.systemverilog_scalar
                     == frontend::SystemVerilogScalarKind::None) {
                     info.systemverilog_scalar
                         = frontend::systemverilog_scalar_kind(
-                            formal_declaration.type
-                                ->target.spelling);
+                            formal_declaration.type->builtin);
                 }
                 const auto adapter_scalar
                     = info.systemverilog_scalar;
@@ -1978,7 +1980,10 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                 }();
                 if (joinable) {
                     design_.signal_info_[id].systemverilog_net_type
-                        = "wire";
+                        = std::string { support::systemverilog_net_kind_name(
+                            support::SystemVerilogNetKind::wire) };
+                    design_.signal_info_[id].systemverilog_net_kind
+                        = support::SystemVerilogNetKind::wire;
                     auto& formal_signal = design_.signals_[id];
                     formal_signal.resolution = ResolutionKind::sv_wire;
                     formal_signal.initial_value
@@ -2143,12 +2148,12 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                       .value_or(*formal_declaration.type);
             auto formal_scalar
                 = frontend::systemverilog_scalar_kind(
-                    effective_type.target.spelling);
+                    effective_type.builtin);
             if (formal_scalar
                 == frontend::SystemVerilogScalarKind::None) {
                 formal_scalar
                     = frontend::systemverilog_scalar_kind(
-                        formal_declaration.type->target.spelling);
+                        formal_declaration.type->builtin);
             }
             if (interface_port) {
                 formal_scalar
@@ -2198,14 +2203,19 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
         if (!interface_port && formal_declaration.type
             && *actual_signal < design_.signals_.size()
             && *actual_signal < design_.signal_info_.size()) {
-            const auto& formal_net
+            using NetKind = support::SystemVerilogNetKind;
+            // The formal's built-in net type (IEEE 1800-2023 6.7); a
+            // user-defined nettype has none.
+            const auto formal_net
                 = formal_declaration.type->systemverilog_net_type.empty()
-                ? formal_declaration.type->target.spelling
-                : formal_declaration.type->systemverilog_net_type;
+                ? formal_declaration.type->net_kind
+                : formal_declaration.type->net_type_kind;
             auto& merged = design_.signals_[*actual_signal];
             auto& merged_info = design_.signal_info_[*actual_signal];
             // A port whose actual is an expression has its own net, of the
             // port's net type (23.3.3.7).
+            // A net, of a built-in or user-defined net type, keeps the type's
+            // name in systemverilog_net_type; empty means a variable.
             const bool formal_own_net
                 = merged_info.systemverilog_net_type.empty()
                 && (merged_info.name
@@ -2213,25 +2223,28 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                     || merged_info.name
                         == child_path + ".$actual_"
                             + formal_declaration.name);
-            if ((formal_net == "tri0" || formal_net == "tri1")
+            if ((formal_net == NetKind::tri0 || formal_net == NetKind::tri1)
                 && !merged.implicit_driver
-                && (merged_info.systemverilog_net_type == "wire"
-                    || merged_info.systemverilog_net_type == "tri"
+                && (merged_info.systemverilog_net_kind == NetKind::wire
+                    || merged_info.systemverilog_net_kind == NetKind::tri
                     || formal_own_net)) {
-                const auto pull = formal_net == "tri0"
+                const auto pull = formal_net == NetKind::tri0
                     ? Logic4::zero : Logic4::one;
                 merged.implicit_driver = pull;
                 merged.initial_value = PackedLogic4 {
                     merged.initial_value.width(), pull };
-                merged_info.systemverilog_net_type = formal_net;
+                merged_info.systemverilog_net_type = std::string {
+                    support::systemverilog_net_kind_name(formal_net)
+                };
+                merged_info.systemverilog_net_kind = formal_net;
             }
             // A supply port makes the merged net that supply type, whatever
             // the actual's net type other than the other supply (Table
             // 23-1).
-            if ((formal_net == "supply0" || formal_net == "supply1")
-                && merged_info.systemverilog_net_type != "supply0"
-                && merged_info.systemverilog_net_type != "supply1") {
-                const auto supply = formal_net == "supply0"
+            if ((formal_net == NetKind::supply0 || formal_net == NetKind::supply1)
+                && merged_info.systemverilog_net_kind != NetKind::supply0
+                && merged_info.systemverilog_net_kind != NetKind::supply1) {
+                const auto supply = formal_net == NetKind::supply0
                     ? Logic4::zero : Logic4::one;
                 merged.implicit_driver = supply;
                 merged.implicit_drive_strength = {
@@ -2239,7 +2252,10 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                 };
                 merged.initial_value = PackedLogic4 {
                     merged.initial_value.width(), supply };
-                merged_info.systemverilog_net_type = formal_net;
+                merged_info.systemverilog_net_type = std::string {
+                    support::systemverilog_net_kind_name(formal_net)
+                };
+                merged_info.systemverilog_net_kind = formal_net;
             }
         }
         // An output variable port shares its actual variable's storage; the
@@ -2252,6 +2268,8 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
             && *actual_signal < design_.signal_info_.size()
             && design_.signal_info_[*actual_signal]
                    .systemverilog_net_type.empty()) {
+            // A net, of a built-in or user-defined net type, keeps the type's
+            // name in systemverilog_net_type; empty means a variable.
             std::string constant_error;
             if (const auto constant = evaluate_hir_systemverilog_constant(
                     *child_interface_specialization,

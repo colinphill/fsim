@@ -294,7 +294,9 @@ std::optional<Statement> uvm_run_test_statement(const SourceSpan& call,
       auto member = expression.text.substr(
           std::string_view { "__fsim_uvm_run_test_" }.size());
       std::ranges::replace(member, '_', '-');
-      expression.text = "@sv-static-method:@uvm-run-test-" + member;
+      expression.text.clear();
+      expression.marker = support::ExpressionMarker::sv_static_method;
+      expression.marker_argument = "@uvm-run-test-" + member;
       const bool count = member == "begin" || member == "components";
       expression.call_result_width = count ? 32U : 64U;
       expression.call_result_signed = count;
@@ -317,12 +319,14 @@ std::optional<Statement> uvm_run_test_statement(const SourceSpan& call,
     }
     if (statement.kind == StatementKind::TaskCall
         && statement.task_name.starts_with("__fsim_uvm_run_test_")) {
-      statement.task_name = "@sv-static-task:@uvm-run-test-"
+      statement.task_marker = support::ExpressionMarker::sv_static_task;
+      statement.task_marker_argument = "@uvm-run-test-"
           + statement.task_name.substr(
               std::string_view { "__fsim_uvm_run_test_" }.size());
+      statement.task_name.clear();
     }
     for (auto* nested : { &statement.statements, &statement.loop_updates,
-             &statement.else_statements }) {
+             &statement.loop_initializations, &statement.else_statements }) {
       for (auto& item : *nested) {
         self(self, item);
       }

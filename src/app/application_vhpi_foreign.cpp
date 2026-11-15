@@ -7457,7 +7457,8 @@ private:
         const auto* const expression = hir_expression(id);
         return expression != nullptr
             && expression->kind == vhdl::ExpressionKind::aggregate
-            && expression->text == "@vhdl-formal-subelements";
+            && expression->marker
+                == support::ExpressionMarker::vhdl_formal_subelements;
     }
 
     // The source text of a choice of a formal subelement: a literal index
@@ -7840,6 +7841,7 @@ private:
         }
         if (expression->kind == vhdl::ExpressionKind::call
             && expression->operands.size() == 1U
+            && expression->marker == support::ExpressionMarker::none
             && !expression->text.empty() && expression->text.front() != '@'
             && expression->text.find('\'') == std::string::npos) {
             auto* const inner
@@ -8522,7 +8524,8 @@ private:
     // attribute name; neither is a function call (Figure 25).
     [[nodiscard]] bool is_function_call(const vhdl::Expression& expression)
     {
-        if (expression.text.empty() || expression.text.front() == '@'
+        if (expression.marker != support::ExpressionMarker::none
+            || expression.text.empty() || expression.text.front() == '@'
             || expression.text.find('\'') != std::string::npos) {
             return false;
         }
@@ -8532,7 +8535,8 @@ private:
     // A call whose name is a type mark (IEEE 1076-2019 9.3.6).
     [[nodiscard]] bool is_type_conversion(const vhdl::Expression& expression)
     {
-        if (expression.text.empty() || expression.text.front() == '@'
+        if (expression.marker != support::ExpressionMarker::none
+            || expression.text.empty() || expression.text.front() == '@'
             || expression.text.find('\'') != std::string::npos) {
             return false;
         }
@@ -8566,7 +8570,7 @@ private:
         case vhdl::ExpressionKind::binary:
             return call_object(scope, id, expression);
         case vhdl::ExpressionKind::call:
-            if (expression.text.starts_with("@vhdl-physical:")
+            if (expression.marker == support::ExpressionMarker::vhdl_physical
                 && expression.operands.size() == 1U) {
                 const auto* const magnitude
                     = hir_expression(expression.operands.front());
@@ -8574,14 +8578,16 @@ private:
                     return nullptr;
                 }
                 return physical_literal(without_underscores(magnitude->text),
-                    expression.text.substr(std::strlen("@vhdl-physical:")));
+                    expression.marker_argument);
             }
-            if (expression.text.starts_with("@vhdl-qualified:")) {
+            if (expression.marker
+                == support::ExpressionMarker::vhdl_qualified) {
                 return typed_expression(scope, id, expression, vhpiQualifiedExprK,
-                    expression.text.substr(std::strlen("@vhdl-qualified:")));
+                    expression.marker_argument);
             }
-            if (expression.text == "@vhdl-new"
-                || expression.text == "@vhdl-new-qualified") {
+            if (expression.marker == support::ExpressionMarker::vhdl_new
+                || expression.marker
+                    == support::ExpressionMarker::vhdl_new_qualified) {
                 return typed_expression(
                     scope, id, expression, vhpiAllocatorK, "new");
             }
@@ -9108,8 +9114,7 @@ private:
             return type_by_mark(*expression, expression->text);
         case vhpiQualifiedExprK:
             return type_by_mark(*expression,
-                std::string_view { expression->text }.substr(
-                    std::strlen("@vhdl-qualified:")));
+                std::string_view { expression->marker_argument });
         case vhpiAllocatorK: {
             if (expression->operands.empty()) {
                 return nullptr;
@@ -9118,9 +9123,7 @@ private:
             return subtype == nullptr
                 ? nullptr
                 : type_by_mark(*subtype,
-                      std::string_view { subtype->text }.substr(
-                          std::min(subtype->text.size(),
-                              std::strlen("@vhdl-subtype:"))));
+                      std::string_view { subtype->marker_argument });
         }
         case vhpiFuncCallK: {
             if (const auto* const callee = callee_of(*expression);
@@ -14380,13 +14383,12 @@ private:
             }
             return unit_scale(name);
         }
-        constexpr std::string_view physical { "@vhdl-physical:" };
         if (expression->kind == vhdl::ExpressionKind::call
-            && expression->text.starts_with(physical)
+            && expression->marker == support::ExpressionMarker::vhdl_physical
             && expression->operands.size() == 1U) {
             const auto magnitude = integer_literal(expression->operands.front());
             const auto scale = unit_scale(
-                std::string_view { expression->text }.substr(physical.size()));
+                std::string_view { expression->marker_argument });
             if (magnitude && scale) {
                 return *magnitude * *scale;
             }
@@ -14695,12 +14697,11 @@ private:
         }
         // A physical literal `N unit` is the unit name with the abstract
         // literal N as its operand.
-        constexpr std::string_view physical_prefix = "@vhdl-physical:";
-        if (!expression->text.starts_with(physical_prefix)) {
+        if (expression->marker != support::ExpressionMarker::vhdl_physical) {
             return 1;
         }
         const auto base_name
-            = std::string_view { expression->text }.substr(physical_prefix.size());
+            = std::string_view { expression->marker_argument };
         std::int64_t count { 1 };
         if (!expression->operands.empty()) {
             const auto operand = std::ranges::find(hir_.expressions(),

@@ -47,6 +47,27 @@ struct ClassTypeView {
     std::string identity;
 };
 
+// Turns `expression` into a synthesized call node of kind `marker`; the text
+// stays empty and the payload travels in the marker argument.
+void mark_expression(frontend::Expression& expression,
+    const support::ExpressionMarker marker, std::string argument = { },
+    std::string owner = { })
+{
+    expression.text.clear();
+    expression.marker = marker;
+    expression.marker_argument = std::move(argument);
+    expression.marker_owner = std::move(owner);
+}
+
+// The same for the callee of a statement.
+void mark_task(frontend::Statement& statement,
+    const support::ExpressionMarker marker, std::string argument = { })
+{
+    statement.task_name.clear();
+    statement.task_marker = marker;
+    statement.task_marker_argument = std::move(argument);
+}
+
 /// The selection a class scope through a specialization makes (IEEE 1800-2023
 /// 8.25.1): the frontend's own owner record of a source expression, built by
 /// the frontend from a compiled HIR description.
@@ -396,7 +417,8 @@ private:
             || method_role(owner.canonical_identity, member) != support::UvmRole::registry_get
             || !selection)
             return false;
-        input.text = "@sv-static-method:@uvm-registry-get:" + owner.canonical_identity;
+        mark_expression(input, support::ExpressionMarker::sv_static_method,
+            "@uvm-registry-get:" + owner.canonical_identity);
         input.systemverilog_class_owner = std::move(selection);
         input.call_result_width = 64U;
         input.call_result_signed = false;
@@ -1163,9 +1185,12 @@ private:
             return { };
         }
         output.kind = frontend::ExpressionKind::Call;
-        output.text = std::string { selected->static_storage
-                ? "@sv-static-property:" : "@sv-property:" }
-            + selected->canonical_identity;
+        mark_expression(output,
+            selected->static_storage
+                ? support::ExpressionMarker::sv_static_property
+                : support::ExpressionMarker::sv_property,
+            selected->canonical_identity,
+            selected->owner_identity);
         output.operands.clear();
         if (!selected->static_storage)
             output.operands.push_back(std::move(receiver));
@@ -1198,10 +1223,13 @@ private:
             && output.operands.front().kind
                 == frontend::ExpressionKind::Identifier
             && output.operands.front().text == "super";
-        output.text = std::string { selected->static_method
-                ? "@sv-static-method:"
-                : base_call ? "@sv-base-method:" : "@sv-method:" }
-            + selected->canonical_identity;
+        mark_expression(output,
+            selected->static_method
+                ? support::ExpressionMarker::sv_static_method
+                : base_call ? support::ExpressionMarker::sv_base_method
+                            : support::ExpressionMarker::sv_method,
+            selected->canonical_identity,
+            selected->owner_identity);
         if (selected->static_method && !static_access)
             output.operands.erase(output.operands.begin());
         auto result = method_result(*selected);
@@ -1214,7 +1242,8 @@ private:
     {
         if (!input.valid())
             return { };
-        if (input.text == "@sv-new" && !expected.identity.empty()) {
+        if (input.marker == support::ExpressionMarker::sv_new
+            && !expected.identity.empty()) {
             if (const auto* owner = named_class(expected.identity, scope, input.span)) {
                 if (owner->virtual_class || owner->interface_class)
                     error("FSIM-SV-CLASS-014", "cannot construct a virtual or interface class", input.span);
@@ -1225,7 +1254,10 @@ private:
                 } else if (!input.operands.empty()) {
                     error("FSIM-SV-CLASS-013", "implicit class constructor takes no arguments", input.span);
                 }
-                input.text += ":" + owner->canonical_identity;
+                mark_expression(input,
+                    support::ExpressionMarker::sv_new_constructor,
+                    owner->canonical_identity,
+                    owner->canonical_identity);
                 input.nominal_type = owner->canonical_identity;
                 for (auto& operand : input.operands)
                     expression(operand, scope);
@@ -1332,9 +1364,9 @@ private:
             const auto member = input.text.substr(1U);
             return bind_method(input, operands.front(), member, scope, false);
         }
-        if (input.text.starts_with("@sv-select:") && operands.size() == 1U
-            && !operands.front().identity.empty()) {
-            const auto member = input.text.substr(std::string_view { "@sv-select:" }.size());
+        if (input.marker == support::ExpressionMarker::sv_select
+            && operands.size() == 1U && !operands.front().identity.empty()) {
+            const auto member = input.marker_argument;
             if (property(operands.front().identity, member) == nullptr)
                 return source_property(operands.front().identity, member, scope);
             auto receiver = input.operands.front();
@@ -1353,9 +1385,9 @@ private:
             const bool get = registered->role == support::UvmRole::registry_get;
             if (get && !input.operands.empty())
                 return { };
-            input.text = (get ? "@sv-static-method:@uvm-registry-get:"
-                              : "@sv-static-method:@uvm-registry-create:")
-                + registered->canonical;
+            mark_expression(input, support::ExpressionMarker::sv_static_method,
+                (get ? "@uvm-registry-get:" : "@uvm-registry-create:")
+                    + registered->canonical);
             input.systemverilog_class_owner = registered->owner;
             input.call_result_width = 64U;
             input.call_result_signed = false;
@@ -1372,7 +1404,9 @@ private:
                     if (auto intrinsic = uvm_database_intrinsic(*owner, member,
                             input.systemverilog_class_selection.get(), scope, input.span);
                         !intrinsic.empty()) {
-                        input.text = "@sv-static-method:" + std::move(intrinsic);
+                        mark_expression(input,
+                            support::ExpressionMarker::sv_static_method,
+                            std::move(intrinsic));
                         input.call_result_width = member == "set" ? 0U : 1U;
                         input.call_result_signed = false;
                         input.call_result_domain = frontend::ValueDomain::Bit2;
@@ -1383,7 +1417,9 @@ private:
                     if (auto singleton = uvm_singleton_intrinsic(*owner, member);
                         !singleton.empty()) {
                         const auto* selected = method(owner->canonical_identity, member);
-                        input.text = "@sv-static-method:" + std::move(singleton);
+                        mark_expression(input,
+                            support::ExpressionMarker::sv_static_method,
+                            std::move(singleton));
                         input.call_result_width = 64U;
                         input.call_result_signed = false;
                         input.call_result_domain = frontend::ValueDomain::Bit2;
@@ -1432,7 +1468,9 @@ private:
                     return { nullptr, nullptr, registry->canonical_identity };
             }
         }
-        if (!scope.class_identity.empty() && !input.text.starts_with('@')) {
+        if (!scope.class_identity.empty()
+            && input.marker == support::ExpressionMarker::none
+            && !input.text.starts_with('@')) {
             if (const auto* selected = method(scope.class_identity, input.text)) {
                 const auto member = input.text;
                 if (!selected->static_method) {
@@ -1457,7 +1495,8 @@ private:
                 if (const auto* declaration = named_declaration(input.text, scope, input.span))
                     result = compiled_type(declaration->callable->return_type);
             }
-            input.text = "@sv-static-method:" + std::move(intrinsic);
+            mark_expression(input, support::ExpressionMarker::sv_static_method,
+                std::move(intrinsic));
             input.call_result_width = query ? 32U : object ? 64U : 0U;
             input.call_result_signed = query;
             input.call_result_domain = frontend::ValueDomain::Bit2;
@@ -1500,7 +1539,8 @@ private:
             call.systemverilog_class_selection
                 = input.systemverilog_task_class_selection;
             (void)expression(call, scope);
-            if (call.text.starts_with("@sv-static-method:@uvm-registry-create:")) {
+            if (call.marker == support::ExpressionMarker::sv_static_method
+                && call.marker_argument.starts_with("@uvm-registry-create:")) {
                 input.kind = frontend::StatementKind::ContainerMethod;
                 input.value = std::move(call);
                 input.task_name.clear();
@@ -1519,7 +1559,9 @@ private:
                     if (auto intrinsic = uvm_database_intrinsic(*owner, member,
                             input.systemverilog_task_class_selection.get(), scope, input.span);
                         !intrinsic.empty()) {
-                        input.task_name = "@sv-static-task:" + std::move(intrinsic);
+                        mark_task(input,
+                            support::ExpressionMarker::sv_static_task,
+                            std::move(intrinsic));
                         return;
                     }
                 }
@@ -1532,7 +1574,9 @@ private:
                     && !support::uvm_library(owner->uvm_role)
                     && input.systemverilog_task_class_selection) {
                     frontend::Expression selection { frontend::ExpressionKind::Call,
-                        "@sv-static-call-selection", { }, input.span };
+                        "", { }, input.span };
+                    selection.marker
+                        = support::ExpressionMarker::sv_static_call_selection;
                     selection.systemverilog_source_order = input.systemverilog_source_order;
                     selection.systemverilog_class_owner = frontend::systemverilog_class_scope_owner(
                         *input.systemverilog_task_class_selection, owner->canonical_identity);
@@ -1548,7 +1592,9 @@ private:
                 if (selected != nullptr && selected->static_method
                     && !support::uvm_library(aliased->uvm_role)) {
                     frontend::Expression selection { frontend::ExpressionKind::Call,
-                        "@sv-static-call-selection", { }, input.span };
+                        "", { }, input.span };
+                    selection.marker
+                        = support::ExpressionMarker::sv_static_call_selection;
                     selection.systemverilog_source_order = input.systemverilog_source_order;
                     selection.systemverilog_class_owner = std::move(aliased_selection);
                     input.value = std::move(selection);
@@ -1567,7 +1613,8 @@ private:
             if (static_access && separator == std::string::npos) {
                 if (auto intrinsic = uvm_report_intrinsic(input.task_name, scope, input.span);
                     !intrinsic.empty())
-                    input.task_name = "@sv-static-task:" + std::move(intrinsic);
+                    mark_task(input, support::ExpressionMarker::sv_static_task,
+                        std::move(intrinsic));
             }
             return;
         }
@@ -1586,14 +1633,17 @@ private:
             && selected->kind == sv::ClassMethodKind::function
             && !support::uvm_library(selected->uvm_role)) {
             frontend::Expression call { frontend::ExpressionKind::Call,
-                "@sv-static-method:" + selected->canonical_identity, { }, input.span };
+                "", { }, input.span };
+            call.marker = support::ExpressionMarker::sv_static_method;
+            call.marker_argument = selected->canonical_identity;
             for (auto& argument : input.task_arguments)
                 call.operands.push_back(std::move(argument));
             for (auto& name : input.task_argument_names)
                 call.call_argument_names.push_back(std::move(name));
             call.systemverilog_source_order = input.systemverilog_source_order;
             // `C#(4)::f();` keeps the specialization it selects (8.25.1).
-            if (input.value.text == "@sv-static-call-selection")
+            if (input.value.marker
+                == support::ExpressionMarker::sv_static_call_selection)
                 call.systemverilog_class_owner = input.value.systemverilog_class_owner;
             annotate(call, method_result(*selected));
             input.kind = frontend::StatementKind::ContainerMethod;
@@ -1610,11 +1660,12 @@ private:
             && receiver.text == "super"
             && dot != std::string::npos
             && std::string_view { input.task_name }.substr(dot + 1U) == "new";
-        input.task_name = std::string { base_constructor
-                ? "@sv-base-constructor:"
-                : selected->static_method ? "@sv-static-task:"
-                                          : "@sv-task:" }
-            + selected->canonical_identity;
+        mark_task(input,
+            base_constructor ? support::ExpressionMarker::sv_base_constructor
+                : selected->static_method
+                ? support::ExpressionMarker::sv_static_task
+                : support::ExpressionMarker::sv_task,
+            selected->canonical_identity);
         if (!selected->static_method) {
             input.task_arguments.insert(input.task_arguments.begin(), std::move(receiver));
             input.task_argument_names.insert(input.task_argument_names.begin(), std::string { });
@@ -1745,6 +1796,7 @@ private:
         }
         if (input.kind == frontend::StatementKind::TaskCall)
             task(input, scope);
+        statements(input.loop_initializations, scope, returned);
         statements(input.loop_updates, scope, returned);
         statements(input.statements, scope, returned);
         statements(input.else_statements, scope, returned);
@@ -1967,7 +2019,8 @@ private:
             return;
         qualify_member(type.target.spelling, *unit, type.target.source);
         semantic::CompiledDesignResolver resolver { design_, unit->id };
-        if (!type.target.target.valid() && !type.target.spelling.empty()) {
+        if (!type.target.target.valid() && !type.target.spelling.empty()
+            && !sv::names_builtin_type(type)) {
             const auto resolved = resolver.resolve_systemverilog_named_type(type.target.spelling, scope, false,
                 type.source_order);
             if (resolved.status == semantic::CompiledResolutionStatus::ambiguous) {

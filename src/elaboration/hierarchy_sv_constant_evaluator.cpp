@@ -50,6 +50,15 @@
 namespace fsim::elaboration {
 namespace {
 
+// An assignment pattern item with no choice at all (positional); a `key`
+// choice has an empty spelling too and is told apart by its marker.
+[[nodiscard]] bool unkeyed_choice(
+    const semantic::sv::AssignmentPatternAssociation& association) noexcept
+{
+    return association.choice_spelling.empty()
+        && association.choice_marker == support::ExpressionMarker::none;
+}
+
 using boost::multiprecision::cpp_int;
 using runtime::Logic4;
 using runtime::PackedLogic4;
@@ -496,10 +505,7 @@ void convert_to_two_state(Value& value)
 [[nodiscard]] frontend::ValueDomain type_domain(
     const semantic::sv::TypeReference& type)
 {
-    const auto& spelling = type.target.spelling;
-    if (spelling == "byte" || spelling == "shortint"
-        || spelling == "int" || spelling == "longint"
-        || spelling == "integer") {
+    if (support::systemverilog_builtin_default_signed(type.builtin)) {
         return frontend::ValueDomain::Integer;
     }
     return type.four_state ? frontend::ValueDomain::Logic4
@@ -598,19 +604,23 @@ void convert_to_two_state(Value& value)
         // A packed array of a named packed type (`w_t [1:0]`) has elements
         // of that type's width (IEEE 1800-2017 7.4.1).
         const auto& spelling = type.target.spelling;
-        static constexpr std::array<std::string_view, 16> builtin {
-            "logic", "bit", "reg", "int", "integer", "byte", "shortint",
-            "longint", "time", "wire", "signed", "unsigned", "struct",
-            "union", "enum", "string"
+        // `struct`, `union` and `enum` are the placeholder spellings of
+        // inline aggregate types.
+        static constexpr std::array<std::string_view, 3> inline_type {
+            "struct", "union", "enum"
         };
+        const bool builtin_type = support::systemverilog_integral(type.builtin)
+            || type.builtin == support::SystemVerilogBuiltinType::string
+            || type.net_kind == support::SystemVerilogNetKind::wire;
         // A name not bound to its typedef here (a class property's
         // `s_t [1:0]`) resolves through the effective type below.
         const bool bound_target = type.target.target.valid();
         if (specialization == nullptr || spelling.empty()
             || type.packed_dimensions.size() > 1U
             || type.implicit
-            || std::ranges::find(builtin, std::string_view { spelling })
-                != builtin.end()
+            || builtin_type
+            || std::ranges::find(inline_type, std::string_view { spelling })
+                != inline_type.end()
             || spelling.starts_with('@')
             || spelling.find(' ') != std::string::npos
             || (bound_target
@@ -1294,7 +1304,7 @@ void append_packed(Value& destination, const Value& operand)
 [[nodiscard]] ScalarKind scalar_kind(
     const semantic::sv::TypeReference& type) noexcept
 {
-    return frontend::systemverilog_scalar_kind(type.target.spelling);
+    return frontend::systemverilog_scalar_kind(type.builtin);
 }
 
 [[nodiscard]] ScalarKind promote_scalar_kind(
@@ -1586,7 +1596,7 @@ struct RealMathFunction {
     if (!type.unpacked_dimensions.empty() || type.container_form) {
         return ScalarKind::None;
     }
-    auto kind = frontend::systemverilog_scalar_kind(type.target.spelling);
+    auto kind = frontend::systemverilog_scalar_kind(type.builtin);
     if (kind == ScalarKind::None && specialization != nullptr
         && type.target.target.valid()) {
         kind = hir_systemverilog_declared_scalar_kind(
@@ -1875,11 +1885,8 @@ private:
                     == semantic::sv::TypeForm::packed_union)) {
             return true;
         }
-        const auto& spelling = type.target.spelling;
-        return spelling == "bit" || spelling == "logic"
-            || spelling == "reg" || spelling == "byte"
-            || spelling == "shortint" || spelling == "int"
-            || spelling == "integer" || spelling == "longint";
+        return support::systemverilog_integral(type.builtin)
+            && type.builtin != support::SystemVerilogBuiltinType::time;
     }
 
     [[nodiscard]] static bool fixed_one_dimensional_array_type(
@@ -1933,7 +1940,7 @@ private:
         for (const auto& association : view->systemverilog->associations) {
             if (association.choice_spelling == "default") {
                 fallback = association.value;
-            } else if (association.choice_spelling.empty()) {
+            } else if (unkeyed_choice(association)) {
                 positional.push_back(association.value);
             } else {
                 return false;
@@ -2122,7 +2129,8 @@ private:
         // `integer`, start at zero (IEEE 1800-2017 6.8, Table 6-7).
         const auto two_state = element_domain == frontend::ValueDomain::Bit2
             || (element_domain == frontend::ValueDomain::Integer
-                && element_type.target.spelling != "integer");
+                && element_type.builtin
+                    != support::SystemVerilogBuiltinType::integer);
         auto default_value = make_value(
             PackedLogic4 { static_cast<std::uint32_t>(*width),
                 two_state ? Logic4::zero : Logic4::x },
@@ -2867,6 +2875,7 @@ private:
         if (record.kind != ExpressionKind::name || record.decimal_literal
             || !record.referenced_name
             || !record.referenced_name->selected || record.text == "$"
+            || record.marker != support::ExpressionMarker::none
             || record.text.starts_with('@')
             || record.text.find('.') != std::string::npos) {
             return nullptr;
@@ -3724,7 +3733,7 @@ private:
             || pattern->systemverilog->associations.size() != count
             || std::ranges::any_of(pattern->systemverilog->associations,
                 [](const auto& association) {
-                    return !association.choice_spelling.empty();
+                    return !unkeyed_choice(association);
                 }))) {
             return std::nullopt;
         }
@@ -4602,15 +4611,12 @@ private:
             if (!semantic::sv::systemverilog_cast_size_operand(record)) {
                 const auto operand = specialization_.find_expression(
                     *cast_value);
-                const auto name = std::string_view { record.text }.substr(
-                    std::string_view { "@sv-cast:" }.size());
+                const auto name = std::string_view { record.marker_argument };
                 if (operand && operand->systemverilog != nullptr
                     && operand->systemverilog->kind
                         == ExpressionKind::assignment_pattern
-                    && !name.empty()
-                    && frontend::systemverilog_scalar_kind(name)
-                        == ScalarKind::None
-                    && !parse_integer<std::uint32_t>(name)) {
+                    && record.cast_target
+                        == support::SystemVerilogCastTarget::named) {
                     const auto pattern_type = named_cast_type(record, name);
                     const bool aggregate = pattern_type
                         && unpacked_aggregate(*pattern_type);
@@ -4677,10 +4683,12 @@ private:
                 type->four_state
                     = result->domain != frontend::ValueDomain::Bit2;
                 type->signed_value = result->signed_value;
-                type->target.spelling
-                    = result->domain == frontend::ValueDomain::Integer
-                    ? "int"
-                    : std::to_string(*width);
+                if (result->domain == frontend::ValueDomain::Integer) {
+                    semantic::sv::set_builtin_type(
+                        *type, support::SystemVerilogBuiltinType::int_type);
+                } else {
+                    type->target.spelling = std::to_string(*width);
+                }
                 if (*width > 1U && result->unsized
                     && result->width == 1U) {
                     result->packed = PackedLogic4 {
@@ -4689,46 +4697,52 @@ private:
                     result->width = static_cast<std::uint32_t>(*width);
                 }
             } else {
-                cast_name = std::string_view { record.text }.substr(
-                    std::string_view { "@sv-cast:" }.size());
+                cast_name = std::string_view { record.marker_argument };
+                // The parser typed the cast target (IEEE 1800-2023 6.24.1).
+                using CastTarget = support::SystemVerilogCastTarget;
+                const auto cast_builtin
+                    = record.cast_target == CastTarget::builtin
+                    ? record.cast_builtin
+                    : support::SystemVerilogBuiltinType::none;
                 // A cast to a real type converts the value; one to an
                 // integral type rounds a real (IEEE 1800-2017 6.24.1).
-                if (const auto kind = frontend::systemverilog_scalar_kind(
-                        cast_name);
+                if (const auto kind
+                    = frontend::systemverilog_scalar_kind(cast_builtin);
                     real_family(kind) || kind == ScalarKind::Chandle) {
                     return convert_value_kind(
                         std::move(*result), kind, error_);
                 }
-                if (cast_name == "time") {
+                if (cast_builtin == support::SystemVerilogBuiltinType::time) {
                     type.emplace();
                     type->executable_width = 64U;
                     type->four_state = true;
-                    type->target.spelling = "time";
+                    semantic::sv::set_builtin_type(*type, support::SystemVerilogBuiltinType::time);
                 } else if (const auto width
-                    = parse_integer<std::uint32_t>(cast_name)) {
+                    = record.cast_target == CastTarget::size
+                        ? parse_integer<std::uint32_t>(cast_name)
+                        : std::nullopt) {
                     // A size cast keeps the expression's signedness (6.24.1).
                     type.emplace();
                     type->executable_width = *width;
                     type->four_state = true;
                     type->signed_value = result->signed_value;
                     type->target.spelling = std::string { cast_name };
-                } else if (cast_name == "bit" || cast_name == "logic"
-                    || cast_name == "reg") {
+                } else if (support::systemverilog_integer_vector(cast_builtin)) {
                     type.emplace();
                     type->executable_width = 1U;
-                    type->four_state = cast_name != "bit";
-                    type->target.spelling = std::string { cast_name };
-                } else if (cast_name == "byte" || cast_name == "shortint"
-                    || cast_name == "int" || cast_name == "longint"
-                    || cast_name == "integer") {
+                    type->four_state
+                        = support::systemverilog_four_state(cast_builtin);
+                    semantic::sv::set_builtin_type(*type, cast_builtin);
+                } else if (support::systemverilog_integer_atom(cast_builtin)
+                    && cast_builtin != support::SystemVerilogBuiltinType::time) {
                     type.emplace();
-                    type->executable_width = cast_name == "byte" ? 8U
-                        : cast_name == "shortint" ? 16U
-                        : cast_name == "longint" ? 64U : 32U;
+                    type->executable_width
+                        = support::systemverilog_builtin_width(cast_builtin);
                     type->signed_value = true;
-                    type->four_state = cast_name == "integer";
-                    type->target.spelling = std::string { cast_name };
-                } else if (cast_name == "@type"
+                    type->four_state
+                        = support::systemverilog_four_state(cast_builtin);
+                    semantic::sv::set_builtin_type(*type, cast_builtin);
+                } else if (record.cast_target == CastTarget::type_operator
                     && !record.type_operand.empty()) {
                     // `type(...)'(x)` (6.23).
                     type = semantic::CompiledDesignResolver {
@@ -5055,8 +5069,8 @@ private:
             }
             return logical_result(accumulated);
         }
-        if ((record.text == "@stream-left"
-                || record.text == "@stream-right")
+        if ((record.marker == support::ExpressionMarker::stream_left
+                || record.marker == support::ExpressionMarker::stream_right)
             && record.operands.size() >= 2U) {
             const auto slice = evaluate(record.operands.front());
             const auto slice_size = slice
@@ -5068,7 +5082,8 @@ private:
             concatenation.kind = ExpressionKind::concatenation;
             concatenation.operands.erase(concatenation.operands.begin());
             auto result = evaluate_concatenation(concatenation);
-            if (!result || record.text == "@stream-right"
+            if (!result
+                || record.marker == support::ExpressionMarker::stream_right
                 || *slice_size >= result->width) {
                 return result;
             }
@@ -5090,10 +5105,8 @@ private:
         }
         // A static method of a class specialization (`C#(7)::f()`) runs
         // with the selection's parameters (IEEE 1800-2017 8.25.1, 13.4.3).
-        if (constexpr std::string_view prefix { "@sv-static-method:" };
-            std::string_view { record.text }.starts_with(prefix)) {
-            const auto identity
-                = std::string_view { record.text }.substr(prefix.size());
+        if (record.marker == support::ExpressionMarker::sv_static_method) {
+            const std::string_view identity { record.marker_argument };
             for (const auto& candidate :
                 specialization_.design().systemverilog_hir.classes()) {
                 if (candidate.forward_declaration) continue;
@@ -5136,7 +5149,8 @@ private:
         // Inside a function body its name also denotes the result
         // variable; a call names the function itself (IEEE 1800-2017
         // 13.4.1), so a recursive call resolves to the function.
-        if (!record.text.starts_with("$") && !record.text.starts_with("@")) {
+        if (record.call_kind != semantic::sv::CallKind::system && !record.text.starts_with("@")
+            && record.marker == support::ExpressionMarker::none) {
             const semantic::CompiledDeclarationPredicate function
                 = [](const semantic::CompiledDeclarationView& candidate) {
                       return candidate.systemverilog != nullptr
@@ -5175,7 +5189,7 @@ private:
         }
         // A member of a packed structure array element constant
         // (`P[1].m`, IEEE 1800-2023 7.2.1, 7.4.1).
-        if (record.text.starts_with("@sv-select:")
+        if (record.marker == support::ExpressionMarker::sv_select
             && record.operands.size() == 1U) {
             const auto base = specialization_.find_expression(
                 record.operands.front());
@@ -5189,17 +5203,18 @@ private:
         }
         // A member of a packed structure class constant (`C::p.a.b`, IEEE
         // 1800-2023 7.2.1, 8.25.1).
-        if (record.text.starts_with("@sv-select:")
+        if (record.marker == support::ExpressionMarker::sv_select
             && record.operands.size() == 1U) {
-            std::string path = record.text.substr(11U);
+            std::string path = record.marker_argument;
             auto base = specialization_.find_expression(
                 record.operands.front());
             while (base
                  && base->systemverilog != nullptr
                  && base->systemverilog->kind == ExpressionKind::call
-                 && base->systemverilog->text.starts_with("@sv-select:")
+                 && base->systemverilog->marker
+                     == support::ExpressionMarker::sv_select
                  && base->systemverilog->operands.size() == 1U) {
-                path = base->systemverilog->text.substr(11U) + "." + path;
+                path = base->systemverilog->marker_argument + "." + path;
                 base = specialization_.find_expression(
                     base->systemverilog->operands.front());
             }
@@ -5207,8 +5222,9 @@ private:
                 && (base->systemverilog->kind
                         == ExpressionKind::class_static_property
                     || (base->systemverilog->kind == ExpressionKind::call
-                        && base->systemverilog->text.starts_with(
-                            "@sv-static-property:")))) {
+                        && base->systemverilog->marker
+                            == support::ExpressionMarker::
+                                sv_static_property))) {
                 semantic::sv::TypeReference type;
                 const auto value
                     = evaluate_class_parameter(*base->systemverilog, &type);
@@ -5239,7 +5255,7 @@ private:
         // A parameter of an element of an interface port array
         // (`p[0].FOO`) reads the identity that element publishes (IEEE
         // 1800-2017 25.5, 25.10).
-        if (record.text.starts_with("@sv-select:")
+        if (record.marker == support::ExpressionMarker::sv_select
             && record.operands.size() == 1U) {
             std::function<std::optional<std::string>(semantic::ExpressionId)>
                 path = [&](const semantic::ExpressionId id)
@@ -5265,11 +5281,11 @@ private:
                                    : std::nullopt;
                 }
                 if (node.kind == ExpressionKind::call
-                    && node.text.starts_with("@sv-select:")
+                    && node.marker == support::ExpressionMarker::sv_select
                     && node.operands.size() == 1U) {
                     const auto base = path(node.operands.front());
                     return base ? std::optional { *base + "."
-                                      + node.text.substr(11U) }
+                                      + node.marker_argument }
                                 : std::nullopt;
                 }
                 return std::nullopt;
@@ -5277,7 +5293,7 @@ private:
             const auto& identities
                 = specialization_.specialization().hierarchy_identities;
             if (auto name = path(record.operands.front())) {
-                *name += "." + record.text.substr(11U);
+                *name += "." + record.marker_argument;
                 const auto hierarchy = std::ranges::find(identities, *name,
                     &semantic::SpecializedHirNamedIdentity::name);
                 if (hierarchy != identities.end()) {
@@ -5348,7 +5364,7 @@ private:
         }
         if (std::ranges::all_of(record.associations,
                 [](const auto& association) {
-                    return association.choice_spelling.empty();
+                    return unkeyed_choice(association);
                 })) {
             semantic::sv::Expression concatenation = record;
             concatenation.kind = ExpressionKind::concatenation;
@@ -5753,7 +5769,8 @@ private:
             return array_parameter_value(declaration_id);
         }
         if (record.kind == ExpressionKind::call
-            && !record.text.starts_with("$")
+            && record.call_kind != semantic::sv::CallKind::system
+            && record.marker == support::ExpressionMarker::none
             && !record.text.starts_with("@")) {
             std::optional<semantic::DeclarationId> selected;
             if (record.referenced_name && record.referenced_name->selected) {
@@ -5902,7 +5919,7 @@ private:
             for (const auto& association : associations) {
                 if (association.choice_spelling == "default") {
                     fallback = association.value;
-                } else if (association.choice_spelling.empty()) {
+                } else if (unkeyed_choice(association)) {
                     positional.push_back(association.value);
                 } else {
                     return std::nullopt;
@@ -6291,7 +6308,7 @@ private:
             } else if (associations.size() == count
                 && std::ranges::all_of(associations,
                     [](const auto& association) {
-                        return association.choice_spelling.empty();
+                        return unkeyed_choice(association);
                     })) {
                 for (std::uint64_t index { }; index < count; ++index) {
                     if (!place(associations[index].value, element,
@@ -6311,7 +6328,7 @@ private:
         }
         const bool positional = std::ranges::all_of(associations,
             [](const auto& association) {
-                return association.choice_spelling.empty();
+                return unkeyed_choice(association);
             });
         if (positional && associations.size() != members->size()) {
             return std::nullopt;
@@ -6338,7 +6355,8 @@ private:
                 continue;
             }
             std::string_view member_name = association.choice_spelling;
-            if (member_name == "@key" && association.choices.size() == 1U) {
+            if (association.choice_marker == support::ExpressionMarker::key
+                && association.choices.size() == 1U) {
                 if (const auto key
                     = pattern_member_key(association.choices.front())) {
                     member_name = *key;
@@ -6384,7 +6402,8 @@ private:
         if (choice_record.kind != ExpressionKind::class_static_property
             && choice_record.kind != ExpressionKind::class_property
             && !(choice_record.kind == ExpressionKind::call
-                && choice_record.text.starts_with("@sv-static-property:"))) {
+                && choice_record.marker
+                    == support::ExpressionMarker::sv_static_property)) {
             return std::nullopt;
         }
         const std::string_view identity
@@ -6566,7 +6585,8 @@ private:
         };
         if (record.kind == ExpressionKind::class_static_property
             || (record.kind == ExpressionKind::call
-                && record.text.starts_with("@sv-static-property:"))) {
+                && record.marker
+                    == support::ExpressionMarker::sv_static_property)) {
             semantic::sv::TypeReference type;
             auto value = evaluate_class_parameter(record, &type);
             if (!value) return std::nullopt;
@@ -6598,13 +6618,13 @@ private:
             return std::pair { std::move(*value), std::move(type) };
         }
         if (record.kind == ExpressionKind::call
-            && record.text.starts_with("@sv-select:")
+            && record.marker == support::ExpressionMarker::sv_select
             && record.operands.size() == 1U) {
             auto base = typed_constant(record.operands.front());
             semantic::sv::TypeReference type;
             const auto member = base
                 ? packed_member_slice(base->second,
-                      std::string_view { record.text }.substr(11U), &type)
+                      std::string_view { record.marker_argument }, &type)
                 : std::nullopt;
             if (!member) return std::nullopt;
             return std::pair { slice(base->first, member->first,
@@ -6708,7 +6728,7 @@ private:
             && !view->systemverilog->associations.empty()
             && std::ranges::none_of(view->systemverilog->associations,
                 [](const auto& association) {
-                    return association.choice_spelling.empty();
+                    return unkeyed_choice(association);
                 })) {
             if (const auto array = packed_structure_array(type)) {
                 std::optional<semantic::ExpressionId> fallback;
@@ -6769,7 +6789,7 @@ private:
             && !view->systemverilog->associations.empty()
             && std::ranges::all_of(view->systemverilog->associations,
                 [](const auto& association) {
-                    return association.choice_spelling.empty();
+                    return unkeyed_choice(association);
                 })) {
             std::unordered_set<std::uint32_t> visiting;
             const auto width = resolved_type_width(
@@ -6819,7 +6839,7 @@ private:
         const bool positional = view && view->systemverilog != nullptr
             && std::ranges::all_of(view->systemverilog->associations,
                 [](const auto& association) {
-                    return association.choice_spelling.empty();
+                    return unkeyed_choice(association);
                 });
         if (!view || view->systemverilog == nullptr || members == nullptr
             || view->systemverilog->kind != ExpressionKind::assignment_pattern
@@ -6838,8 +6858,22 @@ private:
         PackedLogic4 packed { static_cast<std::size_t>(*width), Logic4::x };
         std::optional<semantic::ExpressionId> default_value;
         std::unordered_set<std::string> assigned;
-        std::vector<std::pair<std::string_view, semantic::ExpressionId>>
-            type_keys;
+        // A type key: a built-in type's kind, or a type name.
+        struct TypeKey {
+            support::SystemVerilogBuiltinType builtin {
+                support::SystemVerilogBuiltinType::none
+            };
+            std::string_view name;
+            semantic::ExpressionId value;
+        };
+        std::vector<TypeKey> type_keys;
+        const auto key_matches = [](const TypeKey& key,
+                                    const semantic::sv::PackedMember& member) {
+            return key.builtin != support::SystemVerilogBuiltinType::none
+                ? member.type.builtin == key.builtin
+                : member.type.builtin == support::SystemVerilogBuiltinType::none
+                    && member.type.target.spelling == key.name;
+        };
         const auto place = [&](const semantic::sv::PackedMember& member,
                                const semantic::ExpressionId value_id) -> bool {
             std::unordered_set<std::uint32_t> member_visiting;
@@ -6880,30 +6914,39 @@ private:
                 continue;
             }
             std::string_view member_name = association.choice_spelling;
-            if (member_name == "@key" && association.choices.size() == 1U) {
+            // A key choice whose expression names no member stays unresolved
+            // and may be a type key below.
+            bool key_unresolved = association.choice_marker
+                    == support::ExpressionMarker::key
+                && association.choices.size() == 1U;
+            if (key_unresolved) {
                 if (const auto key
                     = pattern_member_key(association.choices.front())) {
                     member_name = *key;
+                    key_unresolved = false;
                 }
             }
             const auto member = std::ranges::find(*members, member_name,
                 &semantic::sv::PackedMember::name);
             // A type key (`int: v`) sets every member of that type that no
             // member key names (IEEE 1800-2017 10.9.2).
-            if (member == members->end() && member_name == "@key"
-                && association.choices.size() == 1U) {
+            TypeKey type_key { support::SystemVerilogBuiltinType::none,
+                member_name, association.value };
+            if (member == members->end() && key_unresolved) {
                 if (const auto key = specialization_.find_expression(
                         association.choices.front());
                     key && key->systemverilog != nullptr) {
-                    member_name = key->systemverilog->text;
+                    type_key.builtin = key->systemverilog->keyword_type;
+                    type_key.name = key->systemverilog->text;
+                    member_name = type_key.name;
                 }
             }
             if (member == members->end()
                 && std::ranges::any_of(*members,
                     [&](const semantic::sv::PackedMember& candidate) {
-                        return candidate.type.target.spelling == member_name;
+                        return key_matches(type_key, candidate);
                     })) {
-                type_keys.emplace_back(member_name, association.value);
+                type_keys.push_back(type_key);
                 continue;
             }
             if (member == members->end() || !place(*member, association.value)) {
@@ -6913,11 +6956,11 @@ private:
             }
             assigned.insert(member->name);
         }
-        for (const auto& [spelling, item] : type_keys) {
+        for (const auto& key : type_keys) {
             for (const auto& member : *members) {
-                if (member.type.target.spelling == spelling
+                if (key_matches(key, member)
                     && !assigned.contains(member.name)) {
-                    if (!place(member, item)) {
+                    if (!place(member, key.value)) {
                         return std::nullopt;
                     }
                     assigned.insert(member.name);
@@ -7565,6 +7608,14 @@ private:
                 return Flow::failed;
             }
         }
+        // The further for-loop initializations run once, after the first
+        // (IEEE 1800-2023 12.7.1).
+        if (const auto initialization
+            = execute_statements(record.loop_initializations);
+            initialization != Flow::normal) {
+            return initialization == Flow::returned ? initialization
+                                                    : Flow::failed;
+        }
         for (std::uint64_t iteration = 0U;
             iteration < maximum_constant_work_units; ++iteration) {
             if (!record.loop_post_test && record.condition) {
@@ -8210,7 +8261,9 @@ private:
         if (record.kind != ExpressionKind::name || !record.referenced_name
             || !record.referenced_name->selected
             || record.text.find('.') != std::string::npos
-            || record.text == "$" || record.text.starts_with('@')) {
+            || record.text == "$"
+            || record.marker != support::ExpressionMarker::none
+            || record.text.starts_with('@')) {
             return nullptr;
         }
         const auto found = compilation_->slots.find(
@@ -9140,6 +9193,9 @@ private:
                     return refuse_program("loop initialization");
                 }
             }
+            if (!compile_statements(record.loop_initializations)) {
+                return false;
+            }
             const auto guard = fresh_register();
             emit(ProgramCode::loop_start, guard);
             const auto top = program_position();
@@ -9659,9 +9715,11 @@ private:
             if (record.text == "?:") {
                 return operand(1U) || operand(2U);
             }
-            return record.text == "@sv-cast:real"
-                || record.text == "@sv-cast:shortreal"
-                || record.text == "@sv-cast:realtime"
+            return (record.marker == support::ExpressionMarker::sv_cast
+                       && record.cast_target
+                           == support::SystemVerilogCastTarget::builtin
+                       && support::systemverilog_real_family(
+                           record.cast_builtin))
                 || real_math_function(record.text).has_value()
                 || record.text == "$itor" || record.text == "$bitstoreal"
                 || record.text == "$bitstoshortreal"
@@ -9677,7 +9735,9 @@ private:
     [[nodiscard]] bool user_function_returns_real(
         const semantic::sv::Expression& record)
     {
-        if (record.text.starts_with('$') || record.text.starts_with('@')) {
+        if (record.call_kind == semantic::sv::CallKind::system
+            || record.marker != support::ExpressionMarker::none
+            || record.text.starts_with('@')) {
             return false;
         }
         std::optional<semantic::DeclarationId> selected;
@@ -9764,7 +9824,7 @@ private:
         }
         const auto& record = *view->systemverilog;
         if (record.kind == ExpressionKind::class_null
-            || record.text == "@sv-null") {
+            || record.marker == support::ExpressionMarker::sv_null) {
             return ScalarKind::Chandle;
         }
         return scalar_kind(record.scalar_kind) == ScalarKind::Chandle
@@ -10010,11 +10070,10 @@ private:
         const semantic::sv::Expression& record,
         semantic::sv::TypeReference* const type = nullptr)
     {
-        constexpr std::string_view prefix { "@sv-static-property:" };
         const auto identity = !record.class_member_identity.empty()
             ? std::string_view { record.class_member_identity }
-            : std::string_view { record.text }.starts_with(prefix)
-            ? std::string_view { record.text }.substr(prefix.size())
+            : record.marker == support::ExpressionMarker::sv_static_property
+            ? std::string_view { record.marker_argument }
             : std::string_view { };
         const auto cut = identity.rfind("::");
         const auto member = cut == std::string_view::npos
@@ -10112,7 +10171,7 @@ private:
             return evaluate_decimal(record);
         }
         if (record.kind == ExpressionKind::class_null
-            || record.text == "@sv-null") {
+            || record.marker == support::ExpressionMarker::sv_null) {
             return chandle_value(0U);
         }
         if (record.kind == ExpressionKind::boolean_literal) {
@@ -10279,15 +10338,18 @@ private:
     if (record.decimal_literal
         || scalar_kind(record.scalar_kind) != ScalarKind::None
         || record.kind == ExpressionKind::class_null
-        || record.text == "@sv-null") {
+        || record.marker == support::ExpressionMarker::sv_null) {
         return true;
     }
     if (record.kind == ExpressionKind::call
-        && (record.text == "@sv-cast:shortreal"
-            || record.text == "@sv-cast:real"
-            || record.text == "@sv-cast:realtime"
-            || record.text == "@sv-cast:time"
-            || record.text == "@sv-cast:chandle"
+        && ((record.marker == support::ExpressionMarker::sv_cast
+                && record.cast_target
+                    == support::SystemVerilogCastTarget::builtin
+                && (support::systemverilog_real_family(record.cast_builtin)
+                    || record.cast_builtin
+                        == support::SystemVerilogBuiltinType::time
+                    || record.cast_builtin
+                        == support::SystemVerilogBuiltinType::chandle))
             || real_math_function(record.text))) {
         return true;
     }
@@ -10387,11 +10449,11 @@ bool hir_systemverilog_constant_expression(
                 break;
             // A class's parameter or local parameter (8.25.1).
             case ExpressionKind::class_static_property: {
-                constexpr std::string_view prefix { "@sv-static-property:" };
                 const auto identity = !source.class_member_identity.empty()
                     ? std::string_view { source.class_member_identity }
-                    : std::string_view { source.text }.starts_with(prefix)
-                    ? std::string_view { source.text }.substr(prefix.size())
+                    : source.marker
+                        == support::ExpressionMarker::sv_static_property
+                    ? std::string_view { source.marker_argument }
                     : std::string_view { };
                 const auto cut = identity.rfind("::");
                 for (const auto& owner :
@@ -10424,7 +10486,7 @@ bool hir_systemverilog_constant_expression(
                     = operands_are_constant()
                     && call_arguments_are_constant();
                 const bool sized_type_cast
-                    = source.text.starts_with("@sv-cast:")
+                    = source.marker == support::ExpressionMarker::sv_cast
                     && source.operands.size() == 1U;
                 const bool expression_size_cast
                     = semantic::sv::is_expression_size_cast(source);
@@ -10813,7 +10875,8 @@ namespace {
             const semantic::sv::TypeReference& element_type)
             -> std::optional<std::string> {
             if (element_type.value_form == semantic::sv::TypeForm::string
-                || element_type.target.spelling == "string") {
+                || element_type.builtin
+                    == support::SystemVerilogBuiltinType::string) {
                 const auto text = unit.evaluate_string_expression(expression);
                 return text ? std::optional {
                                   semantic::systemverilog_string_identity(

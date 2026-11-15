@@ -2,6 +2,7 @@
 #include "fsim/runtime/fst_reader.hpp"
 
 #include "fsim/runtime/fst_compression.hpp"
+#include "fsim/runtime/fst_writer.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/sha256.hpp"
 
@@ -890,7 +891,8 @@ private:
         const FstReaderDeclaration& declaration) const
     {
         const auto direct = scope_stack_.empty()
-            || scope_stack_.back() == "__fsim_root";
+            || (scope_stack_.size() == 1U
+                && scope_stack_.back() == fst_synthesized_root_scope);
         if (direct) {
             return declaration.path == declaration.reference;
         }

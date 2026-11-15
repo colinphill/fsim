@@ -200,4 +200,12 @@ module top;
             end
         end
     end
+
+    // A for loop with several initializations is one scope that declares
+    // every variable, with one vpiForInitStmt per initialization (12.7.1,
+    // 37.68).
+    task automatic paired;
+        for (int a = 0, b = 5; a < b; a++, b--)
+            n = a + b;
+    endtask
 endmodule

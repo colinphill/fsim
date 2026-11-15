@@ -4274,8 +4274,6 @@ void test_compiled_design_resolver_generic_callable_profile()
         vhdl::DeclarationForm::function,
         "mapped", integer_subtype, true);
     vhdl::SubtypeIndication unspecified_subtype;
-    unspecified_subtype.type_mark.spelling
-        = "@vhdl-unspecified:private";
     unspecified_subtype.unspecified_class
         = vhdl::UnspecifiedTypeClass::private_type;
     vhdl::SubtypeIndication boolean_subtype;
@@ -5266,8 +5264,13 @@ void test_compiled_vhdl_resolver_enumeration_array_bounds()
     const auto high_name = add_expression(vhdl::ExpressionKind::name,
         "High_Index", high_constant);
     const auto qualified_one = add_expression(
-        vhdl::ExpressionKind::call, "@vhdl-qualified:Index_T",
-        index_declaration, { one });
+        vhdl::ExpressionKind::call, "Index_T", index_declaration, { one });
+    {
+        auto& qualified = builder.vhdl_hir.mutable_expressions().back();
+        qualified.text.clear();
+        qualified.marker = fsim::support::ExpressionMarker::vhdl_qualified;
+        qualified.marker_argument = "Index_T";
+    }
     const auto qualified_constant = add_typed_object("Qualified_Index",
         DeclarationKind::constant, vhdl::DeclarationForm::constant,
         index_type, qualified_one);
@@ -12111,7 +12114,8 @@ void test_compiled_vhdl_predefined_subtype_fast_path()
     shadow_qualified.id = shadow_qualified_id;
     shadow_qualified.scope = shadow_scope;
     shadow_qualified.kind = vhdl::ExpressionKind::call;
-    shadow_qualified.text = "@vhdl-qualified:string";
+    shadow_qualified.marker = fsim::support::ExpressionMarker::vhdl_qualified;
+    shadow_qualified.marker_argument = "string";
     shadow_qualified.operands = { shadow_literal_id };
     shadow_qualified.source = shadow_builder.source;
     shadow_qualified.origin = shadow_builder.origin;

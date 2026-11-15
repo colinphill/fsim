@@ -15,28 +15,14 @@
 namespace fsim::semantic::sv {
 namespace {
 
-    // The width of a predefined integer type (IEEE 1800-2017 6.11).
+    // The width of a predefined integer type (IEEE 1800-2017 6.11); a type
+    // of no predefined width has none.
     [[nodiscard]] std::optional<std::size_t> integer_type_width(
-        std::string_view spelling)
+        const support::SystemVerilogBuiltinType builtin)
     {
-        static constexpr std::array<std::pair<std::string_view, std::size_t>, 9>
-            widths { {
-                { "bit", 1U },
-                { "logic", 1U },
-                { "reg", 1U },
-                { "byte", 8U },
-                { "shortint", 16U },
-                { "int", 32U },
-                { "integer", 32U },
-                { "longint", 64U },
-                { "time", 64U },
-            } };
-        for (const auto& [name, width] : widths) {
-            if (name == spelling) {
-                return width;
-            }
-        }
-        return std::nullopt;
+        const auto width = support::systemverilog_builtin_width(builtin);
+        return width != 0U ? std::optional<std::size_t> { width }
+                           : std::nullopt;
     }
 
     [[nodiscard]] const TypeDefinition* named_definition(
@@ -79,7 +65,7 @@ namespace {
                        *type.packed_range->left, *type.packed_range->right))
                 + 1U;
         }
-        return integer_type_width(type.target.spelling);
+        return integer_type_width(type.builtin);
     }
 
 } // namespace

@@ -1281,35 +1281,28 @@ Type VhdlParser::parse_vhdl_unspecified_type(const Token &start) {
 
     if (match_keyword("private", true)) {
         info->type_class = VhdlUnspecifiedTypeClass::Private;
-        type.spelling = "@vhdl-unspecified:private";
     } else if (match(TokenKind::Less)) {
         expect(TokenKind::Greater, "'>' in scalar unspecified type",
             "FSIM-VHDL-PARSE-286");
         info->type_class = VhdlUnspecifiedTypeClass::Scalar;
-        type.spelling = "@vhdl-unspecified:scalar";
     } else if (match(TokenKind::LeftParen)) {
         accept_box("discrete unspecified type");
         expect(TokenKind::RightParen, "')' after discrete unspecified type",
             "FSIM-VHDL-PARSE-286");
         info->type_class = VhdlUnspecifiedTypeClass::Discrete;
-        type.spelling = "@vhdl-unspecified:discrete";
     } else if (match_keyword("range", true)) {
         accept_box("numeric unspecified type");
         if (match(TokenKind::Dot)) {
             accept_box("floating unspecified type");
             info->type_class = VhdlUnspecifiedTypeClass::Floating;
-            type.spelling = "@vhdl-unspecified:floating";
         } else {
             info->type_class = VhdlUnspecifiedTypeClass::Integer;
-            type.spelling = "@vhdl-unspecified:integer";
         }
     } else if (match_keyword("units", true)) {
         accept_box("physical unspecified type");
         info->type_class = VhdlUnspecifiedTypeClass::Physical;
-        type.spelling = "@vhdl-unspecified:physical";
     } else if (match_keyword("array", true)) {
         info->type_class = VhdlUnspecifiedTypeClass::Array;
-        type.spelling = "@vhdl-unspecified:array";
         expect(TokenKind::LeftParen, "'(' after array",
             "FSIM-VHDL-PARSE-286");
         do {
@@ -1322,11 +1315,9 @@ Type VhdlParser::parse_vhdl_unspecified_type(const Token &start) {
         info->component_types.push_back(incomplete_subtype());
     } else if (match_keyword("access", true)) {
         info->type_class = VhdlUnspecifiedTypeClass::Access;
-        type.spelling = "@vhdl-unspecified:access";
         info->component_types.push_back(incomplete_subtype());
     } else if (match_keyword("file", true)) {
         info->type_class = VhdlUnspecifiedTypeClass::File;
-        type.spelling = "@vhdl-unspecified:file";
         expect_keyword("of", true, "FSIM-VHDL-PARSE-286");
         info->component_types.push_back(incomplete_subtype());
     } else {

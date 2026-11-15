@@ -343,12 +343,14 @@ struct Simulation::Impl {
 
     // `names` selects the randomized properties; `@inline-value:N` entries
     // instead carry calling-scope values for the inline constraints.
+    // `no_properties` is the `randomize(null)` checker call (18.11.1).
     [[nodiscard]] runtime::PackedLogic4 invoke_source_randomize(
         const runtime::SystemVerilogClassHandle handle,
         const std::span<const std::string> names,
         const std::span<const runtime::PackedLogic4> actuals,
         const std::span<const runtime::SystemVerilogConstraintTemplate>
             inline_constraints,
+        bool no_properties,
         std::optional<runtime::simir::ProcessId> calling_process
         = std::nullopt,
         bool callbacks_lowered = false);
@@ -398,9 +400,12 @@ struct Simulation::Impl {
     void run_randomize_callback(runtime::SystemVerilogClassHandle target,
         std::string_view name,
         std::optional<runtime::simir::ProcessId> calling_process);
+    // A lowered randomize() step `hook` (`callback` names the callback of
+    // a callback step), or, with no hook, the process-kill step `callback`.
     [[nodiscard]] runtime::PackedLogic4 invoke_lowered_randomize_step(
         runtime::simir::ProcessId process,
-        runtime::SystemVerilogClassHandle handle, std::string_view step,
+        runtime::SystemVerilogClassHandle handle,
+        runtime::simir::ClassMethodHook hook, std::string_view callback,
         std::span<const runtime::PackedLogic4> actuals);
 
     [[nodiscard]] runtime::PackedLogic4 invoke_source_randomization_mode(
@@ -462,6 +467,7 @@ struct Simulation::Impl {
         const std::span<const std::string> actual_names,
         const std::span<const std::uint8_t> actual_directions,
         const bool virtual_dispatch,
+        bool randomize_no_properties,
         application_detail::SystemVerilogClassHirExecution::ActualReferences
             actual_references = {},
         std::optional<runtime::simir::ProcessId> report_process

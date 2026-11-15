@@ -606,21 +606,9 @@ void execute_container_operation(
     if (source.type.fixed) {
         const auto& index_value = access.read(operation.index);
         if (source.type.sparse) {
-            const auto index = index_value.known_signed_value();
-            const auto low = std::min(
-                source.type.index_left, source.type.index_right);
-            const auto high = std::max(
-                source.type.index_left, source.type.index_right);
-            const auto ordinal = !index ? std::nullopt
-                : operation.linear_index
-                ? *index >= 0 ? std::optional { static_cast<std::uint64_t>(*index) }
-                              : std::nullopt
-                : *index >= low && *index <= high
-                ? std::optional { sparse_offset(process, instruction,
-                      source.type, index_value) }
-                : std::nullopt;
+            const auto ordinal = sparse_read_ordinal(process, instruction,
+                source.type, index_value, operation.linear_index);
             access.write(operation.destination, ordinal
-                    && *ordinal < sparse_container_element_count(source.type)
                 ? read_sparse_container_element(source, *ordinal)
                 : PackedLogic4(source.type.element_width,
                       source.type.two_state ? Logic4::zero : Logic4::x));
@@ -914,6 +902,15 @@ void execute_container_operation(
             return;
         }
     }
+    if (source.type.sparse) {
+        const auto ordinal = sparse_read_ordinal(process, instruction,
+            source.type, access.read(operation.index),
+            operation.linear_index);
+        access.string(operation.destination) = ordinal
+            ? read_sparse_container_string(source, *ordinal)
+            : std::string { };
+        return;
+    }
     const auto at = source.type.fixed
         ? operation.linear_index
             ? known_index(
@@ -1074,6 +1071,23 @@ void execute_container_operation(
             target.string_elements.push_back(source);
             return;
         }
+    }
+    if (target.type.sparse) {
+        const auto ordinal = operation.linear_index
+            ? known_index(
+                  process, instruction,
+                  access.read(operation.index),
+                  true, "multidimensional linear index")
+            : sparse_offset(process, instruction, target.type,
+                  access.read(operation.index));
+        if (ordinal >= sparse_container_element_count(target.type)) {
+            container_error(
+                process, instruction,
+                "string container index is out of range");
+        }
+        static_cast<void>(
+            write_sparse_container_string(target, ordinal, source));
+        return;
     }
     const auto at = target.type.fixed
         ? operation.linear_index

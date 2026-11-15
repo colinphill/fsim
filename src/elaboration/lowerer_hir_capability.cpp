@@ -105,6 +105,14 @@ std::optional<std::size_t> wide_unsized_decimal_width(
 }
 namespace {
 
+// A streaming concatenation `{<< ...}` or `{>> ...}` (IEEE 1800-2023 11.4.14).
+[[nodiscard]] bool sv_stream_marker(
+    const support::ExpressionMarker marker) noexcept
+{
+    return marker == support::ExpressionMarker::stream_left
+        || marker == support::ExpressionMarker::stream_right;
+}
+
     [[nodiscard]] bool systemverilog_integer_query_call(
         const std::string_view name) noexcept
     {
@@ -1799,7 +1807,8 @@ Lowerer::hir_systemverilog_parameter_member(
                 pattern->systemverilog->associations) {
                 if (association.choice_spelling == "default") {
                     fallback = association.value;
-                } else if (association.choice_spelling == "@key") {
+                } else if (association.choice_marker
+                    == support::ExpressionMarker::key) {
                     const auto key = association.choices.size() == 1U
                         ? specialized_hir_unit_->find_expression(
                               association.choices.front())
@@ -1809,7 +1818,7 @@ Lowerer::hir_systemverilog_parameter_member(
                         item = association.value;
                         break;
                     }
-                } else if (association.choice_spelling.empty()) {
+                } else if (association.positional()) {
                     if (position++ == member_index) {
                         item = association.value;
                         break;
@@ -1884,8 +1893,8 @@ std::optional<std::int64_t> Lowerer::hir_vhdl_bound_position(
     // position of L in T.
     if (bound->vhdl->kind == semantic::vhdl::ExpressionKind::call
         && bound->vhdl->operands.size() == 1U
-        && bound->vhdl->text.starts_with(
-            semantic::vhdl::qualified_expression_prefix)) {
+        && bound->vhdl->marker
+            == support::ExpressionMarker::vhdl_qualified) {
         return hir_vhdl_bound_position(bound->vhdl->operands.front());
     }
     if (bound->vhdl->kind == semantic::vhdl::ExpressionKind::logic_literal) {
@@ -2264,6 +2273,7 @@ bool Lowerer::hir_calls_user_function(
                         return self(self, input.statements)
                             && self(self, input.else_statements)
                             && self(self, input.loop_updates)
+                            && self(self, input.loop_initializations)
                             && std::ranges::all_of(input.case_alternatives,
                                 [&](const auto& alternative) {
                                     return self(self, alternative.statements);
@@ -2568,8 +2578,8 @@ std::optional<std::int64_t> Lowerer::hir_constant_integer(
                         || declaration->vhdl->form
                             == semantic::vhdl::DeclarationForm::subtype);
                 if (type_conversion
-                    || expression->vhdl->text.starts_with(
-                        semantic::vhdl::qualified_expression_prefix)) {
+                    || expression->vhdl->marker
+                        == support::ExpressionMarker::vhdl_qualified) {
                     return finish(self(
                         self, expression->vhdl->operands.front()));
                 }
@@ -3706,8 +3716,8 @@ std::optional<Lowerer::HirPackedRange> Lowerer::hir_expression_range(
     const bool qualified
         = expression->vhdl->kind == semantic::vhdl::ExpressionKind::call
         && expression->vhdl->operands.size() == 1U
-        && expression->vhdl->text.starts_with(
-            semantic::vhdl::qualified_expression_prefix);
+        && expression->vhdl->marker
+            == support::ExpressionMarker::vhdl_qualified;
     if (!qualified
         && (expression->vhdl->kind != semantic::vhdl::ExpressionKind::index
             || expression->vhdl->operands.size() < 2U)) {
@@ -3850,7 +3860,8 @@ std::optional<Lowerer::HirPackedRange> Lowerer::hir_expression_direct_range(
         && expression->systemverilog->kind
             == semantic::sv::ExpressionKind::index
         && (expression->systemverilog->text.starts_with("index.")
-            || expression->systemverilog->text.starts_with("@sv-select:"))) {
+            || expression->systemverilog->marker
+                == support::ExpressionMarker::sv_select)) {
         if (const auto signal = hir_direct_signal(expression_id);
             signal && *signal < design_.signal_info_.size()) {
             const auto& info = design_.signal_info_[*signal];
@@ -4308,6 +4319,8 @@ std::optional<bool> Lowerer::hir_vhdl_range_direction(
                 || lhs->vhdl->scope != rhs->vhdl->scope
                 || lhs->vhdl->kind != rhs->vhdl->kind
                 || lhs->vhdl->text != rhs->vhdl->text
+                || lhs->vhdl->marker != rhs->vhdl->marker
+                || lhs->vhdl->marker_argument != rhs->vhdl->marker_argument
                 || lhs->vhdl->referenced_name
                     != rhs->vhdl->referenced_name
                 || lhs->vhdl->argument_names
@@ -5154,8 +5167,8 @@ Lowerer::hir_root_constant_selection(
     // root signal itself.
     if (parent_expression->systemverilog != nullptr
         && (parent_expression->systemverilog->text.starts_with("index.")
-            || parent_expression->systemverilog->text.starts_with(
-                "@sv-select:"))
+            || parent_expression->systemverilog->marker
+                == support::ExpressionMarker::sv_select)
         && hir_direct_signal(operands.front())) {
         return selection;
     }
@@ -5249,8 +5262,8 @@ bool Lowerer::hir_expression_signed(
         qualified && qualified->vhdl != nullptr
         && ((qualified->vhdl->kind == semantic::vhdl::ExpressionKind::call
                 && qualified->vhdl->operands.size() == 1U
-                && qualified->vhdl->text.starts_with(
-                    semantic::vhdl::qualified_expression_prefix))
+                && qualified->vhdl->marker
+                    == support::ExpressionMarker::vhdl_qualified)
             || (qualified->vhdl->kind
                     == semantic::vhdl::ExpressionKind::binary
                 && qualified->vhdl->text == "&"
@@ -5313,18 +5326,15 @@ bool Lowerer::hir_expression_signed(
     }
     // An element of an object's array of values has the element's
     // signedness.
-    constexpr std::string_view container_index_prefix {
-        "@sv-container-index:"
-    };
     if (const auto access = specialized_hir_unit_->find_expression(
             expression_id);
         access && access->systemverilog != nullptr
         && access->systemverilog->kind == semantic::sv::ExpressionKind::call
-        && access->systemverilog->text.starts_with(container_index_prefix)
+        && access->systemverilog->marker
+            == support::ExpressionMarker::sv_container_index
         && access->systemverilog->operands.size() == 2U) {
         if (const auto type = hir_class_value_container_type(
-                std::string_view { access->systemverilog->text }.substr(
-                    container_index_prefix.size()));
+                access->systemverilog->marker_argument);
             type && type->element_kind == ContainerElementKind::Packed) {
             return type->signed_elements;
         }
@@ -6043,8 +6053,8 @@ Lowerer::hir_vhdl_intrinsic_loop_parameter(
         if (bound && bound->vhdl != nullptr
             && bound->vhdl->kind == semantic::vhdl::ExpressionKind::call
             && bound->vhdl->operands.size() == 1U
-            && bound->vhdl->text.starts_with(
-                semantic::vhdl::qualified_expression_prefix)) {
+            && bound->vhdl->marker
+                == support::ExpressionMarker::vhdl_qualified) {
             bound = specialized_hir_unit_->find_expression(
                 bound->vhdl->operands.front());
         }
@@ -6891,8 +6901,10 @@ std::optional<semantic::DeclarationId> Lowerer::hir_target_declaration(
             }
             if (source.kind == semantic::vhdl::ExpressionKind::call
                 && source.operands.size() == 1U
-                && (source.text.starts_with("@vhdl-member:")
-                    || source.text == "@vhdl-dereference")) {
+                && (source.marker
+                    == support::ExpressionMarker::vhdl_member
+                    || source.marker
+                        == support::ExpressionMarker::vhdl_dereference)) {
                 return source.operands.front();
             }
             return std::nullopt;
@@ -6943,6 +6955,7 @@ std::optional<std::size_t> Lowerer::hir_loop_iteration_count(
                 || source.target || source.value
                 || source.loop_update_target
                 || !source.loop_updates.empty()
+                || !source.loop_initializations.empty()
                 || !source.loop_variable.empty())) {
             return std::nullopt;
         }
@@ -7525,9 +7538,8 @@ Lowerer::hir_virtual_interface_member(
         return hir_virtual_interface_candidates(std::move(result),
             *virtual_type, source.text.substr(indexed_member.size()));
     }
-    constexpr std::string_view selected_member { "@sv-select:" };
     if (source.kind == semantic::sv::ExpressionKind::call
-        && source.text.starts_with(selected_member)
+        && source.marker == support::ExpressionMarker::sv_select
         && source.operands.size() == 1U) {
         // `C#(virtual I)::vif.m`: a member through the handle a class
         // property holds in the selected specialization (8.9, 8.25, 25.9).
@@ -7540,7 +7552,7 @@ Lowerer::hir_virtual_interface_member(
         HirVirtualInterfaceMember result;
         result.handle_expression = source.operands.front();
         return hir_virtual_interface_candidates(std::move(result),
-            property->type, source.text.substr(selected_member.size()));
+            property->type, source.marker_argument);
     }
     if (source.kind != semantic::sv::ExpressionKind::name) {
         return std::nullopt;
@@ -8046,15 +8058,14 @@ std::optional<SignalId> Lowerer::hir_direct_signal(
         return std::nullopt;
     }
     constexpr std::string_view indexed_member_prefix { "index." };
-    constexpr std::string_view selected_member_prefix { "@sv-select:" };
     // `bus[2].data` outside procedural code is a member selection of the
     // indexed element.
     const auto* selected_index = [&]() -> const semantic::sv::Expression* {
         if (!expression || expression->systemverilog == nullptr
             || expression->systemverilog->kind
                 != semantic::sv::ExpressionKind::call
-            || !expression->systemverilog->text.starts_with(
-                selected_member_prefix)
+            || expression->systemverilog->marker
+                != support::ExpressionMarker::sv_select
             || expression->systemverilog->operands.size() != 1U) {
             return nullptr;
         }
@@ -8163,8 +8174,7 @@ std::optional<SignalId> Lowerer::hir_direct_signal(
         const auto occurrence = array->systemverilog->text + "["
             + std::to_string(*element) + "]";
         const auto member = selected_index != nullptr
-            ? expression->systemverilog->text.substr(
-                  selected_member_prefix.size())
+            ? expression->systemverilog->marker_argument
             : expression->systemverilog->text.substr(
                   indexed_member_prefix.size());
         // `loop[0].r`: a variable of one instance of a loop generate block
@@ -8231,8 +8241,8 @@ std::optional<SignalId> Lowerer::hir_direct_signal(
     if (expression && expression->systemverilog != nullptr
         && expression->systemverilog->kind
             == semantic::sv::ExpressionKind::call
-        && expression->systemverilog->text.starts_with(
-            selected_member_prefix)) {
+        && expression->systemverilog->marker
+            == support::ExpressionMarker::sv_select) {
         // `g[1].h[2].x` written as a selection of a nested element.
         const auto path = hir_systemverilog_constant_path(expression_id);
         if (!path || path->find('[') == std::string::npos) {
@@ -8348,18 +8358,18 @@ std::optional<std::string> Lowerer::hir_systemverilog_constant_path(
         return std::nullopt;
     }
     const auto& source = *expression->systemverilog;
-    constexpr std::string_view selected_prefix { "@sv-select:" };
     constexpr std::string_view indexed_prefix { "index." };
     using Kind = semantic::sv::ExpressionKind;
     if (source.kind == Kind::name) {
         return source.text;
     }
-    if (source.kind == Kind::call && source.text.starts_with(selected_prefix)
+    if (source.kind == Kind::call
+        && source.marker == support::ExpressionMarker::sv_select
         && source.operands.size() == 1U) {
         const auto base = hir_systemverilog_constant_path(source.operands.front());
         return base
             ? std::optional { *base + "."
-                  + source.text.substr(selected_prefix.size()) }
+                  + source.marker_argument }
             : std::nullopt;
     }
     if (source.kind == Kind::index && source.operands.size() == 2U) {
@@ -8721,7 +8731,8 @@ Lowerer::hir_systemverilog_event_array_selection(
             || signal->second >= design_.signals_.size()
             || signal->second >= design_.signal_info_.size()
             || !design_.signals_[signal->second].event_variable
-            || design_.signal_info_[signal->second].type_name != "event") {
+            || design_.signal_info_[signal->second].systemverilog_builtin
+                != support::SystemVerilogBuiltinType::event) {
             return std::nullopt;
         }
         result.elements.emplace_back(
@@ -8785,7 +8796,8 @@ std::optional<SignalId> Lowerer::hir_systemverilog_event_signal(
         const auto found = signals_.find(std::string { event_name });
         return found != signals_.end()
                 && found->second < design_.signal_info_.size()
-                && design_.signal_info_[found->second].type_name == "event"
+                && design_.signal_info_[found->second].systemverilog_builtin
+                    == support::SystemVerilogBuiltinType::event
             ? std::optional { found->second }
             : std::nullopt;
     };
@@ -8809,7 +8821,8 @@ std::optional<SignalId> Lowerer::hir_systemverilog_event_signal(
             : std::nullopt;
         return binding && binding->signal
                 && *binding->signal < design_.signal_info_.size()
-                && design_.signal_info_[*binding->signal].type_name == "event"
+                && design_.signal_info_[*binding->signal].systemverilog_builtin
+                    == support::SystemVerilogBuiltinType::event
             ? binding->signal
             : std::nullopt;
     }
@@ -8848,10 +8861,10 @@ Lowerer::hir_systemverilog_interface_handle(
             });
     };
     if (source.kind == semantic::sv::ExpressionKind::call
-        && source.text.starts_with("@sv-select:")
+        && source.marker
+            == support::ExpressionMarker::sv_select
         && source.operands.size() == 1U
-        && modport_name(std::string_view { source.text }.substr(
-            std::string_view { "@sv-select:" }.size()))) {
+        && modport_name(source.marker_argument)) {
         return hir_systemverilog_interface_handle(source.operands.front());
     }
     // A hierarchical name through generate scopes and instance arrays
@@ -8868,14 +8881,13 @@ Lowerer::hir_systemverilog_interface_handle(
         if (node.kind == semantic::sv::ExpressionKind::name) {
             return node.text;
         }
-        constexpr std::string_view select_prefix { "@sv-select:" };
         if (node.kind == semantic::sv::ExpressionKind::call
-            && node.text.starts_with(select_prefix)
+            && node.marker == support::ExpressionMarker::sv_select
             && node.operands.size() == 1U) {
             auto prefix = self(self, node.operands.front());
             return prefix
                 ? std::optional { *prefix + "."
-                      + node.text.substr(select_prefix.size()) }
+                      + node.marker_argument }
                 : std::nullopt;
         }
         if (node.kind == semantic::sv::ExpressionKind::index
@@ -8900,7 +8912,8 @@ Lowerer::hir_systemverilog_interface_handle(
         }
         occurrence = source.text;
     } else if (source.kind == semantic::sv::ExpressionKind::call
-        && source.text.starts_with("@sv-select:")) {
+        && source.marker
+            == support::ExpressionMarker::sv_select) {
         auto path = hierarchical_path(hierarchical_path, expression_id);
         if (!path) {
             return std::nullopt;
@@ -10261,7 +10274,8 @@ Lowerer::hir_container_object_binding(
                 && expression->systemverilog->text.starts_with("index."))
             || (expression->systemverilog->kind
                     == semantic::sv::ExpressionKind::call
-                && expression->systemverilog->text.starts_with("@sv-select:"));
+                && expression->systemverilog->marker
+                    == support::ExpressionMarker::sv_select);
         const auto path = selected_path
             ? hir_systemverilog_constant_path(expression_id)
             : std::nullopt;
@@ -10316,8 +10330,8 @@ Lowerer::hir_container_object_binding(
                 && selected->systemverilog->text.starts_with("index."))
             || (selected->systemverilog->kind
                     == semantic::sv::ExpressionKind::call
-                && selected->systemverilog->text.starts_with(
-                    "@sv-select:")))) {
+                && selected->systemverilog->marker
+                    == support::ExpressionMarker::sv_select))) {
         // An element member of the declared object itself
         // (`table_q[0].foo`) is not a generate-element path.
         if (!hir_systemverilog_own_element_member(expression_id)) {
@@ -10779,8 +10793,8 @@ Lowerer::hir_container_element_packed_type(
     // The element's own packed type when the container keeps it (an
     // element of `row_t r[2]` with `typedef s_t row_t[3]`).
     if (element.selected_type != nullptr) {
-        if (const auto nominal = semantic::sv::nominal_identity_type(
-                element.selected_type->element_nominal_type)) {
+        if (const auto nominal = semantic::sv::nominal_index_type(
+                element.selected_type->element_nominal_type_id)) {
             semantic::sv::TypeReference reference;
             reference.target.target = *nominal;
             return reference;
@@ -10940,7 +10954,8 @@ Lowerer::hir_sv_runtime_container_read_profile(
                     const auto reference
                         = resolver.effective_systemverilog_type(
                               input, use_scope).value_or(input);
-                    if (reference.target.spelling == "time") {
+                    if (reference.builtin
+                        == support::SystemVerilogBuiltinType::time) {
                         return true;
                     }
                     if (!reference.target.target.valid()
@@ -11023,20 +11038,13 @@ Lowerer::hir_sv_runtime_container_read_profile(
 
     const auto resolver = hir_resolver();
     std::unordered_set<std::uint32_t> visiting;
-    const auto builtin_four_state = [](const std::string_view spelling)
+    const auto builtin_four_state
+        = [](const support::SystemVerilogBuiltinType kind)
         -> std::optional<bool> {
-        const auto descriptor
-            = frontend::systemverilog_integral_type_descriptor(spelling);
-        if (!descriptor) {
+        if (!support::systemverilog_integral(kind)) {
             return std::nullopt;
         }
-        if (descriptor->domain == frontend::ValueDomain::Logic4) {
-            return true;
-        }
-        if (descriptor->domain == frontend::ValueDomain::Bit2) {
-            return false;
-        }
-        return std::nullopt;
+        return support::systemverilog_four_state(kind);
     };
     const auto four_state = [&](const auto& self,
                                 const semantic::sv::TypeReference& input,
@@ -11047,10 +11055,7 @@ Lowerer::hir_sv_runtime_container_read_profile(
         if (reference.container_form) {
             return std::nullopt;
         }
-        const auto spelling = std::string_view {
-            reference.target.spelling
-        };
-        if (spelling == "time") {
+        if (reference.builtin == support::SystemVerilogBuiltinType::time) {
             return true;
         }
         if (reference.target.target.valid()) {
@@ -11084,7 +11089,7 @@ Lowerer::hir_sv_runtime_container_read_profile(
                     // Use the frontend's single authoritative builtin-domain
                     // table even when HIR carries a synthetic typedef.
                     if (const auto builtin
-                        = builtin_four_state(spelling)) {
+                        = builtin_four_state(reference.builtin)) {
                         result = *builtin;
                     } else if (type_declaration
                         && type_declaration->systemverilog != nullptr
@@ -11135,7 +11140,7 @@ Lowerer::hir_sv_runtime_container_read_profile(
 
         // Resolve builtin spelling before value_form: an enum base can
         // retain the outer enum's form while naming a primitive type.
-        if (const auto builtin = builtin_four_state(spelling)) {
+        if (const auto builtin = builtin_four_state(reference.builtin)) {
             return builtin;
         }
         if (reference.value_form
@@ -11478,7 +11483,6 @@ Lowerer::hir_container_aggregate_selection(
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
     }
-    constexpr auto prefix = std::string_view { "@sv-select:" };
     std::vector<std::string_view> names;
     auto base = expression_id;
     for (;;) {
@@ -11486,12 +11490,13 @@ Lowerer::hir_container_aggregate_selection(
         if (!expression || expression->systemverilog == nullptr
             || expression->systemverilog->kind
                 != semantic::sv::ExpressionKind::call
-            || !expression->systemverilog->text.starts_with(prefix)
+            || expression->systemverilog->marker
+                != support::ExpressionMarker::sv_select
             || expression->systemverilog->operands.size() != 1U) {
             break;
         }
-        const auto name = std::string_view {
-            expression->systemverilog->text }.substr(prefix.size());
+        const std::string_view name {
+            expression->systemverilog->marker_argument };
         if (name.empty()) {
             return std::nullopt;
         }
@@ -11856,7 +11861,8 @@ Lowerer::hir_static_container_expression_type(
     }
     // A cast to an unpacked array or queue type (6.24.3).
     if (source.kind == semantic::sv::ExpressionKind::call
-        && source.text.starts_with("@sv-cast:")
+        && source.marker
+            == support::ExpressionMarker::sv_cast
         && source.operands.size() == 1U) {
         if (const auto type
             = hir_systemverilog_cast_type(expression_id, true);
@@ -12154,18 +12160,16 @@ Lowerer::hir_systemverilog_array_query_shape(
                 return std::nullopt;
             }
         } else {
-            const auto& name = leaf->target.spelling;
-            const bool integral = name == "bit" || name == "logic"
-                || name == "reg" || name == "byte" || name == "shortint"
-                || name == "int" || name == "integer" || name == "longint"
-                || name == "time"
+            const auto builtin = leaf->builtin;
+            const bool integral = support::systemverilog_integral(builtin)
                 || leaf->value_form == semantic::sv::TypeForm::packed_integral
                 || leaf->value_form == semantic::sv::TypeForm::enumeration
                 || leaf->value_form == semantic::sv::TypeForm::packed_structure
                 || leaf->value_form == semantic::sv::TypeForm::packed_union;
             // A string element counts as one dimension of variable size
             // (IEEE 1800-2017 20.7).
-            if (name == "string" && result.unpacked_dimensions != 0U) {
+            if (builtin == support::SystemVerilogBuiltinType::string
+                && result.unpacked_dimensions != 0U) {
                 append_dimension({ 0, 0, false }, true);
                 return result;
             }
@@ -12178,7 +12182,7 @@ Lowerer::hir_systemverilog_array_query_shape(
             }
             // A single-bit scalar (`bit`, `logic`, `reg`) has no packed
             // dimension, unlike `int` (IEEE 1800-2017 20.7).
-            if ((name == "bit" || name == "logic" || name == "reg")
+            if (support::systemverilog_integer_vector(builtin)
                 && result.unpacked_dimensions != 0U) {
                 return result;
             }
@@ -12210,19 +12214,15 @@ Lowerer::hir_systemverilog_array_query_shape(
         return shape;
     };
     // The class-property resolver rewrites `items[i]` to a normalized call
-    // carrying the member identity (`@sv-container-index:<property>`). For
+    // carrying the member identity (the container-index marker). For
     // query purposes, recover that property's retained declaration shape,
     // then peel the one or more indices already represented by the call.
-    constexpr std::string_view indexed_container {
-        "@sv-container-index:"
-    };
     if (source.kind == semantic::sv::ExpressionKind::call
-        && source.text.starts_with(indexed_container)) {
+        && source.marker == support::ExpressionMarker::sv_container_index) {
         if (source.operands.size() < 2U) {
             return std::nullopt;
         }
-        const auto identity = std::string_view { source.text }.substr(
-            indexed_container.size());
+        const std::string_view identity { source.marker_argument };
         const auto* property = resolver.resolve_systemverilog_class_property(
             std::string { identity }, false).unique();
         if (property == nullptr) {
@@ -12302,30 +12302,28 @@ Lowerer::hir_systemverilog_array_query_shape(
     }
     // A member of a structure property (`p.m`).
     if (source.kind == semantic::sv::ExpressionKind::call
-        && source.text.starts_with("@sv-select:")) {
+        && source.marker
+            == support::ExpressionMarker::sv_select) {
         const auto member = hir_systemverilog_value_type(expression_id);
         return member ? shape_for_reference(*member, source.scope)
                       : std::nullopt;
     }
-    constexpr std::string_view container_property {
-        "@sv-container-property:"
-    };
-    constexpr std::string_view scalar_property { "@sv-property:" };
+    const bool container_property_call = source.marker
+        == support::ExpressionMarker::sv_container_property;
     const bool static_property = source.kind
         == semantic::sv::ExpressionKind::class_static_property;
     const bool property_receiver = source.kind
             == semantic::sv::ExpressionKind::class_property
-        || static_property || source.text.starts_with(container_property);
+        || static_property || container_property_call;
     if (source.kind != semantic::sv::ExpressionKind::name
         && !property_receiver) {
         return std::nullopt;
     }
     const auto property_identity = !source.class_member_identity.empty()
         ? std::string_view { source.class_member_identity }
-        : source.text.starts_with(container_property)
-        ? std::string_view { source.text }.substr(container_property.size())
-        : source.text.starts_with(scalar_property)
-        ? std::string_view { source.text }.substr(scalar_property.size())
+        : container_property_call
+            || source.marker == support::ExpressionMarker::sv_property
+        ? std::string_view { source.marker_argument }
         : std::string_view { };
     const auto* property = property_receiver && !property_identity.empty()
         ? resolver.resolve_systemverilog_class_property(
@@ -12477,16 +12475,12 @@ Lowerer::hir_systemverilog_container_query(
         : hir_static_container_expression_type(receiver);
     // A fixed-size array property of a class object (`obj.a`, IEEE
     // 1800-2017 7.11, 8.4) has the static bounds of its type.
-    constexpr std::string_view container_property {
-        "@sv-container-property:"
-    };
     if (!named_type_declaration && !selected_type && receiver_expression
         && receiver_expression->systemverilog != nullptr
-        && receiver_expression->systemverilog->text.starts_with(
-            container_property)) {
+        && receiver_expression->systemverilog->marker
+            == support::ExpressionMarker::sv_container_property) {
         if (auto type = hir_class_value_container_type(
-                std::string_view { receiver_expression->systemverilog->text }
-                    .substr(container_property.size()));
+                receiver_expression->systemverilog->marker_argument);
             type && type->fixed) {
             selected_type = std::move(type);
         }
@@ -12766,18 +12760,16 @@ Lowerer::hir_vhdl_qualified_integer_vector_subtype(
     }
     const auto expression = specialized_hir_unit_->find_expression(
         expression_id);
-    constexpr auto qualified_prefix
-        = semantic::vhdl::qualified_expression_prefix;
     if (!expression || expression->vhdl == nullptr
         || expression->vhdl->kind != semantic::vhdl::ExpressionKind::call
-        || !expression->vhdl->text.starts_with(qualified_prefix)
+        || expression->vhdl->marker
+            != support::ExpressionMarker::vhdl_qualified
         || expression->vhdl->operands.size() != 1U) {
         return std::nullopt;
     }
 
     semantic::vhdl::SubtypeIndication result;
-    result.type_mark.spelling = expression->vhdl->text.substr(
-        qualified_prefix.size());
+    result.type_mark.spelling = expression->vhdl->marker_argument;
     if (!hir_vhdl_unshadowed_integer_vector(
             *specialized_hir_unit_, result, expression->vhdl->scope,
             hir_generic_binding_frames_)) {
@@ -12902,12 +12894,10 @@ Lowerer::hir_string_binding(
             || source.type->value_form == semantic::sv::TypeForm::enumeration) {
             return false;
         }
-        static constexpr std::string_view builtin[] {
-            "logic", "bit", "reg", "int", "integer", "byte", "shortint",
-            "longint", "real", "shortreal", "realtime", "time", "event",
-        };
-        if (std::ranges::find(builtin, source.type->target.spelling)
-            != std::ranges::end(builtin)) {
+        const auto builtin_kind = source.type->builtin;
+        if (support::systemverilog_integral(builtin_kind)
+            || support::systemverilog_real_family(builtin_kind)
+            || builtin_kind == support::SystemVerilogBuiltinType::event) {
             return false;
         }
         const auto bound = hir_resolver().effective_systemverilog_type(
@@ -13138,7 +13128,9 @@ bool Lowerer::hir_expression_is_string(
             : std::nullopt;
         cast && cast->systemverilog != nullptr
         && cast->systemverilog->kind == semantic::sv::ExpressionKind::call
-        && ((cast_type && cast_type->target.spelling == "string")
+        && ((cast_type
+            && cast_type->builtin
+                == support::SystemVerilogBuiltinType::string)
             // $typename returns a string (IEEE 1800-2017 20.6.1).
             || cast->systemverilog->text == "$typename"
             || (cast->systemverilog->text == ".get_randstate"
@@ -13235,13 +13227,12 @@ bool Lowerer::hir_expression_is_string(
             return true;
         }
         const auto& element = *expression->systemverilog;
-        constexpr std::string_view element_prefix { "@sv-container-index:" };
         if (element.kind == semantic::sv::ExpressionKind::call
-            && element.text.starts_with(element_prefix)
+            && element.marker
+                == support::ExpressionMarker::sv_container_index
             && element.operands.size() == 2U) {
             const auto type = hir_class_value_container_type(
-                std::string_view { element.text }.substr(
-                    element_prefix.size()));
+                element.marker_argument);
             if (type && type->element_kind == ContainerElementKind::String) {
                 return true;
             }
@@ -13263,7 +13254,8 @@ bool Lowerer::hir_expression_is_string(
             || api == frontend::VhdlSimulatorApi::get_vhdl_assert_format;
         const bool dereferenced_getenv
             = source.kind == semantic::vhdl::ExpressionKind::call
-            && source.text == "@vhdl-dereference"
+            && source.marker
+                == support::ExpressionMarker::vhdl_dereference
             && source.operands.size() == 1U
             && [&] {
                    const auto operand
@@ -13276,7 +13268,8 @@ bool Lowerer::hir_expression_is_string(
                }();
         const bool dereferenced_string_object
             = source.kind == semantic::vhdl::ExpressionKind::call
-            && source.text == "@vhdl-dereference"
+            && source.marker
+                == support::ExpressionMarker::vhdl_dereference
             && source.operands.size() == 1U
             && [&] {
                    const auto declaration = hir_target_declaration(
@@ -13322,8 +13315,8 @@ bool Lowerer::hir_expression_is_string(
         }
         if (source.kind == semantic::vhdl::ExpressionKind::call
             && source.operands.size() == 1U
-            && source.text.starts_with(
-                semantic::vhdl::qualified_expression_prefix)) {
+            && source.marker
+                == support::ExpressionMarker::vhdl_qualified) {
             const auto subtype = hir_vhdl_expression_subtype(expression_id);
             if (subtype && hir_vhdl_predefined_string_type(*subtype)) {
                 // A positional STRING aggregate of STRING pieces and
@@ -13462,7 +13455,8 @@ bool Lowerer::hir_expression_is_string(
         const bool member_string_selection
             = source.kind == semantic::vhdl::ExpressionKind::call
             && source.operands.size() == 1U
-            && source.text.starts_with("@vhdl-member:");
+            && source.marker
+                == support::ExpressionMarker::vhdl_member;
         if (dotted_string_selection || selected_string_callable
             || member_string_selection) {
             const auto subtype = hir_vhdl_expression_subtype(expression_id);
@@ -13637,7 +13631,8 @@ bool Lowerer::hir_expression_is_string(
     // `{>>{q}}` of strings and string queues or arrays streams their
     // characters left to right (IEEE 1800-2017 11.4.14, 6.24.3).
     if (source.kind == semantic::sv::ExpressionKind::call
-        && source.text == "@stream-right" && source.operands.size() >= 2U) {
+        && source.marker == support::ExpressionMarker::stream_right
+        && source.operands.size() >= 2U) {
         return std::all_of(
             source.operands.begin() + 1, source.operands.end(),
             [&](const semantic::ExpressionId operand) {
@@ -13716,7 +13711,8 @@ bool Lowerer::hir_expression_is_string(
         if (record && record->systemverilog != nullptr
             && record->systemverilog->type
             && !record->systemverilog->type->implicit) {
-            return record->systemverilog->type->target.spelling == "string"
+            return record->systemverilog->type->builtin
+                    == support::SystemVerilogBuiltinType::string
                 || record->systemverilog->type->value_form
                     == semantic::sv::TypeForm::string;
         }
@@ -13771,7 +13767,8 @@ std::optional<semantic::ExpressionId> Lowerer::hir_vhdl_whole_range_slice(
         const auto record = specialized_hir_unit_->find_expression(id);
         return record && record->vhdl != nullptr
                 && record->vhdl->kind == semantic::vhdl::ExpressionKind::call
-                && record->vhdl->text == "@vhdl-dereference"
+                && record->vhdl->marker
+                    == support::ExpressionMarker::vhdl_dereference
                 && record->vhdl->operands.size() == 1U
             ? record->vhdl->operands.front()
             : id;
@@ -13831,15 +13828,18 @@ bool Lowerer::can_lower_hir_string_expression(
         allocator && allocator->vhdl != nullptr
         && allocator->vhdl->kind == semantic::vhdl::ExpressionKind::call) {
         const auto& source = *allocator->vhdl;
-        if (source.text == "@vhdl-null") {
+        if (source.marker
+            == support::ExpressionMarker::vhdl_null) {
             return true;
         }
-        if (source.text == "@vhdl-new-qualified"
+        if (source.marker
+            == support::ExpressionMarker::vhdl_new_qualified
             && source.operands.size() == 2U) {
             return can_lower_hir_string_expression(
                 source.operands[1], process_scope);
         }
-        if (source.text == "@vhdl-new") {
+        if (source.marker
+            == support::ExpressionMarker::vhdl_new) {
             return hir_vhdl_line_allocator_length(expression).has_value();
         }
     }
@@ -14346,8 +14346,10 @@ Lowerer::hir_vhdl_attribute_profile(
         if (prefix->vhdl->kind == semantic::vhdl::ExpressionKind::index
             || prefix->vhdl->kind == semantic::vhdl::ExpressionKind::slice
             || (prefix->vhdl->kind == semantic::vhdl::ExpressionKind::call
-                && (prefix->vhdl->text.starts_with("@vhdl-member:")
-                    || prefix->vhdl->text == "@vhdl-dereference"
+                && (prefix->vhdl->marker
+                    == support::ExpressionMarker::vhdl_member
+                    || prefix->vhdl->marker
+                        == support::ExpressionMarker::vhdl_dereference
                     || prefix->vhdl->text == "'element"))) {
             auto subtype = hir_vhdl_expression_subtype(
                 source.operands.front());
@@ -14376,6 +14378,7 @@ Lowerer::hir_vhdl_attribute_profile(
         if (prefix->vhdl->kind == semantic::vhdl::ExpressionKind::call
             && !prefix->vhdl->operands.empty()
             && !prefix->vhdl->text.starts_with('\'')
+            && prefix->vhdl->marker == support::ExpressionMarker::none
             && !prefix->vhdl->text.starts_with('@')
             && declaration && declaration->vhdl != nullptr
             && declaration->vhdl->subtype && !declaration->vhdl->callable
@@ -16906,7 +16909,8 @@ Lowerer::hir_vhdl_signal_attribute_profile(
         if (!magnitude && physical && physical->vhdl != nullptr
             && physical->vhdl->kind
                 == semantic::vhdl::ExpressionKind::call
-            && physical->vhdl->text.starts_with("@vhdl-physical:")
+            && physical->vhdl->marker
+                == support::ExpressionMarker::vhdl_physical
             && physical->vhdl->operands.size() == 1U) {
             magnitude = hir_constant_integer(
                 physical->vhdl->operands.front());
@@ -17600,7 +17604,8 @@ std::optional<frontend::ValueDomain> Lowerer::hir_expression_domain(
     if (expression->vhdl != nullptr
         && expression->vhdl->kind
             == semantic::vhdl::ExpressionKind::call
-        && expression->vhdl->text == "@vhdl-null") {
+        && expression->vhdl->marker
+            == support::ExpressionMarker::vhdl_null) {
         return frontend::ValueDomain::Bit2;
     }
     if (hir_vhdl_character_literal_code(expression_id, 0U)) {
@@ -17877,8 +17882,6 @@ std::optional<frontend::ValueDomain> Lowerer::hir_expression_domain(
                     ? frontend::ValueDomain::Bit2 : frontend::ValueDomain::Logic4;
             }
         }
-        constexpr auto container_index_prefix
-            = std::string_view { "@sv-container-index:" };
         if (source.kind == semantic::sv::ExpressionKind::call
             && source.text == "inside") {
             return frontend::ValueDomain::Logic4;
@@ -17916,10 +17919,10 @@ std::optional<frontend::ValueDomain> Lowerer::hir_expression_domain(
             return frontend::ValueDomain::Bit2;
         }
         if (source.kind == semantic::sv::ExpressionKind::call
-            && source.text.starts_with(container_index_prefix)) {
+            && source.marker
+                == support::ExpressionMarker::sv_container_index) {
             const auto type = hir_class_value_container_type(
-                std::string_view { source.text }.substr(
-                    container_index_prefix.size()));
+                source.marker_argument);
             // A subarray of a multidimensional array (`obj.m[1]` of
             // `m[3][4]`) is not a packed value (IEEE 1800-2017 7.4.5).
             if (type && type->fixed
@@ -17934,7 +17937,8 @@ std::optional<frontend::ValueDomain> Lowerer::hir_expression_domain(
             }
             return frontend::ValueDomain::Bit2;
         }
-        if (const auto method = sv_container_method_call(source.text);
+        if (const auto method = sv_container_method_call(
+                source.marker, source.marker_argument);
             method && source.kind == semantic::sv::ExpressionKind::call) {
             if (!method->reduction.empty()) {
                 const auto type = hir_class_value_container_type(
@@ -17946,8 +17950,7 @@ std::optional<frontend::ValueDomain> Lowerer::hir_expression_domain(
             return method->result_domain();
         }
         if (source.kind == semantic::sv::ExpressionKind::call
-            && (source.text == "@stream-left"
-                || source.text == "@stream-right")
+            && sv_stream_marker(source.marker)
             && source.operands.size() >= 2U) {
             auto result = frontend::ValueDomain::Bit2;
             for (std::size_t index = 1U;
@@ -18188,7 +18191,8 @@ std::optional<frontend::ValueDomain> Lowerer::hir_expression_domain(
     } else {
         const auto& source = *expression->vhdl;
         if (source.kind == semantic::vhdl::ExpressionKind::call
-            && source.text == "@vhdl-dereference"
+            && source.marker
+                == support::ExpressionMarker::vhdl_dereference
             && source.operands.size() == 1U) {
             const auto access_subtype = hir_vhdl_expression_subtype(
                 source.operands.front());
@@ -18577,10 +18581,25 @@ bool Lowerer::hir_vhdl_expression_is_real(
     return subtype && hir_vhdl_subtype_is_real(*subtype);
 }
 
+namespace {
+
+// logic, bit, reg, int, integer and string never name a scalar kind through
+// a typedef chain.
+bool builtin_without_scalar_alias(
+    const support::SystemVerilogBuiltinType kind) noexcept
+{
+    return support::systemverilog_integer_vector(kind)
+        || kind == support::SystemVerilogBuiltinType::int_type
+        || kind == support::SystemVerilogBuiltinType::integer
+        || kind == support::SystemVerilogBuiltinType::string;
+}
+
+}  // namespace
+
 bool Lowerer::hir_type_is_event(const semantic::sv::TypeReference& type,
     const semantic::ScopeId scope) const
 {
-    if (type.target.spelling == "event") {
+    if (type.builtin == support::SystemVerilogBuiltinType::event) {
         return true;
     }
     if (specialized_hir_unit_ == nullptr || type.target.spelling.empty()) {
@@ -18588,7 +18607,8 @@ bool Lowerer::hir_type_is_event(const semantic::sv::TypeReference& type,
     }
     const auto underlying
         = hir_resolver().underlying_systemverilog_type(type, scope);
-    return underlying && underlying->target.spelling == "event";
+    return underlying
+        && underlying->builtin == support::SystemVerilogBuiltinType::event;
 }
 
 bool Lowerer::hir_class_property_is_event(
@@ -18610,19 +18630,18 @@ frontend::SystemVerilogScalarKind Lowerer::hir_declared_type_scalar_kind(
 {
     using Kind = frontend::SystemVerilogScalarKind;
     const auto& spelling = type.target.spelling;
-    const auto direct = frontend::systemverilog_scalar_kind(spelling);
+    const auto direct = frontend::systemverilog_scalar_kind(type.builtin);
     if (direct != Kind::None || specialized_hir_unit_ == nullptr
         || type.container_form || !type.packed_dimensions.empty()
         || type.packed_range || spelling.empty() || type.implicit
-        || spelling == "logic" || spelling == "bit" || spelling == "reg"
-        || spelling == "int" || spelling == "integer" || spelling == "string") {
+        || builtin_without_scalar_alias(type.builtin)) {
         return direct;
     }
     const auto underlying
         = hir_resolver().underlying_systemverilog_type(type, scope);
     return underlying && !underlying->container_form
             && underlying->packed_dimensions.empty() && !underlying->packed_range
-        ? frontend::systemverilog_scalar_kind(underlying->target.spelling)
+        ? frontend::systemverilog_scalar_kind(underlying->builtin)
         : Kind::None;
 }
 
@@ -18730,13 +18749,10 @@ frontend::SystemVerilogScalarKind Lowerer::hir_systemverilog_scalar_kind(
         if (!record.type) {
             return Kind::None;
         }
-        const auto kind
-            = frontend::systemverilog_scalar_kind(record.type->target.spelling);
-        const auto& spelling = record.type->target.spelling;
-        if (kind != Kind::None || spelling.empty() || record.type->implicit
-            || spelling == "logic" || spelling == "bit" || spelling == "reg"
-            || spelling == "int" || spelling == "integer"
-            || spelling == "string") {
+        const auto kind = frontend::systemverilog_scalar_kind(record.type->builtin);
+        if (kind != Kind::None || record.type->target.spelling.empty()
+            || record.type->implicit
+            || builtin_without_scalar_alias(record.type->builtin)) {
             return kind;
         }
         // A type parameter or alias of a real type (6.20.3).
@@ -18744,7 +18760,7 @@ frontend::SystemVerilogScalarKind Lowerer::hir_systemverilog_scalar_kind(
         const auto underlying = resolver.underlying_systemverilog_type(
             *record.type, record.scope);
         return underlying
-            ? frontend::systemverilog_scalar_kind(underlying->target.spelling)
+            ? frontend::systemverilog_scalar_kind(underlying->builtin)
             : Kind::None;
     };
 
@@ -18837,7 +18853,8 @@ frontend::SystemVerilogScalarKind Lowerer::hir_systemverilog_scalar_kind(
     if (source.kind == semantic::sv::ExpressionKind::name
         || source.kind == semantic::sv::ExpressionKind::index
         || (source.kind == semantic::sv::ExpressionKind::call
-            && source.text.starts_with("@sv-select:"))) {
+            && source.marker
+                == support::ExpressionMarker::sv_select)) {
         if (const auto member = hir_container_aggregate_selection(
                 expression_id);
             member
@@ -18877,7 +18894,8 @@ frontend::SystemVerilogScalarKind Lowerer::hir_systemverilog_scalar_kind(
     // A user function call has its declared return type, including one
     // reached through a package import.
     if (source.kind == semantic::sv::ExpressionKind::call
-        && !source.text.starts_with("$") && !source.text.starts_with("@")
+        && source.marker == support::ExpressionMarker::none
+        && source.call_kind != semantic::sv::CallKind::system && !source.text.starts_with("@")
         && source.text != "?:") {
         if (const auto callee_id = hir_referenced_declaration(expression_id)) {
             const auto callee = specialized_hir_unit_->find_declaration(
@@ -18990,7 +19008,8 @@ Lowerer::hir_systemverilog_parameter_type(
             && !source.type->packed_range)
         || source.type->container_form
         || source.type->value_form == semantic::sv::TypeForm::string
-        || source.type->target.spelling == "string") {
+        || source.type->builtin
+            == support::SystemVerilogBuiltinType::string) {
         return std::nullopt;
     }
     return *source.type;
@@ -19867,11 +19886,10 @@ void Lowerer::classify_hir_vhdl_character_literal(
             }
         } else if (expression.kind == semantic::vhdl::ExpressionKind::call
             && operands.size() == 1U
-            && expression.text.starts_with(
-                semantic::vhdl::qualified_expression_prefix)) {
+            && expression.marker
+                == support::ExpressionMarker::vhdl_qualified) {
             semantic::vhdl::SubtypeIndication qualified;
-            qualified.type_mark.spelling = expression.text.substr(
-                semantic::vhdl::qualified_expression_prefix.size());
+            qualified.type_mark.spelling = expression.marker_argument;
             if (vhdl_predefined_character_subtype(
                     *specialized_hir_unit_, qualified, expression.scope,
                     hir_generic_binding_frames_)) {
@@ -20923,7 +20941,8 @@ bool Lowerer::hir_vhdl_runtime_string_prefix(const semantic::ExpressionId prefix
     if (access_dereference && access_dereference->vhdl != nullptr
         && access_dereference->vhdl->kind
             == semantic::vhdl::ExpressionKind::call
-        && access_dereference->vhdl->text == "@vhdl-dereference"
+        && access_dereference->vhdl->marker
+            == support::ExpressionMarker::vhdl_dereference
         && access_dereference->vhdl->operands.size() == 1U) {
         const auto access_subtype = hir_vhdl_expression_subtype(
             access_dereference->vhdl->operands.front());
@@ -21014,10 +21033,10 @@ std::optional<std::string> Lowerer::hir_vhdl_physical_unit_name(
         return std::nullopt;
     }
     const auto& source = *expression->vhdl;
-    constexpr std::string_view prefix { "@vhdl-physical:" };
     if (source.kind == semantic::vhdl::ExpressionKind::call
-        && source.text.starts_with(prefix) && source.operands.size() == 1U) {
-        return source.text.substr(prefix.size());
+        && source.marker == support::ExpressionMarker::vhdl_physical
+        && source.operands.size() == 1U) {
+        return source.marker_argument;
     }
     if (source.kind == semantic::vhdl::ExpressionKind::name
         && !source.text.empty()
@@ -21470,7 +21489,8 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
             expression_id);
         external && external->vhdl != nullptr
         && external->vhdl->kind == semantic::vhdl::ExpressionKind::call
-        && external->vhdl->text == "@vhdl-external") {
+        && external->vhdl->marker
+            == support::ExpressionMarker::vhdl_external) {
         if (const auto signal = hir_vhdl_external_signal_lookup(expression_id);
             signal && *signal < design_.signals_.size()) {
             return design_.signals_[*signal].initial_value.width();
@@ -21483,8 +21503,8 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
         qualified && qualified->vhdl != nullptr
         && qualified->vhdl->kind == semantic::vhdl::ExpressionKind::call
         && qualified->vhdl->operands.size() == 1U
-        && qualified->vhdl->text.starts_with(
-            semantic::vhdl::qualified_expression_prefix)) {
+        && qualified->vhdl->marker
+            == support::ExpressionMarker::vhdl_qualified) {
         // `T'(aggregate)` of a record type T has the element bounds its
         // values give (IEEE 1076-2008 9.3.5, 9.3.3.2), not its context's.
         const auto operand = specialized_hir_unit_->find_expression(
@@ -21495,8 +21515,7 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
             && root && root->first == semantic::vhdl::TypeForm::record) {
             semantic::vhdl::SubtypeIndication record;
             record.type_mark.target = root->second;
-            record.type_mark.spelling = qualified->vhdl->text.substr(
-                semantic::vhdl::qualified_expression_prefix.size());
+            record.type_mark.spelling = qualified->vhdl->marker_argument;
             if (const auto completed = hir_vhdl_initialized_object_subtype(
                     qualified->vhdl->operands.front(), record,
                     qualified->vhdl->scope.valid() ? qualified->vhdl->scope
@@ -21732,6 +21751,7 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
                 == semantic::vhdl::ExpressionKind::binary
             || expression->vhdl->kind
                 == semantic::vhdl::ExpressionKind::unary)
+        && expression->vhdl->marker == support::ExpressionMarker::none
         && !expression->vhdl->text.starts_with('@')
         && hir_vhdl_record_result_possible(*expression->vhdl)
         && hir_vhdl_record_result_width_frames_.insert(
@@ -21751,7 +21771,8 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
     if (expression->vhdl != nullptr
         && expression->vhdl->kind
             == semantic::vhdl::ExpressionKind::call
-        && expression->vhdl->text == "@vhdl-null") {
+        && expression->vhdl->marker
+            == support::ExpressionMarker::vhdl_null) {
         return 32U;
     }
     if (hir_vhdl_character_literal_code(expression_id, 0U)) {
@@ -21892,7 +21913,8 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
     if (expression->vhdl != nullptr
         && expression->vhdl->kind
             == semantic::vhdl::ExpressionKind::call
-        && expression->vhdl->text == "@vhdl-dereference"
+        && expression->vhdl->marker
+            == support::ExpressionMarker::vhdl_dereference
         && expression->vhdl->operands.size() == 1U) {
         const auto subtype = hir_vhdl_expression_subtype_ref(expression_id);
         return subtype ? vhdl_subtype_width(*subtype) : std::nullopt;
@@ -22325,8 +22347,6 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
                 return receiver->type->element_width;
             }
         }
-        constexpr auto container_index_prefix
-            = std::string_view { "@sv-container-index:" };
         if (source.kind == semantic::sv::ExpressionKind::call
             && source.text == "inside") {
             return 1U;
@@ -22363,7 +22383,7 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
         if (source.kind == semantic::sv::ExpressionKind::call
             && (source.text == "$get_coverage"
                 || source.text == "$get_inst_coverage"
-                || frontend::is_coverage_query_call(source.text))) {
+                || frontend::is_coverage_query(source.marker))) {
             return 64U;
         }
         if (const auto function = hir_systemverilog_math_function(
@@ -22377,12 +22397,12 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
                 : 64U;
         }
         if (source.kind == semantic::sv::ExpressionKind::call
-            && source.text.starts_with(container_index_prefix)) {
+            && source.marker
+                == support::ExpressionMarker::sv_container_index) {
             // An element of an array of values has its element width; one
             // of an array of class handles is a handle.
             const auto type = hir_class_value_container_type(
-                std::string_view { source.text }.substr(
-                    container_index_prefix.size()));
+                source.marker_argument);
             // A subarray of a multidimensional array is not a packed value
             // (IEEE 1800-2017 7.4.5).
             if (type && type->fixed
@@ -22424,7 +22444,8 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
             && source.text == "$clog2" && source.operands.size() == 1U) {
             return 32U;
         }
-        if (const auto method = sv_container_method_call(source.text);
+        if (const auto method = sv_container_method_call(
+                source.marker, source.marker_argument);
             method && source.kind == semantic::sv::ExpressionKind::call) {
             if (!method->reduction.empty()) {
                 const auto type = hir_class_value_container_type(
@@ -22436,8 +22457,7 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
             return method->result_width();
         }
         if (source.kind == semantic::sv::ExpressionKind::call
-            && (source.text == "@stream-left"
-                || source.text == "@stream-right")
+            && sv_stream_marker(source.marker)
             && source.operands.size() >= 2U) {
             std::size_t width { };
             for (std::size_t index = 1U;
@@ -23159,7 +23179,8 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
         const auto element = member && member->systemverilog != nullptr
                 && member->systemverilog->kind
                     == semantic::sv::ExpressionKind::call
-                && member->systemverilog->text.starts_with("@sv-select:")
+                && member->systemverilog->marker
+                    == support::ExpressionMarker::sv_select
                 && member->systemverilog->operands.size() == 1U
             ? specialized_hir_unit_->find_expression(
                   member->systemverilog->operands.front())
@@ -23264,7 +23285,7 @@ std::optional<std::size_t> Lowerer::hir_systemverilog_type_width(
         }
         // An event value outside the module scope is the handle of its
         // event object (IEEE 1800-2017 15.5).
-        if (reference.target.spelling == "event"
+        if (reference.builtin == support::SystemVerilogBuiltinType::event
             && reference.unpacked_dimensions.empty()
             && !reference.container_form) {
             return 64U;
@@ -23273,9 +23294,7 @@ std::optional<std::size_t> Lowerer::hir_systemverilog_type_width(
         // `logic [N:1][3:0]`: the product of every packed dimension's
         // extent, each folded in this specialization (7.4.1).
         if (reference.packed_dimensions.size() > 1U
-            && (reference.target.spelling == "logic"
-                || reference.target.spelling == "bit"
-                || reference.target.spelling == "reg")) {
+            && support::systemverilog_integer_vector(reference.builtin)) {
             std::size_t product { 1U };
             for (const auto& dimension : reference.packed_dimensions) {
                 const auto left = hir_range_left(dimension);
@@ -23325,16 +23344,10 @@ std::optional<std::size_t> Lowerer::hir_systemverilog_type_width(
             // A packed array of a named packed type (`un_t [7:0]`) has
             // elements of that type's width (IEEE 1800-2017 7.4.1).
             const auto& spelling = reference.target.spelling;
-            if (!spelling.empty() && spelling != "logic" && spelling != "bit"
-                && spelling != "reg" && reference.packed_dimensions.size() <= 1U
-                && spelling != "int" && spelling != "integer"
-                && spelling != "byte" && spelling != "shortint"
-                && spelling != "longint" && spelling != "time"
-                && spelling != "wire" && spelling != "signed"
-                && spelling != "unsigned" && spelling != "struct"
-                && spelling != "union" && spelling != "enum"
-                && !spelling.starts_with('@')
-                && spelling.find(' ') == std::string::npos) {
+            if (!spelling.empty() && reference.named
+                && !support::systemverilog_integral(reference.builtin)
+                && reference.packed_dimensions.size() <= 1U
+                && reference.net_kind != support::SystemVerilogNetKind::wire) {
                 auto element = reference;
                 element.packed_range.reset();
                 element.packed_dimensions.clear();
@@ -23464,19 +23477,10 @@ std::optional<std::size_t> Lowerer::hir_systemverilog_type_width(
                 *reference.executable_width);
         }
         if (!width) {
-            const auto spelling
-                = std::string_view { reference.target.spelling };
-            if (spelling == "bit" || spelling == "logic"
-                || spelling == "reg") {
-                width = 1U;
-            } else if (spelling == "byte") {
-                width = 8U;
-            } else if (spelling == "shortint") {
-                width = 16U;
-            } else if (spelling == "int" || spelling == "integer") {
-                width = 32U;
-            } else if (spelling == "longint" || spelling == "time") {
-                width = 64U;
+            if (const auto builtin_width
+                = support::systemverilog_builtin_width(reference.builtin);
+                builtin_width != 0U) {
+                width = builtin_width;
             }
         }
         if (!width || reference.container_form != semantic::sv::TypeForm::static_array) {
@@ -23605,20 +23609,27 @@ Lowerer::hir_systemverilog_cast_type(
     const auto expression = specialized_hir_unit_ != nullptr
         ? specialized_hir_unit_->find_expression(expression_id)
         : std::nullopt;
-    constexpr auto prefix = std::string_view { "@sv-cast:" };
     if (!expression || expression->systemverilog == nullptr) {
         return std::nullopt;
     }
     const auto& source = *expression->systemverilog;
     if (source.kind != semantic::sv::ExpressionKind::call
-        || !source.text.starts_with(prefix)
+        || source.marker != support::ExpressionMarker::sv_cast
         || source.operands.size() != 1U) {
         return std::nullopt;
     }
-    const auto name = std::string_view { source.text }.substr(prefix.size());
+    const std::string_view name { source.marker_argument };
     semantic::sv::TypeReference type;
     type.target.spelling = name;
-    if (name == "@type") {
+    // The parser typed the cast target (IEEE 1800-2023 6.24.1).
+    const auto cast_builtin = source.cast_target
+            == support::SystemVerilogCastTarget::builtin
+        ? source.cast_builtin
+        : support::SystemVerilogBuiltinType::none;
+    if (cast_builtin != support::SystemVerilogBuiltinType::none) {
+        semantic::sv::set_builtin_type(type, cast_builtin);
+    }
+    if (source.cast_target == support::SystemVerilogCastTarget::type_operator) {
         // `type(...)'(x)` (6.23): the operator's type in this
         // specialization.
         if (source.type_operand.empty()) {
@@ -23631,13 +23642,16 @@ Lowerer::hir_systemverilog_cast_type(
         if (type.type_of) {
             return std::nullopt;
         }
-    } else if (name != "string" && name != "real" && name != "shortreal"
-        && name != "realtime") {
+    } else if (source.cast_target == support::SystemVerilogCastTarget::named) {
         const auto named = hir_systemverilog_named_type(name, source.scope);
         if (!named) {
             return std::nullopt;
         }
         type = *named;
+    } else if (cast_builtin != support::SystemVerilogBuiltinType::string
+        && !support::systemverilog_real_family(cast_builtin)) {
+        // Integral, signing, const and size targets have no type here.
+        return std::nullopt;
     }
     // An unpacked array of strings or reals is not a scalar cast target.
     if (!containers
@@ -23696,7 +23710,6 @@ Lowerer::hir_systemverilog_cast_profile(
         return std::nullopt;
     }
     const auto& source = *expression->systemverilog;
-    constexpr auto prefix = std::string_view { "@sv-cast:" };
     const auto value_operand
         = semantic::sv::systemverilog_cast_value_operand(source);
     const auto size_operand
@@ -23704,7 +23717,8 @@ Lowerer::hir_systemverilog_cast_profile(
     const bool expression_size_cast
         = semantic::sv::is_expression_size_cast(source);
     if (source.kind != semantic::sv::ExpressionKind::call
-        || (!expression_size_cast && !source.text.starts_with(prefix))
+        || (!expression_size_cast
+            && source.marker != support::ExpressionMarker::sv_cast)
         || !value_operand) {
         return std::nullopt;
     }
@@ -23718,7 +23732,7 @@ Lowerer::hir_systemverilog_cast_profile(
             && size_view->systemverilog != nullptr
             && size_view->systemverilog->kind
                 == semantic::sv::ExpressionKind::call
-            && size_view->systemverilog->text.starts_with("$");
+            && size_view->systemverilog->call_kind == semantic::sv::CallKind::system;
         if (!hir_systemverilog_size_cast_operand_is_integral(operand)
             || (!size_query
                 && !hir_systemverilog_size_cast_operand_is_integral(
@@ -23748,12 +23762,10 @@ Lowerer::hir_systemverilog_cast_profile(
             std::nullopt,
         };
     }
-    const auto type_name = std::string_view { source.text }.substr(
-        prefix.size());
-    if (type_name.empty()) {
-        return std::nullopt;
-    }
-    if (type_name == "@type") {
+    using CastTarget = support::SystemVerilogCastTarget;
+    using CastBuiltin = support::SystemVerilogBuiltinType;
+    const std::string_view type_name { source.marker_argument };
+    if (source.cast_target == CastTarget::type_operator) {
         if (source.type_operand.empty()) {
             return std::nullopt;
         }
@@ -23782,47 +23794,43 @@ Lowerer::hir_systemverilog_cast_profile(
         };
     }
 
-    const auto builtin = [&]()
-        -> std::optional<HirSystemVerilogCastProfile> {
-        if (type_name == "bit") {
+    if (source.cast_target == CastTarget::builtin) {
+        const auto kind = source.cast_builtin;
+        if (kind == CastBuiltin::bit) {
             return HirSystemVerilogCastProfile {
                 1U, frontend::ValueDomain::Bit2, false, std::nullopt
             };
         }
-        if (type_name == "logic" || type_name == "reg") {
+        if (kind == CastBuiltin::logic || kind == CastBuiltin::reg) {
             return HirSystemVerilogCastProfile {
                 1U, frontend::ValueDomain::Logic4, false, std::nullopt
             };
         }
-        if (type_name == "byte" || type_name == "shortint"
-            || type_name == "int" || type_name == "longint") {
-            const auto width = type_name == "byte" ? 8U
-                : type_name == "shortint"          ? 16U
-                : type_name == "int"               ? 32U
-                                                   : 64U;
+        if (kind == CastBuiltin::byte || kind == CastBuiltin::shortint
+            || kind == CastBuiltin::int_type
+            || kind == CastBuiltin::longint) {
             return HirSystemVerilogCastProfile {
-                width, frontend::ValueDomain::Integer, true, std::nullopt
+                support::systemverilog_builtin_width(kind),
+                frontend::ValueDomain::Integer, true, std::nullopt
             };
         }
-        if (type_name == "integer") {
+        if (kind == CastBuiltin::integer) {
             return HirSystemVerilogCastProfile {
                 32U, frontend::ValueDomain::Logic4, true, std::nullopt
             };
         }
-        if (type_name == "time") {
+        if (kind == CastBuiltin::time) {
             return HirSystemVerilogCastProfile {
                 64U, frontend::ValueDomain::Logic4, false, std::nullopt
             };
         }
         return std::nullopt;
-    }();
-    if (builtin) {
-        return builtin;
     }
     // `signed'(x)` and `unsigned'(x)` change only the signedness, and
     // `const'(x)` nothing; the operand keeps its width (6.24.1).
-    if (type_name == "signed" || type_name == "unsigned"
-        || type_name == "const") {
+    if (source.cast_target == CastTarget::signed_type
+        || source.cast_target == CastTarget::unsigned_type
+        || source.cast_target == CastTarget::constant) {
         const auto width = hir_expression_width(operand, hir_process_scope_);
         if (!width || *width == 0U) {
             return std::nullopt;
@@ -23831,18 +23839,21 @@ Lowerer::hir_systemverilog_cast_profile(
             *width,
             hir_expression_domain(operand, hir_process_scope_)
                 .value_or(frontend::ValueDomain::Logic4),
-            type_name == "const" ? hir_expression_signed(operand)
-                                 : type_name == "signed",
+            source.cast_target == CastTarget::constant
+                ? hir_expression_signed(operand)
+                : source.cast_target == CastTarget::signed_type,
             std::nullopt,
         };
     }
 
-    // SystemVerilog sized casts use a decimal constant as the type spelling,
-    // for example `3'(value)`.  The frontend retains that spelling in the
-    // synthetic cast call, rather than manufacturing a declaration for it.
-    if (const auto width = unsigned_decimal(type_name);
-        width && *width != 0U
-        && *width <= std::numeric_limits<std::size_t>::max()) {
+    // SystemVerilog sized casts use a decimal constant as the size, for
+    // example `3'(value)`; the parser keeps its digits as the cast argument.
+    if (source.cast_target == CastTarget::size) {
+        const auto width = unsigned_decimal(type_name);
+        if (!width || *width == 0U
+            || *width > std::numeric_limits<std::size_t>::max()) {
+            return std::nullopt;
+        }
         return HirSystemVerilogCastProfile {
             static_cast<std::size_t>(*width),
             hir_expression_domain(operand, hir_process_scope_)
@@ -23850,6 +23861,11 @@ Lowerer::hir_systemverilog_cast_profile(
             hir_expression_signed(operand),
             std::nullopt,
         };
+    }
+    // Every other target is a type name: a size constant, typedef, class or
+    // type parameter.
+    if (source.cast_target != CastTarget::named || type_name.empty()) {
+        return std::nullopt;
     }
 
     const auto sized_cast = [&](const semantic::DeclarationId candidate)
@@ -23985,7 +24001,8 @@ Lowerer::hir_systemverilog_packed_pattern_operand(
     const auto packed_pattern = [](const semantic::sv::Expression& source) {
         return source.kind == semantic::sv::ExpressionKind::assignment_pattern
             || (source.kind == semantic::sv::ExpressionKind::call
-                && source.text.starts_with("@sv-tagged:"));
+                && source.marker
+                    == support::ExpressionMarker::sv_tagged);
     };
     const auto& source = *expression->systemverilog;
     if (packed_pattern(source)) {
@@ -24030,8 +24047,6 @@ Lowerer::hir_vhdl_conversion_profile(
         return std::nullopt;
     }
     const auto& source = *expression->vhdl;
-    constexpr auto qualified_prefix
-        = semantic::vhdl::qualified_expression_prefix;
     if (source.kind != semantic::vhdl::ExpressionKind::call
         || source.operands.size() != 1U) {
         return std::nullopt;
@@ -24046,10 +24061,10 @@ Lowerer::hir_vhdl_conversion_profile(
             std::nullopt,
         };
     }
-    auto type_name = std::string_view { source.text };
-    if (type_name.starts_with(qualified_prefix)) {
-        type_name.remove_prefix(qualified_prefix.size());
-    }
+    const auto type_name = source.marker
+            == support::ExpressionMarker::vhdl_qualified
+        ? std::string_view { source.marker_argument }
+        : std::string_view { source.text };
     auto canonical = std::string { type_name };
     lowercase_ascii(canonical);
     const auto selected = hir_vhdl_type_declaration(expression_id);
@@ -24314,7 +24329,7 @@ Lowerer::hir_vhdl_conversion_profile(
     if (subtype && (!width || *width == 0U || unconstrained_target)
         && composite_definition != nullptr
         && composite_definition->form == semantic::vhdl::TypeForm::array
-        && !std::string_view { source.text }.starts_with(qualified_prefix)) {
+        && source.marker != support::ExpressionMarker::vhdl_qualified) {
         // Only an array operand supplies the index range; a scalar operand
         // is not closely related and leaves the target indefinite (IEEE
         // 1076-2019 9.3.6).
@@ -24346,8 +24361,8 @@ Lowerer::hir_vhdl_conversion_profile(
         const auto aggregate = qualified && qualified->vhdl != nullptr
                 && qualified->vhdl->kind
                     == semantic::vhdl::ExpressionKind::call
-                && std::string_view { qualified->vhdl->text }.starts_with(
-                    qualified_prefix)
+                && qualified->vhdl->marker
+                    == support::ExpressionMarker::vhdl_qualified
                 && qualified->vhdl->operands.size() == 1U
             ? specialized_hir_unit_->find_expression(
                   qualified->vhdl->operands.front())
@@ -24404,7 +24419,7 @@ Lowerer::hir_vhdl_conversion_profile(
     // 9.3.6); its packed storage is Logic9 unless the subtype records one.
     if (subtype && composite_definition != nullptr
         && composite_definition->form == semantic::vhdl::TypeForm::record
-        && !std::string_view { source.text }.starts_with(qualified_prefix)) {
+        && source.marker != support::ExpressionMarker::vhdl_qualified) {
         if (!width || *width == 0U) {
             if (const auto converted
                 = hir_vhdl_expression_subtype(expression_id)) {
@@ -24457,8 +24472,8 @@ Lowerer::hir_vhdl_expression_runtime_width(
         expression_id);
     if (effective && expression && expression->vhdl != nullptr
         && expression->vhdl->kind == semantic::vhdl::ExpressionKind::call
-        && expression->vhdl->text.starts_with(
-            semantic::vhdl::qualified_expression_prefix)
+        && expression->vhdl->marker
+            == support::ExpressionMarker::vhdl_qualified
         && expression->vhdl->operands.size() == 1U) {
         const auto aggregate = specialized_hir_unit_->find_expression(
             expression->vhdl->operands.front());
@@ -25569,8 +25584,8 @@ Lowerer::compute_hir_vhdl_expression_subtype(
         auto value_id = expression_id;
         auto value_kind = source.kind;
         if (source.kind == semantic::vhdl::ExpressionKind::call
-            && source.text.starts_with(
-                semantic::vhdl::qualified_expression_prefix)
+            && source.marker
+                == support::ExpressionMarker::vhdl_qualified
             && source.operands.size() == 1U) {
             if (const auto operand = specialized_hir_unit_->find_expression(
                     source.operands.front());
@@ -25604,8 +25619,8 @@ Lowerer::compute_hir_vhdl_expression_subtype(
         conversion && conversion->vhdl != nullptr
         && conversion->vhdl->kind == semantic::vhdl::ExpressionKind::call
         && conversion->vhdl->operands.size() == 1U
-        && !conversion->vhdl->text.starts_with(
-            semantic::vhdl::qualified_expression_prefix)) {
+        && conversion->vhdl->marker
+            != support::ExpressionMarker::vhdl_qualified) {
         const auto selected = hir_vhdl_type_declaration(expression_id);
         const auto declaration = selected
             ? specialized_hir_unit_->find_declaration(*selected)
@@ -25970,12 +25985,10 @@ Lowerer::compute_hir_vhdl_expression_subtype(
     }
     if (source.kind == semantic::vhdl::ExpressionKind::call
         && source.operands.size() == 2U && source.referenced_name) {
-        auto call_name = std::string_view { source.text };
-        constexpr auto qualified_prefix
-            = semantic::vhdl::qualified_expression_prefix;
-        if (call_name.starts_with(qualified_prefix)) {
-            call_name.remove_prefix(qualified_prefix.size());
-        }
+        const auto call_name = source.marker
+                == support::ExpressionMarker::vhdl_qualified
+            ? std::string_view { source.marker_argument }
+            : std::string_view { source.text };
         auto member_spelling = call_name;
         if (const auto separator = call_name.find_last_of(".:");
             separator != std::string_view::npos) {
@@ -26496,7 +26509,8 @@ Lowerer::compute_hir_vhdl_expression_subtype(
         return result;
     }
     if (source.kind == semantic::vhdl::ExpressionKind::call
-        && source.text == "@vhdl-dereference"
+        && source.marker
+            == support::ExpressionMarker::vhdl_dereference
         && source.operands.size() == 1U) {
         const auto prefix = hir_vhdl_expression_subtype(
             source.operands.front());
@@ -26649,9 +26663,9 @@ Lowerer::compute_hir_vhdl_expression_subtype(
     // constraints for it (IEEE 1076-2008 8.3).
     if (source.kind == semantic::vhdl::ExpressionKind::call
         && source.operands.size() == 1U
-        && source.text.starts_with("@vhdl-member:")) {
-        const auto name = std::string_view { source.text }.substr(
-            std::string_view { "@vhdl-member:" }.size());
+        && source.marker
+            == support::ExpressionMarker::vhdl_member) {
+        const std::string_view name { source.marker_argument };
         auto prefix = hir_vhdl_expression_subtype(source.operands.front());
         if (prefix) {
             prefix = hir_effective_vhdl_subtype(*prefix).value_or(*prefix);
@@ -26877,12 +26891,10 @@ Lowerer::compute_hir_vhdl_expression_subtype(
         if (resolved.status
             == semantic::CompiledResolutionStatus::not_found) {
             semantic::vhdl::Name name;
-            constexpr auto qualified_prefix
-                = semantic::vhdl::qualified_expression_prefix;
-            auto spelling = std::string_view { source.text };
-            if (spelling.starts_with(qualified_prefix)) {
-                spelling.remove_prefix(qualified_prefix.size());
-            }
+            const auto spelling = source.marker
+                    == support::ExpressionMarker::vhdl_qualified
+                ? std::string_view { source.marker_argument }
+                : std::string_view { source.text };
             name.spelling = std::string { spelling };
             name.canonical = name.spelling;
             resolved = resolver.resolve_vhdl(
@@ -26896,12 +26908,10 @@ Lowerer::compute_hir_vhdl_expression_subtype(
             && !source.referenced_name->selected
             && source.referenced_name->overloads.empty()
             && source.nominal_type.empty()) {
-            auto spelling = std::string_view { source.text };
-            constexpr auto qualified_prefix
-                = semantic::vhdl::qualified_expression_prefix;
-            if (spelling.starts_with(qualified_prefix)) {
-                spelling.remove_prefix(qualified_prefix.size());
-            }
+            const auto spelling = source.marker
+                    == support::ExpressionMarker::vhdl_qualified
+                ? std::string_view { source.marker_argument }
+                : std::string_view { source.text };
             const auto separator = spelling.find_last_of(".:");
             const auto member_spelling = simple_name_of(spelling);
             const auto numeric_member
@@ -27070,14 +27080,10 @@ Lowerer::compute_hir_vhdl_expression_subtype(
         if (projected_numeric_subtype) {
             return projected_numeric_subtype;
         }
-        constexpr auto qualified_prefix
-            = semantic::vhdl::qualified_expression_prefix;
         if (resolved.status
                 == semantic::CompiledResolutionStatus::not_found
-            && std::string_view { source.text }.starts_with(
-                qualified_prefix)) {
-            auto spelling = std::string_view { source.text };
-            spelling.remove_prefix(qualified_prefix.size());
+            && source.marker == support::ExpressionMarker::vhdl_qualified) {
+            const std::string_view spelling { source.marker_argument };
             if (!spelling.empty()
                 && spelling.find_first_of(".:")
                     == std::string_view::npos) {
@@ -27670,7 +27676,8 @@ Lowerer::hir_vhdl_constant_array_shape(
         positional_associations = positional_association;
         std::optional<std::size_t> ordinal;
         if (association.choices.empty()) {
-            if (!association.choice_spelling.empty()
+            if ((!association.choice_spelling.empty()
+                || association.choice_marker != support::ExpressionMarker::none)
                 || positional >= outer_count) {
                 return std::nullopt;
             }
@@ -27847,7 +27854,8 @@ Lowerer::compute_hir_vhdl_array_selection(
     const auto indexed = source.kind
         == semantic::vhdl::ExpressionKind::index;
     // An external name's operands are its path and subtype, not indices.
-    if (call && source.text == "@vhdl-external") {
+    if (call && source.marker
+        == support::ExpressionMarker::vhdl_external) {
         return std::nullopt;
     }
     if ((!call && !indexed) || source.operands.empty()
@@ -27931,7 +27939,8 @@ Lowerer::compute_hir_vhdl_array_selection(
         = root_prefix_expression && root_prefix_expression->vhdl != nullptr
         && root_prefix_expression->vhdl->kind
             == semantic::vhdl::ExpressionKind::call
-        && root_prefix_expression->vhdl->text == "@vhdl-dereference"
+        && root_prefix_expression->vhdl->marker
+            == support::ExpressionMarker::vhdl_dereference
         && root_prefix_expression->vhdl->operands.size() == 1U;
     const bool user_attribute_root
         = root_prefix_record && root_prefix_record->vhdl != nullptr
@@ -27941,6 +27950,8 @@ Lowerer::compute_hir_vhdl_array_selection(
         = root_prefix_record && root_prefix_record->vhdl != nullptr
         && root_prefix_record->vhdl->kind
             == semantic::vhdl::ExpressionKind::call
+        && root_prefix_record->vhdl->marker
+            == support::ExpressionMarker::none
         && !root_prefix_record->vhdl->text.starts_with('@')
         && root_prefix_record->vhdl->text.find('\'')
             == std::string::npos
@@ -27953,7 +27964,8 @@ Lowerer::compute_hir_vhdl_array_selection(
         = root_prefix_record && root_prefix_record->vhdl != nullptr
         && root_prefix_record->vhdl->kind
             == semantic::vhdl::ExpressionKind::call
-        && root_prefix_record->vhdl->text == "@vhdl-external";
+        && root_prefix_record->vhdl->marker
+            == support::ExpressionMarker::vhdl_external;
     const bool value_root
         = user_attribute_root || function_result_root || access_object_root
         || explicit_dereference_root || external_root;
@@ -29185,7 +29197,6 @@ Lowerer::hir_vhdl_member_selection(
     }
     const auto expression = specialized_hir_unit_->find_expression(
         expression_id);
-    constexpr auto prefix = std::string_view { "@vhdl-member:" };
     if (!expression || expression->vhdl == nullptr) {
         return std::nullopt;
     }
@@ -29525,14 +29536,13 @@ Lowerer::hir_vhdl_member_selection(
         };
     }
     if (source.kind != semantic::vhdl::ExpressionKind::call
-        || !expression->vhdl->text.starts_with(prefix)
+        || expression->vhdl->marker != support::ExpressionMarker::vhdl_member
         || expression->vhdl->operands.size() != 1U) {
         return std::nullopt;
     }
     const auto member_name = std::string_view {
-        expression->vhdl->text
-    }
-                                 .substr(prefix.size());
+        expression->vhdl->marker_argument
+    };
     if (member_name.empty()) {
         return std::nullopt;
     }
@@ -29711,7 +29721,8 @@ Lowerer::hir_vhdl_member_selection(
         const auto dereference = base && base->vhdl != nullptr
                 && base->vhdl->kind
                     == semantic::vhdl::ExpressionKind::call
-                && base->vhdl->text == "@vhdl-dereference"
+                && base->vhdl->marker
+                    == support::ExpressionMarker::vhdl_dereference
                 && base->vhdl->operands.size() == 1U
             ? std::optional { base->vhdl->operands.front() }
             : std::nullopt;
@@ -30001,7 +30012,8 @@ bool Lowerer::can_lower_hir_expression(
             return supported;
         }
         if (source.kind == semantic::sv::ExpressionKind::call
-            && source.text.starts_with("@sv-sync-new:")) {
+            && source.marker
+                == support::ExpressionMarker::sv_sync_new) {
             supported = source.operands.size() <= 1U
                 && std::ranges::all_of(
                     source.operands,
@@ -30024,11 +30036,13 @@ bool Lowerer::can_lower_hir_expression(
                     && declaration->systemverilog->type
                 ? &*declaration->systemverilog->type
                 : nullptr;
-            const auto type_name = type != nullptr
-                ? std::string_view { type->target.spelling }
-                : std::string_view { };
-            const bool mailbox = type_name == "mailbox";
-            const bool semaphore = type_name == "semaphore";
+            const auto standard_class = type != nullptr
+                ? type->standard_class
+                : support::SystemVerilogStandardClass::none;
+            const bool mailbox = standard_class
+                == support::SystemVerilogStandardClass::mailbox;
+            const bool semaphore = standard_class
+                == support::SystemVerilogStandardClass::semaphore;
             if (mailbox || semaphore) {
                 const auto method
                     = std::string_view { source.text }.substr(1U);
@@ -30053,10 +30067,9 @@ bool Lowerer::can_lower_hir_expression(
                 return supported;
             }
         }
-        constexpr auto container_index_prefix
-            = std::string_view { "@sv-container-index:" };
         if (source.kind == semantic::sv::ExpressionKind::call
-            && source.text.starts_with(container_index_prefix)) {
+            && source.marker
+                == support::ExpressionMarker::sv_container_index) {
             supported = source.operands.size() == 2U
                 && hir_expression_width(
                        source.operands[0], process_scope)
@@ -30067,8 +30080,9 @@ bool Lowerer::can_lower_hir_expression(
             return supported;
         }
         if (source.kind == semantic::sv::ExpressionKind::call
-            && source.text.starts_with("@sv-container-method:")) {
-            const auto method = sv_container_method_call(source.text);
+            && support::sv_container_method_family(source.marker)) {
+            const auto method = sv_container_method_call(
+                source.marker, source.marker_argument);
             supported = method
                 && (source.operands.size() == 1U
                     || (!method->reduction.empty()
@@ -30344,7 +30358,7 @@ bool Lowerer::can_lower_hir_expression(
             return supported;
         }
         if (source.kind == semantic::sv::ExpressionKind::call
-            && source.text == "std::randomize") {
+            && source.marker == support::ExpressionMarker::sv_std_randomize) {
             // Direct lowering owns the language, argument, and local-storage
             // diagnostics for this built-in scope function.
             supported = true;
@@ -30439,8 +30453,7 @@ bool Lowerer::can_lower_hir_expression(
             return true;
         }
         if (source.kind == semantic::sv::ExpressionKind::call
-            && (source.text == "@stream-left"
-                || source.text == "@stream-right")) {
+            && sv_stream_marker(source.marker)) {
             const auto slice_size = source.operands.empty()
                 ? std::nullopt
                 : hir_constant_integer(source.operands.front());
@@ -30541,7 +30554,8 @@ bool Lowerer::can_lower_hir_expression(
             return operand && operand->systemverilog != nullptr
                 && operand->systemverilog->kind
                 == semantic::sv::ExpressionKind::call
-                && operand->systemverilog->text == "@sv-type";
+                && operand->systemverilog->marker
+                    == support::ExpressionMarker::sv_type;
         };
         if (source.kind == semantic::sv::ExpressionKind::binary
             && source.operands.size() == 2U
@@ -30556,7 +30570,8 @@ bool Lowerer::can_lower_hir_expression(
             return true;
         }
         if (source.kind == semantic::sv::ExpressionKind::call
-            && source.text == "@sv-type") {
+            && source.marker
+                == support::ExpressionMarker::sv_type) {
             // Keep invalid standalone use in the direct HIR path so it emits
             // the dedicated type-operator diagnostic.
             erase();
@@ -30952,9 +30967,7 @@ bool Lowerer::can_lower_hir_expression(
                 erase();
                 return supported;
             }
-            constexpr auto qualified_prefix
-                = semantic::vhdl::qualified_expression_prefix;
-            if (source.text.starts_with(qualified_prefix)
+            if (source.marker == support::ExpressionMarker::vhdl_qualified
                 && source.operands.size() == 1U) {
                 // Keep malformed qualifications on the HIR-native path so
                 // the expression lowerer can issue the precise VHQUAL
@@ -31233,8 +31246,8 @@ std::optional<Lowerer::HirVhdlMinMaxShape> Lowerer::hir_vhdl_min_max_shape(
             operands[0]);
         const auto aggregate = qualified && qualified->vhdl != nullptr
                 && qualified->vhdl->kind == semantic::vhdl::ExpressionKind::call
-                && qualified->vhdl->text.starts_with(
-                    semantic::vhdl::qualified_expression_prefix)
+                && qualified->vhdl->marker
+                    == support::ExpressionMarker::vhdl_qualified
                 && qualified->vhdl->operands.size() == 1U
             ? specialized_hir_unit_->find_expression(
                   qualified->vhdl->operands.front())
@@ -31758,8 +31771,8 @@ Lowerer::hir_vhdl_qualified_enumeration_string_width(
         expression_id);
     if (!expression || expression->vhdl == nullptr
         || expression->vhdl->kind != semantic::vhdl::ExpressionKind::call
-        || !expression->vhdl->text.starts_with(
-            semantic::vhdl::qualified_expression_prefix)
+        || expression->vhdl->marker
+            != support::ExpressionMarker::vhdl_qualified
         || expression->vhdl->operands.size() != 1U) {
         return std::nullopt;
     }

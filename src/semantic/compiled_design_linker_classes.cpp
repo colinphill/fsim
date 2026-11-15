@@ -201,6 +201,7 @@ void append_statement_references(const ReferenceLookup& lookup,
     append_statements(statement->statements);
     append_statements(statement->else_statements);
     append_statements(statement->loop_updates);
+    append_statements(statement->loop_initializations);
     for (const auto& alternative : statement->case_alternatives)
         append_statements(alternative.statements);
 }
@@ -297,15 +298,11 @@ void append_scoped_class_references(const CompiledDesign& design,
             continue;
         append_reference(references, *owner, statement.class_handle_type,
             statement.source);
-        auto spelling = std::string_view { statement.task.spelling };
-        constexpr auto static_prefix = std::string_view { "@sv-static-task:" };
-        constexpr auto instance_prefix = std::string_view { "@sv-task:" };
-        if (spelling.starts_with(static_prefix))
-            spelling.remove_prefix(static_prefix.size());
-        else if (spelling.starts_with(instance_prefix))
-            spelling.remove_prefix(instance_prefix.size());
-        else
+        if (statement.task_marker != support::ExpressionMarker::sv_task
+            && statement.task_marker
+                != support::ExpressionMarker::sv_static_task)
             continue;
+        const std::string_view spelling { statement.task_marker_argument };
         const auto member = spelling.rfind("::");
         if (member != std::string_view::npos)
             append_reference(references, *owner, spelling.substr(0U, member),

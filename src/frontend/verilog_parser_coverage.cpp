@@ -1433,6 +1433,11 @@ void VerilogParser::structure_covergroup_formals(
         formal.type_tokens.assign(
             item.begin() + static_cast<std::ptrdiff_t>(type_start),
             item.begin() + static_cast<std::ptrdiff_t>(name_index));
+        // The formal's type tokens stay source text; the built-in type each
+        // keyword names is read here once (IEEE 1800-2023 5.6.2, 6.11).
+        for (auto& token : formal.type_tokens) {
+            mark_type_keyword_token(token, keyword_set_);
+        }
         if (unsupported_coverage_type(
                 formal.type_tokens,
                 standard_revision_ == StandardRevision::SystemVerilog2023)) {

@@ -1485,7 +1485,7 @@ struct FstWriter::Impl {
             if (scope.value == 0U && by_scope.contains(0U)) {
                 append_u8(result, fst_scope);
                 append_u8(result, fst_scope_module);
-                append_c_string(result, "__fsim_root");
+                append_c_string(result, fst_synthesized_root_scope);
                 append_c_string(result, { });
                 emit_scope_entries(scope);
                 append_u8(result, fst_upscope);

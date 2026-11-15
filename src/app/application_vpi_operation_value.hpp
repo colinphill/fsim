@@ -364,25 +364,30 @@ struct VpiCastShape {
     return vector_result(bits, target.is_signed);
 }
 
-/// The value of a cast `T'(e)` of `operand` (IEEE 1800-2023 6.24.1): `type`
-/// is the casting type as written, a built-in type or `signed`, `unsigned`
-/// or `const`; `size` is the width of a size cast `n'(e)`, whose signedness
+/// The value of a cast `T'(e)` of `operand` (IEEE 1800-2023 6.24.1):
+/// `target_kind` and `builtin` are the casting type, a built-in type or
+/// `signed`, `unsigned` or `const`; `size` is the width of a size cast `n'(e)`, whose signedness
 /// passes through unchanged. An integral result holds the operand as an
 /// assignment to its type would (sign extended when the operand is signed,
 /// truncated, a two-state type turning x and z into 0, 6.12.2 rounding a
 /// real to the nearest integer); a real result converts the operand (6.12.2).
 /// None for a cast to a user-defined type or a conversion it cannot make.
 [[nodiscard]] inline std::optional<VpiOperationValue> evaluate_cast(
-    const std::string_view type, const std::optional<std::size_t> size,
+    const support::SystemVerilogCastTarget target_kind,
+    const support::SystemVerilogBuiltinType builtin,
+    const std::optional<std::size_t> size,
     const VpiOperationValue& operand)
 {
     using namespace operation_value_detail;
-    if (!size && type == "const") {
+    using Builtin = support::SystemVerilogBuiltinType;
+    using CastTarget = support::SystemVerilogCastTarget;
+    if (!size && target_kind == CastTarget::constant) {
         return operand;
     }
-    if (!size && (type == "real" || type == "realtime" || type == "shortreal")) {
+    if (!size && target_kind == CastTarget::builtin
+        && support::systemverilog_real_family(builtin)) {
         const auto number = as_real(operand);
-        return real_result(type == "shortreal"
+        return real_result(builtin == Builtin::shortreal
                 ? static_cast<double>(static_cast<float>(number))
                 : number);
     }
@@ -392,30 +397,21 @@ struct VpiCastShape {
             return std::nullopt;
         }
         target = VpiCastShape { *size, operand.is_signed, false };
-    } else if (type == "signed" || type == "unsigned") {
+    } else if (target_kind == CastTarget::signed_type
+        || target_kind == CastTarget::unsigned_type) {
         if (operand.real_value) {
             return std::nullopt;
         }
-        target = VpiCastShape { operand.bits.width(), type == "signed", false };
-    } else {
-        static constexpr struct {
-            std::string_view name;
-            VpiCastShape target;
-        } atoms[] {
-            { "byte", { 8U, true, true } },
-            { "shortint", { 16U, true, true } },
-            { "int", { 32U, true, true } },
-            { "longint", { 64U, true, true } },
-            { "integer", { 32U, true, false } },
-            { "time", { 64U, false, false } },
-            { "bit", { 1U, false, true } },
-            { "logic", { 1U, false, false } },
-            { "reg", { 1U, false, false } },
-        };
-        for (const auto& atom : atoms) {
-            if (atom.name == type) {
-                target = atom.target;
-            }
+        target = VpiCastShape { operand.bits.width(),
+            target_kind == CastTarget::signed_type, false };
+    } else if (target_kind == CastTarget::builtin) {
+        // The width and signedness of an integral built-in type (6.11); a
+        // two-state type turns x and z into 0.
+        if (support::systemverilog_integral(builtin)) {
+            target = VpiCastShape {
+                support::systemverilog_builtin_width(builtin),
+                support::systemverilog_builtin_default_signed(builtin),
+                !support::systemverilog_four_state(builtin) };
         }
     }
     if (!target) {

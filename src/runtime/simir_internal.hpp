@@ -4058,12 +4058,18 @@ struct Interpreter::Impl : SchedulerBatchTask {
         PackedLogic4 value,
         SignalChangeOrigin origin = { });
 
-    /// declaration_initialization_active: a whole or slice write of an
-    /// unresolved, unforced, non-aggregate signal becomes its settled
-    /// current and driven value (publish_settled); false for any other write,
-    /// which commits as usual.
-    [[nodiscard]] bool settle_declaration_initializer_write(SignalId signal_id,
-        const PackedLogic4& value, std::optional<std::size_t> offset);
+    /// declaration_initialization_active: a whole or slice write of the
+    /// initializer process `process` is initialization, not a transaction
+    /// (owner 11-15). An unresolved signal takes it as its settled driven
+    /// value; a resolved one takes it as the process's initial driving value
+    /// and settles to the resolution of its drivers; a force keeps its
+    /// forced bits (publish_settled); an aggregate alias settles each
+    /// element signal of its container. False for a write it does not cover
+    /// (events, implicit drivers, charge storage, resolution-function
+    /// signals), which commits as usual.
+    [[nodiscard]] bool settle_declaration_initializer_write(ProcessId process,
+        SignalId signal_id, const PackedLogic4& value,
+        std::optional<std::size_t> offset);
     void initialize_package_static_signal(
         SignalId signal_id,
         PackedLogic4 value);

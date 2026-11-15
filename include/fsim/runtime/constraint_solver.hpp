@@ -2,6 +2,7 @@
 #pragma once
 
 #include "fsim/runtime/packed_value.hpp"
+#include "fsim/support/systemverilog_builtin_type.hpp"
 
 #include <chrono>
 #include <cstddef>
@@ -32,9 +33,38 @@ struct SystemVerilogConstraintVariableProfile {
       SystemVerilogConstraintDomainKind::BitVector};
   std::size_t width{};
   bool signed_value{};
+  // The name of a user-defined type ("" for a built-in one).
   std::string nominal_type;
   bool four_state{};
+  // The built-in data type (IEEE 1800-2023 6.11); none for a user type.
+  support::SystemVerilogBuiltinType builtin{
+      support::SystemVerilogBuiltinType::none};
+  // The HIR identity index of a user-defined type, when it has one.
+  std::optional<std::uint32_t> nominal_type_id{};
+  // A non-random class property: the constraint reads it as its declared
+  // type whatever profile the expression gives it (IEEE 1800-2023 18.3).
+  bool state_property{};
 };
+
+// Whether a profile names its type: a built-in kind, a user type's
+// identity or name, or a state property's storage.
+[[nodiscard]] inline bool names_constraint_type(
+    const SystemVerilogConstraintVariableProfile& profile) noexcept {
+  return profile.builtin != support::SystemVerilogBuiltinType::none
+      || profile.nominal_type_id.has_value()
+      || !profile.nominal_type.empty()
+      || profile.state_property;
+}
+
+// Whether two profiles name the same type.
+[[nodiscard]] inline bool same_constraint_type(
+    const SystemVerilogConstraintVariableProfile& left,
+    const SystemVerilogConstraintVariableProfile& right) noexcept {
+  return left.builtin == right.builtin
+      && left.nominal_type_id == right.nominal_type_id
+      && left.nominal_type == right.nominal_type
+      && left.state_property == right.state_property;
+}
 
 struct SystemVerilogConstraintVariable {
   std::string canonical_identity;
@@ -226,7 +256,7 @@ enum class SystemVerilogConstraintTemplateKind : std::uint8_t {
     Foreach,
     /// A method or built-in call on an operand list: `.size`, the array
     /// reductions (whose optional trailing operands are an iterator name and
-    /// a with-expression), `@sv-cast:` conversions and bit counts.
+    /// a with-expression), casts (cast_target) and bit counts.
     Method,
 };
 
@@ -238,6 +268,15 @@ struct SystemVerilogConstraintTemplate {
     PackedLogic4 constant;
     SystemVerilogConstraintVariableProfile profile;
     std::vector<SystemVerilogConstraintTemplate> operands;
+    // A Method node that is a cast (IEEE 1800-2023 6.24.1): the target kind,
+    // its built-in type, and the width of a size or resolved typedef cast.
+    support::SystemVerilogCastTarget cast_target {
+        support::SystemVerilogCastTarget::none
+    };
+    support::SystemVerilogBuiltinType cast_builtin {
+        support::SystemVerilogBuiltinType::none
+    };
+    std::size_t cast_width { };
 };
 
 struct SystemVerilogConstraintExpressionNode {

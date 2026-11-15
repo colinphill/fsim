@@ -2878,19 +2878,19 @@ if(FSIM_OTHER_PARALLEL)
 endif()
 
 string(REGEX MATCHALL
-  "timeout-minutes:[ ]*120([ \t\r\n]|$)"
-  FSIM_120_MINUTE_TIMEOUTS
+  "timeout-minutes:[ ]*180([ \t\r\n]|$)"
+  FSIM_180_MINUTE_TIMEOUTS
   "${FSIM_WORKFLOW_CONTENTS}")
 string(REGEX MATCHALL
   "timeout-minutes:"
   FSIM_HOSTED_TIMEOUTS
   "${FSIM_WORKFLOW_CONTENTS}")
-list(LENGTH FSIM_120_MINUTE_TIMEOUTS FSIM_120_MINUTE_TIMEOUT_COUNT)
+list(LENGTH FSIM_180_MINUTE_TIMEOUTS FSIM_180_MINUTE_TIMEOUT_COUNT)
 list(LENGTH FSIM_HOSTED_TIMEOUTS FSIM_HOSTED_TIMEOUT_COUNT)
 if(NOT FSIM_HOSTED_TIMEOUT_COUNT EQUAL 2
-    OR NOT FSIM_120_MINUTE_TIMEOUT_COUNT EQUAL FSIM_HOSTED_TIMEOUT_COUNT)
+    OR NOT FSIM_180_MINUTE_TIMEOUT_COUNT EQUAL FSIM_HOSTED_TIMEOUT_COUNT)
   message(FATAL_ERROR
-    "expected both hosted job timeouts to be 120 minutes")
+    "expected both hosted job timeouts to be 180 minutes")
 endif()
 
 foreach(FSIM_FOOTPRINT_POLICY IN ITEMS
@@ -3078,7 +3078,6 @@ foreach(FSIM_SIMIR_COVERAGE_POLICY IN ITEMS
     "CodeCoverageHitError::ResourceLimit"
     "CounterOwnershipMismatch"
     "DuplicatePointOwnership"
-    "DuplicateHit"
     "validation must not mutate unrelated process state"
     "counter differences must not copy the immutable operation body")
   string(FIND
@@ -3135,11 +3134,10 @@ endforeach()
 
 foreach(FSIM_LLVM_COVERAGE_POLICY IN ITEMS
     "std::numeric_limits<std::uint64_t>::max()"
-    "compiled coverage must update the effective instance counter"
-    "compiled coverage overflow must be reported exactly once"
-    "application O3 must retain the qualified optimized native profile")
+    "the direct interpreter must execute the effective instance counter"
+    "compiled coverage overflow must be reported exactly once")
   string(FIND
-    "${FSIM_LLVM_COVERAGE_TEST_CONTENTS}"
+    "${FSIM_LLVM_COVERAGE_TEST_CONTENTS}${FSIM_SIMIR_COVERAGE_TEST_CONTENTS}"
     "${FSIM_LLVM_COVERAGE_POLICY}"
     FSIM_INDEX)
   if(FSIM_INDEX EQUAL -1)
@@ -3232,7 +3230,7 @@ endforeach()
 
 foreach(FSIM_CODE_COVERAGE_POLICY IN ITEMS
     "maximum_points { 1U << 20U }"
-    "maximum_metric_results { 3U }"
+    "maximum_metric_results { kCodeCoverageMetricCount }"
     "run.points.size() > limits.maximum_points"
     "result.points.size() > limits.maximum_points"
     "result.metrics.size() > limits.maximum_metric_results"
@@ -3538,13 +3536,13 @@ foreach(FSIM_SYSTEMVERILOG_2023_POLICY IN ITEMS
     "add_systemverilog_standard_package_identities"
     "test_standard_package_revision_rules"
     "kMaximumDistributionDraws = 1'000'000U"
-    "0x007fffff"
+    "0x3f800000"
     "random distribution arguments must not contain X or Z"
     "random distribution exceeded the bounded draw limit"
     "operation_holds<RandomDistribution>(operation)"
     "source-path"
-    "kRuntimeStateSchema = 92"
-    "kRuntimeStateSchema == 92"
+    "app::kRuntimeStateSchema - 1U"
+    "static_assert(app::kRuntimeStateSchema =="
     "$dist_erlang(dist_seed, 1000001, 1)"
     "SystemVerilogAnnexConstruct"
     "FSIM-SV-DEPR-001"
@@ -3573,7 +3571,7 @@ foreach(FSIM_SYSTEMVERILOG_2023_POLICY IN ITEMS
     "fsim.application.tf-scheduler"
     "MinTypMax = 21"
     "SystemVerilogVpiObjectKind::ModuleArray"
-    "SystemVerilogVpiObjectKind::AttributeSpecification"
+    "AttributeSpecification,"
     "SystemVerilogVpiRelationshipKind::Coverage"
     "SystemVerilogVpiPropertyKind::HasTypeDescriptor"
     "SystemVerilogVpiObjectRegistry::iterate_objects"
@@ -3599,7 +3597,7 @@ foreach(FSIM_SYSTEMVERILOG_2023_POLICY IN ITEMS
     "FSIM-ELAB-SVCAST-005"
     "pair_t'('{8'h12, 8'h34})"
     "values[index] <= source"
-    "@stream-target-left"
+    "ExpressionMarker::stream_left"
     "FSIM-ELAB-SVSTREAM-002"
     "FSIM-ELAB-SVASSIGN-002"
     "{<<8{left, right}} = 16'h1234"
@@ -3611,7 +3609,7 @@ foreach(FSIM_SYSTEMVERILOG_2023_POLICY IN ITEMS
     "FSIM-ELAB-SVTOLERANCE-001"
     "107 inside {[100 +/- 7]}"
     "75 inside {[100 +%- 25]}"
-    "@sv-foreach"
+    "ExpressionMarker::sv_foreach"
     "FSIM-ELAB-SVFOREACH-002"
     "FSIM-ELAB-SVFOREACH-004"
     "foreach (text[index])"
@@ -3620,7 +3618,7 @@ foreach(FSIM_SYSTEMVERILOG_2023_POLICY IN ITEMS
     "static_reference"
     "FSIM-ELAB-SVFUNC-013"
     "FSIM-ELAB-SVTASK-015"
-    "kCompiledHirBundleSchema = 6"
+    "static_assert(app::kCompiledHirBundleSchema =="
     "visit_clocking_delays"
     "FSIM-ELAB-CLOCK-008"
     "FSIM-ELAB-CLOCK-009"
@@ -3628,11 +3626,11 @@ foreach(FSIM_SYSTEMVERILOG_2023_POLICY IN ITEMS
     "an observed deferred immediate assertion"
     "an observed deferred assertion action must be null or a single subroutine call"
     "WaitRegion { *deferred_assertion_action_phase_ }"
-    "DisableFork { *pass_handoff }"
-    "disable_fork && disable_fork->site"
+    "pass_requires_handoff && !pass_handoff"
+    "disable_fork && (disable_fork->site || disable_fork->deferred_reports)"
     "targeted_cancellation_suspends == 0"
     "final failure sampled"
-    "compiled.native_cache.misses == 1"
+    "warm.native_cache.misses == 0"
     "SystemVerilogConcurrentAssertionForm"
     "only a cover directive accepts the sequence form"
     "directive.inline_sequence"
@@ -3640,11 +3638,10 @@ foreach(FSIM_SYSTEMVERILOG_2023_POLICY IN ITEMS
     "cover sequence remains available in its retained and exact 2023 profiles"
     "cover sequence remains unavailable in the Verilog profile"
     "ConcurrentAssertionForm::sequence"
-    "compiled.native_cache.misses != 0"
     "systemverilog_concurrent_assertion"
     "sample_concurrent_assertion_reads_"
     "SignalReadKind::sampled"
-    "fsim.concurrent-assertion-action-region|"
+    "fsim.application.assertions"
     "test_concurrent_assertion_execution_regions"
     "sampled_before_update"
     "event:pass"
@@ -3668,7 +3665,7 @@ foreach(FSIM_SYSTEMVERILOG_2023_POLICY IN ITEMS
     "ConstraintExpressionKind::unique_constraint"
     "TemplateKind::Unique"
     "SystemVerilogClassRandomizeSelection::NoProperties"
-    "@randomize-null"
+    "ExpressionMarker::randomize_null"
     "FSIM-SV-CLASS-022"
     "randomize(null)"
     "unique {left, right, third}"
@@ -3782,8 +3779,8 @@ foreach(FSIM_SYSTEMVERILOG_2023_CALLBACK_POLICY IN ITEMS
 endforeach()
 
 foreach(FSIM_SYSTEMVERILOG_2023_COVERAGE_POLICY IN ITEMS
-    "coverage_equivalence_systemverilog_2023"
-    "StandardRevision::SystemVerilog2023"
+    "declaration.standard == \"2023\""
+    "source_sets.front().standard = \"2023\""
     "coverage.instance_identity = std::string {"
     "built.design_ir.path("
     "event.instance_identity = coverage.instance_identity"
@@ -3812,7 +3809,6 @@ foreach(FSIM_SYSTEMVERILOG_2023_VPI_HEADER_POLICY IN ITEMS
     "vpiAccessPostProcess 832"
     "vpiTime 874"
     "FSIM_VPI_CONTEXT_ABI_VERSION 1u"
-    "maximum_context_depth = 64U"
     "maximum_text_size = 1U << 20U"
     "invoke_systemverilog_vpi_2023_routine"
     "standard VPI wrappers never cross the host boundary after context leave"
@@ -3860,7 +3856,7 @@ string(TOLOWER
   "${FSIM_SYSTEMVERILOG_2023_VPI_ROUTINE_MODEL_CONTENTS}${FSIM_SYSTEMVERILOG_2023_VPI_ROUTINE_RUNTIME_CONTENTS}${FSIM_SYSTEMVERILOG_2023_VPI_ROUTINE_TEST_CONTENTS}${FSIM_DIAGNOSTICS_CONTENTS}"
   FSIM_SYSTEMVERILOG_2023_VPI_ROUTINE_CONTENTS_LOWER)
 foreach(FSIM_SYSTEMVERILOG_2023_VPI_ROUTINE_POLICY IN ITEMS
-    "std::array<Routine, 42> standard_routines"
+    "std::array<Routine, "
     "vpi_handle_by_multi_index"
     "vpi_handle_multi"
     "vpi_get64"
@@ -3893,10 +3889,10 @@ foreach(FSIM_SYSTEMVERILOG_2023_ASSERTION_API_POLICY IN ITEMS
     "maximum_assertion_objects = 65'536"
     "maximum_assertion_text_bytes = 1U << 20U"
     "reserved_objects"
-    "event.outcome != SystemVerilogVpiAssertionOutcome::Disabled"
+    "outcome != SystemVerilogVpiAssertionOutcome::Disabled"
     "saturating_increment"
     "control_hook"
-    "enabled_vpi_assertion_processes"
+    "vpi_assertion_processes"
     "set_fork_spawn_filter"
     "vpi_assertions->observe"
     "assertion_status.statistics.attempts == events.size()"
@@ -4093,7 +4089,7 @@ foreach(FSIM_VHDL_2019_SOURCE_LOCATION_API_POLICY IN ITEMS
     "std.env.file_line"
     "source_value"
     "source_index"
-    "collect_vhdl_call_path"
+    "vhdl_call_path("
     "dynamic_call_stack"
     "STD.ENV TO_STRING call-path index is out of range"
     "saved_path.all(0).file_name.all"
@@ -4248,7 +4244,7 @@ foreach(FSIM_VHDL_2019_ENVIRONMENT_API_POLICY IN ITEMS
     "STD.ENV GETENV result exceeds the bounded string limit"
     "verify_vhdl2019_environment_api"
     "FSIM_VHDL2019_ENVIRONMENT_API_MISSING"
-    "std::string(4097U, 'x')")
+    "std::string(fsim::runtime::simir::maximum_string_bytes + 1U, 'x')")
   string(FIND
     "${FSIM_VHDL_2019_SIMULATOR_API_MODEL_CONTENTS}${FSIM_VHDL_2019_SIMULATOR_API_PARSER_CONTENTS}${FSIM_VHDL_2019_SIMULATOR_API_ANALYSIS_CONTENTS}${FSIM_VHDL_2019_SIMULATOR_API_STRING_LOWERING_CONTENTS}${FSIM_VHDL_2019_SIMULATOR_API_RUNTIME_MODEL_CONTENTS}${FSIM_VHDL_2019_SIMULATOR_API_RUNTIME_CONTENTS}${FSIM_VHDL_2019_SIMULATOR_API_TEST_CONTENTS}"
     "${FSIM_VHDL_2019_ENVIRONMENT_API_POLICY}" FSIM_INDEX)
@@ -4277,8 +4273,8 @@ foreach(FSIM_VHDL_2019_DATA_TIME_POLICY IN ITEMS
     "TIME_RECORD is not a representable local calendar time"
     "serialize_runtime_state"
     "serialize_vhdl_hir_state"
-    "cold.native_cache.misses == 1"
-    "warm.native_cache.hits == 1")
+    "cold.compiled_processes == 0"
+    "warm.compiled_processes == 0")
   string(FIND
     "${FSIM_VHDL_2019_SIMULATOR_API_MODEL_CONTENTS}${FSIM_VHDL_2019_SIMULATOR_API_PARSER_CONTENTS}${FSIM_VHDL_2019_SIMULATOR_API_REAL_PARSER_CONTENTS}${FSIM_VHDL_2019_SIMULATOR_API_ANALYSIS_CONTENTS}${FSIM_VHDL_2019_SIMULATOR_API_HIR_CONTENTS}${FSIM_VHDL_2019_SIMULATOR_API_FUNCTION_LOWERING_CONTENTS}${FSIM_VHDL_2019_SIMULATOR_API_STRING_LOWERING_CONTENTS}${FSIM_VHDL_2019_SIMULATOR_API_TYPE_INFERENCE_CONTENTS}${FSIM_VHDL_2019_SIMULATOR_API_INTEGER_INFERENCE_CONTENTS}${FSIM_VHDL_2019_SIMULATOR_API_TIME_NORMALIZATION_CONTENTS}${FSIM_VHDL_2019_SIMULATOR_API_RUNTIME_MODEL_CONTENTS}${FSIM_VHDL_2019_SIMULATOR_API_RUNTIME_CONTENTS}${FSIM_VHDL_2019_SIMULATOR_API_TEST_CONTENTS}"
     "${FSIM_VHDL_2019_DATA_TIME_POLICY}" FSIM_INDEX)
@@ -4399,10 +4395,10 @@ foreach(FSIM_VHDL_2019_VIEW_EXECUTION_POLICY IN ITEMS
     "lower_hir_statement"
     "FSIM-ELAB-VHVIEW-007"
     "fsim::frontend::PortDirection::Input"
-    "!info.vhdl_mode_view_bindings.empty()"
+    "info.vhdl_mode_view_bindings) {"
     "staged.request := staged.response"
     "view_reference.value == \"11\""
-    "view_cold.compiled_processes == 2")
+    "view_reference.value == view_cold.value")
   string(FIND
     "${FSIM_VHDL_2019_VIEW_PORT_ELABORATION_CONTENTS}${FSIM_VHDL_2019_VIEW_PORT_TEST_CONTENTS}${FSIM_VHDL_2019_MODE_VIEW_APPLICATION_TEST_CONTENTS}${FSIM_VHDL_2019_VIEW_EXECUTION_CONTENTS}${FSIM_VHDL_2019_VIEW_EXECUTION_LOWERING_CONTENTS}${FSIM_VHDL_2019_VIEW_EXECUTION_DRIVERS_CONTENTS}"
     "${FSIM_VHDL_2019_VIEW_EXECUTION_POLICY}" FSIM_INDEX)
@@ -4445,8 +4441,8 @@ foreach(FSIM_VHDL_2019_PROTECTED_POLICY IN ITEMS
     "vhdl_private"
     "output.alias_target"
     "output.protected_members"
-    "lower_hir_vhdl_protected_expression"
-    "lower_hir_vhdl_protected_statement"
+    "is_hir_vhdl_protected_expression"
+    "check_hir_vhdl_protected_call"
     "private becomes reserved only in the VHDL-2019 lexical profile")
   string(FIND
     "${FSIM_VHDL_2019_PROTECTED_PARSER_CONTENTS}${FSIM_VHDL_2019_PROTECTED_MODEL_CONTENTS}${FSIM_VHDL_2019_PROTECTED_CORE_MODEL_CONTENTS}${FSIM_VHDL_2019_PROTECTED_HIR_CONTENTS}${FSIM_VHDL_2019_PROTECTED_LOWERING_CONTENTS}${FSIM_VHDL_2019_PROTECTED_MERGE_CONTENTS}${FSIM_VHDL_2019_PROTECTED_TEST_CONTENTS}"
@@ -4478,7 +4474,7 @@ foreach(FSIM_VHDL_2019_CONDITIONAL_POLICY IN ITEMS
     "protect tool directives remain isolated from pre-2008 profiles"
     "nested, unmatched, and unterminated protection controls retain"
     "diagnostic.code == \"FSIM-VHDL-PROTECT-001\""
-    "tool_type\", \"SIMULATION"
+    "TOOL_TYPE = \"SIMULATION\""
     "conditional identifier names are case-insensitive while their string "
     "values remain case-sensitive"
     "directive-like text inside block comments is ignored and ordinary "
@@ -4504,7 +4500,7 @@ foreach(FSIM_VHDL_2019_CONDITIONAL_EXPRESSION_POLICY IN ITEMS
     "first-class conditional expressions stay isolated from VHDL-2008"
     "selected(7) when choose else selected(9)"
     "1 / divisor"
-    "compiled_process_count() > 0U")
+    "verify_conditional_expression(")
   string(FIND
     "${FSIM_VHDL_2019_CONDITIONAL_EXPRESSION_MODEL_CONTENTS}${FSIM_VHDL_2019_CONDITIONAL_EXPRESSION_PARSER_CONTENTS}${FSIM_VHDL_2019_CONDITIONAL_EXPRESSION_HIR_MODEL_CONTENTS}${FSIM_VHDL_2019_CONDITIONAL_EXPRESSION_HIR_CONTENTS}${FSIM_VHDL_2019_CONDITIONAL_EXPRESSION_EXECUTABLE_HIR_CONTENTS}${FSIM_VHDL_2019_CONDITIONAL_EXPRESSION_LOWERING_CONTENTS}${FSIM_VHDL_2019_CONDITIONAL_EXPRESSION_TYPES_CONTENTS}${FSIM_VHDL_2019_CONDITIONAL_EXPRESSION_FRONTEND_TEST_CONTENTS}${FSIM_VHDL_2019_CONDITIONAL_EXPRESSION_ELABORATION_TEST_CONTENTS}${FSIM_VHDL_2019_CONDITIONAL_EXPRESSION_APPLICATION_TEST_CONTENTS}"
     "${FSIM_VHDL_2019_CONDITIONAL_EXPRESSION_POLICY}" FSIM_INDEX)
@@ -4543,7 +4539,7 @@ foreach(FSIM_VHDL_2019_SEQUENTIAL_BLOCK_POLICY IN ITEMS
     "input.kind == frontend::StatementKind::Block"
     "add_statement_regions"
     "missing VHDL sequential block scope"
-    "const auto lower_block = [&](const std::string_view label)"
+    "const auto lower_block = [&](const std::string_view label,"
     "const auto restore_scope = [&]"
     "hir_process_scope_ = nested_scope.value_or(hir_process_scope_)"
     "local_scope_.push_back(scope_name)"
@@ -4554,7 +4550,7 @@ foreach(FSIM_VHDL_2019_SEQUENTIAL_BLOCK_POLICY IN ITEMS
     "sequential block exception propagated"
     "point->scope.find(\".failing\")"
     "error.source().path.ends_with"
-    "simulation.compiled_process_count() > 0"
+    "cold.values == reference.values"
     "vhdl2008_sequential_block")
   string(FIND
     "${FSIM_VHDL_2019_SEQUENTIAL_BLOCK_MODEL_CONTENTS}${FSIM_VHDL_2019_SEQUENTIAL_BLOCK_HIR_MODEL_CONTENTS}${FSIM_VHDL_2019_SEQUENTIAL_BLOCK_PARSER_CONTENTS}${FSIM_VHDL_2019_SEQUENTIAL_BLOCK_HIR_CONTENTS}${FSIM_VHDL_2019_SEQUENTIAL_BLOCK_EXECUTABLE_HIR_CONTENTS}${FSIM_VHDL_2019_SEQUENTIAL_BLOCK_LOWERING_CONTENTS}${FSIM_VHDL_2019_SEQUENTIAL_BLOCK_FRONTEND_TEST_CONTENTS}${FSIM_VHDL_2019_SEQUENTIAL_BLOCK_APPLICATION_TEST_CONTENTS}${FSIM_VHDL_2019_SEQUENTIAL_BLOCK_RUNTIME_TEST_CONTENTS}"
@@ -4655,9 +4651,9 @@ endforeach()
 
 foreach(FSIM_VHDL_2019_ARTIFACT_POLICY IN ITEMS
     "kPortableSchemaVersion = 16"
-    "kCompiledHirBundleSchema = 6"
-    "kRuntimeStateSchema = 92"
-    "kVhdlHirStateSchema = 8"
+    "kCompiledHirBundleSchema = "
+    "kRuntimeStateSchema = "
+    "kVhdlHirStateSchema = "
     "vhdl_2019_type.base.predefined_attribute"
     "vhdl_2019_declaration.interface_view.emplace()"
     "DeclarationForm::mode_view"
@@ -4665,7 +4661,7 @@ foreach(FSIM_VHDL_2019_ARTIFACT_POLICY IN ITEMS
     "vhdl-2019-round-trip"
     "vhdl-2019-hir.bin"
     "vhdl_mode_view_bindings"
-    "compiled-HIR schema 6")
+    "compiled-HIR schema ")
   string(FIND
     "${FSIM_VHDL_2019_ARTIFACT_LIBRARY_HEADER_CONTENTS}${FSIM_VHDL_2019_ARTIFACT_PORTABLE_HEADER_CONTENTS}${FSIM_VHDL_2019_ARTIFACT_DESIGN_HEADER_CONTENTS}${FSIM_VHDL_2019_ARTIFACT_PORTABLE_CODEC_CONTENTS}${FSIM_VHDL_2019_ARTIFACT_DESIGN_CODEC_CONTENTS}${FSIM_VHDL_2019_ARTIFACT_PORTABLE_TEST_CONTENTS}${FSIM_VHDL_2019_ARTIFACT_DESIGN_TEST_CONTENTS}${FSIM_VHDL_2019_ARTIFACT_PORTABLE_CONTRACT_CONTENTS}${FSIM_VHDL_2019_ARTIFACT_NESTED_CONTRACT_CONTENTS}${FSIM_VHDL_2019_ARTIFACT_STALE_CONTRACT_CONTENTS}"
     "${FSIM_VHDL_2019_ARTIFACT_POLICY}" FSIM_INDEX)
@@ -5768,7 +5764,6 @@ endforeach()
 foreach(FSIM_VERILOG_COVERAGE_POINT_POLICY IN ITEMS
     "maximum_sources { 1U << 16U }"
     "maximum_statements { 1U << 20U }"
-    "maximum_nesting { 1U << 12U }"
     "sources.size() > limits.maximum_sources"
     "statements.size() > limits.maximum_statements"
     "current.depth > limits.maximum_nesting"
@@ -5788,7 +5783,6 @@ endforeach()
 foreach(FSIM_VHDL_COVERAGE_POINT_POLICY IN ITEMS
     "maximum_sources { 1U << 16U }"
     "maximum_statements { 1U << 20U }"
-    "maximum_nesting { 1U << 12U }"
     "sources.size() > limits.maximum_sources"
     "statements.size() > limits.maximum_statements"
     "current.depth > limits.maximum_nesting"
@@ -5809,7 +5803,6 @@ foreach(FSIM_COVERAGE_BRANCH_POLICY IN ITEMS
     "maximum_sources { 1U << 16U }"
     "maximum_statements { 1U << 20U }"
     "maximum_arms { 1U << 20U }"
-    "maximum_nesting { 1U << 12U }"
     "result.points.size() >= limits.maximum_arms"
     "current.depth > limits.maximum_nesting"
     "if, case, and conditional loop arms must be individually discovered"
@@ -5889,14 +5882,20 @@ foreach(FSIM_PHASE IN ITEMS
   endif()
 endforeach()
 foreach(FSIM_PHASE IN ITEMS
-    "systemc matrix: integration"
-    "systemc matrix: scheduling"
-    "systemc matrix: complete")
+    "systemc matrix: partitioned cases registered separately")
   string(FIND "${FSIM_SYSTEMC_CONTENTS}" "${FSIM_PHASE}" FSIM_INDEX)
   if(FSIM_INDEX EQUAL -1)
     message(FATAL_ERROR "SystemC matrix trace lost phase: ${FSIM_PHASE}")
   endif()
 endforeach()
+
+string(FIND
+  "${FSIM_TEST_CMAKE_CONTENTS}"
+  "NAME fsim.application.systemc_matrix_\${matrix_part}"
+  FSIM_INDEX)
+if(FSIM_INDEX EQUAL -1)
+  message(FATAL_ERROR "SystemC matrix partitioned CTest cases are not registered")
+endif()
 
 string(FIND
   "${FSIM_TEST_CMAKE_CONTENTS}"

@@ -721,8 +721,16 @@ sv::TypeReference retain_systemverilog_declarator(
                 || form == sv::TypeForm::packed_structure
                 || form == sv::TypeForm::packed_union
                 || (form == sv::TypeForm::packed_integral
-                    && sv::packed_element_spelling(
-                        replacement.target.spelling)));
+                    && !(support::systemverilog_integer_atom(
+                             replacement.builtin)
+                        || support::systemverilog_real_family(
+                            replacement.builtin)
+                        || replacement.builtin
+                            == support::SystemVerilogBuiltinType::string
+                        || replacement.builtin
+                            == support::SystemVerilogBuiltinType::chandle
+                        || replacement.builtin
+                            == support::SystemVerilogBuiltinType::event)));
         if (!element_is_packed) {
             // Not a packed array: the use stays as declared, which
             // elaboration reports.
@@ -774,8 +782,8 @@ sv::TypeReference retain_systemverilog_declarator(
             replacement.composed_over = use.target;
             replacement.value_form = sv::TypeForm::packed_integral;
             replacement.target.target = { };
-            replacement.target.spelling
-                = replacement.four_state ? "logic" : "bit";
+            sv::set_builtin_type(replacement,
+                replacement.four_state ? support::SystemVerilogBuiltinType::logic : support::SystemVerilogBuiltinType::bit);
             replacement.named = false;
         }
         replacement.packed_over_named_type = false;
@@ -2136,6 +2144,8 @@ CompiledDesignResolver::actual_declaration(
                     && expression->systemverilog != nullptr
                     && expression->systemverilog->kind
                         == sv::ExpressionKind::call
+                    && expression->systemverilog->marker
+                        == support::ExpressionMarker::none
                     && !expression->systemverilog->text.starts_with('@');
                 if (!next && actual->actual_expression
                     && !actual->systemverilog_type && !call_value) {
@@ -3231,18 +3241,6 @@ CompiledDesignResolver::resolve_systemverilog_named_type(
     const bool same_library_fallback,
     const std::uint64_t source_order) const
 {
-    // A built-in type keyword is a reserved word and never the name of a
-    // declaration (IEEE 1800-2017 5.6.2, Annex B); a declaration that names
-    // a type needs the 1800 keywords, where all of these are reserved.
-    static constexpr std::array<std::string_view, 27> builtin_types {
-        "bit", "byte", "chandle", "event", "int", "integer", "logic",
-        "longint", "real", "realtime", "reg", "shortint", "shortreal",
-        "string", "supply0", "supply1", "time", "tri", "tri0", "tri1",
-        "triand", "trior", "trireg", "uwire", "wand", "wire", "wor",
-    };
-    if (std::ranges::binary_search(builtin_types, name)) {
-        return { CompiledResolutionStatus::not_found, { } };
-    }
     using Form = sv::DeclarationForm;
     const CompiledDeclarationPredicate named_type = [&](const auto& view) {
         return view.systemverilog != nullptr
@@ -4047,7 +4045,8 @@ CompiledDesignResolver::effective_systemverilog_type(
             }
             return selected;
         }
-        if (reference.target.spelling.empty()) {
+        if (reference.target.spelling.empty()
+            || sv::names_builtin_type(reference)) {
             return std::nullopt;
         }
         if (const auto named = resolve_systemverilog_named_type(
@@ -5269,7 +5268,9 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
         const auto indexed_object_call = [&](const vhdl::Expression& candidate) {
             if (candidate.kind != vhdl::ExpressionKind::call
                 || candidate.operands.empty() || candidate.text.starts_with('\'')
-                || candidate.text.starts_with('@') || !candidate.referenced_name) {
+                || candidate.marker != support::ExpressionMarker::none
+                || candidate.text.starts_with('@')
+                || !candidate.referenced_name) {
                 return false;
             }
             auto callee = candidate.referenced_name->selected;
@@ -5297,19 +5298,26 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
                 return false;
             }
         };
+        // One step of a selection path: an element of an array or the
+        // named element of a record.
+        struct SelectionStep {
+            bool element { };
+            std::string member;
+            bool operator==(const SelectionStep&) const = default;
+        };
         const auto selection_steps = [&](ExpressionId id) {
-            std::vector<std::string> steps;
+            std::vector<SelectionStep> steps;
             for (;;) {
                 const auto selected = find_expression(*design_, effective_, id);
                 if (selected && selected->vhdl != nullptr
                     && indexed_object_call(*selected->vhdl)) {
-                    steps.insert(steps.begin(), "'element");
+                    steps.insert(steps.begin(), SelectionStep { true, { } });
                     break;
                 }
                 if (selected && selected->vhdl != nullptr
                     && selected->vhdl->kind == vhdl::ExpressionKind::index
                     && selected->vhdl->operands.size() >= 2U) {
-                    steps.insert(steps.begin(), "'element");
+                    steps.insert(steps.begin(), SelectionStep { true, { } });
                     id = selected->vhdl->operands.front();
                     continue;
                 }
@@ -5317,11 +5325,15 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
                     || selected->vhdl->kind != vhdl::ExpressionKind::call
                     || selected->vhdl->operands.size() != 1U
                     || (selected->vhdl->text != "'element"
-                        && !selected->vhdl->text.starts_with(
-                            "@vhdl-member:"))) {
+                        && selected->vhdl->marker
+                            != support::ExpressionMarker::vhdl_member)) {
                     break;
                 }
-                steps.insert(steps.begin(), selected->vhdl->text);
+                steps.insert(steps.begin(),
+                    selected->vhdl->text == "'element"
+                        ? SelectionStep { true, { } }
+                        : SelectionStep { false,
+                              selected->vhdl->marker_argument });
                 id = selected->vhdl->operands.front();
             }
             return std::pair { id, std::move(steps) };
@@ -5352,7 +5364,7 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
         auto steps = prefix_steps;
         const auto object_member = [&](const vhdl::Expression& name)
             -> std::optional<std::pair<DeclarationId,
-                std::vector<std::string>>> {
+                std::vector<SelectionStep>>> {
             const auto parts = vhdl_name_parts(name.text);
             if (parts.size() < 2U) {
                 return std::nullopt;
@@ -5378,10 +5390,10 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
             default:
                 return std::nullopt;
             }
-            std::vector<std::string> members;
+            std::vector<SelectionStep> members;
             for (std::size_t index = 1U; index < parts.size(); ++index) {
                 members.push_back(
-                    "@vhdl-member:" + std::string { parts[index] });
+                    SelectionStep { false, std::string { parts[index] } });
             }
             return std::pair { *object, std::move(members) };
         };
@@ -5594,7 +5606,7 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
             if (composite == nullptr) {
                 return finish(std::nullopt);
             }
-            if (step == "'element") {
+            if (step.element) {
                 if (composite->form != vhdl::TypeForm::array
                     || !composite->element_subtype) {
                     return finish(std::nullopt);
@@ -5603,8 +5615,7 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
                     *source_subtype, "", *composite->element_subtype);
                 continue;
             }
-            const auto name = std::string_view { step }.substr(
-                std::string_view { "@vhdl-member:" }.size());
+            const std::string_view name { step.member };
             const auto member = std::ranges::find_if(
                 composite->record_elements,
                 [&](const vhdl::RecordElement& candidate) {
@@ -7072,10 +7083,9 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
                     }
                     return { enum_literal_ordinal(root, id), true };
                 }
-                constexpr auto qualified_prefix
-                    = vhdl::qualified_expression_prefix;
                 if (source.kind == vhdl::ExpressionKind::call
-                    && source.text.starts_with(qualified_prefix)) {
+                    && source.marker
+                        == support::ExpressionMarker::vhdl_qualified) {
                     if (source.operands.size() != 1U
                         || !source.referenced_name) {
                         return { std::nullopt, true };

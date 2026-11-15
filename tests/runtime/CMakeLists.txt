@@ -1600,6 +1600,19 @@ target_include_directories(
 fsim_add_foreign_conformance_test(
   vpi-escaped-scope vpi foreign_vpi_escaped_scope.sv
   foreign_vpi_escaped_scope.expected "" fsim_foreign_vpi_escaped_scope_plugin)
+# A labeled for or foreach loop is a scope named by its label, a labeled
+# statement a named begin-end block, and an unlabeled loop's implicit block
+# an unnamed scope (IEEE 1800-2023 9.3.5, 12.7.1, 12.7.3, 37.12).
+add_library(fsim_foreign_vpi_statement_labels_plugin SHARED
+  foreign_vpi_statement_labels_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_statement_labels_plugin)
+target_link_libraries(fsim_foreign_vpi_statement_labels_plugin PRIVATE fsim_tf)
+target_include_directories(fsim_foreign_vpi_statement_labels_plugin
+  PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-statement-labels vpi foreign_vpi_statement_labels.sv
+  foreign_vpi_statement_labels.expected ""
+  fsim_foreign_vpi_statement_labels_plugin)
 # PLI 1.0 TF routines of IEEE 1364-2001 clause 25, registered through
 # the PLI 1.0 task table; the plusarg feeds mc_scan_plusargs.
 add_library(fsim_foreign_pli_tf_core_plugin SHARED

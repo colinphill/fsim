@@ -130,7 +130,8 @@ endclass
       "==",
       {
           Expression{ExpressionKind::Identifier, "handle", {}, {}},
-          Expression{ExpressionKind::Call, "@sv-null", {}, {}},
+          marked_expression(
+              fsim::support::ExpressionMarker::sv_null, {}, {}, {}),
       },
       {}};
   const SystemVerilogScalarTypeEnvironment types{{"handle", chandle_kind}};
@@ -148,11 +149,10 @@ endclass
           && *equal_value->integral() == 1,
       "null chandle equality folds without treating the handle as numeric");
 
-  auto cast = Expression{
-      ExpressionKind::Call,
-      "@sv-cast:chandle",
-      {Expression{ExpressionKind::Call, "@sv-null", {}, {}}},
-      {}};
+  auto cast = systemverilog_builtin_cast(
+      fsim::support::SystemVerilogBuiltinType::chandle,
+      marked_expression(fsim::support::ExpressionMarker::sv_null, {}, {}, {}),
+      {});
   require(
       propagate_systemverilog_scalar_types(cast, {}, error)
           && cast.systemverilog_scalar_kind == chandle_kind

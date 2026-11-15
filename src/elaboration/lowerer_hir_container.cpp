@@ -400,24 +400,25 @@ Lowerer::lower_hir_systemverilog_container_expression(
     const auto& call = *expression->systemverilog;
     const auto span = hir_source_span(call.source);
     // `h.p.exists(k)` of a container property held by an object
-    // (`@sv-container-method:<m>:<p>` on the handle) queries a copy of the
+    // (a container-method marker on the handle) queries a copy of the
     // property's container (IEEE 1800-2017 7.9, 7.10, 8.4).
     std::string text = call.text;
     std::optional<HirStaticContainerValue> class_source;
-    if (constexpr std::string_view prefix { "@sv-container-method:" };
-        call.text.starts_with(prefix) && !call.operands.empty()) {
-        const auto rest = std::string_view { call.text }.substr(prefix.size());
-        const auto colon = rest.find(':');
-        if (colon == std::string_view::npos) {
-            return std::nullopt;
-        }
-        text = "." + std::string { rest.substr(0U, colon) };
-        const auto identity = rest.substr(colon + 1U);
+    if ((call.marker == support::ExpressionMarker::sv_container_size
+            || call.marker == support::ExpressionMarker::sv_container_method
+            || call.marker == support::ExpressionMarker::sv_container_push_back)
+        && !call.operands.empty()) {
+        // The size query is marked by itself; any other method is marked as
+        // a container method whose text is the method's name.
+        text = call.marker == support::ExpressionMarker::sv_container_size
+            ? std::string { ".size" }
+            : "." + call.text;
         if (text != ".size" && text != ".num" && text != ".exists"
             && text != ".first" && text != ".last" && text != ".next"
             && text != ".prev") {
             return std::nullopt;
         }
+        const std::string_view identity { call.marker_argument };
         const auto held = hir_class_value_container_type(identity)
             ? lower_hir_class_value_container(call.operands.front(), identity)
             : lower_hir_class_handle_container(
@@ -1528,9 +1529,8 @@ Lowerer::hir_systemverilog_value_type(
         return element;
     }
     // A member of a structure value (`p.m` over a class property).
-    constexpr std::string_view member_select { "@sv-select:" };
     if (source.kind == semantic::sv::ExpressionKind::call
-        && source.text.starts_with(member_select)
+        && source.marker == support::ExpressionMarker::sv_select
         && source.operands.size() == 1U && trailing_segments == 0U) {
         // A boxed structure property has no packed profile; its declared
         // type names the structure.
@@ -1561,8 +1561,7 @@ Lowerer::hir_systemverilog_value_type(
         if (structure == nullptr) {
             return std::nullopt;
         }
-        const auto name
-            = std::string_view { source.text }.substr(member_select.size());
+        const std::string_view name { source.marker_argument };
         const auto member = std::ranges::find(
             structure->members, name, &semantic::sv::PackedMember::name);
         if (member == structure->members.end()) {

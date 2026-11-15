@@ -2053,7 +2053,6 @@ scheduler.
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |
 | `FSIM-ELAB-DEFPARAM-001` | error | A `defparam` hierarchy index or value cannot be resolved as a locally static SystemVerilog constant. |
 | `FSIM-ELAB-DEFPARAM-002` | error | A `defparam` target does not resolve to an elaborated descendant instance parameter, or names a type parameter, which a `defparam` cannot override (IEEE 1800-2017 6.20.3). |
-| `FSIM-ELAB-DEFPARAM-003` | error | Multiple overrides assign the same parameter on a `defparam` target. |
 | `FSIM-ELAB-DEFPARAM-004` | error | A `defparam` path crosses an unsupported language boundary or targets an object that cannot accept parameter overrides. |
 | `FSIM-ELAB-DEFPARAM-005` | error | A defparam value names a variable, net or port instead of a constant expression (IEEE 1800-2017 23.10.1). |
 | `FSIM-ELAB-SVEXTERN-001` | error | An extern module, interface, or program declaration has no unique definition in its logical library. |

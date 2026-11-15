@@ -23,6 +23,13 @@ using Operator = runtime::SystemVerilogConstraintExpressionOperator;
   return value;
 }
 
+// The one-bit two-state profile of a condition (IEEE 1800-2023 11.4.7).
+[[nodiscard]] runtime::SystemVerilogConstraintVariableProfile
+truth_profile() {
+  return {runtime::SystemVerilogConstraintDomainKind::BitVector,
+      1, false, "", false, support::SystemVerilogBuiltinType::bit};
+}
+
 // A value of `width` bits with only bit `bit` set.
 [[nodiscard]] runtime::PackedLogic4 bit_value(
     const std::size_t width, const std::size_t bit) {
@@ -58,7 +65,7 @@ literal(const sv::ConstraintExpression& expression) {
             1, true_value ? runtime::Logic4::one : runtime::Logic4::zero),
         runtime::SystemVerilogConstraintVariableProfile{
             runtime::SystemVerilogConstraintDomainKind::BitVector,
-            1, false, "bit", false}};
+            1, false, "", false, support::SystemVerilogBuiltinType::bit}};
   }
   if (expression.kind == sv::ConstraintExpressionKind::integer_literal) {
     const auto value = decimal(expression.text);
@@ -69,7 +76,7 @@ literal(const sv::ConstraintExpression& expression) {
         low_value(width, *value),
         runtime::SystemVerilogConstraintVariableProfile{
             runtime::SystemVerilogConstraintDomainKind::Integer,
-            width, true, "integer", true}};
+            width, true, "", true, support::SystemVerilogBuiltinType::integer}};
   }
   if (expression.kind != sv::ConstraintExpressionKind::logic_literal) {
     return std::nullopt;
@@ -90,7 +97,7 @@ literal(const sv::ConstraintExpression& expression) {
         runtime::PackedLogic4::from_msb_string(std::string{digit}),
         runtime::SystemVerilogConstraintVariableProfile{
             runtime::SystemVerilogConstraintDomainKind::BitVector,
-            1, false, "logic", true}};
+            1, false, "", true, support::SystemVerilogBuiltinType::logic}};
   }
   // An unsized based literal (`'hDEADBEEF`) is at least 32 bits wide
   // (IEEE 1800-2017 5.7.1).
@@ -131,8 +138,9 @@ literal(const sv::ConstraintExpression& expression) {
             runtime::SystemVerilogConstraintDomainKind::BitVector,
             static_cast<std::size_t>(*width_value),
             signed_literal,
-            signed_literal ? "logic signed" : "logic",
-            true}};
+            "",
+            true,
+            support::SystemVerilogBuiltinType::logic}};
   }
   const auto digit_width = base == 'b' ? 1U : base == 'o' ? 3U
       : base == 'h' ? 4U : 0U;
@@ -169,8 +177,9 @@ literal(const sv::ConstraintExpression& expression) {
             runtime::SystemVerilogConstraintDomainKind::BitVector,
             static_cast<std::size_t>(*width_value),
             signed_literal,
-            signed_literal ? "logic signed" : "logic",
-            true}};
+            "",
+            true,
+            support::SystemVerilogBuiltinType::logic}};
   } catch (const std::invalid_argument&) {
     return std::nullopt;
   }
@@ -281,8 +290,8 @@ class Lowerer final {
             const auto next = rest.find('.');
             sv::ConstraintExpression member;
             member.kind = sv::ConstraintExpressionKind::call;
-            member.text = std::string{member_prefix}
-                + std::string{rest.substr(0, next)};
+            member.marker = support::ExpressionMarker::sv_select;
+            member.marker_argument = std::string{rest.substr(0, next)};
             member.source = expression.source;
             member.operands.push_back(std::move(selection));
             selection = std::move(member);
@@ -409,36 +418,43 @@ class Lowerer final {
       return builder_.constant(std::move(identity), profile);
     }
     if (expression.kind == sv::ConstraintExpressionKind::call
-        && expression.text.starts_with("@sv-cast:")
+        && expression.marker == support::ExpressionMarker::sv_cast
         && expression.operands.size() == 1U) {
+      using Target = support::SystemVerilogCastTarget;
       const auto operand = lower(expression.operands.front());
       if (!operand) return std::nullopt;
-      const auto target = std::string_view{expression.text}.substr(9U);
+      const std::string_view target{expression.marker_argument};
       auto profile = builder_.profile(*operand);
-      const auto separator = target.find(':');
-      if (separator != std::string_view::npos
-          && (target.substr(0, separator) == "signed"
-              || target.substr(0, separator) == "unsigned")) {
+      const bool sign_cast = expression.cast_target == Target::signed_type
+          || expression.cast_target == Target::unsigned_type;
+      if (sign_cast && !target.empty()) {
         // A typedef cast resolved to its signedness and width.
-        const auto width = decimal(target.substr(separator + 1U));
+        const auto width = decimal(target);
         if (!width || *width == 0U || *width > 4096U) {
           error_ = "constraint cast width is out of range";
           return std::nullopt;
         }
-        profile.signed_value = target.substr(0, separator) == "signed";
+        profile.signed_value = expression.cast_target == Target::signed_type;
         profile.width = static_cast<std::size_t>(*width);
-      } else if (target == "signed" || target == "unsigned") {
-        profile.signed_value = target == "signed";
-      } else if (const auto width = decimal(target)) {
-        if (*width == 0U || *width > 4096U) {
+      } else if (sign_cast) {
+        profile.signed_value = expression.cast_target == Target::signed_type;
+      } else if (expression.cast_target == Target::size) {
+        const auto width = decimal(target);
+        if (!width || *width == 0U || *width > 4096U) {
           error_ = "constraint cast width is out of range";
           return std::nullopt;
         }
         profile.width = static_cast<std::size_t>(*width);
-      } else if (const auto scalar = integral_cast(target)) {
+      } else if (const auto scalar = expression.cast_target == Target::builtin
+                     ? integral_cast(expression.cast_builtin)
+                     : std::nullopt) {
         profile = *scalar;
       } else {
-        error_ = "unsupported constraint cast '" + std::string{target} + "'";
+        error_ = "unsupported constraint cast '"
+            + std::string{expression.cast_target == Target::builtin
+                  ? support::systemverilog_builtin_type_name(
+                        expression.cast_builtin)
+                  : target} + "'";
         return std::nullopt;
       }
       return builder_.resize(*operand, profile);
@@ -585,7 +601,8 @@ class Lowerer final {
       }
       const runtime::SystemVerilogConstraintVariableProfile result_profile{
           runtime::SystemVerilogConstraintDomainKind::BitVector,
-          total, false, "logic", false};
+          total, false, "", false,
+          support::SystemVerilogBuiltinType::logic};
       std::optional<ExpressionId> result;
       for (const auto part : parts) {
         auto part_profile = builder_.profile(part);
@@ -617,7 +634,7 @@ class Lowerer final {
       // `a[i].m[j]` selects an element of an array member.
       const bool member_array = expression.operands[0].kind
               == sv::ConstraintExpressionKind::call
-          && expression.operands[0].text.starts_with(member_prefix)
+          && expression.operands[0].marker == support::ExpressionMarker::sv_select
           && [&] {
                const auto prior_error = error_;
                const auto path = aggregate_path(expression.operands[0]);
@@ -664,15 +681,15 @@ class Lowerer final {
       return builder_.resize(shifted, profile);
     }
     if (expression.kind == sv::ConstraintExpressionKind::call
-        && expression.text.starts_with(member_prefix)
+        && expression.marker == support::ExpressionMarker::sv_select
         && expression.operands.size() == 1U) {
       // A member of an element of an array of structures (`a[i].m`) is a
       // variable of its own (IEEE 1800-2017 7.2, 18.4).
       const auto path = member_path(expression);
       if (!path) {
         if (error_.empty()) {
-          error_ = "constraint member selection '" + expression.text
-              + "' is not of a structure element";
+          error_ = "constraint member selection '"
+              + expression.marker_argument + "' is not of a structure element";
         }
         return std::nullopt;
       }
@@ -701,7 +718,7 @@ class Lowerer final {
                 == sv::ConstraintExpressionKind::index
             || (expression.operands[0].kind
                     == sv::ConstraintExpressionKind::call
-                && expression.operands[0].text.starts_with(member_prefix)
+                && expression.operands[0].marker == support::ExpressionMarker::sv_select
                 && expression.operands[0].operands.size() == 1U))) {
       const auto select_from = [&](const std::string& path,
                                    const std::string& typed)
@@ -743,7 +760,8 @@ class Lowerer final {
               ? builder_.constant(held->keys[index],
                     runtime::SystemVerilogConstraintVariableProfile{
                         runtime::SystemVerilogConstraintDomainKind::BitVector,
-                        held->keys[index].width(), false, "bit", false})
+                        held->keys[index].width(), false, "", false,
+                        support::SystemVerilogBuiltinType::bit})
               : builder_.constant(low_value(32,
                     static_cast<std::uint64_t>(index_at(path, index))),
                     index_profile());
@@ -823,9 +841,7 @@ class Lowerer final {
       }
       if (membership.operands.size() == 1U) {
         return builder_.constant(low_value(1, 0),
-            runtime::SystemVerilogConstraintVariableProfile{
-                runtime::SystemVerilogConstraintDomainKind::BitVector,
-                1, false, "bit", false});
+            truth_profile());
       }
       return lower(membership);
     }
@@ -866,9 +882,7 @@ class Lowerer final {
           }
           if (!selected) {
             selected = builder_.constant(low_value(1, 0),
-                runtime::SystemVerilogConstraintVariableProfile{
-                    runtime::SystemVerilogConstraintDomainKind::BitVector,
-                    1, false, "bit", false});
+                truth_profile());
           }
         } else {
           const auto choice = lower(item);
@@ -888,9 +902,7 @@ class Lowerer final {
     if (expression.kind == sv::ConstraintExpressionKind::solve_before
         && !iterators_.empty()) {
       return builder_.constant(low_value(1, 1),
-          runtime::SystemVerilogConstraintVariableProfile{
-              runtime::SystemVerilogConstraintDomainKind::BitVector,
-              1, false, "bit", false});
+          truth_profile());
     }
     if (expression.kind == sv::ConstraintExpressionKind::foreach_constraint
         && expression.operands.size() == 2U) {
@@ -905,7 +917,7 @@ class Lowerer final {
                   != sv::ConstraintExpressionKind::index
               && !(selection.operands[0].kind
                       == sv::ConstraintExpressionKind::call
-                  && selection.operands[0].text.starts_with(member_prefix)
+                  && selection.operands[0].marker == support::ExpressionMarker::sv_select
                   && selection.operands[0].operands.size() == 1U))
           || selection.operands[1].kind
               != sv::ConstraintExpressionKind::name) {
@@ -925,9 +937,7 @@ class Lowerer final {
       }
       if (predicates.empty()) {
         return builder_.constant(low_value(1, 1),
-            runtime::SystemVerilogConstraintVariableProfile{
-                runtime::SystemVerilogConstraintDomainKind::BitVector,
-                1, false, "bit", false});
+            truth_profile());
       }
       return builder_.conjunction(predicates);
     }
@@ -1009,9 +1019,7 @@ class Lowerer final {
         }
         if (result) return result;
         return builder_.constant(low_value(1, equal ? 1U : 0U),
-            runtime::SystemVerilogConstraintVariableProfile{
-                runtime::SystemVerilogConstraintDomainKind::BitVector,
-                1, false, "bit", false});
+            truth_profile());
       }
     }
     // Only a parameter given `$` is unbounded (IEEE 1800-2017 20.6.3);
@@ -1250,9 +1258,7 @@ class Lowerer final {
       builder_ = {};
       dependencies_.clear();
       auto holds = builder_.constant(low_value(1, 1),
-          runtime::SystemVerilogConstraintVariableProfile{
-              runtime::SystemVerilogConstraintDomainKind::BitVector,
-              1, false, "bit", false});
+          truth_profile());
       for (const auto& guard : guards_) {
         auto condition = lower(*guard.condition);
         if (!condition) return deferred_;
@@ -1389,7 +1395,7 @@ class Lowerer final {
       return source.kind == sv::ConstraintExpressionKind::name
           || source.kind == sv::ConstraintExpressionKind::index
           || (source.kind == sv::ConstraintExpressionKind::call
-              && source.text.starts_with(member_prefix));
+              && source.marker == support::ExpressionMarker::sv_select);
     };
     // `v + c`, `c + v` and `v - c` with `c` a constant weight `v` at the
     // items less (or plus) `c`.
@@ -1504,9 +1510,7 @@ class Lowerer final {
     builder_ = {};
     dependencies_.clear();
     auto holds = builder_.constant(low_value(1, 1),
-        runtime::SystemVerilogConstraintVariableProfile{
-            runtime::SystemVerilogConstraintDomainKind::BitVector,
-            1, false, "bit", false});
+        truth_profile());
     for (const auto& guard : guards_) {
       auto condition = lower(*guard.condition);
       if (!condition) {
@@ -1678,7 +1682,7 @@ class Lowerer final {
     }
     // An array member of a structure element (`a[i].m`, 7.2).
     if (expression.kind == sv::ConstraintExpressionKind::call
-        && expression.text.starts_with(member_prefix)
+        && expression.marker == support::ExpressionMarker::sv_select
         && expression.operands.size() == 1U) {
       const auto prior_error = error_;
       auto path = member_path(expression);
@@ -1842,8 +1846,6 @@ class Lowerer final {
     return values;
   }
 
-  static constexpr std::string_view member_prefix{"@sv-select:"};
-
   /// The solver's spelling of a spelled member path (`o.a[0].m`): the
   /// class randomizer names each object a rand handle reaches as
   /// `<root property>.<owner class>::<property>...`, so every segment of
@@ -1923,12 +1925,12 @@ class Lowerer final {
       return frame->path + "[" + std::to_string(frame->position) + "]";
     }
     if (expression.kind == sv::ConstraintExpressionKind::call
-        && expression.text.starts_with(member_prefix)
+        && expression.marker == support::ExpressionMarker::sv_select
         && expression.operands.size() == 1U) {
       const auto base = member_path(expression.operands.front());
       if (!base || base->empty()) return base;
       return solver_path(*base + "."
-          + expression.text.substr(member_prefix.size()));
+          + expression.marker_argument);
     }
     if (expression.kind != sv::ConstraintExpressionKind::index
         || expression.operands.size() != 2U) {
@@ -2054,7 +2056,7 @@ class Lowerer final {
   [[nodiscard]] static runtime::SystemVerilogConstraintVariableProfile
   index_profile() {
     return {runtime::SystemVerilogConstraintDomainKind::Integer,
-        32, true, "int", false};
+        32, true, "", false, support::SystemVerilogBuiltinType::int_type};
   }
 
   /// The class randomizer's size variables are two-state `int`s.
@@ -2065,18 +2067,28 @@ class Lowerer final {
 
   [[nodiscard]] static std::optional<
       runtime::SystemVerilogConstraintVariableProfile>
-  integral_cast(const std::string_view type) {
+  integral_cast(const support::SystemVerilogBuiltinType type) {
     using Kind = runtime::SystemVerilogConstraintDomainKind;
-    if (type == "int") return {{Kind::Integer, 32, true, "int", false}};
-    if (type == "integer") return {{Kind::Integer, 32, true, "integer", true}};
-    if (type == "shortint") return {{Kind::Integer, 16, true, "shortint", false}};
-    if (type == "longint") return {{Kind::Integer, 64, true, "longint", false}};
-    if (type == "byte") return {{Kind::Integer, 8, true, "byte", false}};
-    if (type == "bit") return {{Kind::BitVector, 1, false, "bit", false}};
-    if (type == "logic" || type == "reg") {
-      return {{Kind::BitVector, 1, false, "logic", true}};
+    using Builtin = support::SystemVerilogBuiltinType;
+    switch (type) {
+      case Builtin::int_type:
+        return {{Kind::Integer, 32, true, "", false, Builtin::int_type}};
+      case Builtin::integer:
+        return {{Kind::Integer, 32, true, "", true, Builtin::integer}};
+      case Builtin::shortint:
+        return {{Kind::Integer, 16, true, "", false, Builtin::shortint}};
+      case Builtin::longint:
+        return {{Kind::Integer, 64, true, "", false, Builtin::longint}};
+      case Builtin::byte:
+        return {{Kind::Integer, 8, true, "", false, Builtin::byte}};
+      case Builtin::bit:
+        return {{Kind::BitVector, 1, false, "", false, Builtin::bit}};
+      case Builtin::logic:
+      case Builtin::reg:
+        return {{Kind::BitVector, 1, false, "", true, Builtin::logic}};
+      default:
+        return std::nullopt;
     }
-    return std::nullopt;
   }
 
   /// A variable read with the declared profile of its binding. The solver
@@ -2089,6 +2101,7 @@ class Lowerer final {
       if (held.kind != profile.kind || held.width != profile.width
           || held.signed_value != profile.signed_value
           || held.nominal_type != profile.nominal_type
+          || held.builtin != profile.builtin
           || held.four_state != profile.four_state) {
         return builder_.resize(builder_.variable(variable, held), profile);
       }
@@ -2317,7 +2330,10 @@ class Lowerer final {
     auto result = profile;
     result.kind = runtime::SystemVerilogConstraintDomainKind::BitVector;
     result.width = width;
-    result.nominal_type = profile.four_state ? "logic" : "bit";
+    result.nominal_type.clear();
+    result.builtin = profile.four_state
+        ? support::SystemVerilogBuiltinType::logic
+        : support::SystemVerilogBuiltinType::bit;
     return builder_.resize(shifted, result);
   }
 
@@ -2510,6 +2526,15 @@ class Lowerer final {
   runtime::SystemVerilogConstraintExpressionBuilder builder_;
 };
 
+// shortint, int, longint, integer: the integer atoms that solve as Integer
+// domains (IEEE 1800-2023 6.11).
+[[nodiscard]] constexpr bool is_int_family(
+    const support::SystemVerilogBuiltinType kind) noexcept {
+  using Kind = support::SystemVerilogBuiltinType;
+  return kind == Kind::shortint || kind == Kind::int_type
+      || kind == Kind::longint || kind == Kind::integer;
+}
+
 }  // namespace
 
 runtime::SystemVerilogConstraintVariableProfile
@@ -2519,7 +2544,7 @@ systemverilog_constraint_profile(
   profile.kind = binding.type.value_form
           == semantic::sv::TypeForm::enumeration
       ? runtime::SystemVerilogConstraintDomainKind::Enumeration
-      : binding.type.target.spelling.find("int") != std::string::npos
+      : is_int_family(binding.type.builtin)
           ? runtime::SystemVerilogConstraintDomainKind::Integer
           : runtime::SystemVerilogConstraintDomainKind::BitVector;
   profile.width = static_cast<std::size_t>(
@@ -2527,8 +2552,11 @@ systemverilog_constraint_profile(
           profile.kind == runtime::SystemVerilogConstraintDomainKind::Integer
               ? 32U : 1U));
   profile.signed_value = binding.type.signed_value;
-  profile.nominal_type = binding.type.target.spelling.empty()
-      ? "$constraint-value" : binding.type.target.spelling;
+  profile.builtin = binding.type.builtin;
+  if (profile.builtin == support::SystemVerilogBuiltinType::none) {
+    profile.nominal_type = binding.type.target.spelling.empty()
+        ? "$constraint-value" : binding.type.target.spelling;
+  }
   profile.four_state = binding.type.four_state;
   return profile;
 }

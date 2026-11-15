@@ -334,7 +334,8 @@ resolve_vhdl_vital_named_constant(
     std::size_t contextual_width,
     std::span<const semantic::CompiledBindingFrame> binding_frames = { });
 
-/// An internal `@sv-container-method:<method>:<container>` call: `size()`
+/// An internal container-method call (`sv_container_size`,
+/// `sv_container_pop_front` ...; payload: the container property): `size()`
 /// (a 32-bit int) or `pop_front()` (a 64-bit two-state element handle) of
 /// a container held by an object (IEEE 1800-2017 7.5.1, 7.10.2).
 struct SvContainerMethodCall {
@@ -358,39 +359,30 @@ struct SvContainerMethodCall {
 };
 
 [[nodiscard]] inline std::optional<SvContainerMethodCall>
-sv_container_method_call(const std::string_view text) noexcept
+sv_container_method_call(const support::ExpressionMarker marker,
+    const std::string_view container) noexcept
 {
-    constexpr auto prefix = std::string_view { "@sv-container-method:" };
-    constexpr auto pop_front = std::string_view { "pop_front:" };
-    constexpr auto pop_back = std::string_view { "pop_back:" };
-    constexpr auto size = std::string_view { "size:" };
-    if (!text.starts_with(prefix)) {
+    using Marker = support::ExpressionMarker;
+    switch (marker) {
+    case Marker::sv_container_pop_front:
+        return SvContainerMethodCall { true, container, { } };
+    case Marker::sv_container_pop_back:
+        return SvContainerMethodCall { true, container, { }, true };
+    case Marker::sv_container_size:
+        return SvContainerMethodCall { false, container, { } };
+    case Marker::sv_container_sum:
+        return SvContainerMethodCall { false, container, "sum" };
+    case Marker::sv_container_product:
+        return SvContainerMethodCall { false, container, "product" };
+    case Marker::sv_container_and:
+        return SvContainerMethodCall { false, container, "and" };
+    case Marker::sv_container_or:
+        return SvContainerMethodCall { false, container, "or" };
+    case Marker::sv_container_xor:
+        return SvContainerMethodCall { false, container, "xor" };
+    default:
         return std::nullopt;
     }
-    const auto operation = text.substr(prefix.size());
-    if (operation.starts_with(pop_front)) {
-        return SvContainerMethodCall { true,
-            operation.substr(pop_front.size()), { } };
-    }
-    if (operation.starts_with(pop_back)) {
-        return SvContainerMethodCall { true,
-            operation.substr(pop_back.size()), { }, true };
-    }
-    if (operation.starts_with(size)) {
-        return SvContainerMethodCall { false, operation.substr(size.size()),
-            { } };
-    }
-    for (const auto reduction : { std::string_view { "sum" },
-             std::string_view { "product" }, std::string_view { "and" },
-             std::string_view { "or" }, std::string_view { "xor" } }) {
-        if (operation.size() > reduction.size()
-            && operation.starts_with(reduction)
-            && operation[reduction.size()] == ':') {
-            return SvContainerMethodCall { false,
-                operation.substr(reduction.size() + 1U), reduction };
-        }
-    }
-    return std::nullopt;
 }
 
 // The width of an unsized decimal literal whose value needs more than 64
@@ -6733,6 +6725,9 @@ private:
         std::vector<InstructionIndex> disable_jumps;
         std::optional<InstructionIndex> fork_site;
         InstructionIndex begin { };
+        // The block a foreach statement is written as: a break in its
+        // innermost loop ends it (12.8).
+        bool foreach_statement { };
     };
     std::vector<BlockControlContext> block_controls_;
     struct NamedBlockControl {

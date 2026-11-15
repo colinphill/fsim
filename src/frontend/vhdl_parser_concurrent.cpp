@@ -406,7 +406,7 @@ GenerateRegion VhdlParser::parse_vhdl_static_block(
       const bool convertible = connection.port
           && port_named(*connection.port) == result.block_ports.end()
           && group.kind == ExpressionKind::Aggregate
-          && group.text == "@vhdl-formal-subelements"
+          && group.marker == support::ExpressionMarker::vhdl_formal_subelements
           && !group.operands.empty()
           && group.aggregate_choice_expressions.size()
               == group.operands.size()
@@ -437,6 +437,7 @@ GenerateRegion VhdlParser::parse_vhdl_static_block(
             if (actual.kind == ExpressionKind::Call
                 && actual.operands.size() == 1U
                 && actual.operands.front().kind == ExpressionKind::Identifier
+                && actual.marker == support::ExpressionMarker::none
                 && !actual.text.starts_with('@')) {
               actual_name = actual.operands.front();
             }
@@ -1268,8 +1269,8 @@ void VhdlParser::parse_vhdl_port_associations(
         (void)require_vhdl_standard(keyword, VhdlStandard::Vhdl2008,
             "an inertial port actual", "associate the signal directly");
         auto value = parse_expression();
-        return Expression { ExpressionKind::Call, "@vhdl-inertial",
-            { std::move(value) }, cover(keyword.span, previous().span) };
+        return marked_expression(support::ExpressionMarker::vhdl_inertial, { },
+            { std::move(value) }, cover(keyword.span, previous().span));
       }();
       auto group = std::ranges::find(
           subelement_groups, port, &SubelementGroup::port);
@@ -1284,7 +1285,8 @@ void VhdlParser::parse_vhdl_port_associations(
         PortConnection connection;
         connection.port = port;
         connection.value.kind = ExpressionKind::Aggregate;
-        connection.value.text = "@vhdl-formal-subelements";
+        connection.value.marker
+            = support::ExpressionMarker::vhdl_formal_subelements;
         connection.value.span = cover(actual_start.span, previous().span);
         connection.span = connection.value.span;
         subelement_groups.push_back({ connections.size(), port });
@@ -1298,6 +1300,8 @@ void VhdlParser::parse_vhdl_port_associations(
       const std::function<bool(const Expression&, const Expression&)>
           same_choice = [&](const Expression& left, const Expression& right) {
             if (left.kind != right.kind || left.text != right.text
+                || left.marker != right.marker
+                || left.marker_argument != right.marker_argument
                 || left.operands.size() != right.operands.size()) {
               return false;
             }
@@ -1318,7 +1322,8 @@ void VhdlParser::parse_vhdl_port_associations(
           if (index < nested->aggregate_choices.size()
               && nested->aggregate_choices[index] == name
               && nested->operands[index].kind == ExpressionKind::Aggregate
-              && nested->operands[index].text == "@vhdl-formal-subelements"
+              && nested->operands[index].marker
+                  == support::ExpressionMarker::vhdl_formal_subelements
               && index < nested->aggregate_choice_expressions.size()
               && !nested->aggregate_choice_expressions[index].empty()
               && same_choice(nested->aggregate_choice_expressions[index].front(),
@@ -1327,8 +1332,9 @@ void VhdlParser::parse_vhdl_port_associations(
           }
         }
         if (!existing) {
-          Expression inner { ExpressionKind::Aggregate,
-              "@vhdl-formal-subelements", { }, outer.choice.span };
+          Expression inner { ExpressionKind::Aggregate, { }, { },
+              outer.choice.span };
+          inner.marker = support::ExpressionMarker::vhdl_formal_subelements;
           nested->aggregate_choices.push_back(name);
           nested->aggregate_choice_expressions.push_back({ outer.choice });
           nested->operands.push_back(std::move(inner));
@@ -1500,7 +1506,7 @@ void VhdlParser::rewrite_vhdl_formal_conversions(DesignUnit& unit,
       const auto convertible = connection.port
           && port_named(*connection.port) == ports.end()
           && group.kind == ExpressionKind::Aggregate
-          && group.text == "@vhdl-formal-subelements"
+          && group.marker == support::ExpressionMarker::vhdl_formal_subelements
           && !group.operands.empty()
           && group.aggregate_choice_expressions.size() == group.operands.size()
           && std::ranges::all_of(group.aggregate_choice_expressions,
@@ -1528,6 +1534,7 @@ void VhdlParser::rewrite_vhdl_formal_conversions(DesignUnit& unit,
         std::optional<std::string> actual_conversion;
         if (actual.kind == ExpressionKind::Call && actual.operands.size() == 1U
             && actual.operands.front().kind == ExpressionKind::Identifier
+            && actual.marker == support::ExpressionMarker::none
             && !actual.text.starts_with('@')) {
           actual_conversion = actual.text;
           actual_name = actual.operands.front();
@@ -1623,8 +1630,9 @@ PortConnection VhdlParser::parse_vhdl_port_connection() {
     (void)require_vhdl_standard(keyword, VhdlStandard::Vhdl2008,
         "an inertial port actual", "associate the signal directly");
     auto value = parse_expression();
-    connection.value = Expression { ExpressionKind::Call, "@vhdl-inertial",
-        { std::move(value) }, cover(keyword.span, previous().span) };
+    connection.value = marked_expression(
+        support::ExpressionMarker::vhdl_inertial, { },
+        { std::move(value) }, cover(keyword.span, previous().span));
     connection.span = cover(start.span, previous().span);
     return connection;
   }

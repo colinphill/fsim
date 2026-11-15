@@ -246,6 +246,9 @@ struct PackedTypeMetadata {
         frontend::SystemVerilogScalarKind::None
     };
     std::string systemverilog_net_type;
+    support::SystemVerilogNetKind systemverilog_net_type_kind {
+        support::SystemVerilogNetKind::none
+    };
     std::string systemverilog_resolution_function;
     std::optional<frontend::PackedRange> packed_range;
     bool is_signed { };
@@ -570,11 +573,22 @@ struct SignalInfo {
     std::string name;
     std::size_t width { };
     std::string type_name;
+    // The SystemVerilog built-in type `type_name` names (IEEE 1800-2023
+    // 6.11-6.17); `none` for a named type and for every VHDL or SystemC
+    // object, whose type names can spell the same words.
+    support::SystemVerilogBuiltinType systemverilog_builtin {
+        support::SystemVerilogBuiltinType::none };
     frontend::ValueDomain source_domain { frontend::ValueDomain::Unknown };
     frontend::SystemVerilogScalarKind systemverilog_scalar {
         frontend::SystemVerilogScalarKind::None
     };
     std::string systemverilog_net_type;
+    // The built-in net type of a SystemVerilog net (IEEE 1800-2023 6.7); `none`
+    // for a variable, a net of a user-defined nettype (its name stays in
+    // systemverilog_net_type) and every VHDL or SystemC object.
+    support::SystemVerilogNetKind systemverilog_net_kind {
+        support::SystemVerilogNetKind::none
+    };
     bool is_signed { };
     std::optional<frontend::PackedRange> packed_range;
     // VHDL-only type metadata is large (physical-type metadata alone exceeds
@@ -1787,6 +1801,11 @@ public:
     /// 6.21, 23.6). Recorded while the design is built; the DesignIR built
     /// at elaboration keeps the result.
     [[nodiscard]] bool storage_alias_path(std::string_view path) const;
+    /// Whether `path` is the name relative to the root by which a
+    /// single-root design's object is also found: a lookup name, not a
+    /// hierarchical name (IEEE 1800-2023 21.7.2.3), so traces leave it out.
+    /// Recorded while the design is built, like storage_alias_path().
+    [[nodiscard]] bool root_relative_alias_path(std::string_view path) const;
     /// Return every debug-visible string object path in lexical order.
     /// String port aliases may refer to the same object ID as their connected
     /// parent object.
@@ -2012,6 +2031,9 @@ private:
     // Paths of the name maps below that are storage keys, not names (see
     // storage_alias_path); construction record, not saved.
     std::set<std::string, std::less<>> storage_alias_paths_;
+    // Root-relative lookup names of a single-root design (see
+    // root_relative_alias_path); construction record, not saved.
+    std::set<std::string, std::less<>> root_relative_alias_paths_;
     // Construction drafts. Cleared before the design is published.
     std::unordered_map<std::string, runtime::simir::SignalId> signal_by_name_;
     std::unordered_map<

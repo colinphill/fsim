@@ -14,6 +14,7 @@ namespace fsim::app {
     const std::span<const std::string> actual_names,
     const std::span<const std::uint8_t> actual_directions,
     const bool virtual_dispatch,
+    const bool randomize_no_properties,
     const application_detail::SystemVerilogClassHirExecution::ActualReferences
         actual_references,
     const std::optional<runtime::simir::ProcessId> report_process)
@@ -21,8 +22,8 @@ namespace fsim::app {
     // The built-in randomization methods, called from a method body (IEEE
     // 1800-2017 18.6, 18.8).
     if (canonical_identity == "@builtin-randomize") {
-        return invoke_source_randomize(
-            handle, actual_names, actuals, { }, report_process);
+        return invoke_source_randomize(handle, actual_names, actuals, { },
+            randomize_no_properties, report_process);
     }
     if (canonical_identity.starts_with("@builtin-rand-mode:")
         || canonical_identity.starts_with("@builtin-constraint-mode:")) {

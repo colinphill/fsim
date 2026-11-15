@@ -255,9 +255,9 @@ class_ancestry(
 }
 
 [[nodiscard]] bool base_constructor_call(const Statement& statement) {
-  constexpr std::string_view prefix{"@sv-base-constructor:"};
   return statement.kind == StatementKind::TaskCall
-      && statement.task_name.starts_with(prefix);
+      && statement.task_marker
+          == support::ExpressionMarker::sv_base_constructor;
 }
 
 void collect_base_constructor_calls(
@@ -268,6 +268,7 @@ void collect_base_constructor_calls(
     collect_base_constructor_calls(statement.statements, calls);
     collect_base_constructor_calls(statement.else_statements, calls);
     collect_base_constructor_calls(statement.loop_updates, calls);
+    collect_base_constructor_calls(statement.loop_initializations, calls);
     for (const auto& alternative : statement.case_alternatives) {
       collect_base_constructor_calls(alternative.statements, calls);
     }

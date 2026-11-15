@@ -384,15 +384,15 @@ Lowerer::hir_vhdl_external_subtype(
         : std::nullopt;
     if (!expression || expression->vhdl == nullptr
         || expression->vhdl->kind != semantic::vhdl::ExpressionKind::call
-        || expression->vhdl->text != "@vhdl-external"
+        || expression->vhdl->marker != support::ExpressionMarker::vhdl_external
         || expression->vhdl->operands.size() != 2U) {
         return std::nullopt;
     }
-    constexpr auto subtype_prefix = std::string_view { "@vhdl-subtype:" };
     const auto subtype_expression = specialized_hir_unit_->find_expression(
         expression->vhdl->operands.back());
     if (!subtype_expression || subtype_expression->vhdl == nullptr
-        || !subtype_expression->vhdl->text.starts_with(subtype_prefix)) {
+        || subtype_expression->vhdl->marker
+            != support::ExpressionMarker::vhdl_subtype) {
         return std::nullopt;
     }
     // The type mark analysis resolved for the subtype indication (8.7).
@@ -956,10 +956,10 @@ std::optional<Lowerer::HirVhdlShape> Lowerer::compute_hir_vhdl_shape(
     // (IEEE 1076-2008 10.13).
     const bool function_call
         = (source.kind == Kind::call
+              && source.marker == support::ExpressionMarker::none
               && !source.text.starts_with('@')
               && source.text.find('\'') == std::string::npos
-              && !source.text.starts_with(
-                  semantic::vhdl::qualified_expression_prefix))
+              && source.marker != support::ExpressionMarker::vhdl_qualified)
         || (source.kind == Kind::name && hir_vhdl_function_name(expression_id));
     const auto function_result = function_call
         ? hir_vhdl_function_result_shape(expression_id, hir_process_scope_)
@@ -1209,12 +1209,11 @@ std::optional<Lowerer::HirVhdlShape> Lowerer::compute_hir_vhdl_shape(
             facts = std::move(element);
         }
     } else if (source.kind == Kind::call && source.operands.size() == 1U
-        && (source.text.starts_with("@vhdl-member:")
+        && (source.marker == support::ExpressionMarker::vhdl_member
             || source.text == "'element")) {
         const auto step = source.text == "'element"
             ? std::string_view { }
-            : std::string_view { source.text }.substr(
-                  std::string_view { "@vhdl-member:" }.size());
+            : std::string_view { source.marker_argument };
         if (const auto prefix = hir_vhdl_shape(source.operands.front())) {
             HirVhdlShape element;
             for (const auto& constraint :
@@ -1262,8 +1261,7 @@ std::optional<Lowerer::HirVhdlShape> Lowerer::compute_hir_vhdl_shape(
             }
         }
     } else if (source.kind == Kind::call && source.operands.size() == 1U
-        && source.text.starts_with(
-            semantic::vhdl::qualified_expression_prefix)) {
+        && source.marker == support::ExpressionMarker::vhdl_qualified) {
         facts = hir_vhdl_shape(source.operands.front());
         // An aggregate or literal operand has the type mark as its context
         // (IEEE 1076-2008 9.3.5).
@@ -1623,7 +1621,7 @@ std::optional<Lowerer::HirVhdlShape> Lowerer::hir_vhdl_contextual_shape(
     // operand's (IEEE 1076-2008 9.3.5).
     if (value && value->vhdl != nullptr
         && value->vhdl->kind == semantic::vhdl::ExpressionKind::call
-        && value->vhdl->text.starts_with("@vhdl-qualified:")
+        && value->vhdl->marker == support::ExpressionMarker::vhdl_qualified
         && value->vhdl->operands.size() == 1U) {
         auto operand = hir_vhdl_contextual_shape(
             value->vhdl->operands.front(), context, scope);
@@ -1787,8 +1785,8 @@ std::optional<Lowerer::HirVhdlShape> Lowerer::hir_vhdl_record_value_shape(
     // aggregate (IEEE 1076-2008 9.3.5).
     if (expression->vhdl->kind == semantic::vhdl::ExpressionKind::call
         && expression->vhdl->operands.size() == 1U
-        && expression->vhdl->text.starts_with(
-            semantic::vhdl::qualified_expression_prefix)) {
+        && expression->vhdl->marker
+            == support::ExpressionMarker::vhdl_qualified) {
         const auto operand = specialized_hir_unit_->find_expression(
             expression->vhdl->operands.front());
         // The type mark alone says whether bounds stay open; the

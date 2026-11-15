@@ -104,7 +104,8 @@ namespace {
   // A static random variable keeps its random state, rand_mode and randc
   // cycle with its value (IEEE 1800-2017 18.4, 18.8).
   if (descriptor.random_kind != SystemVerilogClassRandomKind::None
-      && !descriptor.nominal_type.empty()) {
+      && (!descriptor.nominal_type.empty()
+          || descriptor.builtin != support::SystemVerilogBuiltinType::none)) {
     result.random_state = SystemVerilogClassRandomState{
         descriptor.random_kind,
         width,
@@ -115,7 +116,9 @@ namespace {
         0,
         0,
         0,
-        {}};
+        {},
+        0,
+        descriptor.builtin};
   }
   return result;
 }

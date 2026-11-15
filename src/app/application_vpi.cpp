@@ -342,21 +342,18 @@ namespace {
         }
         // The built-in classes of package std are class variables too
         // (IEEE 1800-2023 15.4, 15.3, 9.7, 37.33).
-        if (const auto& spelling = source.target.spelling;
-            spelling == "mailbox" || spelling == "semaphore"
-            || spelling == "process" || spelling.starts_with("std::")) {
-            const auto leaf = spelling.starts_with("std::")
-                ? spelling.substr(5U)
-                : spelling;
-            if (leaf == "mailbox" || leaf == "semaphore" || leaf == "process") {
-                descriptor.kind
-                    = runtime::SystemVerilogVpiDescriptorKind::ClassHandle;
-                descriptor.category
-                    = runtime::SystemVerilogVpiValueCategory::None;
-                descriptor.width = 64U;
-                descriptor.nominal_name = leaf;
-                return descriptor;
-            }
+        if (const auto standard = source.standard_class;
+            standard == support::SystemVerilogStandardClass::mailbox
+            || standard == support::SystemVerilogStandardClass::semaphore
+            || standard == support::SystemVerilogStandardClass::process) {
+            descriptor.kind
+                = runtime::SystemVerilogVpiDescriptorKind::ClassHandle;
+            descriptor.category
+                = runtime::SystemVerilogVpiValueCategory::None;
+            descriptor.width = 64U;
+            descriptor.nominal_name
+                = support::systemverilog_standard_class_name(standard);
+            return descriptor;
         }
         if (source.value_form == semantic::sv::TypeForm::string) {
             descriptor.kind = runtime::SystemVerilogVpiDescriptorKind::String;
@@ -367,10 +364,9 @@ namespace {
         }
 
         const auto integral_category = [&] {
-            const auto& spelling = source.target.spelling;
-            const bool integer_atom = spelling == "byte"
-                || spelling == "shortint" || spelling == "int"
-                || spelling == "longint" || spelling == "integer";
+            const bool integer_atom
+                = support::systemverilog_integer_atom(source.builtin)
+                && source.builtin != support::SystemVerilogBuiltinType::time;
             if (integer_atom) {
                 return source.four_state
                     ? runtime::SystemVerilogVpiValueCategory::Integer4
@@ -850,9 +846,11 @@ namespace {
         }
         // A two-state integer atom type is a decimal constant's (IEEE
         // 1800-2023 6.11, 37.3.2 vpiConstType).
-        const auto& spelling = declaration.type->target.spelling;
-        if ((spelling == "byte" || spelling == "shortint" || spelling == "int"
-                || spelling == "longint")
+        const auto two_state_atom = declaration.type->builtin;
+        if ((two_state_atom == support::SystemVerilogBuiltinType::byte
+                || two_state_atom == support::SystemVerilogBuiltinType::shortint
+                || two_state_atom == support::SystemVerilogBuiltinType::int_type
+                || two_state_atom == support::SystemVerilogBuiltinType::longint)
             && (domain == frontend::ValueDomain::Integer
                 || domain == frontend::ValueDomain::Bit2)) {
             category = runtime::SystemVerilogVpiValueCategory::Integer2;
@@ -1093,46 +1091,29 @@ namespace {
                 runtime::SystemVerilogVpiValueCategory::Logic4) };
     }
 
+    // The VPI net type of a built-in net type (IEEE 1800-2023 6.7, 37.16);
+    // a variable and a user-defined nettype have none.
     [[nodiscard]] runtime::SystemVerilogVpiNetKind vpi_net_kind(
-        const std::string_view name)
+        const support::SystemVerilogNetKind kind) noexcept
     {
-        if (name == "wire") {
-            return runtime::SystemVerilogVpiNetKind::Wire;
+        using Net = support::SystemVerilogNetKind;
+        using Vpi = runtime::SystemVerilogVpiNetKind;
+        switch (kind) {
+        case Net::wire: return Vpi::Wire;
+        case Net::tri: return Vpi::Tri;
+        case Net::wand: return Vpi::Wand;
+        case Net::wor: return Vpi::Wor;
+        case Net::tri0: return Vpi::Tri0;
+        case Net::tri1: return Vpi::Tri1;
+        case Net::supply0: return Vpi::Supply0;
+        case Net::supply1: return Vpi::Supply1;
+        case Net::uwire: return Vpi::Uwire;
+        case Net::trireg: return Vpi::TriReg;
+        case Net::triand: return Vpi::TriAnd;
+        case Net::trior: return Vpi::TriOr;
+        case Net::none: break;
         }
-        if (name == "tri") {
-            return runtime::SystemVerilogVpiNetKind::Tri;
-        }
-        if (name == "wand") {
-            return runtime::SystemVerilogVpiNetKind::Wand;
-        }
-        if (name == "wor") {
-            return runtime::SystemVerilogVpiNetKind::Wor;
-        }
-        if (name == "tri0") {
-            return runtime::SystemVerilogVpiNetKind::Tri0;
-        }
-        if (name == "tri1") {
-            return runtime::SystemVerilogVpiNetKind::Tri1;
-        }
-        if (name == "supply0") {
-            return runtime::SystemVerilogVpiNetKind::Supply0;
-        }
-        if (name == "supply1") {
-            return runtime::SystemVerilogVpiNetKind::Supply1;
-        }
-        if (name == "uwire") {
-            return runtime::SystemVerilogVpiNetKind::Uwire;
-        }
-        if (name == "trireg") {
-            return runtime::SystemVerilogVpiNetKind::TriReg;
-        }
-        if (name == "triand") {
-            return runtime::SystemVerilogVpiNetKind::TriAnd;
-        }
-        if (name == "trior") {
-            return runtime::SystemVerilogVpiNetKind::TriOr;
-        }
-        return runtime::SystemVerilogVpiNetKind::None;
+        return Vpi::None;
     }
 
     [[nodiscard]] runtime::SystemVerilogVpiValueCategory vpi_category(
@@ -1152,18 +1133,24 @@ namespace {
         case runtime::SystemVerilogScalarKind::None:
             break;
         }
-        if (signal.type_name == "event") {
+        using Builtin = support::SystemVerilogBuiltinType;
+        if (signal.systemverilog_builtin == Builtin::event) {
             return runtime::SystemVerilogVpiValueCategory::Event;
         }
-        const bool integer = signal.type_name == "integer"
-            || signal.type_name == "byte" || signal.type_name == "shortint"
-            || signal.type_name == "int" || signal.type_name == "longint";
+        const bool integer = support::systemverilog_integer_atom(
+                signal.systemverilog_builtin)
+            && signal.systemverilog_builtin != Builtin::time;
+        // A VHDL object of std.standard INTEGER is known by its type name
+        // here; the elaborated signal carries no VHDL type identity.
+        const bool four_state_integer
+            = signal.systemverilog_builtin == Builtin::integer
+            || (!vpi_language(language) && signal.type_name == "integer");
         switch (signal.source_domain) {
         case frontend::ValueDomain::Bit2:
             return integer ? runtime::SystemVerilogVpiValueCategory::Integer2
                            : runtime::SystemVerilogVpiValueCategory::Bit2;
         case frontend::ValueDomain::Integer:
-            return signal.type_name == "integer"
+            return four_state_integer
                 ? runtime::SystemVerilogVpiValueCategory::Integer4
                 : runtime::SystemVerilogVpiValueCategory::Integer2;
         case frontend::ValueDomain::Logic9:
@@ -1203,9 +1190,7 @@ namespace {
         result.category = category;
         result.net_kind = kind == runtime::SystemVerilogVpiObjectKind::Net
                 || kind == runtime::SystemVerilogVpiObjectKind::Port
-            ? vpi_net_kind(signal.systemverilog_net_type.empty()
-                      ? signal.type_name
-                      : signal.systemverilog_net_type)
+            ? vpi_net_kind(signal.systemverilog_net_kind)
             : runtime::SystemVerilogVpiNetKind::None;
         // An input or inout port is a net whatever drives the collapsed
         // signal it shares (IEEE 1800-2023 23.2.2.3, 37.15).
@@ -1954,16 +1939,161 @@ std::optional<VpiGenvarMatch> vpi_genvar_region(
     return match;
 }
 
-// The named blocks and forks of the processes a labelled generate block
-// holds are scopes beneath it (IEEE 1800-2023 27.6, 37.43, 38.36.1.1):
-// published once, with their nested blocks, as the generate scope's own
-// children. A block of a process named by it directly is the process.
+// A scope a procedure's statements make, to publish beneath `owner`: an
+// unnamed one has no name and a path that is a key, since a newline is in
+// no identifier (IEEE 1800-2023 5.6.1, 37.12).
+struct VpiScopeRequest {
+    runtime::SystemVerilogVpiObjectKind kind { };
+    std::string name;
+    std::string path;
+    fsim_vpi_handle_v1 owner { };
+    std::optional<semantic::SourceSpanId> source;
+    std::optional<semantic::ScopeId> hir_scope;
+};
+// Publishes a scope and returns its handle, or none to leave the scopes
+// inside it beneath its owner.
+using VpiScopePublisher = std::function<std::optional<fsim_vpi_handle_v1>(
+    const VpiScopeRequest&)>;
+using VpiStatementLookup = std::function<const semantic::sv::Statement*(
+    semantic::StatementId)>;
+using VpiProcessLookup = std::function<const semantic::sv::Process*(
+    semantic::ProcessId)>;
+
+// The kind of scope a procedural statement is (IEEE 1800-2023 9.3.5,
+// 12.7.1, 12.7.3, 37.12 details 1-3): a named block or fork, an unnamed one
+// that declares items, a for loop that declares its variables, or a foreach
+// loop; none for any other statement.
+std::optional<runtime::SystemVerilogVpiObjectKind> vpi_statement_scope_kind(
+    const semantic::sv::Statement& statement)
+{
+    using Kind = semantic::sv::StatementKind;
+    if (statement.generated_role != support::GeneratedStatementRole::none) {
+        return std::nullopt;
+    }
+    if (statement.foreach_collection) {
+        return statement.nested_scope
+            ? std::optional { runtime::SystemVerilogVpiObjectKind::Foreach }
+            : std::nullopt;
+    }
+    if ((statement.kind == Kind::block || statement.kind == Kind::fork)
+        && (!statement.label.empty()
+            || (statement.nested_scope && !statement.declarations.empty()))) {
+        return statement.kind == Kind::block
+            ? runtime::SystemVerilogVpiObjectKind::Begin
+            : runtime::SystemVerilogVpiObjectKind::Fork;
+    }
+    if (statement.kind == Kind::loop && statement.loop_variable_declared
+        && !statement.loop_repeat && !statement.loop_post_test
+        && statement.nested_scope) {
+        return runtime::SystemVerilogVpiObjectKind::For;
+    }
+    return std::nullopt;
+}
+
+// Publishes the scopes the statements make, each beneath the scope that
+// holds it (IEEE 1800-2023 9.3.5, 37.12). The loops and blocks a foreach
+// statement is written as are no scopes (12.7.3): the scopes of its body
+// are the foreach scope's.
+void publish_vpi_statement_scopes(const VpiStatementLookup& find,
+    const std::vector<semantic::StatementId>& statements,
+    const std::string& path, const fsim_vpi_handle_v1 owner,
+    const VpiScopePublisher& publish)
+{
+    for (const auto id : statements) {
+        const auto* const statement = find(id);
+        if (statement == nullptr) {
+            continue;
+        }
+        auto nested_path = path;
+        auto nested_owner = owner;
+        if (const auto kind = vpi_statement_scope_kind(*statement)) {
+            nested_path = statement->label.empty()
+                ? path + "\n#"
+                    + std::to_string(statement->nested_scope->value())
+                : path + "." + statement->label;
+            if (const auto handle = publish({ *kind, statement->label,
+                    nested_path, owner, statement->source,
+                    statement->nested_scope })) {
+                nested_owner = *handle;
+            }
+        }
+        if (statement->foreach_collection) {
+            const auto body = [&](const auto& self,
+                                  const std::vector<semantic::StatementId>& ids)
+                -> void {
+                for (const auto child_id : ids) {
+                    const auto* const child = find(child_id);
+                    if (child == nullptr) {
+                        continue;
+                    }
+                    if (child->generated_role
+                        == support::GeneratedStatementRole::foreach_layer) {
+                        self(self, child->statements);
+                        self(self, child->else_statements);
+                        continue;
+                    }
+                    publish_vpi_statement_scopes(find, { child_id },
+                        nested_path, nested_owner, publish);
+                }
+            };
+            body(body, statement->statements);
+            continue;
+        }
+        publish_vpi_statement_scopes(
+            find, statement->statements, nested_path, nested_owner, publish);
+        publish_vpi_statement_scopes(find, statement->else_statements,
+            nested_path, nested_owner, publish);
+        for (const auto& alternative : statement->case_alternatives) {
+            publish_vpi_statement_scopes(find, alternative.statements,
+                nested_path, nested_owner, publish);
+        }
+    }
+}
+
+// Publishes the scopes of procedures beneath `owner` at `path` (IEEE
+// 1800-2023 9.3.5, 37.12): a procedure's begin-end that declares items is
+// an unnamed scope that holds the procedure's statements. A procedure the
+// frontend generated for an assertion construct has no blocks of the source
+// (16.12, 16.14.6).
+void publish_vpi_process_scopes(const VpiProcessLookup& find_process,
+    const VpiStatementLookup& find_statement,
+    const std::vector<semantic::ProcessId>& processes,
+    const std::string& path, const fsim_vpi_handle_v1 owner,
+    const VpiScopePublisher& publish)
+{
+    for (const auto process_id : processes) {
+        const auto* const process = find_process(process_id);
+        if (process == nullptr || process->synthesized
+            || process->concurrent_assertion
+            || process->declaration_initializer) {
+            continue;
+        }
+        if (process->body_block && !process->declarations.empty()) {
+            const auto body_path
+                = path + "\n#" + std::to_string(process->scope.value());
+            if (const auto handle = publish({
+                    runtime::SystemVerilogVpiObjectKind::Begin, { }, body_path,
+                    owner, process->body_block, process->scope })) {
+                publish_vpi_statement_scopes(find_statement,
+                    process->statements, body_path, *handle, publish);
+                continue;
+            }
+        }
+        publish_vpi_statement_scopes(
+            find_statement, process->statements, path, owner, publish);
+    }
+}
+
+// The block scopes of the processes a generate block holds are scopes
+// beneath it (IEEE 1800-2023 9.3.5, 27.6, 37.12, 37.43): published once,
+// with their nested scopes, as the generate scope's own children. A block
+// of a process named by it directly is the process.
 void publish_vpi_generate_blocks(
     runtime::SystemVerilogVpiObjectRegistry& registry,
     const BuiltProject& project, const std::uint32_t unit,
     const std::string_view relative, const std::string& full_path,
     const fsim_vpi_handle_v1 scope_handle,
-    const semantic::DeclarationId active)
+    const semantic::DeclarationId active, const bool block_scopes_published)
 {
     const auto& units = project.systemverilog_hir.units();
     if (unit >= units.size()
@@ -1982,45 +2112,49 @@ void publish_vpi_generate_blocks(
         scope_type = *owner.value->type;
     }
     scope_type.is_cell = false;
-    const auto blocks = [&](const auto& self,
-                            const std::vector<semantic::StatementId>& ids,
-                            const std::string& path,
-                            const fsim_vpi_handle_v1 owner) -> void {
-        for (const auto id : ids) {
-            const auto* const statement
-                = semantic::find_by_id(project.systemverilog_hir.statements(), id);
-            if (statement == nullptr) {
-                continue;
+    const auto& hir = project.systemverilog_hir;
+    const VpiScopePublisher publish = [&](const VpiScopeRequest& request)
+        -> std::optional<fsim_vpi_handle_v1> {
+        if (registry.contains(request.path)) {
+            // Published already, or a process named by its block.
+            const auto existing = registry.find(request.path);
+            if (existing
+                && (existing.value->kind
+                        == runtime::SystemVerilogVpiObjectKind::Begin
+                    || existing.value->kind
+                        == runtime::SystemVerilogVpiObjectKind::Fork
+                    || existing.value->kind
+                        == runtime::SystemVerilogVpiObjectKind::For
+                    || existing.value->kind
+                        == runtime::SystemVerilogVpiObjectKind::Foreach)) {
+                return existing.value->handle;
             }
-            auto nested_path = path;
-            auto nested_owner = owner;
-            const bool block
-                = statement->kind == semantic::sv::StatementKind::block;
-            if ((block
-                    || statement->kind == semantic::sv::StatementKind::fork)
-                && !statement->label.empty()
-                && !registry.find_child(owner, vpi_identifier(statement->label))) {
-                runtime::SystemVerilogVpiObjectDescriptor descriptor;
-                descriptor.kind = block
-                    ? runtime::SystemVerilogVpiObjectKind::Begin
-                    : runtime::SystemVerilogVpiObjectKind::Fork;
-                descriptor.parent = owner;
-                descriptor.name = vpi_identifier(statement->label);
-                descriptor.type = scope_type;
-                nested_path = path + "." + statement->label;
-                nested_owner = create_checked(
-                    registry, std::move(descriptor), nested_path);
-            }
-            self(self, statement->statements, nested_path, nested_owner);
-            self(self, statement->else_statements, nested_path, nested_owner);
+            return std::nullopt;
         }
+        runtime::SystemVerilogVpiObjectDescriptor descriptor;
+        descriptor.kind = request.kind;
+        descriptor.parent = request.owner;
+        descriptor.name = request.name.empty()
+            ? std::string { }
+            : vpi_identifier(request.name);
+        descriptor.anonymous = request.name.empty();
+        auto type = scope_type;
+        if (request.hir_scope) {
+            type.hir_scope = request.hir_scope->value();
+        }
+        apply_vpi_source(type, project, request.source);
+        descriptor.type = std::move(type);
+        return create_checked(registry, std::move(descriptor), request.path);
     };
-    for (const auto process_id : match->region->processes) {
-        if (const auto* const process
-            = semantic::find_by_id(project.systemverilog_hir.processes(),
-                process_id)) {
-            blocks(blocks, process->statements, full_path, scope_handle);
-        }
+    if (!block_scopes_published) {
+        publish_vpi_process_scopes(
+            [&](const semantic::ProcessId id) {
+                return semantic::find_by_id(hir.processes(), id);
+            },
+            [&](const semantic::StatementId id) {
+                return semantic::find_by_id(hir.statements(), id);
+            },
+            match->region->processes, full_path, scope_handle, publish);
     }
     // The clocking blocks the generate block declares are scopes beneath it
     // and their clockvars children of each block (IEEE 1800-2023 37.48,
@@ -2055,9 +2189,11 @@ void publish_vpi_generate_blocks(
 // publish_vpi_generate_blocks creates directly beneath the generate scope at
 // `relative` of a unit: the named blocks its processes hold outside any other
 // named block and the clocking blocks it declares, one per name.
-std::uint32_t count_vpi_generate_blocks(const BuiltProject& project,
-    const std::uint32_t unit, const std::string_view relative,
-    const semantic::DeclarationId active)
+std::uint32_t count_vpi_generate_blocks(
+    const runtime::SystemVerilogVpiObjectRegistry& registry,
+    const BuiltProject& project, const std::uint32_t unit,
+    const std::string_view relative, const std::string& full_path,
+    const semantic::DeclarationId active, const bool block_scopes_published)
 {
     const auto& units = project.systemverilog_hir.units();
     if (unit >= units.size()) {
@@ -2068,37 +2204,37 @@ std::uint32_t count_vpi_generate_blocks(const BuiltProject& project,
     if (!match) {
         return 0U;
     }
-    std::set<std::string_view> names;
-    const auto visit = [&](const auto& self,
-                           const std::vector<semantic::StatementId>& ids)
-        -> void {
-        for (const auto id : ids) {
-            const auto* const statement
-                = semantic::find_by_id(project.systemverilog_hir.statements(), id);
-            if (statement == nullptr) {
-                continue;
-            }
-            if ((statement->kind == semantic::sv::StatementKind::block
-                    || statement->kind == semantic::sv::StatementKind::fork)
-                && !statement->label.empty()) {
-                names.insert(statement->label);
-                continue;
-            }
-            self(self, statement->statements);
-            self(self, statement->else_statements);
-        }
-    };
-    for (const auto process_id : match->region->processes) {
-        if (const auto* const process
-            = semantic::find_by_id(project.systemverilog_hir.processes(),
-                process_id)) {
-            visit(visit, process->statements);
-        }
+    // The walk publish_vpi_generate_blocks makes, beneath a stand-in for the
+    // generate scope: its direct children are the scopes whose owner is it.
+    constexpr fsim_vpi_handle_v1 generate_scope { 0U };
+    constexpr fsim_vpi_handle_v1 nested_scope { 1U };
+    std::set<std::string> paths;
+    const auto& hir = project.systemverilog_hir;
+    if (!block_scopes_published) {
+        publish_vpi_process_scopes(
+            [&](const semantic::ProcessId id) {
+                return semantic::find_by_id(hir.processes(), id);
+            },
+            [&](const semantic::StatementId id) {
+                return semantic::find_by_id(hir.statements(), id);
+            },
+            match->region->processes, full_path, generate_scope,
+            [&](const VpiScopeRequest& request)
+                -> std::optional<fsim_vpi_handle_v1> {
+                if (request.owner == generate_scope
+                    && !registry.contains(request.path)) {
+                    paths.insert(request.path);
+                }
+                return nested_scope;
+            });
     }
     for (const auto& block : match->region->clocking_blocks) {
-        names.insert(block.name);
+        if (const auto path = full_path + "." + block.name;
+            !registry.contains(path)) {
+            paths.insert(path);
+        }
     }
-    return static_cast<std::uint32_t>(names.size());
+    return static_cast<std::uint32_t>(paths.size());
 }
 
 // A genvar's references within the scope `remainder` of an instance that
@@ -2296,7 +2432,7 @@ void materialize_vpi_generate_scopes(
         if (deferred.unit) {
             publish_vpi_generate_blocks(registry, project, *deferred.unit,
                 scope_path, recorded.instance + "." + scope.path, handle,
-                scope.region);
+                scope.region, deferred.block_scopes_published);
         }
         if (scope.parameters.empty()) {
             continue;
@@ -2514,6 +2650,21 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
                 specialization.instance, &specialization.vpi_generate_scopes);
         }
     }
+    // The SystemVerilog unit of each instance with generate regions, by
+    // instance path.
+    std::map<std::string, const semantic::sv::Unit*, std::less<>>
+        generate_region_units;
+    for (const auto& instance : project.design_ir.instances()) {
+        const auto& specialization = project.design_ir.specializations().at(
+            instance.specialization.value());
+        const auto& units = project.systemverilog_hir.units();
+        const auto unit
+            = std::ranges::find(units, specialization.unit, &semantic::sv::Unit::id);
+        if (unit != units.end() && !unit->generates.empty()) {
+            generate_region_units.emplace(
+                std::string { project.design_ir.path(instance.path) }, &*unit);
+        }
+    }
     std::unordered_map<std::uint32_t, const semantic::sv::Statement*>
         hir_statements;
     std::unordered_map<std::uint32_t, const semantic::sv::Process*>
@@ -2524,6 +2675,16 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
     for (const auto& process : project.systemverilog_hir.processes()) {
         hir_processes.emplace(process.id.value(), &process);
     }
+    const VpiStatementLookup find_statement
+        = [&](const semantic::StatementId id) -> const semantic::sv::Statement* {
+        const auto found = hir_statements.find(id.value());
+        return found == hir_statements.end() ? nullptr : found->second;
+    };
+    const VpiProcessLookup find_process
+        = [&](const semantic::ProcessId id) -> const semantic::sv::Process* {
+        const auto found = hir_processes.find(id.value());
+        return found == hir_processes.end() ? nullptr : found->second;
+    };
     // The DPI properties of an import or export (IEEE 1800-2023 37.40
     // details 6-10) and where its declaration is for the formals (37.41).
     const auto apply_dpi = [&](runtime::SystemVerilogVpiTypeInfo& scope_type,
@@ -2567,6 +2728,65 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
     std::map<std::pair<std::string, std::uint32_t>, fsim_vpi_handle_v1,
         std::less<>>
         block_scopes;
+    // A scope of an instance, package or generate block beneath `owner`,
+    // once per path: none when the path is published already.
+    const auto publish_scope_at
+        = [&](const runtime::SystemVerilogVpiTypeInfo& type,
+              const semantic::sv::Unit* const unit,
+              const runtime::SystemVerilogVpiObjectKind kind,
+              const std::string& name, const std::string& path,
+              const fsim_vpi_handle_v1 owner,
+              const std::optional<semantic::SourceSpanId> source,
+              const semantic::sv::DpiDeclaration* const dpi,
+              const std::uint32_t dpi_unit,
+              const std::optional<semantic::ScopeId> hir_scope)
+        -> std::optional<fsim_vpi_handle_v1> {
+        if (published_scopes.contains(path) || instance_paths.contains(path)) {
+            return std::nullopt;
+        }
+        runtime::SystemVerilogVpiObjectDescriptor scope;
+        scope.kind = kind;
+        scope.parent = owner;
+        scope.name = name;
+        scope.anonymous = name.empty();
+        auto scope_type = type;
+        scope_type.is_cell = false;
+        if (hir_scope) {
+            scope_type.hir_scope = hir_scope->value();
+        }
+        // The scope's own declaration is its location (37.3.3).
+        apply_vpi_source(scope_type, project, source);
+        // A DPI import or export (IEEE 1800-2023 37.40 details 6-10).
+        if (dpi != nullptr && unit != nullptr) {
+            apply_dpi(scope_type, *dpi, dpi_unit,
+                static_cast<std::uint32_t>(
+                    dpi - unit->dpi_declarations.data()));
+        }
+        scope.type = scope_type;
+        const auto handle = create_checked(
+            *result.registry, std::move(scope), path);
+        published_scopes.emplace(path, handle);
+        return handle;
+    };
+    // Publishes the scope of a block (IEEE 1800-2023 9.3.5, 37.12) beneath
+    // an instance or generate block, and records it by the occurrence
+    // `unit_path` and its HIR scope for the variables declared in it.
+    const auto block_scope_publisher
+        = [&](const runtime::SystemVerilogVpiTypeInfo& type,
+              const std::string& unit_path) -> VpiScopePublisher {
+        return [&, type, unit_path](const VpiScopeRequest& request)
+                   -> std::optional<fsim_vpi_handle_v1> {
+            const auto handle = publish_scope_at(type, nullptr, request.kind,
+                request.name, request.path, request.owner, request.source,
+                nullptr, 0U, request.hir_scope);
+            if (handle && request.hir_scope) {
+                block_scopes.emplace(
+                    std::pair { unit_path, request.hir_scope->value() },
+                    *handle);
+            }
+            return handle;
+        };
+    };
     const auto publish_callable_scopes = [&](const semantic::sv::Unit& unit,
                                              const std::string& instance_path,
                                              const fsim_vpi_handle_v1 parent,
@@ -2582,163 +2802,18 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
                                        const std::optional<semantic::SourceSpanId> source,
                                        const semantic::sv::DpiDeclaration* const dpi
                                        = nullptr,
-                                       const std::uint32_t dpi_unit = 0U,
-                                       const std::optional<semantic::ScopeId> hir_scope
-                                       = std::nullopt) {
-            if (published_scopes.contains(path) || instance_paths.contains(path)) {
-                return std::optional<fsim_vpi_handle_v1> { };
-            }
-            runtime::SystemVerilogVpiObjectDescriptor scope;
-            scope.kind = kind;
-            scope.parent = owner;
-            scope.name = name;
-            scope.anonymous = name.empty();
-            auto scope_type = type;
-            scope_type.is_cell = false;
-            if (hir_scope) {
-                scope_type.hir_scope = hir_scope->value();
-            }
-            // The scope's own declaration is its location (37.3.3).
-            apply_vpi_source(scope_type, project, source);
-            // A DPI import or export (IEEE 1800-2023 37.40 details 6-10).
-            if (dpi != nullptr) {
-                apply_dpi(scope_type, *dpi, dpi_unit,
-                    static_cast<std::uint32_t>(
-                        dpi - unit.dpi_declarations.data()));
-            }
-            scope.type = scope_type;
-            const auto handle = create_checked(
-                *result.registry, std::move(scope), path);
-            published_scopes.emplace(path, handle);
-            return std::optional { handle };
+                                       const std::uint32_t dpi_unit = 0U) {
+            return publish_scope_at(type, &unit, kind, name, path, owner,
+                source, dpi, dpi_unit, std::nullopt);
         };
-        std::function<void(const std::vector<semantic::StatementId>&,
-            const std::string&, fsim_vpi_handle_v1)> blocks;
-        blocks = [&](const std::vector<semantic::StatementId>& statements,
-                     const std::string& path, const fsim_vpi_handle_v1 owner) {
-            for (const auto id : statements) {
-                const auto found = hir_statements.find(id.value());
-                if (found == hir_statements.end()) {
-                    continue;
-                }
-                const auto& statement = *found->second;
-                auto nested_path = path;
-                auto nested_owner = owner;
-                const bool block_statement
-                    = (statement.kind == semantic::sv::StatementKind::block
-                          || statement.kind
-                              == semantic::sv::StatementKind::fork)
-                    && !statement.foreach_collection
-                    && statement.generated_role
-                        == support::GeneratedStatementRole::none;
-                // A named block is a scope; an unnamed one only when it
-                // declares items (9.3.5, 37.12 detail 1), with no name.
-                if (block_statement
-                    && (!statement.label.empty()
-                        || (statement.nested_scope
-                            && !statement.declarations.empty()))) {
-                    // An unnamed scope's path is a key and no name: a
-                    // newline is in no identifier (5.6.1).
-                    nested_path = statement.label.empty()
-                        ? path + "\n#"
-                            + std::to_string(statement.nested_scope->value())
-                        : path + "." + statement.label;
-                    if (const auto handle = publish_scope(
-                            statement.kind == semantic::sv::StatementKind::block
-                                ? runtime::SystemVerilogVpiObjectKind::Begin
-                                : runtime::SystemVerilogVpiObjectKind::Fork,
-                            statement.label, nested_path, owner,
-                            statement.source, nullptr, 0U,
-                            statement.nested_scope)) {
-                        nested_owner = *handle;
-                        if (statement.nested_scope) {
-                            block_scopes.emplace(
-                                std::pair { unit_path,
-                                    statement.nested_scope->value() },
-                                *handle);
-                        }
-                    }
-                }
-                // A for statement that declares its loop variables and a
-                // foreach statement are scopes (12.7.1, 12.7.3, 37.12
-                // details 2 and 3): unnamed unless labeled.
-                const bool foreach_statement
-                    = statement.foreach_collection.has_value()
-                    && statement.generated_role
-                        == support::GeneratedStatementRole::none;
-                const bool for_statement
-                    = statement.kind == semantic::sv::StatementKind::loop
-                    && !statement.foreach_collection
-                    && statement.loop_variable_declared
-                    && !statement.loop_repeat && !statement.loop_post_test
-                    && statement.generated_role
-                        == support::GeneratedStatementRole::none;
-                if ((foreach_statement || for_statement)
-                    && statement.nested_scope) {
-                    nested_path = statement.label.empty()
-                        ? path + "\n#"
-                            + std::to_string(statement.nested_scope->value())
-                        : path + "." + statement.label;
-                    if (const auto handle = publish_scope(foreach_statement
-                                ? runtime::SystemVerilogVpiObjectKind::Foreach
-                                : runtime::SystemVerilogVpiObjectKind::For,
-                            statement.label, nested_path, owner,
-                            statement.source, nullptr, 0U,
-                            statement.nested_scope)) {
-                        nested_owner = *handle;
-                        block_scopes.emplace(
-                            std::pair { unit_path,
-                                statement.nested_scope->value() },
-                            *handle);
-                    }
-                }
-                if (foreach_statement) {
-                    // The frontend writes a foreach as loops of its own
-                    // (12.7.3): those are no scopes of the source. The
-                    // source body is the statement that starts where the
-                    // foreach statement's body does.
-                    const auto& spans = project.semantics.source_spans();
-                    const auto offset
-                        = [&](const semantic::SourceSpanId span)
-                        -> std::optional<std::size_t> {
-                        if (!span.valid() || span.value() >= spans.size()) {
-                            return std::nullopt;
-                        }
-                        return spans.at(span.value()).begin.offset;
-                    };
-                    const auto wanted = statement.foreach_body_source
-                        ? offset(*statement.foreach_body_source)
-                        : std::nullopt;
-                    std::function<bool(
-                        const std::vector<semantic::StatementId>&)>
-                        body;
-                    body = [&](const std::vector<semantic::StatementId>& ids) {
-                        for (const auto child_id : ids) {
-                            const auto child = hir_statements.find(
-                                child_id.value());
-                            if (child == hir_statements.end()) {
-                                continue;
-                            }
-                            const auto& child_statement = *child->second;
-                            if (wanted
-                                && offset(child_statement.source) == wanted) {
-                                blocks({ child_id }, nested_path, nested_owner);
-                                return true;
-                            }
-                            if (body(child_statement.statements)
-                                || body(child_statement.else_statements)) {
-                                return true;
-                            }
-                        }
-                        return false;
-                    };
-                    body(statement.statements);
-                    continue;
-                }
-                blocks(statement.statements, nested_path, nested_owner);
-                blocks(statement.else_statements, nested_path, nested_owner);
-            }
-        };
+        // The scopes of the blocks of a statement list (IEEE 1800-2023 9.3.5,
+        // 37.12), keyed by this unit's occurrence and their HIR scopes.
+        const auto blocks
+            = [&](const std::vector<semantic::StatementId>& statements,
+                  const std::string& path, const fsim_vpi_handle_v1 owner) {
+                  publish_vpi_statement_scopes(find_statement, statements,
+                      path, owner, block_scope_publisher(type, unit_path));
+              };
         for (const auto declaration_id : unit.declarations) {
             const auto* const declaration
                 = project.systemverilog_hir.find_declaration(declaration_id);
@@ -2800,36 +2875,9 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         if (in_package) {
             return;
         }
-        for (const auto process_id : unit.processes) {
-            const auto found = hir_processes.find(process_id.value());
-            if (found == hir_processes.end()) {
-                continue;
-            }
-            const auto& process = *found->second;
-            // A process the frontend generated for an assertion construct
-            // has no blocks of the source (16.12, 16.14.6).
-            if (process.synthesized || process.concurrent_assertion
-                || process.declaration_initializer) {
-                continue;
-            }
-            // A procedure's begin-end that declares items is an unnamed
-            // scope (37.12 detail 1) holding the procedure's statements.
-            if (process.body_block && !process.declarations.empty()) {
-                const auto path = instance_path + "\n#"
-                    + std::to_string(process.scope.value());
-                if (const auto handle = publish_scope(
-                        runtime::SystemVerilogVpiObjectKind::Begin, "", path,
-                        parent, process.body_block, nullptr, 0U,
-                        process.scope)) {
-                    block_scopes.emplace(
-                        std::pair { unit_path, process.scope.value() },
-                        *handle);
-                    blocks(process.statements, path, *handle);
-                    continue;
-                }
-            }
-            blocks(process.statements, instance_path, parent);
-        }
+        publish_vpi_process_scopes(find_process, find_statement,
+            unit.processes, instance_path, parent,
+            block_scope_publisher(type, unit_path));
         // Clocking blocks are scopes too (IEEE 1800-2023 37.48): published
         // before the clockvar storage beneath them would make them generate
         // scopes. Their clockvars follow with the other clocking objects.
@@ -3019,7 +3067,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             const auto& nettype = unit->compilation.default_nettype;
             scope_type.default_net_kind = nettype.empty()
                 ? runtime::SystemVerilogVpiNetKind::Wire
-                : vpi_net_kind(nettype);
+                : vpi_net_kind(unit->compilation.default_net_kind);
             scope_type.default_decay_time = unit->default_decay_time;
             scope_type.unconnected_drive = unit->unconnected_drive
                     == semantic::sv::UnconnectedDrive::pull_zero
@@ -3316,6 +3364,62 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         return parent;
     };
 
+    // The block scopes of the procedures of each generate block occurrence
+    // on a path, published once with the occurrence (IEEE 1800-2023 9.3.5,
+    // 27.6, 37.12): a variable declared in a block of a generate block is
+    // published in the block's scope, which is keyed by the occurrence.
+    std::set<std::string, std::less<>> generate_block_paths;
+    std::set<std::string, std::less<>> generate_block_scopes_published;
+    const auto ensure_generate_block_scopes = [&](const std::string_view path) {
+        std::string_view instance;
+        for (auto end = path.rfind('.'); end != std::string_view::npos;
+             end = end == 0U ? std::string_view::npos
+                             : path.rfind('.', end - 1U)) {
+            if (instance_paths.contains(path.substr(0U, end))) {
+                instance = path.substr(0U, end);
+                break;
+            }
+        }
+        if (instance.empty()) {
+            return;
+        }
+        const auto scopes = instance_generate_scopes.find(instance);
+        const auto unit = generate_region_units.find(instance);
+        if (scopes == instance_generate_scopes.end()
+            || unit == generate_region_units.end()) {
+            return;
+        }
+        const auto owner = instance_paths.find(instance)->second;
+        for (auto end = path.find('.', instance.size() + 1U);
+             end != std::string_view::npos; end = path.find('.', end + 1U)) {
+            const auto generate_path = path.substr(0U, end);
+            if (!generate_block_paths.emplace(generate_path).second) {
+                continue;
+            }
+            const auto relative = generate_path.substr(instance.size() + 1U);
+            const auto recorded = std::ranges::find_if(*scopes->second,
+                [&](const auto& scope) { return scope.path == relative; });
+            if (recorded == scopes->second->end()) {
+                continue;
+            }
+            const auto match = vpi_generate_region_at(
+                unit->second->generates, recorded->path, recorded->region);
+            if (!match || match->region->processes.empty()) {
+                continue;
+            }
+            const auto handle = ensure_generate_scope(std::string { instance },
+                recorded->path, owner, generate_scope_type(owner));
+            if (handle == 0U) {
+                continue;
+            }
+            publish_vpi_process_scopes(find_process, find_statement,
+                match->region->processes, std::string { generate_path },
+                handle,
+                block_scope_publisher(
+                    generate_scope_type(handle), std::string { generate_path }));
+            generate_block_scopes_published.emplace(generate_path);
+        }
+    };
     // The recorded generate scope at `path` beneath the instance at
     // `instance_path`.
     const auto recorded_generate_scope
@@ -3954,6 +4058,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
                                      const std::string_view path)
         -> std::optional<std::pair<fsim_vpi_handle_v1,
             const semantic::sv::Declaration*>> {
+        ensure_generate_block_scopes(path);
         if (block_scopes.empty()) {
             return std::nullopt;
         }
@@ -4318,10 +4423,8 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         const auto& signal_info = project.design.signals().at(signal);
         const auto category
             = vpi_category(specialization.language, signal_info);
-        const auto declared_net = vpi_net_kind(
-            signal_info.systemverilog_net_type.empty()
-                ? signal_info.type_name
-                : signal_info.systemverilog_net_type);
+        const auto declared_net
+            = vpi_net_kind(signal_info.systemverilog_net_kind);
         // A net declared with a user-defined nettype is a net whatever its
         // resolution (IEEE 1800-2023 6.6.7, 37.16 detail 11).
         const bool nettype_net
@@ -5493,7 +5596,9 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
                                 == runtime::SystemVerilogVpiObjectKind::
                                     GenerateScope
                                 ? count_vpi_generate_blocks(
-                                      project, *unit, scope_path, scope.region)
+                                      *result.registry, project, *unit,
+                                      scope_path, prefix, scope.region,
+                                      generate_block_scopes_published.contains(prefix))
                                 : 0U);
                     if (count == 0U) {
                         continue;
@@ -5505,6 +5610,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
                         scope_place,
                         unit,
                         { },
+                        generate_block_scopes_published.contains(prefix),
                     });
                     if (result.registry->defer_children(
                             parent, static_cast<std::uint32_t>(count))
@@ -5541,6 +5647,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
                     unit,
                     processes ? std::move(processes.mapped().processes)
                               : std::vector<SystemVerilogVpiDeferredProcess> { },
+                    false,
                 });
             }
         }

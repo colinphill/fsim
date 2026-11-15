@@ -2596,9 +2596,12 @@ private:
                 return false;
             }
         }
-        for (auto& child : statement.else_statements) {
-            if (!substitute(child)) {
-                return false;
+        for (auto* list : { &statement.else_statements,
+                 &statement.loop_initializations }) {
+            for (auto& child : *list) {
+                if (!substitute(child)) {
+                    return false;
+                }
             }
         }
         return true;

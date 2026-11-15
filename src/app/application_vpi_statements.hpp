@@ -271,14 +271,16 @@ public:
 
     /// The built-in data type of a function's return value or a formal
     /// argument, with its packed dimensions, leftmost first (IEEE 1800-2023
-    /// 37.41); `word` is "logic", "bit", "int", ... Types named by a typedef
+    /// 37.41); `builtin` is logic, bit, int, ... Types named by a typedef
     /// or class have none.
     struct DeclaredType {
-        std::string word;
+        support::SystemVerilogBuiltinType builtin {
+            support::SystemVerilogBuiltinType::none
+        };
         bool is_signed { };
         std::vector<std::pair<std::int64_t, std::int64_t>> ranges;
         /// The typedef a formal or result is declared with (an identifier,
-        /// `word` is then empty), and the callable scope that declares it:
+        /// `builtin` is then none), and the callable scope that declares it:
         /// the typespec is that typedef's (37.41, 37.25).
         std::string type_name;
         /// The callable and formal ("" for the result) the type belongs to:
@@ -293,10 +295,14 @@ public:
         /// A container type: the kind of array (0 none, 1 fixed-size
         /// unpacked, 2 dynamic array, 3 queue, 4 associative array), its
         /// dimensions when fixed-size, and its element type (and, for an
-        /// associative array, the index type's word; empty for `[*]`).
+        /// associative array, the index type: built in, else its name; none
+        /// and empty for `[*]`).
         int array_kind { };
         std::vector<std::pair<std::int64_t, std::int64_t>> dimensions;
         std::vector<DeclaredType> element;
+        support::SystemVerilogBuiltinType index_builtin {
+            support::SystemVerilogBuiltinType::none
+        };
         std::string index_word;
         /// A virtual interface type (25.9): the interface's name, and the
         /// modport's when the type names one; the typespec is an interface
@@ -511,8 +517,16 @@ public:
     /// A cast operation's casting type as written (`int`, `signed`, `8`;
     /// IEEE 1800-2023 6.24.1), or the constant size expression of a size
     /// cast written with one (`(W+1)'(x)`) as `size`; none for another node.
+    // A cast's target (IEEE 1800-2023 6.24.1): its kind and built-in type,
+    // a literal size, or the expression handle of a constant size.
     struct CastTarget {
-        std::string type;
+        support::SystemVerilogCastTarget target {
+            support::SystemVerilogCastTarget::none
+        };
+        support::SystemVerilogBuiltinType builtin {
+            support::SystemVerilogBuiltinType::none
+        };
+        std::optional<std::size_t> literal_size { };
         fsim_vpi_handle_v1 size { };
     };
     /// The HIR expression of a cast operation node; none for another node.

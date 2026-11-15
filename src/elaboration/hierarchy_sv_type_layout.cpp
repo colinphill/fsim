@@ -70,6 +70,7 @@ std::optional<semantic::DeclarationId> specialized_type_parameter_formal(
         }
     }
     if (formal_id || reference.target.spelling.empty()
+        || semantic::sv::names_builtin_type(reference)
         || (name_only_without_target && reference.target.target.valid())) {
         return formal_id;
     }
@@ -441,12 +442,12 @@ bool systemverilog_tagged_union_aggregate(
                 const auto effective
                     = resolver.effective_systemverilog_type(member.type, scope)
                           .value_or(member.type);
-                const auto& spelling = effective.target.spelling;
+                using Builtin = support::SystemVerilogBuiltinType;
                 if (effective.container_form
                     || !effective.unpacked_dimensions.empty()
                     || effective.value_form == semantic::sv::TypeForm::string
-                    || spelling == "string" || spelling == "real"
-                    || spelling == "shortreal" || spelling == "realtime") {
+                    || effective.builtin == Builtin::string
+                    || support::systemverilog_real_family(effective.builtin)) {
                     return true;
                 }
                 if (!effective.target.target.valid()
@@ -671,8 +672,9 @@ systemverilog_vpi_declared_type(
             }
         }
         if (!element) {
-            const auto& spelling = input.target.spelling;
-            if (input.value_form == Form::string || spelling == "string") {
+            using Builtin = support::SystemVerilogBuiltinType;
+            if (input.value_form == Form::string
+                || input.builtin == Builtin::string) {
                 if (!dimensions.empty()) {
                     return std::nullopt;
                 }
@@ -684,29 +686,28 @@ systemverilog_vpi_declared_type(
             }
             // An integer atom has its own width; its packed range is the
             // implicit one (6.11).
-            const std::uint32_t atom = spelling == "byte" ? 8U
-                : spelling == "shortint"                  ? 16U
-                : spelling == "int" || spelling == "integer" ? 32U
-                : spelling == "longint" || spelling == "time" ? 64U
-                                                          : 0U;
+            const std::uint32_t atom
+                = support::systemverilog_integer_atom(input.builtin)
+                ? support::systemverilog_builtin_width(input.builtin)
+                : 0U;
             // An enumeration's base type keeps the enumeration form.
             if (atom == 0U && input.value_form
                 && *input.value_form != Form::packed_integral
                 && *input.value_form != Form::enumeration) {
                 return std::nullopt;
             }
-            if (atom == 0U && !spelling.empty() && spelling != "bit"
-                && spelling != "logic" && spelling != "reg"
-                && !semantic::sv::is_builtin_net_kind(spelling)) {
+            if (atom == 0U && !input.target.spelling.empty()
+                && !support::systemverilog_integer_vector(input.builtin)
+                && input.net_kind == support::SystemVerilogNetKind::none) {
                 return std::nullopt;
             }
             Descriptor scalar;
-            scalar.category = spelling == "time" ? Category::Time
+            scalar.category = input.builtin == Builtin::time ? Category::Time
                 : atom != 0U
-                ? (spelling == "integer" || input.four_state
+                ? (input.builtin == Builtin::integer || input.four_state
                           ? Category::Integer4
                           : Category::Integer2)
-                : input.four_state || spelling != "bit"
+                : input.four_state || input.builtin != Builtin::bit
                 ? Category::Logic4
                 : Category::Bit2;
             const auto width = atom != 0U ? std::uint64_t { atom } : repeat;
@@ -1170,18 +1171,21 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
                 return handle;
             }
             // The built-in classes of package std (15.4, 15.3, 9.7).
-            if (const std::string_view leaf = spelling.starts_with("std::")
-                        ? std::string_view { spelling }.substr(5U)
-                        : std::string_view { spelling };
-                leaf == "mailbox" || leaf == "semaphore" || leaf == "process") {
+            if (const auto standard = input.standard_class;
+                standard == support::SystemVerilogStandardClass::mailbox
+                || standard == support::SystemVerilogStandardClass::semaphore
+                || standard == support::SystemVerilogStandardClass::process) {
                 Typespec handle;
                 handle.kind = Kind::Class;
-                handle.name = std::string { leaf };
+                handle.name = std::string {
+                    support::systemverilog_standard_class_name(standard) };
+                handle.standard_class = standard;
                 return handle;
             }
             Typespec builtin;
             builtin.is_signed = input.signed_value;
-            if (input.value_form == Form::string || spelling == "string") {
+            if (input.value_form == Form::string
+                || input.builtin == support::SystemVerilogBuiltinType::string) {
                 builtin.kind = Kind::String;
                 builtin.is_signed = false;
                 return builtin;
@@ -1190,27 +1194,34 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
                 && *input.value_form != Form::enumeration) {
                 return std::nullopt;
             }
-            static constexpr std::pair<std::string_view, Kind> atoms[] {
-                { "byte", Kind::Byte }, { "shortint", Kind::ShortInt },
-                { "int", Kind::Int }, { "longint", Kind::LongInt },
-                { "integer", Kind::Integer }, { "time", Kind::Time },
-                { "real", Kind::Real }, { "realtime", Kind::Real },
-                { "shortreal", Kind::ShortReal }, { "event", Kind::Event },
-                { "chandle", Kind::Chandle },
-            };
-            if (const auto* const atom = std::ranges::find(
-                    atoms, spelling, &std::pair<std::string_view, Kind>::first);
-                atom != std::end(atoms)) {
+            using Builtin = support::SystemVerilogBuiltinType;
+            std::optional<Kind> atom;
+            switch (input.builtin) {
+            case Builtin::byte: atom = Kind::Byte; break;
+            case Builtin::shortint: atom = Kind::ShortInt; break;
+            case Builtin::int_type: atom = Kind::Int; break;
+            case Builtin::longint: atom = Kind::LongInt; break;
+            case Builtin::integer: atom = Kind::Integer; break;
+            case Builtin::time: atom = Kind::Time; break;
+            case Builtin::real:
+            case Builtin::realtime: atom = Kind::Real; break;
+            case Builtin::shortreal: atom = Kind::ShortReal; break;
+            case Builtin::event: atom = Kind::Event; break;
+            case Builtin::chandle: atom = Kind::Chandle; break;
+            default: break;
+            }
+            if (atom) {
                 // An integer atom's packed range is its implicit one (6.11).
-                builtin.kind = atom->second;
+                builtin.kind = *atom;
                 return builtin;
             }
-            if (!spelling.empty() && spelling != "bit" && spelling != "logic"
-                && spelling != "reg"
-                && !semantic::sv::is_builtin_net_kind(spelling)) {
+            if (!spelling.empty()
+                && !support::systemverilog_integer_vector(input.builtin)
+                && input.net_kind == support::SystemVerilogNetKind::none) {
                 return std::nullopt;
             }
-            builtin.kind = spelling == "bit" ? Kind::Bit : Kind::Logic;
+            builtin.kind = input.builtin == Builtin::bit ? Kind::Bit
+                                                          : Kind::Logic;
             builtin.ranges = std::move(dimensions);
             return builtin;
         }
@@ -1512,15 +1523,16 @@ std::optional<ContainerType> systemverilog_container_type(
     const auto nominal_identity = [&working_specialization](
                                       const semantic::sv::TypeReference& type) {
         if (!type.target.target.valid()) {
-            return std::string { };
+            return std::optional<std::uint32_t> { };
         }
         const auto definition = working_specialization.find_type(
             type.target.target);
         return definition && definition->systemverilog != nullptr
                 && semantic::sv::has_nominal_type_identity(
                     definition->systemverilog->form)
-            ? semantic::sv::nominal_type_identity(type.target.target)
-            : std::string { };
+            ? std::optional { semantic::sv::nominal_type_index(
+                  type.target.target) }
+            : std::optional<std::uint32_t> { };
     };
     const auto boundary = [&](const std::optional<std::int64_t> value,
                               const std::optional<semantic::ExpressionId> expression) {
@@ -1731,6 +1743,8 @@ std::optional<ContainerType> systemverilog_container_type(
                 result.union_aggregate = element->union_aggregate;
                 result.element_nominal_type
                     = element->element_nominal_type;
+                result.element_nominal_type_id
+                    = element->element_nominal_type_id;
                 result.element_types
                     = std::move(element->element_types);
                 result.member_names
@@ -1759,11 +1773,16 @@ std::optional<ContainerType> systemverilog_container_type(
                                        index_reference,
                                        working_specialization.scope())
                           .value_or(index_reference);
-                const auto index_spelling
-                    = effective_index.target.spelling.empty()
-                    ? index.spelling
-                    : effective_index.target.spelling;
-                if (index_spelling == "string") {
+                // The built-in index kind as written and after the typedef
+                // chain (IEEE 1800-2023 6.11, 7.8.4).
+                const auto direct_builtin = index_reference.builtin;
+                const auto resolved_builtin
+                    = effective_index.builtin
+                        != support::SystemVerilogBuiltinType::none
+                    ? effective_index.builtin
+                    : direct_builtin;
+                if (resolved_builtin
+                    == support::SystemVerilogBuiltinType::string) {
                     result.index_width = 0U;
                     result.two_state_indices = true;
                     result.signed_indices = false;
@@ -1775,39 +1794,24 @@ std::optional<ContainerType> systemverilog_container_type(
                         working_specialization,
                         index_declaration);
                     const auto builtin_index_width
-                        = [](const std::string_view spelling)
+                        = [](const support::SystemVerilogBuiltinType kind)
                         -> std::optional<std::uint32_t> {
-                        if (spelling == "bit" || spelling == "logic"
-                            || spelling == "reg") {
-                            return 1U;
-                        }
-                        if (spelling == "byte") {
-                            return 8U;
-                        }
-                        if (spelling == "shortint") {
-                            return 16U;
-                        }
-                        if (spelling == "int"
-                            || spelling == "integer") {
-                            return 32U;
-                        }
-                        if (spelling == "longint"
-                            || spelling == "time") {
-                            return 64U;
-                        }
-                        return std::nullopt;
+                        const auto bits
+                            = support::systemverilog_builtin_width(kind);
+                        return bits == 0U ? std::nullopt
+                                          : std::optional { bits };
                     };
                     const auto direct_builtin_width
-                        = builtin_index_width(index.spelling);
+                        = builtin_index_width(direct_builtin);
                     const auto resolved_builtin_width
-                        = builtin_index_width(index_spelling);
+                        = builtin_index_width(resolved_builtin);
                     if (width && *width > std::numeric_limits<std::uint32_t>::max()) {
                         return std::nullopt;
                     }
                     // A direct builtin index uses its language-defined
-                    // width. A typedef can retain a builtin base spelling
-                    // while adding a packed range, so use the fully
-                    // resolved declaration width for non-builtin names.
+                    // width. A typedef can name a builtin base while
+                    // adding a packed range, so use the fully resolved
+                    // declaration width for a named index type.
                     result.index_width = direct_builtin_width
                             && !(packed_index && width)
                         ? *direct_builtin_width
@@ -1819,12 +1823,13 @@ std::optional<ContainerType> systemverilog_container_type(
                     result.two_state_indices
                         = index.target.valid()
                         ? !effective_index.four_state
-                        : index_spelling == "bit";
+                        : !support::systemverilog_four_state(resolved_builtin);
                     result.signed_indices
                         = index.target.valid()
                         ? effective_index.signed_value
-                        : index_spelling != "bit"
-                            && index_spelling != "time";
+                        : effective_index.signed_value
+                            || support::systemverilog_builtin_default_signed(
+                                resolved_builtin);
                 }
             }
             if (result.queue && candidate.queue_maximum) {
@@ -1874,9 +1879,9 @@ std::optional<ContainerType> systemverilog_container_type(
         }
 
         ContainerType result;
-        result.element_nominal_type = nominal_identity(candidate);
+        result.element_nominal_type_id = nominal_identity(candidate);
         if (candidate.value_form == semantic::sv::TypeForm::string
-            || candidate.target.spelling == "string") {
+            || candidate.builtin == support::SystemVerilogBuiltinType::string) {
             result.element_kind = ContainerElementKind::String;
             result.element_width = 0U;
         } else if (candidate.target.target.valid()) {
@@ -1908,7 +1913,7 @@ std::optional<ContainerType> systemverilog_container_type(
                 result.union_aggregate = type.form
                     == semantic::sv::TypeForm::unpacked_union;
                 result.aggregate_value = box_leaf;
-                result.element_nominal_type
+                result.element_nominal_type_id
                     = nominal_identity(candidate);
                 // A boxed packed leaf of `width` four-state bits.
                 const auto packed_leaf = [](const std::uint32_t width) {
@@ -1932,7 +1937,8 @@ std::optional<ContainerType> systemverilog_container_type(
                 }
                 for (const auto& member : type.members) {
                     if (tagged_aggregate
-                        && member.type.target.spelling == "void") {
+                        && member.type.builtin
+                            == support::SystemVerilogBuiltinType::void_type) {
                         result.member_names.push_back(member.name);
                         result.element_types.push_back(packed_leaf(1U));
                         continue;
@@ -2037,6 +2043,10 @@ std::optional<ContainerType> systemverilog_container_type(
                 base->element_nominal_type
                     = result.element_nominal_type;
             }
+            if (result.element_nominal_type_id) {
+                base->element_nominal_type_id
+                    = result.element_nominal_type_id;
+            }
             return base;
         } else {
             std::optional<std::uint64_t> width
@@ -2058,7 +2068,7 @@ std::optional<ContainerType> systemverilog_container_type(
                 return std::nullopt;
             }
             result.scalar_kind = frontend::systemverilog_scalar_kind(
-                candidate.target.spelling);
+                candidate.builtin);
             result.element_kind
                 = result.scalar_kind
                     == frontend::SystemVerilogScalarKind::None
@@ -2150,10 +2160,10 @@ std::optional<semantic::sv::TypeReference> systemverilog_event_array_type(
         || array.container_element_types.size() != 1U) {
         return std::nullopt;
     }
-    // `event` is a keyword (IEEE 1800-2023 6.17), so its spelling is the
-    // type; any other element names a typedef that may denote it.
+    // `event` is a keyword (IEEE 1800-2023 6.17); any other element names a
+    // typedef that may denote it.
     const auto& element = array.container_element_types.front();
-    if (element.target.spelling == "event") {
+    if (element.builtin == support::SystemVerilogBuiltinType::event) {
         return array;
     }
     if (!element.named || element.container_form) {
@@ -2161,7 +2171,7 @@ std::optional<semantic::sv::TypeReference> systemverilog_event_array_type(
     }
     const auto underlying = resolver.underlying_systemverilog_type(
         element, scope);
-    if (!underlying || underlying->target.spelling != "event"
+    if (!underlying || underlying->builtin != support::SystemVerilogBuiltinType::event
         || underlying->container_form) {
         return std::nullopt;
     }

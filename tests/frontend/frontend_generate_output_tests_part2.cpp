@@ -255,8 +255,12 @@ endclass
                  .methods.front().statements[0].kind
               == StatementKind::ContainerMethod
           && class_events.design.systemverilog_classes[1]
-                 .methods.front().statements[0].value.text
-              == "@sv-cast:void"
+                 .methods.front().statements[0].value.marker
+              == fsim::support::ExpressionMarker::sv_cast
+          && class_events.design.systemverilog_classes[1]
+                 .methods.front().statements[0].value
+                 .systemverilog_cast_builtin
+              == fsim::support::SystemVerilogBuiltinType::void_type
           && class_events.design.systemverilog_classes[1]
                  .methods.front().statements[1].kind
               == StatementKind::EventTrigger

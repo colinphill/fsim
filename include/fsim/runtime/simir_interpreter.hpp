@@ -130,15 +130,20 @@ public:
     // array property (object handle, property identity).
     using ClassContainerWatchedHook
         = std::function<bool(std::uint64_t, std::string_view)>;
+    // Process, receiver, method identity, lowered randomize() step, actuals,
+    // string actuals, actual names, directions, inline constraints, virtual
+    // dispatch, and `randomize(null)` (ClassMethodCall).
     using ClassMethodCallContextHook = std::function<PackedLogic4(
         ProcessId,
         std::uint64_t,
         std::string_view,
+        ClassMethodHook,
         std::vector<PackedLogic4>&,
         std::vector<std::string>&,
         std::span<const std::string>,
         std::span<const std::uint8_t>,
         std::span<const SystemVerilogConstraintTemplate>,
+        bool,
         bool)>;
     using ClassStaticPropertyReadHook = std::function<PackedLogic4(std::string_view)>;
     using ClassStaticPropertyWriteHook = std::function<void(

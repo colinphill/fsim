@@ -77,8 +77,12 @@ std::size_t VerilogParser::structure_assertion_locals(
             break;
         }
 
-        const std::vector<Token> common_type(
+        // The type stays source text; its keywords are read here once.
+        std::vector<Token> common_type(
             type_tokens.begin(), type_tokens.end());
+        for (auto& token : common_type) {
+            mark_type_keyword_token(token, keyword_set_);
+        }
         const std::span declarator_tokens {
             statement.data() + name_index,
             statement.size() - name_index

@@ -5020,13 +5020,41 @@ private:
         return 0U;
     }
 
+    // The typespec kind of a built-in type a declared type names (IEEE
+    // 1800-2023 37.25, 37.41); none for a type that has no typespec of its
+    // own here.
+    [[nodiscard]] static std::optional<TypespecKind> declared_typespec_kind(
+        const support::SystemVerilogBuiltinType builtin) noexcept
+    {
+        using Builtin = support::SystemVerilogBuiltinType;
+        switch (builtin) {
+        case Builtin::logic: return TypespecKind::Logic;
+        case Builtin::bit: return TypespecKind::Bit;
+        case Builtin::byte: return TypespecKind::Byte;
+        case Builtin::shortint: return TypespecKind::ShortInt;
+        case Builtin::int_type: return TypespecKind::Int;
+        case Builtin::longint: return TypespecKind::LongInt;
+        case Builtin::integer: return TypespecKind::Integer;
+        case Builtin::time: return TypespecKind::Time;
+        case Builtin::real:
+        case Builtin::realtime: return TypespecKind::Real;
+        case Builtin::shortreal: return TypespecKind::ShortReal;
+        case Builtin::string: return TypespecKind::String;
+        default: return std::nullopt;
+        }
+    }
+
     // A text that tells declared types apart, for the typespecs built from
     // them.
     [[nodiscard]] static std::string declared_signature(
         const VpiStatementModel::DeclaredType& declared)
     {
-        std::string text = declared.word + (declared.is_signed ? "s" : "u")
-            + std::to_string(declared.array_kind) + "/" + declared.index_word;
+        std::string text
+            = std::to_string(static_cast<unsigned>(declared.builtin))
+            + (declared.is_signed ? "s" : "u")
+            + std::to_string(declared.array_kind) + "/"
+            + std::to_string(static_cast<unsigned>(declared.index_builtin))
+            + "/" + declared.index_word;
         for (const auto& [left, right] : declared.ranges) {
             text += "[" + std::to_string(left) + ":" + std::to_string(right) + "]";
         }
@@ -5046,13 +5074,6 @@ private:
     declared_typespec_node(const VpiStatementModel::DeclaredType& declared)
     {
         using Kind = runtime::SystemVerilogVpiTypespecKind;
-        static const std::map<std::string, Kind, std::less<>> kinds {
-            { "logic", Kind::Logic }, { "bit", Kind::Bit },
-            { "byte", Kind::Byte }, { "shortint", Kind::ShortInt },
-            { "int", Kind::Int }, { "longint", Kind::LongInt },
-            { "integer", Kind::Integer }, { "time", Kind::Time },
-            { "real", Kind::Real }, { "realtime", Kind::Real },
-            { "shortreal", Kind::ShortReal }, { "string", Kind::String } };
         runtime::SystemVerilogVpiTypespec node;
         if (declared.array_kind != 0) {
             if (declared.element.size() != 1U) {
@@ -5074,22 +5095,20 @@ private:
                 node.ranges.push_back({ left, right });
             }
             node.element.push_back(*element);
-            if (!declared.index_word.empty()) {
-                const auto found = kinds.find(declared.index_word);
-                if (found != kinds.end()) {
-                    runtime::SystemVerilogVpiTypespec index;
-                    index.kind = found->second;
-                    node.index.push_back(std::move(index));
-                }
+            if (const auto index_kind
+                = declared_typespec_kind(declared.index_builtin)) {
+                runtime::SystemVerilogVpiTypespec index;
+                index.kind = *index_kind;
+                node.index.push_back(std::move(index));
             }
             return node;
         }
-        const auto found = kinds.find(declared.word);
-        if (found == kinds.end() || !declared.type_name.empty()
+        const auto found = declared_typespec_kind(declared.builtin);
+        if (!found || !declared.type_name.empty()
             || !declared.class_name.empty()) {
             return std::nullopt;
         }
-        node.kind = found->second;
+        node.kind = *found;
         node.is_signed = declared.is_signed;
         for (const auto& [left, right] : declared.ranges) {
             node.ranges.push_back({ left, right });
@@ -5184,27 +5203,17 @@ private:
                           : declared.ranges.front().second);
         }
         const auto key
-            = std::tuple { declared.word, declared.is_signed, declared.ranges };
+            = std::tuple { declared.builtin, declared.is_signed, declared.ranges };
         if (const auto known = declared_typespecs_.find(key);
             known != declared_typespecs_.end()) {
             return known->second;
         }
-        static const std::map<std::string, TypespecKind, std::less<>> kinds {
-            { "logic", TypespecKind::Logic }, { "bit", TypespecKind::Bit },
-            { "byte", TypespecKind::Byte },
-            { "shortint", TypespecKind::ShortInt },
-            { "int", TypespecKind::Int }, { "longint", TypespecKind::LongInt },
-            { "integer", TypespecKind::Integer },
-            { "time", TypespecKind::Time }, { "real", TypespecKind::Real },
-            { "realtime", TypespecKind::Real },
-            { "shortreal", TypespecKind::ShortReal },
-            { "string", TypespecKind::String } };
-        const auto kind = kinds.find(declared.word);
-        if (kind == kinds.end()) {
+        const auto kind = declared_typespec_kind(declared.builtin);
+        if (!kind) {
             return 0U;
         }
         Typespec scalar;
-        scalar.kind = kind->second;
+        scalar.kind = *kind;
         scalar.is_signed = declared.is_signed;
         // A built-in vector is one logic or bit typespec with its packed
         // dimensions, as the elaborator builds it.
@@ -12550,9 +12559,8 @@ private:
                 } else {
                     value.bits = simulation_.read_process_call_result(
                         owner->process, index);
-                    const auto word = frame_variable_word(locals[index]);
-                    if (word == "real" || word == "realtime"
-                        || word == "shortreal") {
+                    if (support::systemverilog_real_family(
+                            locals[index].systemverilog_builtin)) {
                         value.kind = Value::Kind::real;
                         value.real = real_bits(value.bits);
                     } else {
@@ -13870,10 +13878,8 @@ private:
             }
             auto bits = value_bits(*value, local->width);
             // A two-state variable holds no unknown bit.
-            const auto word = frame_variable_word(*local);
             if (local->value_kind != runtime::simir::ValueKind::logic4
-                || word == "int" || word == "byte" || word == "shortint"
-                || word == "longint" || word == "bit") {
+                || frame_variable_two_state(*local)) {
                 for (std::size_t bit = 0U; bit < local->width; ++bit) {
                     if (bits.get(bit) != Logic4::one) {
                         bits.set(bit, Logic4::zero);
@@ -13936,11 +13942,16 @@ private:
         return succeed(result);
     }
 
-    [[nodiscard]] static std::string frame_variable_word(
-        const runtime::simir::DebugLocal& local)
+    // A two-state built-in type (IEEE 1800-2023 6.11): int, byte, shortint,
+    // longint and bit.
+    [[nodiscard]] static bool frame_variable_two_state(
+        const runtime::simir::DebugLocal& local) noexcept
     {
-        auto word = local.type_name.substr(0U, local.type_name.find(' '));
-        return word;
+        using Kind = support::SystemVerilogBuiltinType;
+        const auto kind = local.systemverilog_builtin;
+        return kind == Kind::int_type || kind == Kind::byte
+            || kind == Kind::shortint || kind == Kind::longint
+            || kind == Kind::bit;
     }
 
     // An event variable is a named event of the frame (37.43).
@@ -13953,9 +13964,8 @@ private:
     [[nodiscard]] static bool frame_variable_signed(
         const runtime::simir::DebugLocal& local)
     {
-        const auto word = frame_variable_word(local);
-        return word == "int" || word == "integer" || word == "byte"
-            || word == "shortint" || word == "longint";
+        return support::systemverilog_builtin_default_signed(
+                   local.systemverilog_builtin);
     }
 
     // The vpiType of an automatic variable (37.17, 37.33, 37.43).
@@ -14018,26 +14028,25 @@ private:
         if (frame_variable_interface(variable) != nullptr) {
             return vpiVirtualInterfaceVar;
         }
-        const auto word = frame_variable_word(*local);
-        if (word == "int") {
+        using Kind = support::SystemVerilogBuiltinType;
+        switch (local->systemverilog_builtin) {
+        case Kind::int_type:
             return vpiIntVar;
-        }
-        if (word == "integer") {
+        case Kind::integer:
             return vpiIntegerVar;
-        }
-        if (word == "byte") {
+        case Kind::byte:
             return vpiByteVar;
-        }
-        if (word == "shortint") {
+        case Kind::shortint:
             return vpiShortIntVar;
-        }
-        if (word == "longint") {
+        case Kind::longint:
             return vpiLongIntVar;
-        }
-        if (word == "time") {
+        case Kind::time:
             return vpiTimeVar;
+        case Kind::bit:
+            return vpiBitVar;
+        default:
+            return vpiReg;
         }
-        return word == "bit" ? vpiBitVar : vpiReg;
     }
 
     fsim_vpi_status_v1 frame_variable_property(
@@ -17268,22 +17277,23 @@ private:
             // details 3 and 5): a typedef's typespec or a built-in type's.
             if (type == vpiTypespec) {
                 if (const auto target = statement_model_->cast_target(*serial);
-                    target && target->size == 0U && !target->type.empty()) {
+                    target && target->size == 0U
+                    && target->target
+                        != support::SystemVerilogCastTarget::none
+                    && target->target
+                        != support::SystemVerilogCastTarget::type_operator) {
                     if (const auto* const named
                         = cast_typedef(*serial)) {
                         return succeed(result,
                             make_typespec(TypespecLevel { named, 0U }));
                     }
                     VpiStatementModel::DeclaredType declared;
-                    declared.word = target->type;
-                    declared.is_signed = target->type == "int"
-                        || target->type == "byte" || target->type == "shortint"
-                        || target->type == "longint" || target->type == "integer";
-                    if (declared.word != "signed" && declared.word != "unsigned"
-                        && declared.word != "const"
-                        && !std::ranges::all_of(declared.word, [](const char c) {
-                               return c >= '0' && c <= '9';
-                           })) {
+                    declared.builtin = target->builtin;
+                    declared.is_signed
+                        = support::systemverilog_builtin_default_signed(
+                            declared.builtin);
+                    if (declared.builtin
+                        != support::SystemVerilogBuiltinType::none) {
                         return succeed(
                             result, declared_type_relation(declared, type));
                     }
@@ -18841,7 +18851,8 @@ private:
             // built-in class (IEEE 1800-2023 37.32).
             case vpiClassType:
                 return node.kind == TypespecKind::Class
-                    ? integer(VpiClassModel::class_type_of(node.name))
+                    ? integer(VpiClassModel::class_type_of(
+                          node.standard_class))
                     : succeed(result, 0U, undefined);
             case vpiIsModPort:
                 return node.kind == TypespecKind::Interface
@@ -20997,24 +21008,24 @@ private:
                     }
                 }
                 size = static_cast<std::size_t>(low_bits(width->bits));
-            } else if (!target->type.empty()
-                && std::ranges::all_of(target->type, [](const char digit) {
-                       return digit >= '0' && digit <= '9';
-                   })) {
-                if (target->type.size() > 9U) {
+            } else if (target->literal_size) {
+                if (*target->literal_size > 999999999U) {
                     return std::nullopt;
                 }
-                size = static_cast<std::size_t>(std::stoul(target->type));
+                size = *target->literal_size;
             }
-            computed = evaluate_cast(target->type, size, values.front());
+            computed = evaluate_cast(
+                target->target, target->builtin, size, values.front());
             // A cast to a typedef converts to the type it names (6.24.1).
             if (!computed && !size && target->size == 0U) {
                 if (const auto* const named = cast_typedef(serial)) {
                     if (named->kind == TypespecKind::Real
                         || named->kind == TypespecKind::ShortReal) {
                         computed = evaluate_cast(
-                            named->kind == TypespecKind::Real ? "real"
-                                                              : "shortreal",
+                            support::SystemVerilogCastTarget::builtin,
+                            named->kind == TypespecKind::Real
+                                ? support::SystemVerilogBuiltinType::real
+                                : support::SystemVerilogBuiltinType::shortreal,
                             std::nullopt, values.front());
                     } else if (const auto shape = typespec_cast_shape(*named)) {
                         computed = evaluate_integral_cast(
@@ -23240,7 +23251,7 @@ private:
     // Typespecs of a function's return variable and formals, built from
     // the declaration's HIR type (IEEE 1800-2023 37.41).
     std::deque<runtime::SystemVerilogVpiTypespec> declared_typespec_nodes_;
-    std::map<std::tuple<std::string, bool,
+    std::map<std::tuple<support::SystemVerilogBuiltinType, bool,
                  std::vector<std::pair<std::int64_t, std::int64_t>>>,
         fsim_vpi_handle_v1>
         declared_typespecs_;

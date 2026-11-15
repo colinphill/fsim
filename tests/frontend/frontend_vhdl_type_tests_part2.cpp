@@ -133,7 +133,9 @@ end architecture;
   const auto &initializer =
       *architecture->processes.front().variables.front().initializer;
   require(initializer.kind == ExpressionKind::Call &&
-              initializer.text == "@vhdl-qualified:envelope_t" &&
+              initializer.marker ==
+                  fsim::support::ExpressionMarker::vhdl_qualified &&
+              initializer.marker_argument == "envelope_t" &&
               initializer.operands.size() == 1 &&
               initializer.operands.front().kind == ExpressionKind::Aggregate &&
               initializer.span.begin.line == 28,
@@ -142,8 +144,10 @@ end architecture;
   require(outer_aggregate.aggregate_choices ==
                   std::vector<std::string>{"payload", "items", "tag"} &&
               outer_aggregate.operands[1].kind == ExpressionKind::Call &&
-              outer_aggregate.operands[1].text ==
-                  "@vhdl-qualified:payload_array_t",
+              outer_aggregate.operands[1].marker ==
+                  fsim::support::ExpressionMarker::vhdl_qualified &&
+              outer_aggregate.operands[1].marker_argument ==
+                  "payload_array_t",
           "record choices and nested array qualification retain source order");
   const auto &array_aggregate = outer_aggregate.operands[1].operands.front();
   require(array_aggregate.kind == ExpressionKind::Aggregate &&
@@ -962,7 +966,8 @@ end architecture;
               case_expression.operands[1].text == "a" &&
               case_expression.operands[2].text == "b" &&
               external_expression.kind == ExpressionKind::Call &&
-              external_expression.text == "@vhdl-external" &&
+              external_expression.marker ==
+                  fsim::support::ExpressionMarker::vhdl_external &&
               external_expression.operands.size() == 2 &&
               // An absolute pathname keeps its leading `.` (IEEE
               // 1076-2008 8.7).

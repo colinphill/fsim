@@ -10,6 +10,52 @@
 
 namespace fsim::frontend::class_resolution_detail {
 
+namespace {
+
+// Turns `expression` into the synthesized node `marker` with `argument`; the
+// text of a marked node is empty.
+void mark_expression(Expression& expression,
+    const support::ExpressionMarker marker, std::string argument = { },
+    std::string owner = { })
+{
+  expression.text.clear();
+  expression.marker = marker;
+  expression.marker_argument = std::move(argument);
+  expression.marker_owner = std::move(owner);
+}
+
+// Turns the callee of `statement` into the synthesized callee `marker` with
+// `argument`; the task name is empty.
+void mark_task(Statement& statement, const support::ExpressionMarker marker,
+    std::string argument = { })
+{
+  statement.task_name.clear();
+  statement.task_marker = marker;
+  statement.task_marker_argument = std::move(argument);
+}
+
+// A cast to the built-in data type `kind` (IEEE 1800-2023 6.24.1).
+[[nodiscard]] bool builtin_cast(const Expression& expression,
+    const support::SystemVerilogBuiltinType kind) noexcept
+{
+  return expression.marker == support::ExpressionMarker::sv_cast
+      && expression.systemverilog_cast_target
+          == support::SystemVerilogCastTarget::builtin
+      && expression.systemverilog_cast_builtin == kind;
+}
+
+// A synthesized SystemVerilog expression the class resolution has already
+// bound: every marker of the expression family from a member selection to a
+// coverage query.
+[[nodiscard]] bool synthesized_expression(
+    const support::ExpressionMarker marker) noexcept
+{
+  return marker >= support::ExpressionMarker::sv_select
+      && marker <= support::ExpressionMarker::sv_coverage_query_type;
+}
+
+} // namespace
+
 [[nodiscard]] std::optional<MethodMatch> Resolver::select_method(
     const std::string_view identity,
     const std::string_view name,
@@ -142,7 +188,7 @@ void Resolver::retain_task_profile(
     const Scope& scope,
     const std::optional<std::string>& expected_class,
     const SystemVerilogScalarKind expected_scalar) {
-  if (expression.text == "@sv-null") {
+  if (expression.marker == support::ExpressionMarker::sv_null) {
     if (expected_scalar == SystemVerilogScalarKind::Chandle
         || expression.systemverilog_scalar_kind
             == SystemVerilogScalarKind::Chandle) {
@@ -164,7 +210,7 @@ void Resolver::retain_task_profile(
     }
     return std::nullopt;
   }
-  if (expression.text == "@sv-cast:chandle") {
+  if (builtin_cast(expression, support::SystemVerilogBuiltinType::chandle)) {
     if (expression.operands.size() != 1U) {
       diagnose(
           diagnostics_, "FSIM-SV-SEM-174",
@@ -186,14 +232,14 @@ void Resolver::retain_task_profile(
         SystemVerilogScalarKind::Chandle;
     return chandle_type();
   }
-  if (expression.text == "@sv-cast:void"
+  if (builtin_cast(expression, support::SystemVerilogBuiltinType::void_type)
       && expression.operands.size() == 1U) {
     resolve_expression(expression.operands.front(), scope);
     expression.systemverilog_scalar_kind =
         SystemVerilogScalarKind::None;
     return Type{};
   }
-  if (expression.text == "@sv-size-cast:expression"
+  if (expression.marker == support::ExpressionMarker::sv_size_cast
       && expression.operands.size() == 2U) {
     resolve_expression(expression.operands.front(), scope);
     const auto operand = resolve_expression(
@@ -206,14 +252,15 @@ void Resolver::retain_task_profile(
     }
     return std::nullopt;
   }
-  if (expression.text.starts_with("@sv-cast:")
+  if (expression.marker == support::ExpressionMarker::sv_cast
       && expression.operands.size() == 1U) {
     // A static cast of a class handle to a class it may be assigned to is
     // that handle (IEEE 1800-2017 6.24.1, 8.15).
-    const auto classes = resolve_class_name(
-        std::string_view{expression.text}.substr(
-            std::string_view{"@sv-cast:"}.size()),
-        scope);
+    std::vector<const SystemVerilogClassDeclaration*> classes;
+    if (expression.systemverilog_cast_target
+        == support::SystemVerilogCastTarget::named) {
+      classes = resolve_class_name(expression.marker_argument, scope);
+    }
     if (classes.size() == 1U) {
       const auto target = class_type(*classes.front());
       auto operand_type = resolve_expression(
@@ -221,8 +268,8 @@ void Resolver::retain_task_profile(
       const auto operand_class = operand_type
           ? class_identity(*operand_type) : std::nullopt;
       const auto target_class = class_identity(target);
-      const bool null_operand
-          = expression.operands.front().text == "@sv-null";
+      const bool null_operand = expression.operands.front().marker
+          == support::ExpressionMarker::sv_null;
       if (target_class
           && (null_operand
               || (operand_class
@@ -246,8 +293,7 @@ void Resolver::retain_task_profile(
     }
     return std::nullopt;
   }
-  if (expression.text == "process::self"
-      || expression.text == "std::process::self") {
+  if (expression.marker == support::ExpressionMarker::sv_process_self) {
     for (auto& operand : expression.operands) {
       resolve_expression(operand, scope);
     }
@@ -255,7 +301,7 @@ void Resolver::retain_task_profile(
         SystemVerilogScalarKind::Chandle;
     return chandle_type();
   }
-  if (expression.text == "@sv-shallow-copy"
+  if (expression.marker == support::ExpressionMarker::sv_shallow_copy
       && expression.operands.size() == 1U) {
     auto type = resolve_expression(expression.operands.front(), scope);
     if (!type || !class_identity(*type)) {
@@ -269,9 +315,8 @@ void Resolver::retain_task_profile(
     expression.nominal_type = *class_identity(*type);
     return type;
   }
-  constexpr std::string_view typed_new{"@sv-new-typed:"};
-  if (expression.text.starts_with(typed_new)) {
-    const auto name = expression.text.substr(typed_new.size());
+  if (expression.marker == support::ExpressionMarker::sv_new_typed) {
+    const auto name = expression.marker_argument;
     const auto owners = resolve_class_name(name, scope);
     if (owners.size() != 1U) {
       diagnose(
@@ -303,12 +348,12 @@ void Resolver::retain_task_profile(
       expression.systemverilog_class_owner =
           std::make_shared<const Type>(selection->type);
     }
-    expression.text = "@sv-new";
+    mark_expression(expression, support::ExpressionMarker::sv_new);
     return resolve_expression(
         expression, scope, constructed,
         SystemVerilogScalarKind::None);
   }
-  if (expression.text == "@sv-new") {
+  if (expression.marker == support::ExpressionMarker::sv_new) {
     if (!expected_class) {
       diagnose(
           diagnostics_,
@@ -319,13 +364,15 @@ void Resolver::retain_task_profile(
     }
     const auto expected_declaration = find_class(*expected_class);
     if (expected_declaration == nullptr) {
-      expression.text = "@sv-new:" + *expected_class;
+      mark_expression(expression,
+          support::ExpressionMarker::sv_new_constructor, *expected_class,
+          *expected_class);
       expression.nominal_type = *expected_class;
       for (auto& operand : expression.operands) {
         resolve_expression(operand, scope);
       }
       Type deferred;
-      deferred.spelling = *expected_class;
+      set_systemverilog_type_name(deferred, *expected_class);
       deferred.named_type = *expected_class;
       return deferred;
     }
@@ -346,14 +393,16 @@ void Resolver::retain_task_profile(
         expression.operands.size(),
         expression.span);
     if (!method) return std::nullopt;
-    expression.text = "@sv-new:" + *expected_class;
+    mark_expression(expression,
+        support::ExpressionMarker::sv_new_constructor, *expected_class,
+        *expected_class);
     expression.nominal_type = *expected_class;
     for (auto& operand : expression.operands) {
       resolve_expression(operand, scope);
     }
     return class_type(*find_class(*expected_class));
   }
-  if (expression.text == "@sv-dollar-cast") {
+  if (expression.marker == support::ExpressionMarker::sv_dollar_cast) {
     std::vector<std::optional<Type>> operand_types;
     operand_types.reserve(expression.operands.size());
     for (auto& operand : expression.operands) {
@@ -370,19 +419,21 @@ void Resolver::retain_task_profile(
     }
     if (operand_types.front()
         && class_identity(*operand_types.front())) {
-      expression.text += ":"
-          + *class_identity(*operand_types.front());
+      mark_expression(expression,
+          support::ExpressionMarker::sv_dollar_cast_class,
+          *class_identity(*operand_types.front()),
+          *class_identity(*operand_types.front()));
     }
-    return Type{ValueDomain::Logic4, "bit", PackedRange{0, 0, true}, false};
+    return systemverilog_builtin_type(ValueDomain::Logic4, support::SystemVerilogBuiltinType::bit,
+        PackedRange{0, 0, true}, false);
   }
-  constexpr std::string_view selected_member_prefix{"@sv-select:"};
-  if (expression.text.starts_with(selected_member_prefix)
+  if (expression.marker == support::ExpressionMarker::sv_select
       && expression.operands.size() == 1U) {
     const auto receiver_type = resolve_expression(
         expression.operands.front(), scope);
     const auto identity = receiver_type
         ? class_identity(*receiver_type) : std::nullopt;
-    const auto member = expression.text.substr(selected_member_prefix.size());
+    const auto member = expression.marker_argument;
     // A member of a packed structure class property stays a selection.
     if (!identity && receiver_type
         && is_class_property_access(expression.operands.front())) {
@@ -398,16 +449,16 @@ void Resolver::retain_task_profile(
     }
     // A member of a value element of an object's array (`obj.v[i].m`) is
     // a member path on the indexed property (`index.m`).
-    constexpr std::string_view element_prefix{"@sv-container-index:"};
     if (!identity
         && expression.operands.front().kind == ExpressionKind::Call
-        && expression.operands.front().text.starts_with(element_prefix)
+        && expression.operands.front().marker
+            == support::ExpressionMarker::sv_container_index
         && expression.operands.front().operands.size() == 2U) {
       auto element = std::move(expression.operands.front());
-      Expression property{ExpressionKind::Call,
-          "@sv-container-property:"
-              + element.text.substr(element_prefix.size()),
-          {std::move(element.operands[0])}, element.span};
+      auto property = marked_expression(
+          support::ExpressionMarker::sv_container_property,
+          std::move(element.marker_argument),
+          {std::move(element.operands[0])}, element.span);
       Expression selected{ExpressionKind::Index,
           "index." + std::string{member},
           {std::move(property), std::move(element.operands[1])},
@@ -469,14 +520,17 @@ void Resolver::retain_task_profile(
             expression.span);
         if (!method || !method->method) return std::nullopt;
         if (method->method->is_static) {
-          expression.text = "@sv-static-method:"
-              + method->method->canonical_identity;
+          mark_expression(expression,
+              support::ExpressionMarker::sv_static_method,
+              method->method->canonical_identity,
+              method->owner->canonical_identity);
           expression.operands.clear();
           expression.call_argument_names.clear();
           retain_call_profile(expression, *method->method, false);
         } else {
-          expression.text = "@sv-method:"
-              + method->method->canonical_identity;
+          mark_expression(expression, support::ExpressionMarker::sv_method,
+              method->method->canonical_identity,
+              method->owner->canonical_identity);
           retain_call_profile(expression, *method->method, true);
         }
         if (const auto result_identity = class_identity(
@@ -488,6 +542,7 @@ void Resolver::retain_task_profile(
       // `p.randomize` without parentheses calls the built-in method
       // (IEEE 1800-2017 13.5.5, 18.6.1).
       if (member == "randomize") {
+        mark_expression(expression, support::ExpressionMarker::none);
         expression.text = ".randomize";
         return resolve_call(expression, scope, expected_class, expected_scalar);
       }
@@ -506,11 +561,12 @@ void Resolver::retain_task_profile(
           match.property->declaration.type,
           match.owner->canonical_identity);
       expression.kind = ExpressionKind::Call;
-      expression.text =
-          (type.systemverilog_container
-               ? "@sv-static-container-property:"
-               : "@sv-static-property:")
-          + match.owner->canonical_identity + "::" + std::string{member};
+      mark_expression(expression,
+          type.systemverilog_container
+              ? support::ExpressionMarker::sv_static_container_property
+              : support::ExpressionMarker::sv_static_property,
+          match.owner->canonical_identity + "::" + std::string{member},
+          match.owner->canonical_identity);
       expression.operands.clear();
       retain_result_type(expression, type);
       if (const auto result_identity = class_identity(type)) {
@@ -518,11 +574,12 @@ void Resolver::retain_task_profile(
       }
       return type;
     }
-    expression.text =
-        (match.property->declaration.type.systemverilog_container
-             ? "@sv-container-property:"
-             : "@sv-property:")
-        + match.owner->canonical_identity + "::" + std::string{member};
+    mark_expression(expression,
+        match.property->declaration.type.systemverilog_container
+            ? support::ExpressionMarker::sv_container_property
+            : support::ExpressionMarker::sv_property,
+        match.owner->canonical_identity + "::" + std::string{member},
+        match.owner->canonical_identity);
     auto property_type = match.property->declaration.type;
     // A container of class handles selected through another object
     // (`m[i].arr[j] = new`) names its element class in the owner's scope.
@@ -557,7 +614,7 @@ void Resolver::retain_task_profile(
     }
     return property_type;
   }
-  if (expression.text.starts_with("@sv-")) {
+  if (synthesized_expression(expression.marker)) {
     for (auto& operand : expression.operands) {
       resolve_expression(operand, scope);
     }
@@ -610,18 +667,20 @@ void Resolver::retain_task_profile(
     // of the object.
     const auto mode_call = [&](Expression receiver, const std::string& target) {
       expression.operands.front() = std::move(receiver);
-      expression.text = "@sv-method:@builtin-"
-          + std::string{expression.text == ".rand_mode"
-                ? "rand-mode:" : "constraint-mode:"}
-          + target;
+      mark_expression(expression, support::ExpressionMarker::sv_method,
+          "@builtin-"
+              + std::string{expression.text == ".rand_mode"
+                    ? "rand-mode:" : "constraint-mode:"}
+              + target);
       expression.call_argument_names.resize(expression.operands.size());
       expression.call_argument_directions.assign(
           expression.operands.size(), PortDirection::Input);
       for (auto& operand : expression.operands | std::views::drop(1)) {
         resolve_expression(operand, scope);
       }
-      Type result{
-          ValueDomain::Integer, "int", PackedRange{31, 0, true}, true};
+      Type result = systemverilog_builtin_type(ValueDomain::Integer,
+          support::SystemVerilogBuiltinType::int_type,
+          PackedRange{31, 0, true}, true);
       retain_result_type(expression, result);
       return result;
     };
@@ -702,14 +761,13 @@ void Resolver::retain_task_profile(
     // array of handles, or a member below one: an index node whose text
     // carries the member path, or its member selection once resolved
     // (IEEE 1800-2017 8.22, 18.8).
-    constexpr std::string_view selected_prefix{"@sv-select:"};
     const auto& mode_receiver = expression.operands.front();
     const bool indexed = mode_receiver.kind == ExpressionKind::Index
         && mode_receiver.operands.size() == 2U
         && (mode_receiver.text == "index"
             || mode_receiver.text.starts_with("index."));
     const bool selected_member = mode_receiver.kind == ExpressionKind::Call
-        && mode_receiver.text.starts_with(selected_prefix)
+        && mode_receiver.marker == support::ExpressionMarker::sv_select
         && mode_receiver.operands.size() == 1U;
     if (built_in_mode && !implicit_member && (indexed || selected_member)) {
       auto whole = mode_receiver;
@@ -723,7 +781,7 @@ void Resolver::retain_task_profile(
       std::string member;
       if (selected_member) {
         receiver = mode_receiver.operands.front();
-        member = mode_receiver.text.substr(selected_prefix.size());
+        member = mode_receiver.marker_argument;
       } else if (const auto dot = mode_receiver.text.rfind('.');
                  dot != std::string::npos) {
         receiver = mode_receiver;
@@ -798,21 +856,18 @@ void Resolver::retain_task_profile(
         }
       }
     }
-    constexpr std::string_view container_property_prefix{
-        "@sv-container-property:"};
     if (receiver_type && receiver_type->systemverilog_container) {
       const auto method = expression.text.substr(1U);
       const bool instance_property =
           expression.operands.front().kind == ExpressionKind::Call
-          && expression.operands.front().text.starts_with(
-              container_property_prefix)
+          && expression.operands.front().marker
+              == support::ExpressionMarker::sv_container_property
           && expression.operands.front().operands.size() == 1U;
       // A static property's methods apply to the class's one container
       // object, which the container method lowering binds directly
       // (IEEE 1800-2017 8.9, 7.10).
       if (instance_property) {
-        const auto property = expression.operands.front().text.substr(
-            container_property_prefix.size());
+        const auto property = expression.operands.front().marker_argument;
         std::vector<Expression> operands;
         auto receiver = std::move(
             expression.operands.front().operands.front());
@@ -824,8 +879,31 @@ void Resolver::retain_task_profile(
               receiver_type->systemverilog_class_declaration);
           operands.push_back(std::move(operand));
         }
-        expression.text = "@sv-container-method:" + method + ":"
-            + property;
+        // The marked methods are the ones the container method lowering
+        // reads (IEEE 1800-2017 7.5.1, 7.10.2, 7.12.3).
+        using Marker = support::ExpressionMarker;
+        const auto container_marker = method == "pop_front"
+            ? Marker::sv_container_pop_front
+            : method == "pop_back" ? Marker::sv_container_pop_back
+            : method == "size" ? Marker::sv_container_size
+            : method == "sum" ? Marker::sv_container_sum
+            : method == "product" ? Marker::sv_container_product
+            : method == "and" ? Marker::sv_container_and
+            : method == "or" ? Marker::sv_container_or
+            : method == "xor" ? Marker::sv_container_xor
+            : Marker::none;
+        if (container_marker != Marker::none) {
+          mark_expression(expression, container_marker, property);
+        } else {
+          // Any other built-in array method keeps its name as the text;
+          // push_back has its own marker, as in a task call statement.
+          const std::string method_name { method };
+          mark_expression(expression,
+              method == "push_back" ? Marker::sv_container_push_back
+                                    : Marker::sv_container_method,
+              property);
+          expression.text = method_name;
+        }
         expression.operands = std::move(operands);
       } else {
         // A with-clause's iterator (`item` by default) hides a class
@@ -866,11 +944,9 @@ void Resolver::retain_task_profile(
             || method == "exists" || method == "first"
             || method == "last" || method == "next"
             || method == "prev") {
-          Type result{
-              ValueDomain::Integer,
-              "int",
-              PackedRange{31, 0, true},
-              true};
+          Type result = systemverilog_builtin_type(ValueDomain::Integer,
+              support::SystemVerilogBuiltinType::int_type,
+              PackedRange{31, 0, true}, true);
           retain_result_type(expression, result);
           return result;
         }
@@ -896,13 +972,14 @@ void Resolver::retain_task_profile(
     const auto name = expression.text.substr(1U);
     if (name == "randomize") {
       const auto receiver_identity = *class_identity(*receiver_type);
-      expression.text = "@sv-method:@builtin-randomize";
+      mark_expression(expression, support::ExpressionMarker::sv_method,
+          "@builtin-randomize");
       expression.call_argument_names.resize(expression.operands.size());
       expression.call_argument_directions.assign(
           expression.operands.size(), PortDirection::Input);
       const auto null_argument = [](const Expression& operand) {
         return operand.kind == ExpressionKind::Call
-            && operand.text == "@sv-null";
+            && operand.marker == support::ExpressionMarker::sv_null;
       };
       const auto has_null = std::ranges::any_of(
           expression.operands | std::views::drop(1), null_argument);
@@ -919,14 +996,17 @@ void Resolver::retain_task_profile(
       for (std::size_t index = 1; index < expression.operands.size();
            ++index) {
         if (null_argument(expression.operands[index])) {
-          if (checker_call) {
-            expression.call_argument_names[index] = "@randomize-null";
-          }
+          // The checker form `randomize(null)` (IEEE 1800-2017 18.11.1)
+          // keeps its operand marked; it selects no property.
           expression.operands[index] = Expression{
               ExpressionKind::IntegerLiteral,
               "0",
               {},
               expression.operands[index].span};
+          if (checker_call) {
+            expression.operands[index].marker
+                = support::ExpressionMarker::randomize_null;
+          }
           continue;
         }
         const auto selected_name = expression.operands[index].text;
@@ -1026,9 +1106,9 @@ void Resolver::retain_task_profile(
           path.remove_prefix(dot + 1U);
           while (!path.empty()) {
             const auto next = path.find('.');
-            Expression select{ExpressionKind::Call,
-                "@sv-select:" + std::string{path.substr(0, next)}, {},
-                node.span};
+            auto select = marked_expression(
+                support::ExpressionMarker::sv_select,
+                std::string{path.substr(0, next)}, {}, node.span);
             select.operands.push_back(std::move(selected));
             selected = std::move(select);
             path = next == std::string_view::npos ? std::string_view{}
@@ -1098,9 +1178,8 @@ void Resolver::retain_task_profile(
         // 18.7, 18.7.1).
         // `get_c().m` and `(get_c).m`: a member of the object a function
         // returns is selected once the call is bound (IEEE 1800-2017 18.7).
-        constexpr std::string_view select_prefix{"@sv-select:"};
         if (!deferring && node.kind == ExpressionKind::Call
-            && node.text.starts_with(select_prefix)
+            && node.marker == support::ExpressionMarker::sv_select
             && node.operands.size() == 1U) {
           auto& operand = node.operands.front();
           if (operand.kind == ExpressionKind::Identifier
@@ -1168,18 +1247,17 @@ void Resolver::retain_task_profile(
           resolve_caller_names(resolve_caller_names, choice);
         }
       }
-      Type result{
-          ValueDomain::Integer,
-          "int",
-          PackedRange{31, 0, true},
-          true};
+      Type result = systemverilog_builtin_type(ValueDomain::Integer,
+          support::SystemVerilogBuiltinType::int_type,
+          PackedRange{31, 0, true}, true);
       retain_result_type(expression, result);
       return result;
     }
     // `obj.get_randstate()` returns the object's random number generator
     // state (IEEE 1800-2017 18.13.4).
     if (name == "get_randstate" && expression.operands.size() == 1U) {
-      expression.text = "@sv-method:@builtin-get-randstate";
+      mark_expression(expression, support::ExpressionMarker::sv_method,
+          "@builtin-get-randstate");
       expression.call_argument_names.resize(expression.operands.size());
       expression.call_argument_directions.assign(
           expression.operands.size(), PortDirection::Input);
@@ -1194,11 +1272,12 @@ void Resolver::retain_task_profile(
         expression.operands.size() - 1U,
         expression.span, &*receiver_type);
     if (!match || !match->method) return std::nullopt;
-    expression.text =
-        (expression.operands.front().text == "super"
-             ? "@sv-base-method:"
-             : "@sv-method:")
-        + match->method->canonical_identity;
+    mark_expression(expression,
+        expression.operands.front().text == "super"
+            ? support::ExpressionMarker::sv_base_method
+            : support::ExpressionMarker::sv_method,
+        match->method->canonical_identity,
+        match->owner->canonical_identity);
     retain_call_profile(expression, *match->method, true);
     for (std::size_t index = 1; index < expression.operands.size(); ++index) {
       const auto formal = index - 1U < match->method->arguments.size()
@@ -1213,7 +1292,9 @@ void Resolver::retain_task_profile(
     // A static method called through a handle runs without the handle
     // (IEEE 1800-2017 8.10).
     if (match->method->is_static && expression.operands.front().text != "super") {
-      expression.text = "@sv-static-method:" + match->method->canonical_identity;
+      mark_expression(expression, support::ExpressionMarker::sv_static_method,
+          match->method->canonical_identity,
+          match->owner->canonical_identity);
       // The handle's class specialization selects the method's (8.25).
       if (!receiver_type->systemverilog_class_parameter_actuals.empty()) {
         expression.systemverilog_class_owner =
@@ -1276,10 +1357,12 @@ void Resolver::retain_task_profile(
                   std::string_view{expression.text}.substr(0, selected),
                   *owner)
             : true;
-        expression.text = "@sv-static-method:"
-            + (intrinsic.empty()
-                   ? match->method->canonical_identity
-                   : intrinsic);
+        mark_expression(expression,
+            support::ExpressionMarker::sv_static_method,
+            intrinsic.empty() ? match->method->canonical_identity
+                              : intrinsic,
+            intrinsic.empty() ? match->owner->canonical_identity
+                              : std::string { });
         if (specialized) {
           expression.systemverilog_class_owner =
               std::make_shared<const Type>(owner->type);
@@ -1314,9 +1397,12 @@ void Resolver::retain_task_profile(
   }
 
   // Outside a class an unqualified randomize call is the scope randomize
-  // function, `[std::] randomize` (IEEE 1800-2017 18.12).
-  if (scope.class_owner == nullptr && expression.text == "randomize") {
+  // function, `[std::] randomize` (IEEE 1800-2017 18.12), unless the design
+  // declares a subroutine of that name here (26.7).
+  if (scope.class_owner == nullptr && expression.text == "randomize"
+      && !design_subroutine_visible(expression.text, scope)) {
     expression.text = "std::randomize";
+    expression.marker = support::ExpressionMarker::sv_std_randomize;
   }
   // An unqualified randomize call in a class method randomizes the object
   // itself (IEEE 1800-2017 18.6.1, 18.7); an unqualified get_randstate
@@ -1360,10 +1446,12 @@ void Resolver::retain_task_profile(
         expression.operands.size(),
         expression.span);
     if (match && match->method) {
-      expression.text = (match->method->is_static
-              ? "@sv-static-method:"
-              : "@sv-method:")
-          + match->method->canonical_identity;
+      mark_expression(expression,
+          match->method->is_static
+              ? support::ExpressionMarker::sv_static_method
+              : support::ExpressionMarker::sv_method,
+          match->method->canonical_identity,
+          match->owner->canonical_identity);
       if (!match->method->is_static) {
         Expression receiver{
             ExpressionKind::Identifier, "this", {}, expression.span};
@@ -1409,7 +1497,8 @@ void Resolver::resolve_scope_inline_constraints(
        index < expression.aggregate_choices.size()
        && index < expression.aggregate_choice_expressions.size();
        ++index) {
-    if (expression.aggregate_choices[index] != "@sv-inline-constraint") {
+    if (aggregate_choice_marker(expression, index)
+        != support::ExpressionMarker::sv_inline_constraint) {
       continue;
     }
     for (auto& choice : expression.aggregate_choice_expressions[index]) {
@@ -1417,12 +1506,94 @@ void Resolver::resolve_scope_inline_constraints(
     }
   }
 }
+// The std package is only wildcard imported into the compilation unit, so a
+// class named process that the design declares or imports hides std::process
+// (IEEE 1800-2023 26.7); `process::self` then calls that class's method. A
+// name written `std::process::m` always selects the std class.
+void Resolver::release_hidden_process_member(
+    Expression& expression, const Scope& scope) const {
+  if (expression.marker != support::ExpressionMarker::sv_process_self
+      && expression.marker != support::ExpressionMarker::sv_process_state) {
+    return;
+  }
+  const std::string_view text { expression.text };
+  const auto separator = text.find("::");
+  if (separator == std::string_view::npos || text.starts_with("std::")
+      || resolve_class_name(text.substr(0U, separator), scope).empty()) {
+    return;
+  }
+  expression.marker = support::ExpressionMarker::none;
+  expression.marker_argument.clear();
+}
+// A std package class named by its bare name is hidden by a class of that
+// name the design declares or imports (IEEE 1800-2023 26.7).
+support::SystemVerilogStandardClass Resolver::visible_standard_class(
+    const Type& type, const Scope& scope) const {
+  const auto standard = type.systemverilog_standard_class;
+  if (standard == support::SystemVerilogStandardClass::none
+      || type.named_type.find("::") != std::string::npos
+      || resolve_class_name(type.named_type, scope).empty()) {
+    return standard;
+  }
+  return support::SystemVerilogStandardClass::none;
+}
+Type Resolver::release_hidden_standard_class(
+    Type type, const Scope& scope) const {
+  if (type.systemverilog_container) {
+    for (auto& element : type.systemverilog_container->element_types) {
+      element = release_hidden_standard_class(std::move(element), scope);
+    }
+  }
+  if (type.systemverilog_standard_class
+          == support::SystemVerilogStandardClass::none
+      || visible_standard_class(type, scope)
+          != support::SystemVerilogStandardClass::none) {
+    return type;
+  }
+  const auto declarations = resolve_class_name(type.named_type, scope);
+  auto released = class_type(*declarations.front());
+  released.named_type_span = type.named_type_span;
+  released.systemverilog_source_order = type.systemverilog_source_order;
+  released.systemverilog_container = std::move(type.systemverilog_container);
+  return released;
+}
+// A subroutine the unit declares, or a package it imports declares, under a
+// std package subroutine's name hides that subroutine (IEEE 1800-2023 26.7).
+bool Resolver::design_subroutine_visible(
+    const std::string_view name, const Scope& scope) const {
+  const auto declares = [&](const DesignUnit& unit) {
+    return std::ranges::any_of(unit.functions,
+               [&](const FunctionDeclaration& function) {
+                 return function.name == name;
+               })
+        || std::ranges::any_of(unit.tasks,
+               [&](const TaskDeclaration& task) { return task.name == name; });
+  };
+  if (scope.unit != nullptr && declares(*scope.unit)) {
+    return true;
+  }
+  for (const auto* import : scope.imports) {
+    if (!import->name.empty() && import->name != name) {
+      continue;
+    }
+    for (const auto& candidate : design_.units) {
+      if (candidate.kind == UnitKind::SystemVerilogPackage
+          && candidate.name == import->package
+          && effective_library(candidate.library) == scope.library
+          && declares(candidate)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
 std::optional<Type> Resolver::resolve_expression(
     Expression& expression,
     const Scope& scope,
     const std::optional<std::string>& expected_class,
     const SystemVerilogScalarKind expected_scalar) {
   if (!expression.valid()) return std::nullopt;
+  release_hidden_process_member(expression, scope);
   if (expression.kind == ExpressionKind::Identifier) {
     return resolve_identifier(expression, scope);
   }
@@ -1465,8 +1636,8 @@ std::optional<Type> Resolver::resolve_expression(
       while (!path.empty()) {
         const auto dot = path.find('.');
         const auto member = path.substr(0, dot);
-        Expression select{ExpressionKind::Call,
-            "@sv-select:" + std::string{member}, {}, expression.span};
+        auto select = marked_expression(support::ExpressionMarker::sv_select,
+            std::string{member}, {}, expression.span);
         select.operands.push_back(std::move(selected));
         selected = std::move(select);
         path = dot == std::string_view::npos ? std::string_view{}
@@ -1499,13 +1670,14 @@ std::optional<Type> Resolver::resolve_expression(
     }
   }
   // An element of a nested container of handles already resolved
-  // (`q[i][j]` over `@sv-container-index:q(o, i)`) is the object its
+  // (`q[i][j]` over a container index of the property `q`) is the object its
   // handles name (IEEE 1800-2017 7.4.5, 8.9).
   if (expression.kind == ExpressionKind::Index
       && expression.operands.size() == 2U
       && !expression.nominal_type.empty()
       && expression.operands[0].kind == ExpressionKind::Call
-      && expression.operands[0].text.starts_with("@sv-container-index:")) {
+      && expression.operands[0].marker
+          == support::ExpressionMarker::sv_container_index) {
     if (const auto* declaration = find_class(expression.nominal_type)) {
       auto type = class_type(*declaration);
       retain_result_type(expression, type);
@@ -1546,19 +1718,17 @@ std::optional<Type> Resolver::resolve_expression(
       remaining.static_range_expressions.erase(
           remaining.static_range_expressions.begin());
     }
-    constexpr std::string_view indexed_property_prefix {
-        "@sv-container-index:" };
     auto& base_expression = expression.operands.front();
     // A fixed-size array nested in a dynamic, queue or associative array is
     // a container element of the property, not another dimension of it
     // (IEEE 1800-2017 7.4.5).
     const auto outer_static = [&]() {
       if (base_expression.kind != ExpressionKind::Call
-          || !base_expression.text.starts_with(indexed_property_prefix)) {
+          || base_expression.marker
+              != support::ExpressionMarker::sv_container_index) {
         return true;
       }
-      const std::string_view identity{base_expression.text};
-      const auto qualified = identity.substr(indexed_property_prefix.size());
+      const std::string_view qualified{base_expression.marker_argument};
       const auto split = qualified.rfind("::");
       if (split == std::string_view::npos) return true;
       const auto match = find_property(
@@ -1568,29 +1738,30 @@ std::optional<Type> Resolver::resolve_expression(
       return !outer || outer->kind == SystemVerilogContainerKind::StaticArray;
     }();
     if (outer_static && base_expression.kind == ExpressionKind::Call
-        && base_expression.text.starts_with(indexed_property_prefix)
+        && base_expression.marker
+            == support::ExpressionMarker::sv_container_index
         && base_expression.operands.size() >= 2U
         && container->systemverilog_container->kind
             == SystemVerilogContainerKind::StaticArray
         && !container->systemverilog_container->element_types.empty()
         && !container->systemverilog_container->element_types.front()
                 .systemverilog_class_declaration.empty()) {
-      auto text = std::move(base_expression.text);
+      auto argument = std::move(base_expression.marker_argument);
       auto operands = std::move(base_expression.operands);
       operands.push_back(std::move(expression.operands[1]));
       expression.kind = ExpressionKind::Call;
-      expression.text = std::move(text);
+      mark_expression(expression,
+          support::ExpressionMarker::sv_container_index, std::move(argument));
       expression.operands = std::move(operands);
       retain_result_type(expression, element);
       expression.nominal_type = element.systemverilog_class_declaration;
       return element;
     }
-    constexpr std::string_view property_prefix{
-        "@sv-container-property:"};
     // `obj.v[i].m` keeps its member path (`index.m`): the elaborator
     // walks it as a value path rooted at the property.
     if (expression.operands[0].kind != ExpressionKind::Call
-        || !expression.operands[0].text.starts_with(property_prefix)
+        || expression.operands[0].marker
+            != support::ExpressionMarker::sv_container_property
         || expression.operands[0].operands.size() != 1U
         || expression.text != "index") {
       retain_result_type(expression, element);
@@ -1601,8 +1772,8 @@ std::optional<Type> Resolver::resolve_expression(
     auto receiver = std::move(expression.operands[0].operands.front());
     auto index = std::move(expression.operands[1]);
     expression.kind = ExpressionKind::Call;
-    expression.text = "@sv-container-index:"
-        + expression.operands[0].text.substr(property_prefix.size());
+    mark_expression(expression, support::ExpressionMarker::sv_container_index,
+        expression.operands[0].marker_argument);
     expression.operands = {std::move(receiver), std::move(index)};
     retain_result_type(expression, element);
     expression.nominal_type = element.systemverilog_class_declaration;
@@ -1635,12 +1806,12 @@ std::optional<Type> Resolver::resolve_expression(
               || operand.text.ends_with("::status"));
     };
     if (process_status(expression.operands[0])) {
-      left = Type{
-          ValueDomain::Integer, "int", PackedRange{31, 0, true}, true};
+      left = systemverilog_builtin_type(
+          ValueDomain::Integer, support::SystemVerilogBuiltinType::int_type, PackedRange{31, 0, true}, true);
     }
     if (process_status(expression.operands[1])) {
-      right = Type{
-          ValueDomain::Integer, "int", PackedRange{31, 0, true}, true};
+      right = systemverilog_builtin_type(
+          ValueDomain::Integer, support::SystemVerilogBuiltinType::int_type, PackedRange{31, 0, true}, true);
     }
     if (chandle(left) || chandle(right)) {
       const bool equality = expression.text == "=="
@@ -1659,8 +1830,8 @@ std::optional<Type> Resolver::resolve_expression(
       }
       expression.systemverilog_scalar_kind =
           SystemVerilogScalarKind::None;
-      return Type{
-          ValueDomain::Bit2, "bit", PackedRange{0, 0, true}, false};
+      return systemverilog_builtin_type(
+          ValueDomain::Bit2, support::SystemVerilogBuiltinType::bit, PackedRange{0, 0, true}, false);
     }
     return std::nullopt;
   }
@@ -1673,7 +1844,8 @@ std::optional<Type> Resolver::resolve_expression(
     // constant index, so it names a structure member or a type (IEEE
     // 1800-2017 10.9.1, 10.9.2) and stays a name.
     const bool key = index < expression.aggregate_choices.size()
-        && expression.aggregate_choices[index] == "@key";
+        && aggregate_choice_marker(expression, index)
+            == support::ExpressionMarker::key;
     for (auto& choice : expression.aggregate_choice_expressions[index]) {
       if (key && choice.kind == ExpressionKind::Identifier
           && scope.class_owner != nullptr
@@ -1774,10 +1946,12 @@ std::optional<Type> Resolver::resolve_typed_expression(
     }
     return expected;
   }
-  if (expression.text == "@sv-new"
-      && (expected.spelling == "mailbox"
-          || expected.spelling == "semaphore")) {
-    expression.text = "@sv-sync-new:" + expected.spelling;
+  if (const auto standard = visible_standard_class(expected, scope);
+      expression.marker == support::ExpressionMarker::sv_new
+      && (standard == support::SystemVerilogStandardClass::mailbox
+          || standard == support::SystemVerilogStandardClass::semaphore)) {
+    mark_expression(expression, support::ExpressionMarker::sv_sync_new,
+        expected.spelling);
     expression.systemverilog_scalar_kind =
         SystemVerilogScalarKind::Chandle;
     for (auto& operand : expression.operands) {
@@ -1887,16 +2061,14 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
         {},
         statement.span};
     const auto receiver_type = resolve_expression(receiver, scope);
-    constexpr std::string_view container_property_prefix{
-        "@sv-container-property:"};
     if (receiver_type && receiver_type->systemverilog_container
         && receiver.kind == ExpressionKind::Call
-        && receiver.text.starts_with(container_property_prefix)
+        && receiver.marker == support::ExpressionMarker::sv_container_property
         && receiver.operands.size() == 1U) {
       const auto name = statement.task_name.substr(dot + 1U);
       if (name == "push_back") {
-        statement.task_name = "@sv-container-push-back:"
-            + receiver.text.substr(container_property_prefix.size());
+        mark_task(statement, support::ExpressionMarker::sv_container_push_back,
+            receiver.marker_argument);
         statement.task_arguments.insert(
             statement.task_arguments.begin(),
             std::move(receiver.operands.front()));
@@ -1972,7 +2144,8 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
       const auto name = statement.task_name.substr(dot + 1U);
       // `obj.set_randstate(state)` (IEEE 1800-2017 18.13.5).
       if (name == "set_randstate" && statement.task_arguments.size() == 1U) {
-        statement.task_name = "@sv-object-set-randstate";
+        mark_task(statement,
+            support::ExpressionMarker::sv_object_set_randstate);
         statement.task_arguments.insert(
             statement.task_arguments.begin(), std::move(receiver));
         statement.task_argument_names.insert(
@@ -1981,7 +2154,7 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
         return;
       }
       if (name == "srandom" && statement.task_arguments.size() == 1U) {
-        statement.task_name = "@sv-object-srandom";
+        mark_task(statement, support::ExpressionMarker::sv_object_srandom);
         statement.task_arguments.insert(
             statement.task_arguments.begin(), std::move(receiver));
         statement.task_argument_names.insert(
@@ -2065,8 +2238,8 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
       // (IEEE 1800-2017 8.10); the handle only names the class.
       if (match && match->method && match->method->is_static
           && kind != SystemVerilogClassMethodKind::Constructor) {
-        statement.task_name = "@sv-static-task:"
-            + match->method->canonical_identity;
+        mark_task(statement, support::ExpressionMarker::sv_static_task,
+            match->method->canonical_identity);
         retain_task_profile(
             statement,
             *match->method,
@@ -2087,9 +2260,11 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
         const auto canonical = match->method
             ? match->method->canonical_identity
             : *class_identity(*receiver_type) + "::new";
-        statement.task_name = kind == SystemVerilogClassMethodKind::Constructor
-            ? "@sv-base-constructor:" + canonical
-            : "@sv-task:" + canonical;
+        mark_task(statement,
+            kind == SystemVerilogClassMethodKind::Constructor
+                ? support::ExpressionMarker::sv_base_constructor
+                : support::ExpressionMarker::sv_task,
+            canonical);
         statement.task_arguments.insert(
             statement.task_arguments.begin(), std::move(receiver));
         statement.task_argument_names.insert(
@@ -2205,10 +2380,9 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
               && selects_specialization(
                   std::string_view{statement.task_name}.substr(0, selected),
                   *owner);
-          statement.task_name = "@sv-static-task:"
-              + (intrinsic.empty()
-                     ? match->method->canonical_identity
-                     : intrinsic);
+          mark_task(statement, support::ExpressionMarker::sv_static_task,
+              intrinsic.empty() ? match->method->canonical_identity
+                                : intrinsic);
           const auto method = specialize_selected_method(
               *match->method, *owner, scope);
           retain_task_profile(
@@ -2221,8 +2395,9 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
           // 8.25.1, 8.10): the statement keeps the selection as its value,
           // as the expression form of a static call keeps it.
           if (specialized) {
-            Expression selection{ExpressionKind::Call,
-                "@sv-static-call-selection", {}, statement.span};
+            auto selection = marked_expression(
+                support::ExpressionMarker::sv_static_call_selection, {}, {},
+                statement.span);
             selection.systemverilog_source_order
                 = statement.systemverilog_source_order;
             selection.systemverilog_class_owner =
@@ -2267,10 +2442,11 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
           statement.task_arguments.size(),
           statement.span);
       if (match && match->method) {
-        statement.task_name = (match->method->is_static
-                ? "@sv-static-task:"
-                : "@sv-task:")
-            + match->method->canonical_identity;
+        mark_task(statement,
+            match->method->is_static
+                ? support::ExpressionMarker::sv_static_task
+                : support::ExpressionMarker::sv_task,
+            match->method->canonical_identity);
         if (!match->method->is_static) {
           Expression receiver{
               ExpressionKind::Identifier, "this", {}, statement.span};
@@ -2364,10 +2540,11 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
   if (statement.kind == StatementKind::TaskCall
       && statement.task_name == "$cast"
       && statement.task_arguments.size() == 2U) {
-    Expression call{ExpressionKind::Call, "@sv-dollar-cast",
+    auto call = marked_expression(
+        support::ExpressionMarker::sv_dollar_cast, {},
         {std::move(statement.task_arguments[0]),
          std::move(statement.task_arguments[1])},
-        statement.span};
+        statement.span);
     statement.kind = StatementKind::ContainerMethod;
     statement.value = std::move(call);
     statement.task_name.clear();
@@ -2444,8 +2621,9 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
         && find_methods(*identity, name, SystemVerilogClassMethodKind::Task)
                .empty()) {
       statement.kind = StatementKind::TaskCall;
-      statement.task_name = name == "srandom" ? "@sv-object-srandom"
-                                              : "@sv-object-set-randstate";
+      mark_task(statement, name == "srandom"
+              ? support::ExpressionMarker::sv_object_srandom
+              : support::ExpressionMarker::sv_object_set_randstate);
       statement.task_arguments.clear();
       statement.task_argument_names.clear();
       statement.task_arguments.push_back(std::move(receiver));
@@ -2466,7 +2644,8 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
         return false;
       }
       statement.kind = StatementKind::TaskCall;
-      statement.task_name = "@sv-task:" + match->method->canonical_identity;
+      mark_task(statement, support::ExpressionMarker::sv_task,
+          match->method->canonical_identity);
       statement.task_arguments.clear();
       statement.task_argument_names.clear();
       statement.task_arguments.push_back(std::move(receiver));
@@ -2570,7 +2749,8 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
     statement.condition = Expression{
         ExpressionKind::Binary, "!=",
         {std::move(handle),
-         Expression{ExpressionKind::Call, "@sv-null", {}, span}},
+         marked_expression(
+             support::ExpressionMarker::sv_null, {}, {}, span)},
         span};
     resolve_expression(statement.condition, scope);
   }
@@ -2624,6 +2804,9 @@ void Resolver::resolve_statement(
   if (!resolve_statement_head(statement, scope, return_class, return_scalar)) {
     return;
   }
+  for (auto& initialization : statement.loop_initializations) {
+    resolve_statement(initialization, scope, return_class, return_scalar);
+  }
   for (auto& update : statement.loop_updates) {
     resolve_statement(update, scope, return_class, return_scalar);
   }
@@ -2644,6 +2827,10 @@ void Resolver::resolve_statement(
   }
 }
 void Resolver::resolve_function(FunctionDeclaration& function, Scope scope) {
+  release_hidden_standard_classes(function.arguments, scope);
+  release_hidden_standard_classes(function.variables, scope);
+  function.return_type
+      = release_hidden_standard_class(std::move(function.return_type), scope);
   // A default argument is resolved where the subroutine is declared
   // (IEEE 1800-2017 13.5.3).
   for (auto& argument : function.arguments) {
@@ -2670,6 +2857,8 @@ void Resolver::resolve_function(FunctionDeclaration& function, Scope scope) {
   for (auto& nested : function.functions) resolve_function(nested, scope);
 }
 void Resolver::resolve_task(TaskDeclaration& task, Scope scope) {
+  release_hidden_standard_classes(task.arguments, scope);
+  release_hidden_standard_classes(task.variables, scope);
   // A default argument is resolved where the subroutine is declared
   // (IEEE 1800-2017 13.5.3).
   for (auto& argument : task.arguments) {

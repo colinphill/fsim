@@ -17,8 +17,14 @@ struct ScopeRandomizeTarget {
   bool signed_value{};
   ScopeRandomizeDomainKind domain_kind{
       ScopeRandomizeDomainKind::bit_vector};
+  // A user-defined type's name (class identity); empty for a built-in type.
   std::string nominal_type;
   std::vector<PackedLogic4> domain;
+  // The built-in data type (IEEE 1800-2023 6.11); none for a user type.
+  support::SystemVerilogBuiltinType builtin{
+      support::SystemVerilogBuiltinType::none};
+  // The HIR identity index of a user-defined type, when it has one.
+  std::optional<std::uint32_t> nominal_type_id{};
 };
 
 /// An unpacked array, queue or associative array of packed elements in a
@@ -33,9 +39,12 @@ struct ScopeRandomizeContainer {
   bool signed_value{};
   ScopeRandomizeDomainKind domain_kind{
       ScopeRandomizeDomainKind::bit_vector};
+  // A user-defined element type's name; empty for a built-in type.
   std::string nominal_type;
   std::vector<PackedLogic4> domain;
   bool randomized{};
+  // The HIR identity index of a user-defined element type, when it has one.
+  std::optional<std::uint32_t> nominal_type_id{};
 };
 
 /// Jointly solve and transactionally publish one source std::randomize call.
