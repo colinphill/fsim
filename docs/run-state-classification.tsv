@@ -451,6 +451,7 @@ interp.impl	stopped_by_design	P	plain run state
 interp.impl	paused_in_final	P	plain run state
 interp.impl	simulator_status	P	plain run state
 interp.impl	finals_ran	P	plain run state
+interp.impl	finish_in_final	S	set only by a $finish in a final procedure, which ends the run: false at every save point
 interp.impl	process_profile_enabled	Prof	profile counters, not saved
 interp.impl	process_profile_reported	Prof	profile counters, not saved
 interp.impl	update_profile_enabled	Prof	profile counters, not saved

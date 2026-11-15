@@ -592,6 +592,8 @@ void audit_host(const Impl& impl, const Findings& findings)
     FSIM_RS_IDLE("interp.impl", declaration_initialization_active);
     busy(impl.declaration_initialization_active,
         "the declaration initializers");
+    FSIM_RS_IDLE("interp.impl", finish_in_final);
+    busy(impl.finish_in_final, "a $finish in a final procedure");
     FSIM_RS_IDLE("interp.impl", switch_refreshing);
     busy(impl.switch_refreshing, "a switch network refresh");
     FSIM_RS_IDLE("interp.impl", static_kernel_publishing);

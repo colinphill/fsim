@@ -2015,8 +2015,9 @@ void run_statically_bounded_loop_test()
         true);
     excessive.compiled.systemverilog_hir.mutable_processes().front().statements
         = { excessive_repeat };
-    require_systemverilog_hir_rejection(
-        std::move(excessive), "FSIM-ELAB-073");
+    // A loop of any length is legal (IEEE 1800-2023 12.7): past the unroll
+    // limit it runs at run time.
+    require_systemverilog_hir_execution(std::move(excessive), "1");
 }
 
 void run_local_nonblocking_boundary_test()

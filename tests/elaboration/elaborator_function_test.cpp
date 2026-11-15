@@ -808,13 +808,15 @@ endmodule
                 .low_word()
                 .aval
             == 1);
+    // Every element differs, so each takes the Table 7-1 default
+    // (IEEE 1800-2023 11.4.11).
     const auto& merged_fixed = object_value("merged_fixed");
     assert(
         merged_fixed.elements.size() == 4
-        && merged_fixed.elements[0].low_word().bval == 0x08
-        && merged_fixed.elements[1].low_word().bval == 0x08
-        && merged_fixed.elements[2].low_word().bval == 0x08
-        && merged_fixed.elements[3].low_word().bval == 0x08);
+        && merged_fixed.elements[0].low_word().bval == 0xff
+        && merged_fixed.elements[1].low_word().bval == 0xff
+        && merged_fixed.elements[2].low_word().bval == 0xff
+        && merged_fixed.elements[3].low_word().bval == 0xff);
     const auto& reset = object_value("partial_second");
     assert(
         reset.elements[0].low_word().aval == 0x91

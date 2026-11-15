@@ -1773,9 +1773,6 @@ void Simulation::Impl::add_constraint_state_variables(
                 const auto spelling = declared.target.spelling;
                 declared = definition->base;
                 declared.target.spelling = spelling;
-                // The element keeps the typedef's identity, as the
-                // constraint binding names it.
-                declared.builtin = support::SystemVerilogBuiltinType::none;
             }
             if (!declared.executable_width && declared.packed_range
                 && declared.packed_range->left

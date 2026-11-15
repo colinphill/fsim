@@ -1441,7 +1441,6 @@ endmodule
             R"(
 module invalid_procedural_loops;
   initial begin
-    for (int lane = 0; lane < 1000001; lane++);
     for (int lane = 0; lane < 1; lane++) lane = 2;
   end
 endmodule
@@ -1453,12 +1452,7 @@ endmodule
             invalid_systemverilog_loops.design,
             "sv:work.invalid_procedural_loops");
     assert(!rejected_systemverilog_loops.ok());
-    for (const auto code :
-         {"FSIM-ELAB-073", "FSIM-ELAB-074"}) {
-        assert(
-            has_diagnostic(
-                rejected_systemverilog_loops, code));
-    }
+    assert(has_diagnostic(rejected_systemverilog_loops, "FSIM-ELAB-074"));
 
     const auto repeat_statements =
         fsim::frontend::parse_text(
@@ -1554,25 +1548,28 @@ endmodule
             .to_msb_string()
         == "0100");
 
-    const auto invalid_repeat_statements =
+    // A loop of any length is legal (IEEE 1800-2023 12.7): past the unroll
+    // limit it runs at run time.
+    const auto long_repeat_statements =
         fsim::frontend::parse_text(
-            "invalid_repeat_statements.sv",
+            "long_repeat_statements.sv",
             R"(
-module invalid_repeat_statements;
+module long_repeat_statements;
   initial begin
     repeat (1000001);
   end
 endmodule
 )",
             fsim::frontend::Language::SystemVerilog2017);
-    assert(invalid_repeat_statements.ok());
-    const auto rejected_repeat_statements =
+    assert(long_repeat_statements.ok());
+    const auto elaborated_long_repeat =
         compile_and_elaborate(
-            invalid_repeat_statements.design,
-            "sv:work.invalid_repeat_statements");
-    assert(!rejected_repeat_statements.ok());
-    assert(has_diagnostic(
-        rejected_repeat_statements, "FSIM-ELAB-073"));
+            long_repeat_statements.design,
+            "sv:work.long_repeat_statements");
+    assert(elaborated_long_repeat.ok());
+    assert(
+        elaborated_long_repeat.design->create_interpreter()->run().status
+        == fsim::runtime::RunStatus::completed);
 
     const auto runtime_loop_statements =
         fsim::frontend::parse_text(
