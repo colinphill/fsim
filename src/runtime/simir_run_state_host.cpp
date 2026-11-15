@@ -589,6 +589,9 @@ void audit_host(const Impl& impl, const Findings& findings)
     FSIM_RS_IDLE("interp.impl", package_static_initialization_active);
     busy(impl.package_static_initialization_active,
         "package static initialization");
+    FSIM_RS_IDLE("interp.impl", declaration_initialization_active);
+    busy(impl.declaration_initialization_active,
+        "the declaration initializers");
     FSIM_RS_IDLE("interp.impl", switch_refreshing);
     busy(impl.switch_refreshing, "a switch network refresh");
     FSIM_RS_IDLE("interp.impl", static_kernel_publishing);

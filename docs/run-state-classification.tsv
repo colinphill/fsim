@@ -442,6 +442,7 @@ interp.impl	late_process_kernel_member	P	plain run state
 interp.impl	package_static_startup_actions_entered	P	plain run state
 interp.impl	start_in_progress	S	commit scratch, empty at a save point
 interp.impl	package_static_initialization_active	S	commit scratch, empty at a save point
+interp.impl	declaration_initialization_active	S	set only while the declaration initializers run in the first activation, before any save point
 interp.impl	package_static_initialization_process	D	assigned once at start from the design's package initialization process
 interp.impl	package_static_startup_signal_processes	D	derived tables rebuilt from the artifact or from saved values
 interp.impl	validation_only	Cfg	configuration from the artifact or command line
@@ -1474,6 +1475,7 @@ sim.impl	vpi_some_signal_watched	D	VPI handle tables, rebuilt on demand; not sav
 sim.impl	vpi_watched_handles	D	VPI handle tables, rebuilt on demand; not saved
 sim.impl	vpi_word_handles	D	VPI handle tables, rebuilt on demand; not saved
 sim.impl	vpi_string_handles	D	VPI handle tables, rebuilt on demand; not saved
+sim.impl	vpi_declaration_objects	D	VPI handle tables, rebuilt on demand; not saved
 sim.impl	vpi_watched_strings	D	VPI handle tables, rebuilt on demand; not saved
 sim.impl	vpi_string_watch_observer	D	VPI handle tables, rebuilt on demand; not saved
 sim.impl	vpi_container_scalar_kinds	D	VPI handle tables, rebuilt on demand; not saved
@@ -1679,6 +1681,10 @@ foreign.vpi_live	subarrays_	D	VPI handle tables and model caches, rebuilt on dem
 foreign.vpi_live	typespecs_	D	VPI handle tables and model caches, rebuilt on demand; not saved
 foreign.vpi_live	typespec_index_	D	VPI handle tables and model caches, rebuilt on demand; not saved
 foreign.vpi_live	typespec_members_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	param_assign_index_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	instance_param_assigns_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	class_param_assign_records_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	class_param_assign_index_	D	VPI handle tables and model caches, rebuilt on demand; not saved
 foreign.vpi_live	enum_constants_	D	VPI handle tables and model caches, rebuilt on demand; not saved
 foreign.vpi_live	param_assigns_	D	VPI handle tables and model caches, rebuilt on demand; not saved
 foreign.vpi_live	declared_typespec_nodes_	D	VPI handle tables and model caches, rebuilt on demand; not saved
