@@ -4922,6 +4922,7 @@ Interpreter::Impl::StaticKernel::behavioral_boundary_op(const std::uint32_t inde
                 impl_.simulator_status.reset();
             }
             impl_.stopped_by_design = true;
+            impl_.finish_in_final = impl_.finish_in_final || impl_.finals_ran;
             if (warp_time_) {
                 // The host reaches the warped time step first, then stops.
                 schedule_stop_at(*warp_time_);

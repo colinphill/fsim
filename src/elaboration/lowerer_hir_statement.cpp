@@ -20041,15 +20041,20 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 ? limit + 1U
                 : *static_loop_iterations * hir_unrolled_copies_;
         };
+        // A loop with more iterations than a static count records runs at
+        // run time like any other long loop: a loop of any length is legal
+        // (IEEE 1800-2023 12.7).
         const bool long_repeat = statement->systemverilog != nullptr
             && statement->systemverilog->loop_repeat
-            && statement->systemverilog->loop_limit && static_loop_iterations
-            && unrolled_copies(maximum_unrolled_repeat_iterations)
-                > maximum_unrolled_repeat_iterations;
+            && statement->systemverilog->loop_limit
+            && (!static_loop_iterations
+                || unrolled_copies(maximum_unrolled_repeat_iterations)
+                    > maximum_unrolled_repeat_iterations);
         const bool long_static_for = [&] {
-            if (statement->systemverilog == nullptr || !static_loop_iterations
-                || unrolled_copies(maximum_unrolled_for_iterations())
-                    <= maximum_unrolled_for_iterations()) {
+            if (statement->systemverilog == nullptr
+                || (static_loop_iterations
+                    && unrolled_copies(maximum_unrolled_for_iterations())
+                        <= maximum_unrolled_for_iterations())) {
                 return false;
             }
             const auto& loop_statement = *statement->systemverilog;

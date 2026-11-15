@@ -827,6 +827,9 @@ sv::TypeReference retain_systemverilog_declarator(
     replacement.container_form = use.container_form;
     replacement.queue_maximum = use.queue_maximum;
     replacement.associative_index = use.associative_index;
+    // The index type's full shape, its built-in kind among it (IEEE
+    // 1800-2023 7.8.1, 7.8.2).
+    replacement.associative_index_metadata = use.associative_index_metadata;
     replacement.unpacked_dimensions = use.unpacked_dimensions;
     replacement.container_element_types = use.container_element_types;
     if (nested_container

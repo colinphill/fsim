@@ -8723,9 +8723,16 @@ Lowerer::lower_hir_systemverilog_packed_pattern(
     std::size_t positional { };
     std::optional<semantic::ExpressionId> default_value;
     // `type:value` keys in source order; a later key for the same type
-    // replaces an earlier one (IEEE 1800-2017 10.9.2).
-    std::vector<std::pair<std::string_view, semantic::ExpressionId>>
-        type_keys;
+    // replaces an earlier one (IEEE 1800-2017 10.9.2). A key is a built-in
+    // type's kind or a type name.
+    struct PatternTypeKey {
+        support::SystemVerilogBuiltinType builtin {
+            support::SystemVerilogBuiltinType::none
+        };
+        std::string_view name;
+        semantic::ExpressionId value;
+    };
+    std::vector<PatternTypeKey> type_keys;
     const auto write_at = [&](const semantic::sv::TypeDefinition& owner,
                               const std::size_t index,
                               const std::size_t base,
@@ -8760,18 +8767,21 @@ Lowerer::lower_hir_systemverilog_packed_pattern(
     const auto type_key_value = [&](const semantic::sv::TypeReference& member)
         -> std::optional<semantic::ExpressionId> {
         for (auto key = type_keys.rbegin(); key != type_keys.rend(); ++key) {
-            const auto spelling = key->first;
             if (!member.packed_dimensions.empty()) {
                 continue;
             }
-            if (!member.target.target.valid()) {
-                if (member.target.spelling == spelling) {
-                    return key->second;
+            if (key->builtin != support::SystemVerilogBuiltinType::none) {
+                if (!member.target.target.valid()
+                    && member.builtin == key->builtin) {
+                    return key->value;
                 }
                 continue;
             }
+            if (!member.target.target.valid()) {
+                continue;
+            }
             const auto named = hir_systemverilog_named_type_declaration(
-                spelling, source.scope);
+                key->name, source.scope);
             const auto view = named
                 ? specialized_hir_unit_->find_declaration(*named)
                 : std::nullopt;
@@ -8779,7 +8789,7 @@ Lowerer::lower_hir_systemverilog_packed_pattern(
                 && view->systemverilog->declared_type
                 && *view->systemverilog->declared_type
                     == member.target.target) {
-                return key->second;
+                return key->value;
             }
         }
         return std::nullopt;
@@ -8852,8 +8862,8 @@ Lowerer::lower_hir_systemverilog_packed_pattern(
                 &semantic::sv::PackedMember::name);
             if (member == declared.members.end()) {
                 // A key that names no member is a type key (10.9.2).
-                type_keys.emplace_back(
-                    key->systemverilog->text, association.value);
+                type_keys.push_back(PatternTypeKey { key->systemverilog->keyword_type,
+                    key->systemverilog->text, association.value });
                 continue;
             }
             index = static_cast<std::size_t>(std::distance(
@@ -8862,8 +8872,9 @@ Lowerer::lower_hir_systemverilog_packed_pattern(
             && association.choice_marker == support::ExpressionMarker::none)) {
             index = positional++;
         } else {
-            type_keys.emplace_back(
-                association.choice_spelling, association.value);
+            type_keys.push_back(PatternTypeKey {
+                support::SystemVerilogBuiltinType::none,
+                association.choice_spelling, association.value });
             continue;
         }
         if (index >= declared.members.size() || selected[index]) {

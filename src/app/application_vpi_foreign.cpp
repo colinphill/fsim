@@ -11062,8 +11062,13 @@ private:
 
     // The number of elements a container holds now.
     [[nodiscard]] static std::size_t class_container_size(
-        const runtime::simir::ContainerValue& container) noexcept
+        const runtime::simir::ContainerValue& container)
     {
+        // A sparse fixed array holds every element (IEEE 1800-2023 7.4).
+        if (container.type.sparse) {
+            return static_cast<std::size_t>(
+                runtime::simir::container_element_count(container));
+        }
         switch (container.type.element_kind) {
         case runtime::simir::ContainerElementKind::String:
             return container.string_elements.size();
@@ -11641,25 +11646,29 @@ private:
             switch (holder.type.element_kind) {
             case runtime::simir::ContainerElementKind::String:
                 element.kind = Value::Kind::string;
-                element.text = holder.string_elements[node.index];
+                element.text = runtime::simir::container_string_element(
+                    holder, node.index);
                 return element;
             case runtime::simir::ContainerElementKind::Packed:
-            case runtime::simir::ContainerElementKind::Scalar:
+            case runtime::simir::ContainerElementKind::Scalar: {
+                const auto stored = runtime::simir::container_packed_element(
+                    holder, node.index);
                 // A real element holds its IEEE 754 bits.
                 if (frontend::is_real_scalar_kind(holder.type.scalar_kind)
-                    && holder.elements[node.index].width() != 0U) {
+                    && stored.width() != 0U) {
                     element.kind = Value::Kind::real;
-                    element.real = real_bits(holder.elements[node.index]);
+                    element.real = real_bits(stored);
                     return element;
                 }
-                if (holder.elements[node.index].width() == 0U) {
+                if (stored.width() == 0U) {
                     return std::nullopt;
                 }
-                element.bits = holder.elements[node.index].is_logic9()
-                    ? runtime::collapse_to_logic4(holder.elements[node.index])
-                    : holder.elements[node.index];
+                element.bits = stored.is_logic9()
+                    ? runtime::collapse_to_logic4(stored)
+                    : stored;
                 element.is_signed = holder.type.signed_elements;
                 return element;
+            }
             default:
                 return std::nullopt;
             }
@@ -11735,13 +11744,15 @@ private:
                 if (input->format != vpiStringVal) {
                     return FSIM_VPI_STATUS_NOT_FOUND;
                 }
-                holder->string_elements[node.index]
-                    = input->value.str != nullptr ? input->value.str : "";
+                runtime::simir::set_container_string_element(*holder,
+                    node.index,
+                    input->value.str != nullptr ? input->value.str : "");
                 return succeed(result);
             }
             if ((holder->type.element_kind != Element::Packed
                     && holder->type.element_kind != Element::Scalar)
-                || holder->elements[node.index].is_logic9()) {
+                || runtime::simir::container_packed_element(
+                    *holder, node.index).is_logic9()) {
                 return FSIM_VPI_STATUS_NOT_FOUND;
             }
             if (frontend::is_real_scalar_kind(holder->type.scalar_kind)) {
@@ -11749,11 +11760,13 @@ private:
                     return FSIM_VPI_STATUS_NOT_FOUND;
                 }
                 const auto real = input->value.real;
-                holder->elements[node.index]
-                    = holder->elements[node.index].width() == 32U
+                runtime::simir::set_container_packed_element(*holder,
+                    node.index,
+                    runtime::simir::container_packed_element(
+                        *holder, node.index).width() == 32U
                     ? integer_bits(std::bit_cast<std::uint32_t>(
                                        static_cast<float>(real)), 32U)
-                    : integer_bits(std::bit_cast<std::uint64_t>(real), 64U);
+                    : integer_bits(std::bit_cast<std::uint64_t>(real), 64U));
                 return succeed(result);
             }
             const auto width = std::max<std::size_t>(
@@ -11770,7 +11783,8 @@ private:
                     }
                 }
             }
-            holder->elements[node.index] = std::move(bits);
+            runtime::simir::set_container_packed_element(
+                *holder, node.index, std::move(bits));
             return succeed(result);
         }
         auto& stored = !member->static_store.empty()
@@ -12028,8 +12042,9 @@ private:
                         == runtime::simir::ContainerElementKind::Packed
                     || node.parent->type.element_kind
                         == runtime::simir::ContainerElementKind::Scalar)
-                && node.index < node.parent->elements.size()) {
-                const auto& stored = node.parent->elements[node.index];
+                && node.index < class_container_size(*node.parent)) {
+                const auto stored = runtime::simir::container_packed_element(
+                    *node.parent, node.index);
                 return succeed(result,
                     stored.width() == 0U || stored.low_word().bval != 0U
                         ? 0U
@@ -13260,7 +13275,8 @@ private:
         try {
             const auto value = simulation_.read_process_container_local(
                 owner->process, variable->local);
-            if (static_cast<std::size_t>(index) >= value.elements.size()) {
+            if (static_cast<std::uint64_t>(index)
+                >= runtime::simir::container_element_count(value)) {
                 return 0U;
             }
         } catch (const std::exception&) {
@@ -13824,20 +13840,22 @@ private:
             if (variable->element) {
                 const auto elements = simulation_.read_process_container_local(
                     owner->process, variable->local);
-                if (*variable->element >= elements.elements.size()) {
+                if (*variable->element
+                    >= runtime::simir::container_element_count(elements)) {
                     return FSIM_VPI_STATUS_NOT_FOUND;
                 }
                 // A put triggers the event whether or not a thread used the
                 // element before (38.34, 15.5.1): a never used element gets
                 // its event object now, so its `.triggered` holds for the
                 // rest of the time step (15.5.3).
-                auto event_handle
-                    = elements.elements[*variable->element].low_word().aval;
+                auto event_handle = runtime::simir::container_packed_element(
+                    elements, *variable->element).low_word().aval;
                 if (event_handle == 0U) {
                     event_handle = simulation_.create_dynamic_event();
                     auto created = elements;
-                    created.elements[*variable->element]
-                        = runtime::PackedLogic4::from_aval_bval(64, event_handle, 0);
+                    runtime::simir::set_container_packed_element(created,
+                        *variable->element,
+                        runtime::PackedLogic4::from_aval_bval(64, event_handle, 0));
                     simulation_.write_process_container_local(
                         owner->process, variable->local, created);
                 }
@@ -21125,18 +21143,19 @@ private:
             position = static_cast<std::size_t>(index);
         }
         Value value;
-        if (type.element_kind == Element::String) {
-            if (!position || *position >= array.string_elements.size()) {
-                return std::nullopt;
-            }
-            value.kind = Value::Kind::string;
-            value.text = array.string_elements[*position];
-            return value;
-        }
-        if (!position || *position >= array.elements.size()) {
+        // A fixed array holds every element, stored or not (IEEE 1800-2023
+        // 7.4).
+        if (!position
+            || *position >= runtime::simir::container_element_count(array)) {
             return std::nullopt;
         }
-        value.bits = array.elements[*position];
+        if (type.element_kind == Element::String) {
+            value.kind = Value::Kind::string;
+            value.text
+                = runtime::simir::container_string_element(array, *position);
+            return value;
+        }
+        value.bits = runtime::simir::container_packed_element(array, *position);
         if (frontend::is_real_scalar_kind(type.scalar_kind)) {
             value.kind = Value::Kind::real;
             value.real = real_bits(value.bits);
@@ -22320,7 +22339,8 @@ private:
         section.start = static_cast<std::size_t>(arguments.indexes[0]);
         section.count = arguments.count;
         if (section.count == 0U
-            || section.start + section.count > section.container.elements.size()) {
+            || section.start + section.count
+                > runtime::simir::container_element_count(section.container)) {
             return std::nullopt;
         }
         return section;
@@ -22366,7 +22386,8 @@ private:
             section.count = arguments.count;
             if (section.count == 0U
                 || section.start + section.count
-                    > section.container.elements.size()) {
+                    > runtime::simir::container_element_count(
+                        section.container)) {
                 return std::nullopt;
             }
             return section;
@@ -22422,8 +22443,8 @@ private:
             std::optional<Value> value;
             if (frame_section) {
                 value.emplace();
-                value->bits
-                    = frame_section->container.elements[frame_section->start + index];
+                value->bits = runtime::simir::container_packed_element(
+                    frame_section->container, frame_section->start + index);
                 value->is_signed = frame_section->container.type.signed_elements;
             } else {
                 value = object_value((*section)[index]);
@@ -22615,9 +22636,9 @@ private:
                         }
                     }
                 }
-                frame_section->container
-                    .elements[frame_section->start + position]
-                    = std::move(bits);
+                runtime::simir::set_container_packed_element(
+                    frame_section->container, frame_section->start + position,
+                    std::move(bits));
                 continue;
             }
             const auto element = (*section)[position];
@@ -22639,14 +22660,16 @@ private:
                 = const_cast<runtime::simir::ContainerValue*>(node.container);
             if (holder == nullptr
                 || frame_section->start + frame_section->count
-                    > holder->elements.size()) {
+                    > runtime::simir::container_element_count(*holder)) {
                 return FSIM_VPI_STATUS_NOT_FOUND;
             }
             for (std::size_t position = 0U; position < frame_section->count;
                  ++position) {
-                holder->elements[frame_section->start + position]
-                    = frame_section->container
-                          .elements[frame_section->start + position];
+                runtime::simir::set_container_packed_element(*holder,
+                    frame_section->start + position,
+                    runtime::simir::container_packed_element(
+                        frame_section->container,
+                        frame_section->start + position));
             }
             return succeed(result);
         }

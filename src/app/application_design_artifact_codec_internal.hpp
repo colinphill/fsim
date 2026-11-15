@@ -1353,7 +1353,7 @@ namespace codec_detail {
     {
         // Every member is listed: one added to the record and not here
         // fails the build (the binding names each member).
-        [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5, m6, m7, m8] = value;
+        [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5, m6, m7, m8, m9] = value;
         return std::tie(
             value.type,
             value.elements,
@@ -1363,7 +1363,8 @@ namespace codec_detail {
             value.string_keys,
             value.shape,
             value.associative_default,
-            value.associative_default_text);
+            value.associative_default_text,
+            value.compact_planes);
     }
 
     template <typename T>

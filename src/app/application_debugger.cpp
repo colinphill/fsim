@@ -304,10 +304,12 @@ namespace {
   using runtime::simir::ContainerElementKind;
   switch (value.type.element_kind) {
   case ContainerElementKind::Packed:
-    return value.elements[index].to_msb_string();
+    return runtime::simir::container_packed_element(value, index)
+        .to_msb_string();
   case ContainerElementKind::Scalar: {
     const auto scalar = runtime::decode_systemverilog_scalar_payload(
-        value.elements[index], value.type.scalar_kind);
+        runtime::simir::container_packed_element(value, index),
+        value.type.scalar_kind);
     if (!scalar) return "<invalid scalar>";
     if (scalar.value.kind == runtime::SystemVerilogScalarKind::Chandle) {
       return scalar.value.bits == 0
@@ -319,12 +321,58 @@ namespace {
     return formatted ? formatted.text : "<invalid scalar>";
   }
   case ContainerElementKind::String:
-    return escaped_string(value.string_elements[index]);
+    return escaped_string(
+        runtime::simir::container_string_element(value, index));
   case ContainerElementKind::Container:
   case ContainerElementKind::Aggregate:
     return format_container(value.nested_elements[index]);
   }
   return "<invalid element>";
+}
+
+// A sparse fixed array: its stored elements by index (the linear ordinal of
+// a multidimensional array), then the element every other index holds.
+[[nodiscard]] std::string format_sparse_container(
+    const runtime::simir::ContainerValue& value) {
+  using runtime::simir::ContainerElementKind;
+  const bool strings = value.type.element_kind == ContainerElementKind::String;
+  std::string result{"["};
+  std::uint64_t stored{};
+  const auto append = [&](const std::string& index, const std::string& text) {
+    if (result.size() > 1U) result += ", ";
+    result += index;
+    result += ":";
+    result += text;
+  };
+  const auto count = runtime::simir::sparse_container_element_count(value.type);
+  const auto visit = [&](const std::uint64_t ordinal) {
+    const auto label = value.type.dimensions.size() > 1U
+        ? std::to_string(ordinal)
+        : std::to_string(value.type.index_left >= value.type.index_right
+              ? static_cast<std::int64_t>(value.type.index_left)
+                    - static_cast<std::int64_t>(ordinal)
+              : static_cast<std::int64_t>(value.type.index_left)
+                    + static_cast<std::int64_t>(ordinal));
+    append(label, format_container_element(value, ordinal));
+    ++stored;
+  };
+  if (!value.compact_planes.empty()) {
+    for (std::uint64_t ordinal = 0U; ordinal < count; ++ordinal) {
+      visit(ordinal);
+    }
+  } else {
+    for (const auto& key : value.keys) {
+      visit(key.known_unsigned_value().value_or(0U));
+    }
+  }
+  if (stored < count) {
+    append("default", strings
+        ? escaped_string(
+              runtime::simir::sparse_container_string_background(value))
+        : runtime::simir::sparse_container_background(value).to_msb_string());
+  }
+  result += "]";
+  return result;
 }
 
 [[nodiscard]] std::string format_container(
@@ -349,6 +397,9 @@ namespace {
     }
     result += "}";
     return result;
+  }
+  if (value.type.sparse) {
+    return format_sparse_container(value);
   }
   std::string result{"["};
   const auto size = runtime::simir::container_value_size(value);

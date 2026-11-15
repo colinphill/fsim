@@ -385,10 +385,36 @@ void Interpreter::Impl::write_container_object_path_value(
             ? known_index(
                   process, instruction, index, true,
                   "multidimensional linear index")
-            : fixed_offset(process, instruction, target.type, index);
-        if (at >= target.elements.size()) {
+            : static_cast<std::size_t>(target.type.sparse
+                    ? sparse_offset(process, instruction, target.type, index)
+                    : fixed_offset(process, instruction, target.type, index));
+        if (at >= container_element_count(target)) {
             container_error(
                 process, instruction, "container index is out of range");
+        }
+        if (target.type.sparse) {
+            auto element = value;
+            if (selection != nullptr) {
+                try {
+                    element = dynamic_part_insert_value(
+                        read_sparse_container_element(target, at), value,
+                        *base, *selection);
+                } catch (const std::invalid_argument&) {
+                    container_error(process, instruction,
+                        "invalid dynamic part-select container element write");
+                }
+            }
+            if (element.width() != target.type.element_width
+                || element.is_logic9()
+                || (target.type.two_state && has_unknown(element))) {
+                container_error(process, instruction,
+                    "container element write type mismatch");
+            }
+            if (write_sparse_container_element(
+                    target, at, std::move(element))) {
+                write_container_object_value(id, replacement, process, origin);
+            }
+            return;
         }
     } else {
         // A queue or dynamic array ignores a write through an unknown,

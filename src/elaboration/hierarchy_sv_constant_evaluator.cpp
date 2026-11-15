@@ -1853,8 +1853,11 @@ private:
         std::optional<Value> result;
     };
 
+    // `foreach_broke`: a break that ends the foreach statement over several
+    // dimensions holding it (12.8), through the loops generated for it.
     enum class Flow : std::uint8_t { normal,
         broke,
+        foreach_broke,
         continued,
         returned,
         failed };
@@ -6869,8 +6872,11 @@ private:
         std::vector<TypeKey> type_keys;
         const auto key_matches = [](const TypeKey& key,
                                     const semantic::sv::PackedMember& member) {
+            // A type key names a type exactly: no packed dimensions beside
+            // it (as the pattern lowering matches).
             return key.builtin != support::SystemVerilogBuiltinType::none
                 ? member.type.builtin == key.builtin
+                    && member.type.packed_dimensions.empty()
                 : member.type.builtin == support::SystemVerilogBuiltinType::none
                     && member.type.target.spelling == key.name;
         };
@@ -6919,15 +6925,25 @@ private:
             bool key_unresolved = association.choice_marker
                     == support::ExpressionMarker::key
                 && association.choices.size() == 1U;
-            if (key_unresolved) {
+            // A built-in type keyword is a type key, never a member name
+            // (IEEE 1800-2017 10.9.2).
+            const auto key_record = key_unresolved
+                ? specialization_.find_expression(association.choices.front())
+                : std::nullopt;
+            const bool keyword_key = key_record
+                && key_record->systemverilog != nullptr
+                && key_record->systemverilog->keyword_type
+                    != support::SystemVerilogBuiltinType::none;
+            if (key_unresolved && !keyword_key) {
                 if (const auto key
                     = pattern_member_key(association.choices.front())) {
                     member_name = *key;
                     key_unresolved = false;
                 }
             }
-            const auto member = std::ranges::find(*members, member_name,
-                &semantic::sv::PackedMember::name);
+            const auto member = keyword_key ? members->end()
+                : std::ranges::find(*members, member_name,
+                      &semantic::sv::PackedMember::name);
             // A type key (`int: v`) sets every member of that type that no
             // member key names (IEEE 1800-2017 10.9.2).
             TypeKey type_key { support::SystemVerilogBuiltinType::none,
@@ -7589,7 +7605,8 @@ private:
             for (std::uint64_t iteration = 0U;
                 iteration < *count; ++iteration) {
                 const auto flow = execute_statements(record.statements);
-                if (flow == Flow::returned || flow == Flow::failed) {
+                if (flow == Flow::returned || flow == Flow::failed
+                    || flow == Flow::foreach_broke) {
                     return flow;
                 }
                 if (flow == Flow::broke) {
@@ -7629,7 +7646,8 @@ private:
                 }
             }
             const auto body = execute_statements(record.statements);
-            if (body == Flow::returned || body == Flow::failed) {
+            if (body == Flow::returned || body == Flow::failed
+                || body == Flow::foreach_broke) {
                 return body;
             }
             if (body == Flow::broke) {
@@ -7775,13 +7793,16 @@ private:
             if (!initialize_declarations(record)) {
                 return Flow::failed;
             }
-            return execute_statements(record.statements);
+            const auto flow = execute_statements(record.statements);
+            return flow == Flow::foreach_broke && record.foreach_collection
+                ? Flow::normal
+                : flow;
         }
         if (record.kind == Kind::loop) {
             return execute_loop(record);
         }
         if (record.kind == Kind::break_loop) {
-            return Flow::broke;
+            return record.foreach_break ? Flow::foreach_broke : Flow::broke;
         }
         if (record.kind == Kind::continue_loop) {
             return Flow::continued;
@@ -7916,6 +7937,9 @@ private:
             std::vector<std::size_t> continues;
         };
         std::vector<Jumps> jumps;
+        // The breaks that end each enclosing foreach statement over several
+        // dimensions (12.8).
+        std::vector<std::vector<std::size_t>> foreach_breaks;
         std::string refusal;
     };
     ProgramCompilation* compilation_ { };
@@ -9376,12 +9400,32 @@ private:
             patch_jump(to_end, program_position());
             return true;
         }
-        case Kind::block:
-            return compile_declarations(record.declarations)
+        case Kind::block: {
+            if (!record.foreach_collection) {
+                return compile_declarations(record.declarations)
+                    && compile_statements(record.statements);
+            }
+            compilation_->foreach_breaks.emplace_back();
+            const bool compiled = compile_declarations(record.declarations)
                 && compile_statements(record.statements);
+            const auto breaks = std::move(compilation_->foreach_breaks.back());
+            compilation_->foreach_breaks.pop_back();
+            for (const auto jump : breaks) {
+                patch_jump(jump, program_position());
+            }
+            return compiled;
+        }
         case Kind::loop:
             return compile_loop(record);
         case Kind::break_loop:
+            if (record.foreach_break) {
+                if (compilation_->foreach_breaks.empty()) {
+                    return refuse_program("foreach break");
+                }
+                compilation_->foreach_breaks.back().push_back(
+                    emit(ProgramCode::jump));
+                return true;
+            }
             compilation_->jumps.back().breaks.push_back(emit(ProgramCode::jump));
             return true;
         case Kind::continue_loop:

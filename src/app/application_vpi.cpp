@@ -4746,7 +4746,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             }
         }
         const auto word_count
-            = runtime::simir::container_value_size(value);
+            = runtime::simir::container_element_count(value);
         // The words of a fixed memory without element signals are created
         // on first access (IEEE 1800-2023 37.17 makes them reachable only
         // through the memory).
@@ -5930,8 +5930,8 @@ SystemVerilogVpiMaterializedChildren materialize_systemverilog_vpi_children(
     if (const auto& memory = deferred.memory) {
         const auto value
             = interpreter.container_object_value_snapshot(memory->container);
-        const auto count = runtime::simir::container_value_size(value);
-        result.words.reserve(count);
+        const auto count = runtime::simir::container_element_count(value);
+        result.words.reserve(static_cast<std::size_t>(count));
         for (std::size_t ordinal = 0; ordinal < count; ++ordinal) {
             runtime::SystemVerilogVpiObjectDescriptor word;
             word.kind = memory->net_array
@@ -5977,11 +5977,13 @@ runtime::SystemVerilogVpiStoredValue systemverilog_vpi_container_word_value(
 {
     if (category == runtime::SystemVerilogVpiValueCategory::String) {
         runtime::SystemVerilogVpiStoredValue result;
-        result.payload = value.string_elements.at(ordinal);
+        result.payload = runtime::simir::container_string_element(
+            value, ordinal);
         return result;
     }
     return systemverilog_vpi_signal_value(
-        value.elements.at(ordinal), scalar_kind, category);
+        runtime::simir::container_packed_element(value, ordinal),
+        scalar_kind, category);
 }
 
 runtime::SystemVerilogVpiStoredValue systemverilog_vpi_signal_value(

@@ -686,15 +686,16 @@ void append_pattern_element(
     switch (value.type.element_kind) {
     case ContainerElementKind::Packed:
         text += pattern_packed_element(
-            value.elements.at(index), value.type.signed_elements);
+            container_packed_element(value, index),
+            value.type.signed_elements);
         return;
     case ContainerElementKind::Scalar:
         text += make_formatted_output({ }, { }, OutputFormat::real_general,
-            value.elements.at(index), false, false, 0U, false, false,
-            value.type.scalar_kind);
+            container_packed_element(value, index), false, false, 0U, false,
+            false, value.type.scalar_kind);
         return;
     case ContainerElementKind::String:
-        text += pattern_quoted(value.string_elements.at(index));
+        text += pattern_quoted(container_string_element(value, index));
         return;
     case ContainerElementKind::Container:
     case ContainerElementKind::Aggregate:
@@ -705,6 +706,10 @@ void append_pattern_element(
 
 [[nodiscard]] std::size_t pattern_element_count(const ContainerValue& value)
 {
+    if (value.type.sparse) {
+        return static_cast<std::size_t>(
+            sparse_container_element_count(value.type));
+    }
     switch (value.type.element_kind) {
     case ContainerElementKind::Packed:
     case ContainerElementKind::Scalar:

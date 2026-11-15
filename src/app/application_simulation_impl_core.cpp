@@ -76,6 +76,26 @@ namespace fsim::app {
 
 namespace {
 
+// The random state of a container element in a solve: a built-in element
+// type is its kind, a user type keeps its name, as the constraint profile
+// of a binding gives them (systemverilog_constraint_profile).
+[[nodiscard]] runtime::SystemVerilogClassRandomState
+systemverilog_element_random_state(const semantic::sv::TypeReference& type,
+    const runtime::SystemVerilogClassRandomKind kind, const std::size_t width)
+{
+    runtime::SystemVerilogClassRandomState state;
+    state.kind = kind;
+    state.width = width;
+    state.signed_value = type.signed_value;
+    state.builtin = type.builtin;
+    if (type.builtin == support::SystemVerilogBuiltinType::none) {
+        state.nominal_type = type.target.spelling.empty()
+            ? std::string { "$constraint-value" }
+            : type.target.spelling;
+    }
+    return state;
+}
+
 // The value of UVM_IMPLEMENTATION, the last literal of the library's
 // uvm_port_type_e (IEEE 1800.2-2020 F.2.1.4), found by the type's recorded
 // role; empty when the design does not declare it or a literal of the type
@@ -777,7 +797,7 @@ void Simulation::Impl::add_constraint_state_variables(
             container
             && *container
                 <= std::numeric_limits<runtime::simir::ContainerObjectId>::max()) {
-            const auto size = runtime::simir::container_value_size(
+            const auto size = runtime::simir::container_size_method(
                 interpreter->container_object_value_snapshot(
                     static_cast<runtime::simir::ContainerObjectId>(
                         *container)));
@@ -1139,6 +1159,18 @@ void Simulation::Impl::add_constraint_state_variables(
                                      const auto& node,
                                      const auto& aggregate) -> bool {
         const auto& type = value.type;
+        if (type.sparse) {
+            // A sparse fixed array joins element by element like a dense one
+            // (IEEE 1800-2023 7.4, 18.4): its elements are listed from a
+            // dense image and stored back through their ordinals.
+            if (type.element_kind != ContainerElementKind::Packed) {
+                return false;
+            }
+            auto dense = runtime::simir::dense_container_image(value);
+            const bool listed = self(self, dense, path, leaf, node, aggregate);
+            runtime::simir::store_dense_container_image(value, std::move(dense));
+            return listed;
+        }
         if (type.fixed && type.dimensions.size() > 1U) {
             // Its elements are packed values or unpacked structures.
             const bool structures
@@ -1438,15 +1470,10 @@ void Simulation::Impl::add_constraint_state_variables(
             ? runtime::SystemVerilogClassPropertyKind::Logic4
             : runtime::SystemVerilogClassPropertyKind::Bit2;
         element.packed = value;
-        element.random_state = runtime::SystemVerilogClassRandomState {
+        element.random_state = systemverilog_element_random_state(type,
             random ? runtime::SystemVerilogClassRandomKind::Rand
                    : runtime::SystemVerilogClassRandomKind::None,
-            value.width(),
-            type.signed_value,
-            type.target.spelling.empty()
-                ? std::string { "$constraint-value" }
-                : type.target.spelling,
-            true, 0, 0, 0, 0, { } };
+            value.width());
         return element;
     };
     // The structure of each array of structures' elements, for write-back.
@@ -1746,6 +1773,9 @@ void Simulation::Impl::add_constraint_state_variables(
                 const auto spelling = declared.target.spelling;
                 declared = definition->base;
                 declared.target.spelling = spelling;
+                // The element keeps the typedef's identity, as the
+                // constraint binding names it.
+                declared.builtin = support::SystemVerilogBuiltinType::none;
             }
             if (!declared.executable_width && declared.packed_range
                 && declared.packed_range->left
@@ -1775,14 +1805,9 @@ void Simulation::Impl::add_constraint_state_variables(
                 ? runtime::Logic4::x : runtime::Logic4::zero;
             container.element.packed = runtime::PackedLogic4(width, initial);
             container.element.random_state
-                = runtime::SystemVerilogClassRandomState {
-                      runtime::SystemVerilogClassRandomKind::Rand,
-                      static_cast<std::size_t>(width),
-                      declared.signed_value,
-                      declared.target.spelling.empty()
-                          ? std::string { "$constraint-value" }
-                          : declared.target.spelling,
-                      true, 0, 0, 0, 0, { } };
+                = systemverilog_element_random_state(declared,
+                    runtime::SystemVerilogClassRandomKind::Rand,
+                    static_cast<std::size_t>(width));
             // An array of an enumeration takes only its values.
             if (!property.enumeration_domain.empty() && width <= 64U) {
                 auto& domains = node == 0U
@@ -3374,22 +3399,25 @@ void Simulation::Impl::require_vpi_value(
                 if (text == nullptr) {
                     return runtime::SystemVerilogVpiValueError::TypeMismatch;
                 }
-                auto& element
-                    = value.string_elements.at(word->second.second);
-                if (element != *text) {
-                    element = *text;
+                if (runtime::simir::container_string_element(
+                        value, word->second.second)
+                    != *text) {
+                    runtime::simir::set_container_string_element(
+                        value, word->second.second, *text);
                     interpreter->deposit_container_object(
                         word->second.first, std::move(value));
                 }
                 return runtime::SystemVerilogVpiValueError::None;
             }
-            auto& element = value.elements.at(word->second.second);
-            const auto replacement = systemverilog_vpi_packed_value(
+            auto replacement = systemverilog_vpi_packed_value(
                 update.value,
                 vpi_container_scalar_kinds.at(word->second.first),
                 vpi_container_categories.at(word->second.first));
-            if (element != replacement) {
-                element = replacement;
+            if (runtime::simir::container_packed_element(
+                    value, word->second.second)
+                != replacement) {
+                runtime::simir::set_container_packed_element(
+                    value, word->second.second, std::move(replacement));
                 interpreter->deposit_container_object(
                     word->second.first, std::move(value));
             }
@@ -3509,7 +3537,7 @@ runtime::SystemVerilogVpiValueError Simulation::Impl::force_vpi_bridge_word(
         return runtime::SystemVerilogVpiValueError::ReadOnly;
     }
     auto value = vpi_container_value(container);
-    const auto count = runtime::simir::container_value_size(value);
+    const auto count = runtime::simir::container_element_count(value);
     const auto width
         = interpreter->stored_signal_value_snapshot(*bridge).width();
     if (count == 0U || ordinal >= count || width % count != 0U) {
@@ -3525,9 +3553,10 @@ runtime::SystemVerilogVpiValueError Simulation::Impl::force_vpi_bridge_word(
         interpreter->rerun_kernel_drivers(*bridge);
         return runtime::SystemVerilogVpiValueError::None;
     }
-    value.elements.at(ordinal) = systemverilog_vpi_packed_value(
-        *update.forced_value, vpi_container_scalar_kinds.at(container),
-        vpi_container_categories.at(container));
+    runtime::simir::set_container_packed_element(value, ordinal,
+        systemverilog_vpi_packed_value(*update.forced_value,
+            vpi_container_scalar_kinds.at(container),
+            vpi_container_categories.at(container)));
     const auto packed = runtime::simir::pack_container_signal_value(
         value, false);
     interpreter->force_signal_slice(
@@ -3806,7 +3835,7 @@ void Simulation::Impl::publish_vpi_container(
                     : std::optional<std::size_t> { found->second };
             }
             if (previous && before
-                && *before < runtime::simir::container_value_size(*previous)
+                && *before < runtime::simir::container_element_count(*previous)
                 && systemverilog_vpi_container_word_value(*previous, *before,
                        vpi_container_scalar_kinds.at(object),
                        vpi_container_categories.at(object))
@@ -3854,7 +3883,7 @@ void Simulation::Impl::sync_vpi_live_memory(
 {
     auto& memory = vpi_live_memories.at(object);
     auto& words = vpi_container_words[object];
-    const auto size = runtime::simir::container_value_size(value);
+    const auto size = runtime::simir::container_element_count(value);
     // An associative array's words are named by their keys (IEEE 1800-2023
     // 37.17 detail 28), and a word's handle stays valid while its key exists
     // (37.3.8): a word whose key remains moves to the key's new position,
@@ -4001,7 +4030,7 @@ Simulation::Impl::vpi_live_value(
         word != vpi_word_handles.end()) {
         const auto [container, ordinal] = word->second;
         const auto value = vpi_container_value(container);
-        if (ordinal >= runtime::simir::container_value_size(value)) {
+        if (ordinal >= runtime::simir::container_element_count(value)) {
             return std::nullopt;
         }
         return systemverilog_vpi_container_word_value(value, ordinal,
@@ -4155,10 +4184,10 @@ std::optional<std::string> Simulation::Impl::vpi_string_text(
                                container))
                        .first;
     }
-    if (ordinal >= snapshot->second.string_elements.size()) {
+    if (ordinal >= runtime::simir::container_element_count(snapshot->second)) {
         return std::nullopt;
     }
-    return snapshot->second.string_elements[ordinal];
+    return runtime::simir::container_string_element(snapshot->second, ordinal);
 }
 
 void Simulation::Impl::watch_vpi_string(const fsim_vpi_handle_v1 handle)

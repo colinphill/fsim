@@ -272,8 +272,12 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_scope(
             const auto id = solver.add_variable(std::move(variable));
             variables.emplace(input.canonical_identity, id);
             const auto& retained = solver.variables()[id];
+            // Every value of the domain is equally likely (IEEE 1800-2023
+            // 18.12): its range runs in the variable's own order.
+            auto [lowest, highest] = systemverilog_constraint_domain_bounds(
+                retained.domain, retained.profile.signed_value);
             solver.add_distribution({ retained.canonical_identity + "::$std-randomize", id,
-                { { retained.domain.front(), retained.domain.back(), 1,
+                { { std::move(lowest), std::move(highest), 1,
                     SystemVerilogConstraintDistributionWeight::PerValue } } });
         }
         request.inline_constraints(solver, variables);

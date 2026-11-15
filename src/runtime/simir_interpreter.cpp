@@ -5468,7 +5468,7 @@ void Interpreter::deposit_container_object_element(
 {
     if (impl_->package_static_initialization_active) {
         const auto& target = impl_->get_container_object(object);
-        if (ordinal >= target.initial_value.elements.size()
+        if (ordinal >= container_element_count(target.initial_value)
             || value.width() != target.initial_value.type.element_width
             || value.is_logic9()
             || (target.initial_value.type.two_state && has_unknown(value))) {
@@ -5477,13 +5477,13 @@ void Interpreter::deposit_container_object_element(
             };
         }
         auto replacement = target.initial_value;
-        replacement.elements[ordinal] = std::move(value);
+        set_container_packed_element(replacement, ordinal, std::move(value));
         impl_->initialize_package_static_container_object(
             object, replacement);
         return;
     }
     auto& target = impl_->get_container_object(object);
-    if (ordinal >= target.initial_value.elements.size()
+    if (ordinal >= container_element_count(target.initial_value)
         || value.width() != target.initial_value.type.element_width
         || value.is_logic9()
         || (target.initial_value.type.two_state && has_unknown(value))) {
@@ -5531,7 +5531,7 @@ void Interpreter::deposit_container_object_element(
     }
     impl_->observe_static_kernel_container(object);
     auto replacement = impl_->read_container_object_value(object);
-    replacement.elements[ordinal] = std::move(value);
+    set_container_packed_element(replacement, ordinal, std::move(value));
     impl_->write_container_object_value(object, replacement);
     impl_->deposit_static_kernel_container(object);
 }

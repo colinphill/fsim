@@ -755,6 +755,13 @@ std::optional<ContainerType> Lowerer::hir_systemverilog_container_type(
         result.associative_index = container.associative_index
             ? std::optional { container.associative_index->target }
             : std::nullopt;
+        // The index type's full shape, its built-in kind among it (IEEE
+        // 1800-2023 7.8.1).
+        if (container.associative_index) {
+            result.associative_index_metadata
+                = semantic::sv::make_associative_index_metadata(
+                    *container.associative_index);
+        }
         result.unpacked_dimensions = container.static_dimensions;
         if (result.container_element_types.empty()) {
             result.container_element_types.push_back(
@@ -1021,6 +1028,17 @@ std::optional<ContainerType> Lowerer::hir_systemverilog_container_type(
         inner_dimensions.begin(), inner_dimensions.end());
     result.index_left = result.dimensions.front().first;
     result.index_right = result.dimensions.front().second;
+    // An array too large to hold densely keeps only its written elements,
+    // automatic or static alike (IEEE 1800-2023 7.4): the declaration's
+    // storage rule (materialize_container_storage), whose dense attempt
+    // fails before allocating at this size.
+    if (runtime::simir::sparse_container_eligible(result)
+        && runtime::simir::sparse_container_element_count(result)
+            > runtime::simir::maximum_container_elements(result)
+        && !hierarchy_sv_type_layout_detail::materialize_container_storage(
+            result)) {
+        return std::nullopt;
+    }
     return result;
 }
 

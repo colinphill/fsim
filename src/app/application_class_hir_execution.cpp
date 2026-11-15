@@ -1548,17 +1548,21 @@ bool SystemVerilogClassHirExecution::assign_static_container_element(
                         + static_cast<std::ptrdiff_t>(at),
                     std::move(*text));
             } else {
-                value.string_elements[at] = std::move(*text);
+                runtime::simir::set_container_string_element(
+                    value, at, std::move(*text));
             }
         } else if (insert) {
             value.elements.insert(
                 value.elements.begin() + static_cast<std::ptrdiff_t>(at),
                 std::move(*packed));
         } else {
-            value.elements[at] = std::move(*packed);
+            runtime::simir::set_container_packed_element(
+                value, at, std::move(*packed));
         }
     };
-    const auto size = runtime::simir::container_value_size(value);
+    // A sparse fixed array holds every element (IEEE 1800-2023 7.4).
+    const auto size = static_cast<std::size_t>(
+        runtime::simir::container_element_count(value));
     if (string_key) {
         const auto found = std::ranges::lower_bound(
             value.string_keys, *string_key);
@@ -1708,14 +1712,17 @@ SystemVerilogClassHirExecution::static_container_element(
                   }();
             if (position && *position >= 0
                 && std::in_range<std::size_t>(*position)
-                && static_cast<std::size_t>(*position)
-                    < stored.elements.size()) {
+                && static_cast<std::uint64_t>(*position)
+                    < runtime::simir::container_element_count(stored)) {
                 at = static_cast<std::size_t>(*position);
             }
         }
     }
-    const auto& elements = container->value.elements;
-    return std::pair { at && *at < elements.size() ? elements[*at] : missing,
+    const auto& stored_value = container->value;
+    return std::pair { at
+                && *at < runtime::simir::container_element_count(stored_value)
+            ? runtime::simir::container_packed_element(stored_value, *at)
+            : missing,
         type.signed_elements };
 }
 
@@ -1738,7 +1745,7 @@ SystemVerilogClassHirExecution::static_container_method(
     const bool packed_elements
         = type.element_kind == runtime::simir::ContainerElementKind::Packed
         || type.element_kind == runtime::simir::ContainerElementKind::Scalar;
-    const auto size = runtime::simir::container_value_size(value);
+    const auto size = runtime::simir::container_size_method(value);
     const auto integer = [](const std::uint64_t result) {
         return runtime::PackedLogic4::from_aval_bval(32U, result, 0U);
     };
@@ -5453,6 +5460,11 @@ SystemVerilogClassHirExecution::evaluate_typed_actual(
         const semantic::sv::TypeReference& type,
         const std::size_t depth) -> std::optional<CallValue> {
         using ElementKind = runtime::simir::ContainerElementKind;
+        // A sparse fixed array passes every element (IEEE 1800-2023 7.4).
+        if (value.type.sparse) {
+            return capture_container_value(
+                runtime::simir::dense_container_image(value), type, depth);
+        }
         if (const auto form = array_form(type)) {
             if (*form == TypeForm::associative_array
                 || !profile_matches_container(value.type, type, depth)
@@ -6948,7 +6960,7 @@ SystemVerilogClassHirExecution::evaluate_packed(
             }
             if (method_name == "size") {
                 return apply_context(runtime::PackedLogic4::from_aval_bval(
-                    32U, runtime::simir::container_value_size(*stored), 0U),
+                    32U, runtime::simir::container_size_method(*stored), 0U),
                     true, true);
             }
             if (stored->type.element_kind

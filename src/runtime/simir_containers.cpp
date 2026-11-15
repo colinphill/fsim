@@ -288,17 +288,33 @@ void copy_container_slice_in_place(
             + (descending
                     ? -static_cast<std::int64_t>(ordinal)
                     : static_cast<std::int64_t>(ordinal)));
-        const auto source_ordinal = fixed_offset(source.type, selected_index);
+        const auto source_ordinal = static_cast<std::size_t>(
+            slice_element_ordinal(source.type, selected_index));
         switch (destination.type.element_kind) {
         case ContainerElementKind::Packed:
         case ContainerElementKind::Scalar:
-            if (source_ordinal >= source.elements.size()
-                || ordinal >= destination.elements.size()) {
+            if (ordinal >= destination.elements.size()) {
+                std::terminate();
+            }
+            if (source.type.sparse) {
+                destination.elements[ordinal]
+                    = read_sparse_container_element(source, source_ordinal);
+                break;
+            }
+            if (source_ordinal >= source.elements.size()) {
                 std::terminate();
             }
             destination.elements[ordinal] = source.elements[source_ordinal];
             break;
         case ContainerElementKind::String:
+            if (source.type.sparse) {
+                if (ordinal >= destination.string_elements.size()) {
+                    std::terminate();
+                }
+                destination.string_elements[ordinal]
+                    = read_sparse_container_string(source, source_ordinal);
+                break;
+            }
             if (source_ordinal >= source.string_elements.size()
                 || ordinal >= destination.string_elements.size()
                 || destination.string_elements[ordinal].capacity()
@@ -931,9 +947,14 @@ Interpreter::Impl::read_container_object_value(
     }
     const auto& alias = *object.slice_alias;
     const auto& source = read_container_object_value(alias.object);
-    const auto count = object.initial_value.elements.size();
+    auto& view = object.initial_value;
+    if (view.type.element_kind != ContainerElementKind::Packed
+        && view.type.element_kind != ContainerElementKind::Scalar) {
+        return view;
+    }
+    const auto count = container_element_count(view);
     const auto descending = alias.selected_left >= alias.selected_right;
-    for (std::size_t ordinal = 0;
+    for (std::uint64_t ordinal = 0;
         ordinal < count;
         ++ordinal) {
         const auto selected_index = static_cast<std::int32_t>(
@@ -941,9 +962,11 @@ Interpreter::Impl::read_container_object_value(
             + (descending
                     ? -static_cast<std::int64_t>(ordinal)
                     : static_cast<std::int64_t>(ordinal)));
-        object.initial_value.elements[ordinal] = source.elements[fixed_offset(source.type, selected_index)];
+        set_container_packed_element(view, ordinal,
+            container_packed_element(source,
+                slice_element_ordinal(source.type, selected_index)));
     }
-    return object.initial_value;
+    return view;
 }
 
 bool Interpreter::Impl::read_container_object_element(
@@ -2302,15 +2325,21 @@ void Interpreter::Impl::write_container_object_value(
     const auto alias = *object.slice_alias;
     auto replacement = read_container_object_value(alias.object);
     const auto descending = alias.selected_left >= alias.selected_right;
-    for (std::size_t ordinal = 0;
-        ordinal < value.elements.size();
+    const auto count = value.type.element_kind == ContainerElementKind::Packed
+            || value.type.element_kind == ContainerElementKind::Scalar
+        ? container_element_count(value)
+        : 0U;
+    for (std::uint64_t ordinal = 0;
+        ordinal < count;
         ++ordinal) {
         const auto selected_index = static_cast<std::int32_t>(
             static_cast<std::int64_t>(alias.selected_left)
             + (descending
                     ? -static_cast<std::int64_t>(ordinal)
                     : static_cast<std::int64_t>(ordinal)));
-        replacement.elements[fixed_offset(replacement.type, selected_index)] = value.elements[ordinal];
+        set_container_packed_element(replacement,
+            slice_element_ordinal(replacement.type, selected_index),
+            container_packed_element(value, ordinal));
     }
     write_container_object_value(
         alias.object, replacement, driver, origin);
@@ -2624,8 +2653,10 @@ void Interpreter::Impl::write_container_object_dynamic_part_element_value(
         ? known_index(
               process, instruction, index, true,
               "multidimensional linear index")
-        : fixed_offset(process, instruction, type, index);
-    if (selected >= object.initial_value.elements.size()) {
+        : static_cast<std::size_t>(type.sparse
+                ? sparse_offset(process, instruction, type, index)
+                : fixed_offset(process, instruction, type, index));
+    if (selected >= container_element_count(object.initial_value)) {
         container_error(
             process, instruction,
             "container index is out of range");
@@ -2702,7 +2733,9 @@ void resize_container_value(
             };
         }
     }
-    const auto preserved = initializer ? container_value_size(*initializer) : 0;
+    const auto preserved = initializer
+        ? static_cast<std::size_t>(container_element_count(*initializer))
+        : 0U;
     ContainerValue replacement;
     replacement.type = target.type;
     switch (target.type.element_kind) {
@@ -2754,39 +2787,112 @@ void select_container_value(
         destination = state == Logic4::one ? when_true : when_false;
         return;
     }
-    if (container_value_size(when_true)
-            != container_value_size(when_false)
-        || when_true.keys != when_false.keys) {
-        destination = default_container_value(destination.type);
+    // An ambiguous condition (IEEE 1800-2023 11.4.11): logically equivalent
+    // operands give either; an associative array, or arrays of different
+    // element counts, give the default (Table 7-1); otherwise the arrays
+    // combine element by element, a matching element kept and any other
+    // taking its type's default.
+    const auto& type = destination.type;
+    if (compare_container_values(when_true, when_false, false).get(0)
+        == Logic4::one) {
+        destination = when_true;
         return;
     }
-    if (destination.type.element_kind != ContainerElementKind::Packed) {
-        destination = when_true == when_false
-            ? when_true
-            : default_container_value(destination.type);
+    if (type.associative
+        || container_element_count(when_true)
+            != container_element_count(when_false)) {
+        destination = default_container_value(type);
         return;
     }
-    destination.keys = when_true.keys;
-    destination.elements.clear();
-    destination.elements.reserve(when_true.elements.size());
-    for (std::size_t index = 0;
-        index < when_true.elements.size(); ++index) {
-        auto merged = conditional_value(
-            condition,
-            when_true.elements[index],
-            when_false.elements[index]);
-        if (destination.type.two_state) {
-            auto coerced = PackedLogic4(
-                destination.type.element_width, Logic4::zero);
-            for (std::size_t bit = 0; bit < merged.width(); ++bit) {
-                if (merged.get(bit) == Logic4::one) {
-                    coerced.set(bit, Logic4::one);
-                }
-            }
-            merged = std::move(coerced);
+    if (type.element_kind == ContainerElementKind::Packed
+        || type.element_kind == ContainerElementKind::Scalar) {
+        const auto background = initial_packed_element(type);
+        if (type.sparse) {
+            ContainerValue merged;
+            merged.type = type;
+            const auto left = sparse_container_background(when_true);
+            merged.associative_default
+                = left == sparse_container_background(when_false)
+                ? left : background;
+            static_cast<void>(visit_sparse_element_pairs(when_true, when_false,
+                [&](const std::optional<std::uint64_t> ordinal,
+                    const PackedLogic4& first, const PackedLogic4& second) {
+                    if (ordinal) {
+                        static_cast<void>(write_sparse_container_element(
+                            merged, *ordinal,
+                            first == second ? first : background));
+                    }
+                    return true;
+                }));
+            destination = std::move(merged);
+            return;
         }
-        destination.elements.push_back(std::move(merged));
+        ContainerValue merged;
+        merged.type = type;
+        merged.elements.reserve(when_true.elements.size());
+        for (std::size_t index = 0; index < when_true.elements.size();
+             ++index) {
+            const auto& first = when_true.elements[index];
+            merged.elements.push_back(
+                first == when_false.elements[index] ? first : background);
+        }
+        destination = std::move(merged);
+        return;
     }
+    if (type.element_kind == ContainerElementKind::String) {
+        if (type.sparse) {
+            ContainerValue merged;
+            merged.type = type;
+            const auto left = sparse_container_string_background(when_true);
+            if (left == sparse_container_string_background(when_false)) {
+                merged.associative_default_text = left;
+            }
+            static_cast<void>(visit_sparse_string_pairs(when_true, when_false,
+                [&](const std::optional<std::uint64_t> ordinal,
+                    const std::string& first, const std::string& second) {
+                    if (ordinal) {
+                        static_cast<void>(write_sparse_container_string(
+                            merged, *ordinal,
+                            first == second ? first : std::string { }));
+                    }
+                    return true;
+                }));
+            destination = std::move(merged);
+            return;
+        }
+        ContainerValue merged;
+        merged.type = type;
+        merged.string_elements.reserve(when_true.string_elements.size());
+        for (std::size_t index = 0; index < when_true.string_elements.size();
+             ++index) {
+            const auto& first = when_true.string_elements[index];
+            merged.string_elements.push_back(
+                first == when_false.string_elements[index] ? first
+                                                           : std::string { });
+        }
+        destination = std::move(merged);
+        return;
+    }
+    // Elements that are arrays combine by their own elements; an unpacked
+    // structure element is matched whole.
+    ContainerValue merged;
+    merged.type = type;
+    merged.nested_elements.reserve(when_true.nested_elements.size());
+    for (std::size_t index = 0; index < when_true.nested_elements.size();
+         ++index) {
+        const auto& first = when_true.nested_elements[index];
+        const auto& second = when_false.nested_elements[index];
+        if (type.element_kind == ContainerElementKind::Container) {
+            auto element = default_container_value(first.type);
+            select_container_value(element, condition, first, second);
+            merged.nested_elements.push_back(std::move(element));
+        } else {
+            merged.nested_elements.push_back(first == second
+                    ? first
+                    : default_container_value(first.type));
+        }
+    }
+    destination = std::move(merged);
 }
 
 bool container_equality_compatible(
@@ -2845,6 +2951,71 @@ PackedLogic4 compare_container_values(
             "container equality profiles differ"
         };
     }
+    // The equality of one element pair of packed elements: zero, one, or X
+    // for a logical comparison that unknown bits decide.
+    const auto packed_state = [&](const PackedLogic4& left,
+                                  const PackedLogic4& right) {
+        bool unknown { };
+        for (std::size_t bit = 0; bit < lhs.type.element_width; ++bit) {
+            const auto left_bit = left.get(bit);
+            const auto right_bit = right.get(bit);
+            if (case_equal) {
+                if (left_bit != right_bit) {
+                    return Logic4::zero;
+                }
+                continue;
+            }
+            const auto left_known = left_bit == Logic4::zero || left_bit == Logic4::one;
+            const auto right_known = right_bit == Logic4::zero || right_bit == Logic4::one;
+            if (left_known && right_known && left_bit != right_bit) {
+                return Logic4::zero;
+            }
+            unknown |= !left_known || !right_known;
+        }
+        return unknown ? Logic4::x : Logic4::one;
+    };
+    const auto scalar_equal = [&](const PackedLogic4& left,
+                                  const PackedLogic4& right) {
+        if (lhs.type.scalar_kind == SystemVerilogScalarKind::Chandle
+            || lhs.type.scalar_kind == SystemVerilogScalarKind::Time) {
+            return left.low_word().aval == right.low_word().aval;
+        }
+        const auto left_scalar = decode_systemverilog_scalar_payload(
+            left, lhs.type.scalar_kind);
+        const auto right_scalar = decode_systemverilog_scalar_payload(
+            right, rhs.type.scalar_kind);
+        if (!left_scalar || !right_scalar) {
+            throw std::invalid_argument {
+                "SimIR scalar container payload is invalid"
+            };
+        }
+        const auto compared = systemverilog_scalar_compare(
+            SystemVerilogScalarComparison::Equal,
+            left_scalar.value, right_scalar.value);
+        return compared && compared.value;
+    };
+    if (lhs.type.sparse) {
+        if (lhs.type.element_kind == ContainerElementKind::String) {
+            return PackedLogic4(1, visit_sparse_string_pairs(lhs, rhs,
+                    [](std::optional<std::uint64_t>, const std::string& left,
+                        const std::string& right) { return left == right; })
+                    ? Logic4::one : Logic4::zero);
+        }
+        bool unknown { };
+        const bool equal = visit_sparse_element_pairs(lhs, rhs,
+            [&](std::optional<std::uint64_t>, const PackedLogic4& left,
+                const PackedLogic4& right) {
+                if (lhs.type.element_kind == ContainerElementKind::Scalar) {
+                    return scalar_equal(left, right);
+                }
+                const auto state = packed_state(left, right);
+                unknown |= state == Logic4::x;
+                return state != Logic4::zero;
+            });
+        return PackedLogic4(1, !equal ? Logic4::zero
+                : unknown            ? Logic4::x
+                                     : Logic4::one);
+    }
     if (container_value_size(lhs) != container_value_size(rhs)
         || lhs.keys != rhs.keys) {
         return PackedLogic4(1, Logic4::zero);
@@ -2870,28 +3041,7 @@ PackedLogic4 compare_container_values(
     }
     if (lhs.type.element_kind == ContainerElementKind::Scalar) {
         for (std::size_t index = 0; index < lhs.elements.size(); ++index) {
-            const auto& left = lhs.elements[index];
-            const auto& right = rhs.elements[index];
-            bool equal { };
-            if (lhs.type.scalar_kind == SystemVerilogScalarKind::Chandle
-                || lhs.type.scalar_kind == SystemVerilogScalarKind::Time) {
-                equal = left.low_word().aval == right.low_word().aval;
-            } else {
-                const auto left_scalar = decode_systemverilog_scalar_payload(
-                    left, lhs.type.scalar_kind);
-                const auto right_scalar = decode_systemverilog_scalar_payload(
-                    right, rhs.type.scalar_kind);
-                if (!left_scalar || !right_scalar) {
-                    throw std::invalid_argument {
-                        "SimIR scalar container payload is invalid"
-                    };
-                }
-                const auto compared = systemverilog_scalar_compare(
-                    SystemVerilogScalarComparison::Equal,
-                    left_scalar.value, right_scalar.value);
-                equal = compared && compared.value;
-            }
-            if (!equal)
+            if (!scalar_equal(lhs.elements[index], rhs.elements[index]))
                 return PackedLogic4(1, Logic4::zero);
         }
         return PackedLogic4(1, Logic4::one);
@@ -2899,24 +3049,12 @@ PackedLogic4 compare_container_values(
     bool unknown { };
     for (std::size_t element = 0;
         element < lhs.elements.size(); ++element) {
-        const auto& left = lhs.elements[element];
-        const auto& right = rhs.elements[element];
-        for (std::size_t bit = 0; bit < lhs.type.element_width; ++bit) {
-            const auto left_bit = left.get(bit);
-            const auto right_bit = right.get(bit);
-            if (case_equal) {
-                if (left_bit != right_bit) {
-                    return PackedLogic4(1, Logic4::zero);
-                }
-                continue;
-            }
-            const auto left_known = left_bit == Logic4::zero || left_bit == Logic4::one;
-            const auto right_known = right_bit == Logic4::zero || right_bit == Logic4::one;
-            if (left_known && right_known && left_bit != right_bit) {
-                return PackedLogic4(1, Logic4::zero);
-            }
-            unknown |= !left_known || !right_known;
+        const auto state = packed_state(
+            lhs.elements[element], rhs.elements[element]);
+        if (state == Logic4::zero) {
+            return PackedLogic4(1, Logic4::zero);
         }
+        unknown |= state == Logic4::x;
     }
     return PackedLogic4(
         1, unknown ? Logic4::x : Logic4::one);

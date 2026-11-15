@@ -47,6 +47,7 @@ template <> struct RunStateCodec<simir::ContainerValue> {
         archive.io(value.shape);
         archive.io(value.associative_default);
         archive.io(value.associative_default_text);
+        archive.io(value.compact_planes);
     }
 };
 

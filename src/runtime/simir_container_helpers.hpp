@@ -77,6 +77,19 @@ inline void copy_element_prefix(
     const ContainerValue& source,
     const std::size_t count)
 {
+    if (source.type.sparse) {
+        // A sparse source holds its elements by ordinal.
+        ContainerElementCursor cursor { source };
+        for (std::size_t index = 0; index < count; ++index) {
+            if (target.type.element_kind == ContainerElementKind::String) {
+                target.string_elements[index]
+                    = container_string_element(source, index);
+            } else {
+                target.elements[index] = cursor.at(index);
+            }
+        }
+        return;
+    }
     switch (target.type.element_kind) {
     case ContainerElementKind::Packed:
     case ContainerElementKind::Scalar:
@@ -121,6 +134,18 @@ template <typename Container>
         };
     }
     return static_cast<std::size_t>(
+        type.index_left >= type.index_right
+            ? static_cast<std::int64_t>(type.index_left) - index
+            : static_cast<std::int64_t>(index) - type.index_left);
+}
+
+// The storage ordinal of index `index` of a one-dimensional fixed array,
+// dense or sparse (a slice alias selects elements of its first dimension).
+[[nodiscard]] inline std::uint64_t slice_element_ordinal(
+    const ContainerType& type,
+    const std::int32_t index)
+{
+    return static_cast<std::uint64_t>(
         type.index_left >= type.index_right
             ? static_cast<std::int64_t>(type.index_left) - index
             : static_cast<std::int64_t>(index) - type.index_left);

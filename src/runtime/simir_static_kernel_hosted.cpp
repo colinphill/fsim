@@ -467,7 +467,8 @@ void Interpreter::Impl::StaticKernel::run_finals(const bool discarded)
         const auto task = fsim::runtime::detail::make_scheduler_task_descriptor<
             KernelFinalTask,
             +[](Scheduler&, const KernelFinalTask& scheduled) {
-                if (scheduled.owner->static_kernel) {
+                if (scheduled.owner->static_kernel
+                    && !scheduled.owner->finish_in_final) {
                     scheduled.owner->static_kernel->run_final_member(
                         scheduled.member);
                 }

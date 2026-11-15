@@ -2451,6 +2451,9 @@ struct Interpreter::Impl : SchedulerBatchTask {
     bool paused_in_final { };
     std::optional<std::int64_t> simulator_status;
     bool finals_ran { };
+    // A $finish ran in a final procedure: the simulation ends there, and the
+    // final procedures not yet run are skipped (IEEE 1800-2023 9.2.3).
+    bool finish_in_final { };
     bool process_profile_enabled { };
     bool process_profile_reported { };
     bool update_profile_enabled { };

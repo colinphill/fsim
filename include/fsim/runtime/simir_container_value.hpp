@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <utility>
@@ -76,7 +77,9 @@ struct ContainerType {
   // value's `keys` hold the 32-bit ordinals (row-major linear ordinals of a
   // multidimensional array) of the stored elements in increasing order,
   // paired with `elements` or `string_elements`, and every other element
-  // holds the value's background element (sparse_container_background).
+  // holds the value's background element. A packed or scalar sparse value
+  // that stores more elements than a dense bit-plane image would cost keeps
+  // that image instead (ContainerValue::compact_planes).
   bool sparse{};
   friend bool operator==(const ContainerType&,
                          const ContainerType&) = default;
@@ -103,6 +106,11 @@ struct ContainerValue {
   // initial value.
   std::optional<PackedLogic4> associative_default;
   std::optional<std::string> associative_default_text;
+  // The dense image of a filled sparse array of packed or scalar elements:
+  // the value bits of every element, element `i` at bit `i * element_width`,
+  // then the unknown bits in the same layout (two bits per value bit). Set,
+  // `keys` and `elements` are empty; empty for every other value.
+  std::vector<std::uint64_t> compact_planes;
   ContainerValue() = default;
   // Retain the original packed-container construction surface while the
   // additional storages remain an internal representation detail.
@@ -162,6 +170,81 @@ sparse_container_element_count(const ContainerType& type) noexcept;
 /// Returns whether the element changed.
 bool write_sparse_container_element(
     ContainerValue& value, std::uint64_t ordinal, PackedLogic4 element);
+
+/// The element every unstored element of a sparse array of packed or scalar
+/// elements holds.
+[[nodiscard]] PackedLogic4 sparse_container_background(
+    const ContainerValue& value);
+
+/// The element every unstored element of a sparse array of strings holds.
+[[nodiscard]] std::string sparse_container_string_background(
+    const ContainerValue& value);
+
+/// The element count of a container: the declared count of a fixed array
+/// (sparse included), the current count of any other.
+[[nodiscard]] std::uint64_t container_element_count(const ContainerValue& value);
+
+/// The value of the container's size() method (IEEE 1800-2023 7.5.2, 7.9.1,
+/// 7.10.2.1) and of $size on a fixed array (20.7): the elements of its first
+/// dimension, whatever its storage.
+[[nodiscard]] std::uint64_t container_size_method(const ContainerValue& value);
+
+/// A densely stored copy of a container of packed or scalar elements: a
+/// sparse fixed array with every element present; any other container as
+/// it is.
+[[nodiscard]] ContainerValue dense_container_image(const ContainerValue& value);
+
+/// Store the elements of `image` (dense_container_image of `value`, then
+/// changed element by element) back into `value`, whatever its storage.
+void store_dense_container_image(ContainerValue& value, ContainerValue image);
+
+/// Element `ordinal` (storage order) of a container of packed or scalar
+/// elements, whatever its storage.
+[[nodiscard]] PackedLogic4 container_packed_element(
+    const ContainerValue& value, std::uint64_t ordinal);
+
+/// Store element `ordinal` (storage order) of a container of packed or
+/// scalar elements, whatever its storage.
+void set_container_packed_element(
+    ContainerValue& value, std::uint64_t ordinal, PackedLogic4 element);
+
+/// Element `ordinal` (storage order) of a container of strings.
+[[nodiscard]] std::string container_string_element(
+    const ContainerValue& value, std::uint64_t ordinal);
+
+/// Store element `ordinal` (storage order) of a container of strings.
+void set_container_string_element(
+    ContainerValue& value, std::uint64_t ordinal, std::string element);
+
+/// Visit the element pairs of two sparse arrays of one shape that decide
+/// every element pair: the pair at each ordinal either stores, in increasing
+/// order, then (ordinal empty) the two backgrounds once when some ordinal is
+/// stored in neither. Visiting stops when `visit` returns false; the result
+/// is false then.
+bool visit_sparse_element_pairs(
+    const ContainerValue& lhs, const ContainerValue& rhs,
+    const std::function<bool(std::optional<std::uint64_t>,
+        const PackedLogic4&, const PackedLogic4&)>& visit);
+
+/// visit_sparse_element_pairs for sparse arrays of strings.
+bool visit_sparse_string_pairs(
+    const ContainerValue& lhs, const ContainerValue& rhs,
+    const std::function<bool(std::optional<std::uint64_t>,
+        const std::string&, const std::string&)>& visit);
+
+/// Reads the packed or scalar elements of a container at increasing
+/// ordinals in amortized constant time per element, whatever the storage.
+class ContainerElementCursor {
+public:
+  explicit ContainerElementCursor(const ContainerValue& value) noexcept
+      : value_(value) {}
+  /// Element `ordinal`; ordinals of successive calls must not decrease.
+  [[nodiscard]] PackedLogic4 at(std::uint64_t ordinal);
+
+private:
+  const ContainerValue& value_;
+  std::size_t next_key_{};
+};
 
 /// Element `ordinal` of a sparse fixed array of strings.
 [[nodiscard]] std::string read_sparse_container_string(

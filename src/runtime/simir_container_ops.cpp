@@ -66,18 +66,37 @@ void append_container_bits(
     switch (value.type.element_kind) {
     case ContainerElementKind::Packed:
     case ContainerElementKind::Scalar:
+        if (value.type.sparse) {
+            ContainerElementCursor cursor { value };
+            const auto count = sparse_container_element_count(value.type);
+            for (std::uint64_t ordinal = 0U; ordinal < count; ++ordinal) {
+                append_packed(cursor.at(ordinal), value.type.element_width);
+            }
+            return;
+        }
         for (const auto& element : value.elements) {
             append_packed(element, value.type.element_width);
         }
         return;
-    case ContainerElementKind::String:
-        for (const auto& text : value.string_elements) {
+    case ContainerElementKind::String: {
+        const auto append_text = [&](const std::string& text) {
             for (const auto character : text) {
                 append_packed(PackedLogic4::from_aval_bval(8U,
                     static_cast<unsigned char>(character), 0U), 8U);
             }
+        };
+        if (value.type.sparse) {
+            const auto count = sparse_container_element_count(value.type);
+            for (std::uint64_t ordinal = 0U; ordinal < count; ++ordinal) {
+                append_text(container_string_element(value, ordinal));
+            }
+            return;
+        }
+        for (const auto& text : value.string_elements) {
+            append_text(text);
         }
         return;
+    }
     case ContainerElementKind::Container:
     case ContainerElementKind::Aggregate:
         for (const auto& element : value.nested_elements) {
@@ -195,11 +214,28 @@ void consume_container_bits(
     switch (value.type.element_kind) {
     case ContainerElementKind::Packed:
     case ContainerElementKind::Scalar:
+        if (value.type.sparse) {
+            const auto count = sparse_container_element_count(value.type);
+            for (std::uint64_t ordinal = 0U; ordinal < count; ++ordinal) {
+                set_container_packed_element(
+                    value, ordinal, take_packed(value.type.element_width));
+            }
+            return;
+        }
         for (auto& element : value.elements) {
             element = take_packed(value.type.element_width);
         }
         return;
     case ContainerElementKind::String:
+        if (value.type.sparse) {
+            const auto count = sparse_container_element_count(value.type);
+            for (std::uint64_t ordinal = 0U; ordinal < count; ++ordinal) {
+                const auto code = take_packed(8U).known_unsigned_value();
+                set_container_string_element(value, ordinal,
+                    std::string(1U, static_cast<char>(code.value_or(0U))));
+            }
+            return;
+        }
         for (auto& text : value.string_elements) {
             const auto code = take_packed(8U).known_unsigned_value();
             text.assign(1U, static_cast<char>(code.value_or(0U)));
@@ -532,7 +568,8 @@ void execute_container_operation(
     const ProcessId /*process*/,
     const InstructionIndex /*instruction*/)
 {
-    const auto size = container_value_size(access.read_container(operation.source));
+    const auto& source = access.read_container(operation.source);
+    const auto size = container_size_method(source);
     access.write(operation.destination, PackedLogic4::from_aval_bval(32, size, 0));
 }
 

@@ -1134,9 +1134,9 @@ void test_simir_containers()
     require(
         merged.elements.size() == 2
             && merged.elements[0] == value(8, 0x11)
-            && merged.elements[1].low_word().aval == 0x2a
-            && merged.elements[1].low_word().bval == 0x08,
-        "unknown container conditional merges equal-shape elements");
+            && merged.elements[1].to_msb_string() == "XXXXXXXX",
+        "unknown container conditional keeps matching elements and gives "
+        "the others their default (IEEE 1800-2023 11.4.11)");
     require(
         conditional_interpreter
             .container_object_value(shape_object)

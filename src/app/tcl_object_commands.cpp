@@ -1005,16 +1005,20 @@ namespace {
             return result;
         }
         Tcl_Obj* result = Tcl_NewListObj(0, nullptr);
-        const auto size = runtime::simir::container_value_size(value);
-        for (std::size_t index = 0; index < size; ++index) {
+        // Every element of a fixed array, written or not (IEEE 1800-2023
+        // 7.4).
+        const auto size = runtime::simir::container_element_count(value);
+        for (std::uint64_t index = 0; index < size; ++index) {
             Tcl_Obj* element = nullptr;
             switch (value.type.element_kind) {
             case ContainerElementKind::Packed:
-                element = string_object(value.elements.at(index).to_msb_string());
+                element = string_object(runtime::simir::container_packed_element(
+                    value, index).to_msb_string());
                 break;
             case ContainerElementKind::Scalar: {
                 const auto scalar = runtime::decode_systemverilog_scalar_payload(
-                    value.elements.at(index), value.type.scalar_kind);
+                    runtime::simir::container_packed_element(value, index),
+                    value.type.scalar_kind);
                 if (!scalar) {
                     throw std::runtime_error { "container contains an invalid scalar value" };
                 }
@@ -1026,7 +1030,8 @@ namespace {
                 break;
             }
             case ContainerElementKind::String:
-                element = string_object(value.string_elements.at(index));
+                element = string_object(
+                    runtime::simir::container_string_element(value, index));
                 break;
             case ContainerElementKind::Container:
             case ContainerElementKind::Aggregate:
@@ -2048,7 +2053,7 @@ namespace {
         }
         if (original.type.fixed
             && static_cast<std::size_t>(count)
-                != runtime::simir::container_value_size(original)) {
+                != runtime::simir::container_element_count(original)) {
             error = "fixed container value has the wrong number of elements";
             return std::nullopt;
         }
@@ -2122,6 +2127,29 @@ namespace {
                 } else {
                     result.elements.push_back(
                         std::move(entry.element.elements.front()));
+                }
+            }
+        } else if (original.type.sparse) {
+            // A sparse fixed array stores each element through its ordinal;
+            // the background stays the array's (IEEE 1800-2023 7.4).
+            result.compact_planes.clear();
+            ContainerValue parsed;
+            parsed.type = original.type;
+            for (Tcl_Size index = 0; index < count; ++index) {
+                parsed.elements.clear();
+                parsed.string_elements.clear();
+                if (!parse_container_element(original,
+                        std::string { tcl_string(values[index]) }, parsed,
+                        error)) {
+                    return std::nullopt;
+                }
+                const auto ordinal = static_cast<std::uint64_t>(index);
+                if (original.type.element_kind == ContainerElementKind::String) {
+                    runtime::simir::set_container_string_element(result,
+                        ordinal, std::move(parsed.string_elements.front()));
+                } else {
+                    runtime::simir::set_container_packed_element(result,
+                        ordinal, std::move(parsed.elements.front()));
                 }
             }
         } else {

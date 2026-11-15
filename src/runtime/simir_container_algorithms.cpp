@@ -4,7 +4,11 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <functional>
 #include <limits>
+#include <numeric>
+#include <set>
+#include <unordered_map>
 
 namespace fsim::runtime::simir {
 
@@ -208,6 +212,565 @@ namespace {
   return values.back();
 }
 
+// The ordinal a sparse array key holds.
+[[nodiscard]] std::uint64_t sparse_key_ordinal(const PackedLogic4& key) {
+  return key.known_unsigned_value().value_or(0U);
+}
+
+[[nodiscard]] PackedLogic4 sparse_key(const std::uint64_t ordinal) {
+  return PackedLogic4::from_aval_bval(32U, ordinal, 0U);
+}
+
+// Whether a predicate graph reads the iterator index (item.index).
+[[nodiscard]] bool predicate_reads_index(
+    const std::span<const ContainerPredicateNode> predicate) {
+  return std::ranges::any_of(
+      predicate, [](const ContainerPredicateNode& node) {
+        return node.operation == ContainerPredicateOperator::index;
+      });
+}
+
+// Whether a sparse array holds its stored elements as keyed entries rather
+// than as a compact image.
+[[nodiscard]] bool sparse_keyed(const ContainerValue& value) {
+  return value.type.sparse && value.compact_planes.empty();
+}
+
+// The first ordinal of a keyed sparse array that holds no stored element.
+[[nodiscard]] std::uint64_t first_unstored_ordinal(
+    const ContainerValue& value) {
+  std::uint64_t ordinal{};
+  for (const auto& key : value.keys) {
+    if (sparse_key_ordinal(key) != ordinal) {
+      break;
+    }
+    ++ordinal;
+  }
+  return ordinal;
+}
+
+// The declared index of storage ordinal `offset` of a container.
+[[nodiscard]] std::int32_t container_declared_index(
+    const ContainerType& type, const std::uint64_t offset) {
+  const auto step = static_cast<std::int32_t>(offset);
+  return type.fixed
+      ? type.index_left >= type.index_right
+            ? type.index_left - step
+            : type.index_left + step
+      : step;
+}
+
+// A uniform sample below `span` from the deterministic 32-bit source,
+// rejecting the samples of the incomplete last range.
+[[nodiscard]] std::uint32_t uniform_below(
+    const std::function<std::uint32_t()>& random,
+    const std::uint32_t span) {
+  const auto full_range = UINT64_C(1) << 32U;
+  const auto accepted = full_range - full_range % span;
+  std::uint32_t sample{};
+  do {
+    sample = random();
+  } while (static_cast<std::uint64_t>(sample) >= accepted);
+  return sample % span;
+}
+
+// Fold `copies` copies of `element` into `result`, as that many successive
+// folds would: double-and-add or square-and-multiply for the arithmetic
+// reductions, at most one fold for the idempotent ones, parity for xor.
+void fold_repeated(
+    PackedLogic4& result,
+    const BinaryOperator binary,
+    const ContainerReductionOperator operation,
+    PackedLogic4 element,
+    std::uint64_t copies) {
+  switch (operation) {
+  case ContainerReductionOperator::sum:
+  case ContainerReductionOperator::product:
+    while (copies != 0U) {
+      if ((copies & 1U) != 0U) {
+        result = binary_value(binary, result, element);
+      }
+      copies >>= 1U;
+      if (copies != 0U) {
+        element = binary_value(binary, element, element);
+      }
+    }
+    return;
+  case ContainerReductionOperator::bit_and:
+  case ContainerReductionOperator::bit_or:
+    if (copies != 0U) {
+      result = binary_value(binary, result, element);
+    }
+    return;
+  case ContainerReductionOperator::bit_xor:
+    if ((copies & 1U) != 0U) {
+      result = binary_value(binary, result, element);
+    }
+    return;
+  }
+}
+
+// A sparse value like `like` (type and background) holding no element but
+// the background.
+[[nodiscard]] ContainerValue empty_sparse_like(const ContainerValue& like) {
+  ContainerValue result;
+  result.type = like.type;
+  result.associative_default = like.associative_default;
+  result.associative_default_text = like.associative_default_text;
+  return result;
+}
+
+// The order element_less defines, as words compared most significant first:
+// two bits per value bit, the bit's rank in that order.
+void append_rank_words(
+    const ContainerType& type,
+    const PackedLogic4& key,
+    std::vector<std::uint64_t>& words,
+    const std::size_t stride) {
+  const auto width = key.width();
+  const auto base = words.size();
+  words.resize(base + stride, 0U);
+  std::size_t position{};
+  for (std::size_t index = width; index-- != 0U; ++position) {
+    const auto bit = key.get(index);
+    std::uint64_t rank = static_cast<std::uint8_t>(bit);
+    if (type.signed_elements && index + 1U == type.element_width) {
+      rank = bit == Logic4::one ? 0U
+          : bit == Logic4::zero ? 1U
+          : bit == Logic4::x ? 2U : 3U;
+    }
+    const auto bit_position = position * 2U;
+    words[base + bit_position / 64U]
+        |= rank << (62U - bit_position % 64U);
+  }
+}
+
+// Stable ordering of every element of a sparse array by rank-encoded keys
+// held in a compact temporary (one key image per element and a 32-bit
+// permutation), for orderings with no exact sparse form.
+void order_sparse_by_rank(
+    ContainerValue& value,
+    const bool descending,
+    const std::span<const ContainerPredicateNode> key) {
+  const auto count = sparse_container_element_count(value.type);
+  std::vector<std::uint64_t> words;
+  std::size_t stride{};
+  {
+    ContainerElementCursor cursor{value};
+    for (std::uint64_t ordinal = 0U; ordinal < count; ++ordinal) {
+      const auto element = cursor.at(ordinal);
+      const auto rank_key = key.empty()
+          ? element
+          : evaluate_container_predicate(
+                value.type, element,
+                container_declared_index(value.type, ordinal), key);
+      if (ordinal == 0U) {
+        stride = std::max<std::size_t>(
+            (rank_key.width() * 2U + 63U) / 64U, 1U);
+        words.reserve(static_cast<std::size_t>(count) * stride);
+      }
+      append_rank_words(value.type, rank_key, words, stride);
+    }
+  }
+  std::vector<std::uint32_t> permutation(static_cast<std::size_t>(count));
+  std::iota(permutation.begin(), permutation.end(), std::uint32_t { 0 });
+  const auto rank_less =
+      [&](const std::uint32_t left, const std::uint32_t right) {
+        const auto* const a = words.data() + std::size_t { left } * stride;
+        const auto* const b = words.data() + std::size_t { right } * stride;
+        for (std::size_t word = 0U; word < stride; ++word) {
+          if (a[word] != b[word]) {
+            return descending ? b[word] < a[word] : a[word] < b[word];
+          }
+        }
+        return false;
+      };
+  std::stable_sort(permutation.begin(), permutation.end(), rank_less);
+  words.clear();
+  words.shrink_to_fit();
+  auto result = empty_sparse_like(value);
+  for (std::uint64_t position = 0U; position < count; ++position) {
+    static_cast<void>(write_sparse_container_element(
+        result, position,
+        container_packed_element(
+            value, permutation[static_cast<std::size_t>(position)])));
+  }
+  value = std::move(result);
+}
+
+// Ordering methods (7.12.2) of a sparse fixed array: exact sparse forms
+// where the result follows from the stored elements and the background,
+// every element otherwise.
+void order_sparse_container_value(
+    ContainerValue& value,
+    const ContainerOrderingOperator operation,
+    const std::span<const ContainerPredicateNode> key,
+    const std::function<std::uint32_t()>& random) {
+  const auto count = sparse_container_element_count(value.type);
+  const bool strings =
+      value.type.element_kind == ContainerElementKind::String;
+  if (operation == ContainerOrderingOperator::shuffle) {
+    if (!key.empty() || !random) {
+      throw std::invalid_argument{
+          "container shuffle requires an unkeyed random source"};
+    }
+    if (count > std::numeric_limits<std::uint32_t>::max()) {
+      throw std::length_error{
+          "container shuffle exceeds the deterministic index domain"};
+    }
+    if (!sparse_keyed(value)) {
+      for (auto remaining = count; remaining > 1U; --remaining) {
+        const auto other = uniform_below(
+            random, static_cast<std::uint32_t>(remaining));
+        if (other == remaining - 1U) {
+          continue;
+        }
+        auto last = container_packed_element(value, remaining - 1U);
+        set_container_packed_element(
+            value, remaining - 1U, container_packed_element(value, other));
+        set_container_packed_element(value, other, std::move(last));
+      }
+      return;
+    }
+    // The same swaps as a dense array, tracking only where each stored
+    // element moves.
+    std::unordered_map<std::uint64_t, std::size_t> stored_at;
+    stored_at.reserve(value.keys.size());
+    for (std::size_t index = 0U; index < value.keys.size(); ++index) {
+      stored_at.emplace(sparse_key_ordinal(value.keys[index]), index);
+    }
+    for (auto remaining = count; remaining > 1U; --remaining) {
+      const auto last = remaining - 1U;
+      const std::uint64_t other = uniform_below(
+          random, static_cast<std::uint32_t>(remaining));
+      if (other == last) {
+        continue;
+      }
+      const auto at_last = stored_at.find(last);
+      const auto at_other = stored_at.find(other);
+      if (at_last == stored_at.end() && at_other == stored_at.end()) {
+        continue;
+      }
+      if (at_last != stored_at.end() && at_other != stored_at.end()) {
+        std::swap(at_last->second, at_other->second);
+        continue;
+      }
+      const bool from_last = at_last != stored_at.end();
+      const auto moved = from_last ? at_last->second : at_other->second;
+      stored_at.erase(from_last ? last : other);
+      stored_at.emplace(from_last ? other : last, moved);
+    }
+    std::vector<std::pair<std::uint64_t, std::size_t>> placed(
+        stored_at.begin(), stored_at.end());
+    std::ranges::sort(placed);
+    std::vector<PackedLogic4> keys;
+    keys.reserve(placed.size());
+    std::vector<PackedLogic4> elements;
+    std::vector<std::string> string_elements;
+    for (const auto& [ordinal, index] : placed) {
+      keys.push_back(sparse_key(ordinal));
+      if (strings) {
+        string_elements.push_back(std::move(value.string_elements[index]));
+      } else {
+        elements.push_back(std::move(value.elements[index]));
+      }
+    }
+    value.keys = std::move(keys);
+    value.elements = std::move(elements);
+    value.string_elements = std::move(string_elements);
+    return;
+  }
+  if (operation == ContainerOrderingOperator::reverse) {
+    if (!key.empty()) {
+      throw std::invalid_argument{
+          "SimIR container reverse cannot have key metadata"};
+    }
+    if (!sparse_keyed(value)) {
+      for (std::uint64_t low = 0U; low < count / 2U; ++low) {
+        const auto high = count - 1U - low;
+        auto element = container_packed_element(value, low);
+        set_container_packed_element(
+            value, low, container_packed_element(value, high));
+        set_container_packed_element(value, high, std::move(element));
+      }
+      return;
+    }
+    std::reverse(value.keys.begin(), value.keys.end());
+    for (auto& stored : value.keys) {
+      stored = sparse_key(count - 1U - sparse_key_ordinal(stored));
+    }
+    std::reverse(value.elements.begin(), value.elements.end());
+    std::reverse(
+        value.string_elements.begin(), value.string_elements.end());
+    return;
+  }
+  if (operation != ContainerOrderingOperator::ascending
+      && operation != ContainerOrderingOperator::descending) {
+    throw std::invalid_argument{
+        "invalid SimIR container ordering operator"};
+  }
+  if (!key.empty()
+      && (key.size() > maximum_container_predicate_nodes
+          || key.back().value_kind
+              != ContainerPredicateValueKind::element)) {
+    throw std::invalid_argument{
+        "SimIR container ordering key is invalid"};
+  }
+  if (strings) {
+    // As for a dense array, ordering applies to packed elements only.
+    return;
+  }
+  const bool descending =
+      operation == ContainerOrderingOperator::descending;
+  const auto ordered =
+      [&](const PackedLogic4& left, const PackedLogic4& right) {
+        return descending ? element_less(value.type, right, left)
+                          : element_less(value.type, left, right);
+      };
+  const auto background = sparse_container_background(value);
+  if (key.empty() && sparse_keyed(value)) {
+    // Stored elements ordered before the background come first, then every
+    // unstored copy of it, then the rest. No stored element equals the
+    // background, and equivalent elements are equal.
+    auto sorted = value.elements;
+    std::stable_sort(sorted.begin(), sorted.end(), ordered);
+    const auto before = static_cast<std::uint64_t>(
+        std::partition_point(
+            sorted.begin(), sorted.end(),
+            [&](const PackedLogic4& element) {
+              return ordered(element, background);
+            })
+        - sorted.begin());
+    const auto after = sorted.size() - before;
+    value.keys.clear();
+    for (std::uint64_t index = 0U; index < before; ++index) {
+      value.keys.push_back(sparse_key(index));
+    }
+    for (std::uint64_t index = 0U; index < after; ++index) {
+      value.keys.push_back(sparse_key(count - after + index));
+    }
+    value.elements = std::move(sorted);
+    return;
+  }
+  if (!key.empty() && sparse_keyed(value) && !predicate_reads_index(key)) {
+    // Every unstored element has the background's key. Stored elements
+    // with an equivalent key keep their place among those copies, as a
+    // stable sort leaves them.
+    struct Entry {
+      std::uint64_t ordinal{};
+      std::uint64_t stored_before{};
+      PackedLogic4 element;
+      PackedLogic4 key;
+    };
+    std::vector<Entry> entries;
+    entries.reserve(value.keys.size());
+    for (std::size_t index = 0U; index < value.keys.size(); ++index) {
+      const auto ordinal = sparse_key_ordinal(value.keys[index]);
+      entries.push_back(Entry{
+          ordinal, index, value.elements[index],
+          evaluate_container_predicate(
+              value.type, value.elements[index],
+              container_declared_index(value.type, ordinal), key)});
+    }
+    const auto background_key = evaluate_container_predicate(
+        value.type, background, 0, key);
+    std::stable_sort(
+        entries.begin(), entries.end(),
+        [&](const Entry& left, const Entry& right) {
+          return ordered(left.key, right.key);
+        });
+    const auto group_begin = std::partition_point(
+        entries.begin(), entries.end(), [&](const Entry& entry) {
+          return ordered(entry.key, background_key);
+        });
+    const auto group_end = std::partition_point(
+        group_begin, entries.end(), [&](const Entry& entry) {
+          return !ordered(background_key, entry.key);
+        });
+    const auto before =
+        static_cast<std::uint64_t>(group_begin - entries.begin());
+    const auto after =
+        static_cast<std::uint64_t>(entries.end() - group_end);
+    value.keys.clear();
+    value.elements.clear();
+    std::uint64_t position{};
+    for (auto entry = entries.begin(); entry != entries.end(); ++entry) {
+      if (entry < group_begin) {
+        position = static_cast<std::uint64_t>(entry - entries.begin());
+      } else if (entry < group_end) {
+        position = before
+            + static_cast<std::uint64_t>(entry - group_begin)
+            + entry->ordinal - entry->stored_before;
+      } else {
+        position = count - after
+            + static_cast<std::uint64_t>(entry - group_end);
+      }
+      value.keys.push_back(sparse_key(position));
+      value.elements.push_back(std::move(entry->element));
+    }
+    return;
+  }
+  order_sparse_by_rank(value, descending, key);
+}
+
+// Locator methods (7.12.1) of a sparse fixed array. With an index-free
+// predicate and keyed storage, only the stored elements and one copy of the
+// background (at the first unstored ordinal) can decide the result.
+void locate_sparse_container_values(
+    ContainerValue& destination,
+    const ContainerValue source,
+    const ContainerLocatorOperator operation,
+    const std::span<const ContainerPredicateNode> predicate,
+    const std::span<const ContainerPredicateNode> transformation,
+    const bool index_result) {
+  const auto& type = source.type;
+  const auto count = sparse_container_element_count(type);
+  destination.elements.clear();
+  destination.keys.clear();
+  const auto append =
+      [&](PackedLogic4 value) {
+        if (!destination.type.maximum_elements
+            || destination.elements.size()
+                < *destination.type.maximum_elements) {
+          destination.elements.push_back(std::move(value));
+        }
+      };
+  const auto append_match =
+      [&](const std::uint64_t ordinal, const PackedLogic4& element) {
+        if (index_result) {
+          append(PackedLogic4::from_aval_bval(
+              32,
+              static_cast<std::uint32_t>(
+                  container_declared_index(type, ordinal)),
+              0));
+        } else {
+          append(element);
+        }
+      };
+  const auto background = sparse_container_background(source);
+  const bool keyed = sparse_keyed(source)
+      && !predicate_reads_index(predicate)
+      && !predicate_reads_index(transformation);
+  if (operation >= ContainerLocatorOperator::find) {
+    const bool select_last =
+        operation == ContainerLocatorOperator::find_last
+        || operation == ContainerLocatorOperator::find_last_index;
+    const bool select_one =
+        select_last
+        || operation == ContainerLocatorOperator::find_first
+        || operation == ContainerLocatorOperator::find_first_index;
+    const auto matches =
+        [&](const PackedLogic4& element, const std::uint64_t ordinal) {
+          return truth_value(evaluate_container_predicate(
+                     type, element,
+                     container_declared_index(type, ordinal), predicate))
+              == Logic4::one;
+        };
+    if (keyed
+        && (count == source.keys.size() || !matches(background, 0U))) {
+      for (std::size_t step = 0U; step < source.keys.size(); ++step) {
+        const auto index =
+            select_last ? source.keys.size() - step - 1U : step;
+        const auto ordinal = sparse_key_ordinal(source.keys[index]);
+        if (!matches(source.elements[index], ordinal)) {
+          continue;
+        }
+        append_match(ordinal, source.elements[index]);
+        if (select_one) {
+          break;
+        }
+      }
+      return;
+    }
+    if (select_last) {
+      for (std::uint64_t step = 0U; step < count; ++step) {
+        const auto ordinal = count - step - 1U;
+        const auto element = container_packed_element(source, ordinal);
+        if (matches(element, ordinal)) {
+          append_match(ordinal, element);
+          break;
+        }
+      }
+      return;
+    }
+    ContainerElementCursor cursor{source};
+    for (std::uint64_t ordinal = 0U; ordinal < count; ++ordinal) {
+      const auto element = cursor.at(ordinal);
+      if (!matches(element, ordinal)) {
+        continue;
+      }
+      append_match(ordinal, element);
+      if (select_one) {
+        break;
+      }
+    }
+    return;
+  }
+  const auto key_of =
+      [&](const PackedLogic4& element, const std::uint64_t ordinal) {
+        return transformation.empty()
+            ? element
+            : evaluate_container_predicate(
+                  type, element,
+                  container_declared_index(type, ordinal), transformation);
+      };
+  // Every element that can decide the result, in ordinal order.
+  const auto visit = [&](const auto& callback) {
+    if (!keyed) {
+      ContainerElementCursor cursor{source};
+      for (std::uint64_t ordinal = 0U; ordinal < count; ++ordinal) {
+        callback(ordinal, cursor.at(ordinal));
+      }
+      return;
+    }
+    const auto unstored = count > source.keys.size()
+        ? std::optional<std::uint64_t>{first_unstored_ordinal(source)}
+        : std::nullopt;
+    bool background_visited = !unstored;
+    for (std::size_t index = 0U; index < source.keys.size(); ++index) {
+      const auto ordinal = sparse_key_ordinal(source.keys[index]);
+      if (!background_visited && *unstored < ordinal) {
+        callback(*unstored, background);
+        background_visited = true;
+      }
+      callback(ordinal, source.elements[index]);
+    }
+    if (!background_visited) {
+      callback(*unstored, background);
+    }
+  };
+  if (operation == ContainerLocatorOperator::minimum
+      || operation == ContainerLocatorOperator::maximum) {
+    std::optional<PackedLogic4> selected;
+    std::optional<PackedLogic4> selected_key;
+    visit([&](const std::uint64_t ordinal, const PackedLogic4& element) {
+      auto current = key_of(element, ordinal);
+      const bool replace = !selected_key
+          || (operation == ContainerLocatorOperator::minimum
+                  ? element_less(type, current, *selected_key)
+                  : element_less(type, *selected_key, current));
+      if (replace) {
+        selected = element;
+        selected_key = std::move(current);
+      }
+    });
+    if (selected) {
+      append(std::move(*selected));
+    }
+    return;
+  }
+  const auto key_less =
+      [&](const PackedLogic4& left, const PackedLogic4& right) {
+        return element_less(type, left, right);
+      };
+  std::set<PackedLogic4, decltype(key_less)> seen(key_less);
+  visit([&](const std::uint64_t ordinal, const PackedLogic4& element) {
+    if (seen.insert(key_of(element, ordinal)).second) {
+      append_match(ordinal, element);
+    }
+  });
+}
+
 }  // namespace
 
 PackedLogic4 reduce_container_value(
@@ -259,6 +822,40 @@ PackedLogic4 reduce_container_value(
                         + static_cast<std::int32_t>(offset)
             : static_cast<std::int32_t>(offset);
       };
+  if (value.type.sparse) {
+    const auto count = sparse_container_element_count(value.type);
+    const auto fold =
+        [&](const PackedLogic4& element, const std::uint64_t ordinal) {
+          result = binary_value(
+              binary, result,
+              transformation.empty()
+                  ? element
+                  : evaluate_container_predicate(
+                        value.type, element,
+                        container_declared_index(value.type, ordinal),
+                        transformation));
+        };
+    if (!sparse_keyed(value) || predicate_reads_index(transformation)) {
+      ContainerElementCursor cursor{value};
+      for (std::uint64_t ordinal = 0U; ordinal < count; ++ordinal) {
+        fold(cursor.at(ordinal), ordinal);
+      }
+      return result;
+    }
+    // The stored elements, then every unstored copy of the background.
+    for (std::size_t index = 0U; index < value.keys.size(); ++index) {
+      fold(value.elements[index], sparse_key_ordinal(value.keys[index]));
+    }
+    const auto background = sparse_container_background(value);
+    fold_repeated(
+        result, binary, operation,
+        transformation.empty()
+            ? background
+            : evaluate_container_predicate(
+                  value.type, background, 0, transformation),
+        count - value.keys.size());
+    return result;
+  }
   for (std::size_t offset = 0;
        offset < value.elements.size(); ++offset) {
     const auto& element = value.elements[offset];
@@ -282,6 +879,10 @@ void order_container_value(
   if (value.type.associative) {
     throw std::invalid_argument{
         "container ordering does not support associative arrays"};
+  }
+  if (value.type.sparse) {
+    order_sparse_container_value(value, operation, key, random);
+    return;
   }
   if (operation == ContainerOrderingOperator::shuffle) {
     if (!key.empty() || !random) {
@@ -315,16 +916,10 @@ void order_container_value(
         };
     for (std::size_t remaining = size;
          remaining > 1U; --remaining) {
-      const auto span = static_cast<std::uint32_t>(remaining);
-      const auto full_range = UINT64_C(1) << 32U;
-      const auto accepted = full_range - full_range % span;
-      std::uint32_t sample{};
-      do {
-        sample = random();
-      } while (static_cast<std::uint64_t>(sample) >= accepted);
       swap_elements(
           remaining - 1U,
-          static_cast<std::size_t>(sample % span));
+          static_cast<std::size_t>(uniform_below(
+              random, static_cast<std::uint32_t>(remaining))));
     }
     return;
   }
@@ -334,6 +929,10 @@ void order_container_value(
           "SimIR container reverse cannot have key metadata"};
     }
     std::reverse(value.elements.begin(), value.elements.end());
+    std::reverse(
+        value.string_elements.begin(), value.string_elements.end());
+    std::reverse(
+        value.nested_elements.begin(), value.nested_elements.end());
     return;
   }
   if (operation != ContainerOrderingOperator::ascending
@@ -463,6 +1062,12 @@ void locate_container_values(
     throw std::invalid_argument{
         "container locator result element type mismatch"};
   }
+  if (source.type.sparse) {
+    locate_sparse_container_values(
+        destination, source, operation, predicate, transformation,
+        index_result);
+    return;
+  }
   const auto elements = source.elements;
   const auto source_type = source.type;
   destination.elements.clear();
@@ -575,6 +1180,10 @@ namespace {
 
 [[nodiscard]] std::size_t memory_element_count(
     const ContainerValue& value) {
+  if (value.type.sparse) {
+    return static_cast<std::size_t>(
+        sparse_container_element_count(value.type));
+  }
   switch (value.type.element_kind) {
   case ContainerElementKind::Packed:
   case ContainerElementKind::Scalar:
@@ -594,7 +1203,7 @@ namespace {
   switch (value.type.element_kind) {
   case ContainerElementKind::Packed:
   case ContainerElementKind::Scalar:
-    return value.elements.at(offset);
+    return container_packed_element(value, offset);
   case ContainerElementKind::Container:
   case ContainerElementKind::Aggregate:
     return pack_container_signal_value(
@@ -613,7 +1222,7 @@ void replace_memory_packed_element(
   switch (value.type.element_kind) {
   case ContainerElementKind::Packed:
   case ContainerElementKind::Scalar:
-    value.elements.at(offset) = std::move(replacement);
+    set_container_packed_element(value, offset, std::move(replacement));
     return;
   case ContainerElementKind::Container:
   case ContainerElementKind::Aggregate:
@@ -1043,7 +1652,8 @@ MemoryLoadResult load_memory_text_with_status(
                   - target.type.index_left);
     if (replacement.type.element_kind
         == ContainerElementKind::String) {
-      replacement.string_elements[offset] = parse_memory_string(item);
+      set_container_string_element(
+          replacement, offset, parse_memory_string(item));
     } else {
       const auto width = memory_packed_element(
           replacement, offset).width();
@@ -1191,9 +1801,11 @@ std::string write_memory_text(
         : static_cast<std::size_t>(
               static_cast<std::int64_t>(index) - source.type.index_left);
     result += source.type.element_kind == ContainerElementKind::String
-        ? format_memory_string(source.string_elements[offset])
+        ? format_memory_string(container_string_element(source, offset))
         : format(memory_packed_element(source, offset));
     result.push_back('\n');
+    if (result.size() > maximum_memory_file_bytes)
+      throw std::length_error{"write-memory file exceeds the 1 MiB limit"};
     if (index == last) break;
   }
   if (result.size() > maximum_memory_file_bytes)

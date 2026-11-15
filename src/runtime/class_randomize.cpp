@@ -246,44 +246,6 @@ using PropertyDomains
   return found->second;
 }
 
-// Whether `left` orders before `right` as known values of one width.
-[[nodiscard]] bool value_less(const PackedLogic4& left,
-                              const PackedLogic4& right,
-                              const bool signed_value) {
-  // Known single-word values compare as integers.
-  if (left.width() > 0U && left.width() <= 64U
-      && left.width() == right.width() && !left.is_logic9()
-      && !right.is_logic9()) {
-    const auto l = left.low_word();
-    const auto r = right.low_word();
-    if ((l.bval | r.bval) == 0U) {
-      const auto flip = signed_value
-          ? std::uint64_t{1} << (left.width() - 1U) : std::uint64_t{};
-      return (l.aval ^ flip) < (r.aval ^ flip);
-    }
-  }
-  for (std::size_t bit = left.width(); bit-- > 0U;) {
-    auto a = left.get(bit) == Logic4::one;
-    auto b = right.get(bit) == Logic4::one;
-    if (signed_value && bit + 1U == left.width()) std::swap(a, b);
-    if (a != b) return b;
-  }
-  return false;
-}
-
-// The least and greatest values of a domain in the variable's order.
-[[nodiscard]] std::pair<PackedLogic4, PackedLogic4> domain_bounds(
-    const std::span<const PackedLogic4> domain, const bool signed_value) {
-  auto lowest = domain.front();
-  auto highest = domain.front();
-  for (const auto& value : domain) {
-    if (value.width() != lowest.width()) continue;
-    if (value_less(value, lowest, signed_value)) lowest = value;
-    if (value_less(highest, value, signed_value)) highest = value;
-  }
-  return {std::move(lowest), std::move(highest)};
-}
-
 // A uniformly chosen two-state value of any width.
 [[nodiscard]] PackedLogic4 random_packed(
     SystemVerilogClassRandomStream& stream, const std::size_t width) {
@@ -676,22 +638,17 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
           && (property.kind == SystemVerilogClassPropertyKind::Bit2
               || property.kind == SystemVerilogClassPropertyKind::Logic4
               || property.kind == SystemVerilogClassPropertyKind::Integer)) {
-        property.random_state = SystemVerilogClassRandomState{
-            SystemVerilogClassRandomKind::None,
-            property.packed.width(),
-            property.kind == SystemVerilogClassPropertyKind::Integer,
-            std::string{support::systemverilog_builtin_type_name(
-                property.kind == SystemVerilogClassPropertyKind::Integer
-                    ? support::SystemVerilogBuiltinType::int_type
-                    : property.kind == SystemVerilogClassPropertyKind::Bit2
-                        ? support::SystemVerilogBuiltinType::bit
-                        : support::SystemVerilogBuiltinType::logic)},
-            true,
-            0,
-            0,
-            0,
-            0,
-            {}};
+        SystemVerilogClassRandomState state;
+        state.width = property.packed.width();
+        state.signed_value
+            = property.kind == SystemVerilogClassPropertyKind::Integer;
+        state.builtin
+            = property.kind == SystemVerilogClassPropertyKind::Integer
+            ? support::SystemVerilogBuiltinType::int_type
+            : property.kind == SystemVerilogClassPropertyKind::Bit2
+                ? support::SystemVerilogBuiltinType::bit
+                : support::SystemVerilogBuiltinType::logic;
+        property.random_state = std::move(state);
       }
       const auto& random = property.random_state;
       const bool listed_container
@@ -894,13 +851,13 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
     SystemVerilogClassPropertyValue value;
     value.kind = SystemVerilogClassPropertyKind::Bit2;
     value.packed = PackedLogic4::from_aval_bval(32, count, 0);
-    value.random_state = SystemVerilogClassRandomState{
-        random ? SystemVerilogClassRandomKind::Rand
-               : SystemVerilogClassRandomKind::None,
-        32, true,
-        std::string{support::systemverilog_builtin_type_name(
-            support::SystemVerilogBuiltinType::int_type)},
-        true, 0, 0, 0, 0, {}};
+    SystemVerilogClassRandomState state;
+    state.kind = random ? SystemVerilogClassRandomKind::Rand
+                        : SystemVerilogClassRandomKind::None;
+    state.width = 32U;
+    state.signed_value = true;
+    state.builtin = support::SystemVerilogBuiltinType::int_type;
+    value.random_state = std::move(state);
     return value;
   };
   // The name of element `index` of container `c` in the solve.
@@ -1424,7 +1381,7 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
         if (chosen) {
           const auto& retained = solver.variables()[id];
           if (!staged_randc) {
-            const auto [lowest, highest] = domain_bounds(
+            const auto [lowest, highest] = systemverilog_constraint_domain_bounds(
                 retained.domain, retained.profile.signed_value);
             solver.add_distribution({
                 retained.canonical_identity + "::$randomize",

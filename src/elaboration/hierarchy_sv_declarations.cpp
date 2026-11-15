@@ -2219,7 +2219,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
             const auto form = index_type.value_form.value_or(
                 semantic::sv::TypeForm::unresolved);
             // A real or chandle index type is not integral (IEEE 1800-2023
-            // 7.8.4).
+            // 7.8.4); a class index type is its own form (7.8.5).
             const bool nonintegral_scalar
                 = support::systemverilog_real_family(index_type.builtin)
                 || index_type.builtin
@@ -2228,7 +2228,6 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                 = form == semantic::sv::TypeForm::unpacked_structure
                 || form == semantic::sv::TypeForm::tagged_union
                 || form == semantic::sv::TypeForm::unpacked_union
-                || form == semantic::sv::TypeForm::class_handle
                 || index_type.container_form.has_value();
             if (nonintegral_scalar || invalid_form) {
                 report(

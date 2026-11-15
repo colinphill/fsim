@@ -7,6 +7,7 @@
 #include <map>
 #include <optional>
 #include <span>
+#include <utility>
 #include <vector>
 
 namespace fsim::runtime {
@@ -29,6 +30,12 @@ using SystemVerilogConstraintValueIntervals
 systemverilog_constraint_value_interval(
     std::span<const PackedLogic4> domain,
     const SystemVerilogConstraintVariableProfile& profile);
+
+/// The least and greatest values of a non-empty domain in the order of a
+/// variable of that signedness.
+[[nodiscard]] std::pair<PackedLogic4, PackedLogic4>
+systemverilog_constraint_domain_bounds(
+    std::span<const PackedLogic4> domain, bool signed_value);
 
 /// Candidate values for a variable wider than 64 bits. An unsigned variable
 /// whose hard comparisons with constants bound it below 2^64 draws from that

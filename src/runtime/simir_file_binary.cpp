@@ -101,6 +101,10 @@ FileBinaryReadResult read_binary_file(
           : static_cast<std::size_t>(index)
       : fixed_offset(container->type, index);
   const auto element_count = [&]() {
+    if (container->type.sparse) {
+      return static_cast<std::size_t>(
+          sparse_container_element_count(container->type));
+    }
     switch (container->type.element_kind) {
     case ContainerElementKind::Packed:
     case ContainerElementKind::Scalar:
@@ -132,7 +136,7 @@ FileBinaryReadResult read_binary_file(
     switch (container->type.element_kind) {
     case ContainerElementKind::Packed:
     case ContainerElementKind::Scalar:
-      container->elements[offset] = std::move(value);
+      set_container_packed_element(*container, offset, std::move(value));
       break;
     case ContainerElementKind::Container:
     case ContainerElementKind::Aggregate:

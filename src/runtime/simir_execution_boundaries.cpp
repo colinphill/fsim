@@ -74,6 +74,22 @@ namespace {
     return result;
 }
 
+// The strings a DPI import gave back for an array actual (an actual of kind
+// 5), stored into the array whatever its storage.
+void store_dpi_string_array(
+    ContainerValue& container, std::vector<std::string> strings)
+{
+    if (!container.type.sparse) {
+        container.string_elements = std::move(strings);
+        return;
+    }
+    ContainerValue image;
+    image.type = container.type;
+    image.type.sparse = false;
+    image.string_elements = std::move(strings);
+    store_dense_container_image(container, std::move(image));
+}
+
 constexpr std::size_t vhdl_time_record_width = 515U;
 
 struct VhdlCalendarFields {
@@ -404,8 +420,10 @@ bind_inline_constraint_containers(
             }
             return;
         }
-        const auto value = read(static_cast<ContainerRegisterId>(std::stoul(
-            node.text.substr(inline_container_prefix.size()))));
+        // A sparse fixed array names every element (IEEE 1800-2023 7.4).
+        const auto value = dense_container_image(
+            read(static_cast<ContainerRegisterId>(std::stoul(
+                node.text.substr(inline_container_prefix.size())))));
         if (value.type.element_kind != ContainerElementKind::Packed) {
             throw std::invalid_argument {
                 "randomize with-clause array must hold packed elements"
@@ -553,7 +571,9 @@ void Interpreter::Impl::run_scope_randomize(RandomizeStorage& storage,
     std::vector<StagedContainer> staged_containers;
     std::deque<PackedLogic4> container_elements;
     for (const auto& container : operation.containers) {
-        auto value = storage.container(container.container);
+        // A sparse fixed array joins the solve with every element (IEEE
+        // 1800-2023 7.4); its dense image is stored back below.
+        auto value = dense_container_image(storage.container(container.container));
         if ((value.type.element_kind != ContainerElementKind::Packed
                 && value.type.element_kind != ContainerElementKind::Scalar)
             || std::ranges::any_of(value.elements, [&](const auto& element) {
@@ -727,7 +747,9 @@ void Interpreter::Impl::run_scope_randomize(RandomizeStorage& storage,
                 staged.value.elements[index]
                     = std::move(container_elements[staged.first + index]);
             }
-            storage.write_container(staged.id, std::move(staged.value));
+            auto stored = storage.container(staged.id);
+            store_dense_container_image(stored, std::move(staged.value));
+            storage.write_container(staged.id, std::move(stored));
         }
     }
 
@@ -1089,7 +1111,8 @@ const char* Interpreter::Impl::run_class_operation(
             string_actual ? access.read_string(actual)
             : strings_actual
             ? encode_dpi_string_array(
-                  access.read_container(actual).string_elements)
+                  dense_container_image(access.read_container(actual))
+                      .string_elements)
             : std::string { });
     }
     const auto identity = dpi
@@ -1119,8 +1142,8 @@ const char* Interpreter::Impl::run_class_operation(
                 actuals[index]);
         } else if (!operation.actual_kinds.empty()
             && operation.actual_kinds[index] == 5U) {
-            access.container(operation.actuals[index]).string_elements
-                = decode_dpi_string_array(string_actuals[index]);
+            store_dpi_string_array(access.container(operation.actuals[index]),
+                decode_dpi_string_array(string_actuals[index]));
         } else if (operation.actual_kinds.empty()
             || (operation.actual_kinds[index] != 2U
                 && operation.actual_kinds[index] != 4U)) {
@@ -3145,7 +3168,8 @@ void Interpreter::Impl::handle_boundary(
                     ? process.executor->read_string_register(actual)
                 : strings_actual
                     ? encode_dpi_string_array(
-                          read_container_register(process, actual)
+                          dense_container_image(
+                              read_container_register(process, actual))
                               .string_elements)
                     : std::string { });
         }
@@ -3188,9 +3212,9 @@ void Interpreter::Impl::handle_boundary(
                     actuals[index]);
             } else if (!method->actual_kinds.empty()
                 && method->actual_kinds[index] == 5U) {
-                get_container_register(process, method->actuals[index])
-                    .string_elements
-                    = decode_dpi_string_array(string_actuals[index]);
+                store_dpi_string_array(
+                    get_container_register(process, method->actuals[index]),
+                    decode_dpi_string_array(string_actuals[index]));
             } else if (method->actual_kinds.empty()
                 || (method->actual_kinds[index] != 2U
                     && method->actual_kinds[index] != 4U)) {

@@ -1273,4 +1273,45 @@ std::vector<SystemVerilogConstraintClause> clauses_with_fixed(
   return substituted;
 }
 
+namespace {
+
+// Whether `left` orders before `right` as known values of one width.
+[[nodiscard]] bool value_less(const PackedLogic4& left,
+                              const PackedLogic4& right,
+                              const bool signed_value) {
+  // Known single-word values compare as integers.
+  if (left.width() > 0U && left.width() <= 64U
+      && left.width() == right.width() && !left.is_logic9()
+      && !right.is_logic9()) {
+    const auto l = left.low_word();
+    const auto r = right.low_word();
+    if ((l.bval | r.bval) == 0U) {
+      const auto flip = signed_value
+          ? std::uint64_t{1} << (left.width() - 1U) : std::uint64_t{};
+      return (l.aval ^ flip) < (r.aval ^ flip);
+    }
+  }
+  for (std::size_t bit = left.width(); bit-- > 0U;) {
+    auto a = left.get(bit) == Logic4::one;
+    auto b = right.get(bit) == Logic4::one;
+    if (signed_value && bit + 1U == left.width()) std::swap(a, b);
+    if (a != b) return b;
+  }
+  return false;
+}
+
+}  // namespace
+
+std::pair<PackedLogic4, PackedLogic4> systemverilog_constraint_domain_bounds(
+    const std::span<const PackedLogic4> domain, const bool signed_value) {
+  auto lowest = domain.front();
+  auto highest = domain.front();
+  for (const auto& value : domain) {
+    if (value.width() != lowest.width()) continue;
+    if (value_less(value, lowest, signed_value)) lowest = value;
+    if (value_less(highest, value, signed_value)) highest = value;
+  }
+  return {std::move(lowest), std::move(highest)};
+}
+
 }  // namespace fsim::runtime
