@@ -7,7 +7,8 @@
 // past the end appends), push/pop at both ends, delete of one element and
 // of all, queue concatenation (including the queue itself), a bounded
 // queue, new[n] with and without an initializer, whole copies, associative
-// traversal, and elements kept across a suspension.
+// traversal, integral and string keys (std::string order, the empty key,
+// bytes above 0x7f), and elements kept across a suspension.
 module sv_kernel_string_containers;
   int failures;
 
@@ -142,9 +143,76 @@ module sv_kernel_string_containers;
     check_int("refilled", a.size(), 1);
   endtask
 
+  task automatic string_keys();
+    int a[string];
+    int b[string];
+    string s[string];
+    string r[string];
+    bit [7:0] two[string];
+    string k;
+    string walk;
+    a["beta"] = 2;
+    a["alpha"] = 1;
+    a["gamma"] = 3;
+    a[""] = 9;
+    a["alphabet"] = 4;
+    a["Zed"] = 5;
+    a["\xff"] = 7;
+    check_int("string keys", a.size(), 7);
+    check_int("string key read", a["alpha"], 1);
+    check_int("missing string key", a["missing"], 0);
+    check_int("empty key", a[""], 9);
+    check_int("exists", a.exists("beta"), 1);
+    walk = "";
+    if (a.first(k)) begin
+      walk = {walk, "[", k, "]"};
+      while (a.next(k)) walk = {walk, "[", k, "]"};
+    end
+    check("string order", walk, "[][Zed][alpha][alphabet][beta][gamma][\xff]");
+    k = "b";
+    if (a.prev(k)) check("prev of a missing key", k, "alphabet");
+    k = "\xff";
+    check_int("no next", a.next(k), 0);
+    check("key unchanged", k, "\xff");
+    a.delete("beta");
+    check_int("deleted string key", a.exists("beta"), 0);
+    b = a;
+    a["alpha"] = 100;
+    check_int("copy is separate", b["alpha"], 1);
+    s["one"] = "uno";
+    s["two"] = "dos";
+    s["a key of more than fifteen bytes"] = "a value of more than fifteen bytes";
+    check("string to string", s["two"], "dos");
+    check("missing", s["nope"], "");
+    check("long key", s["a key of more than fifteen bytes"], "a value of more than fifteen bytes");
+    r = s;
+    s["one"] = "changed";
+    check("string copy is separate", r["one"], "uno");
+    for (int i = 0; i < 60; i++) s[$sformatf("key%0d", i)] = $sformatf("val%0d", i);
+    check_int("grown", s.size(), 63);
+    check("grown element", s["key37"], "val37");
+    s.delete("key37");
+    check("deleted", s["key37"], "");
+    two["x"] = 8'hff;
+    check_int("two-state", two["x"], 255);
+    check_int("two-state missing", two["y"], 0);
+    #10;
+    walk = "";
+    if (r.first(k)) begin
+      walk = {walk, k, "=", r[k], ";"};
+      while (r.next(k)) walk = {walk, k, "=", r[k], ";"};
+    end
+    check("kept after a wait", walk,
+      "a key of more than fifteen bytes=a value of more than fifteen bytes;one=uno;two=dos;");
+    check_int("kept", a["alphabet"], 4);
+    s.delete();
+    check_int("deleted all", s.size(), 0);
+  endtask
+
   initial begin
     queues();
     associative();
+    string_keys();
     if (failures == 0) $display("PASS");
     $finish;
   end

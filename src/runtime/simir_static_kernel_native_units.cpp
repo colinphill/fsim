@@ -2737,7 +2737,7 @@ void Interpreter::Impl::StaticKernel::concatenate_members(CompiledBody& program,
                 if (dyn_reads_source(op)) {
                     reg(inst.x);
                 }
-                if (dyn_reads_index(op) || dyn_writes_index(op)) {
+                if (dyn_reads_index(inst) || dyn_writes_index(inst)) {
                     reg(inst.y);
                 }
                 break;

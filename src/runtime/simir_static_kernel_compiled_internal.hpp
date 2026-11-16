@@ -390,7 +390,10 @@ inline void operation_registers_of(const T& op, std::vector<RegisterId>& reads,
                 reads.push_back(op.selection.index);
             }
         } else if constexpr (std::is_same_v<T, ContainerRead>) {
-            reads.push_back(op.index);
+            // A string key is a string register.
+            if (!op.string_index) {
+                reads.push_back(op.index);
+            }
             write = op.destination;
         } else if constexpr (std::is_same_v<T, WriteContainerObjectElement>) {
             reads.push_back(op.index);
@@ -642,13 +645,13 @@ inline void kinst_flow(const KInst& inst, const std::uint32_t at,
         if (dyn_reads_source(op)) {
             use.push_back(inst.x);
         }
-        if (dyn_reads_index(op) || dyn_writes_index(op)) {
+        if (dyn_reads_index(inst) || dyn_writes_index(inst)) {
             use.push_back(inst.y);
         }
         if (dyn_writes_destination(op)) {
             def = inst.d;
         }
-        if (dyn_writes_index(op)) {
+        if (dyn_writes_index(inst)) {
             also = inst.y;
         }
         fall();

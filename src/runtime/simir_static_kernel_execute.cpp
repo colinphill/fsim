@@ -578,8 +578,7 @@ void Interpreter::Impl::StaticKernel::execute_body(
             break;
         case KOp::dyn: {
             auto& header = dynamic_headers_[containers_[inst.aux].dynamic_header];
-            const bool string_file = static_kernel_detail::dyn_uses_string_file(
-                static_cast<static_kernel_detail::DynOp>(inst.sub));
+            const bool string_file = static_kernel_detail::dyn_uses_string_file(inst);
             const auto* other = inst.z == no_container || string_file ? nullptr
                 : &dynamic_headers_[containers_[inst.z].dynamic_header];
             auto* strings = string_file

@@ -492,6 +492,7 @@ enum class DynFailure : std::uint32_t {
     byte_unknown,
     string_limit,
     text_assoc_budget,
+    key_bytes,
 };
 
 /// The native fail reason of the first DynFailure (native_fail_message).
@@ -505,6 +506,9 @@ inline constexpr std::uint64_t dyn_layout_sparse = 4U;
 inline constexpr std::uint64_t dyn_layout_linear = 8U;
 /// String elements: each element slot is a text slot (dyn_text_slot).
 inline constexpr std::uint64_t dyn_layout_text = 16U;
+/// String keys: each key slot is a text slot (two words), in std::string
+/// order (dyn_text_keys).
+inline constexpr std::uint64_t dyn_layout_text_keys = 32U;
 
 /// A string element of a kernel container: one element slot (two words)
 /// holding the element's bytes, which the slot owns (malloc'd, no
@@ -654,6 +658,35 @@ struct KInst {
     std::uint64_t imm_a { };
     std::uint64_t imm_b { };
 };
+
+/// An associative array with string keys (dyn_layout_text_keys): its key
+/// operand y is a string register of the member's string file (z), not a
+/// register, and a traversal writes that string.
+[[nodiscard]] inline bool dyn_text_keys(const KInst& inst) noexcept
+{
+    return inst.op == KOp::dyn && (inst.imm_a & dyn_layout_text_keys) != 0U;
+}
+
+/// dyn_reads_index / dyn_writes_index of an instruction: never for string
+/// keys, which are string registers.
+[[nodiscard]] inline bool dyn_reads_index(const KInst& inst) noexcept
+{
+    return !dyn_text_keys(inst) && dyn_reads_index(static_cast<DynOp>(inst.sub));
+}
+
+[[nodiscard]] inline bool dyn_writes_index(const KInst& inst) noexcept
+{
+    return !dyn_text_keys(inst) && dyn_writes_index(static_cast<DynOp>(inst.sub));
+}
+
+/// Whether z of the instruction is the member's string file: a string
+/// element or `default:` operand, or a string key.
+[[nodiscard]] inline bool dyn_uses_string_file(const KInst& inst) noexcept
+{
+    const auto op = static_cast<DynOp>(inst.sub);
+    return dyn_uses_string_file(op)
+        || (dyn_text_keys(inst) && (dyn_reads_index(op) || dyn_writes_index(op)));
+}
 
 /// The shape of the resolved slot a VHDL assignment (store_vhdl, wide_store
 /// sub 2) writes, which generated code resolves into the slot's next block

@@ -5454,7 +5454,7 @@ private:
                 }
                 // A traversal also writes its key register y, which stays in
                 // memory (pinned below); a missing key leaves it unchanged.
-                if (detail::dyn_reads_index(op) || detail::dyn_writes_index(op)) {
+                if (detail::dyn_reads_index(inst) || detail::dyn_writes_index(inst)) {
                     reads.push_back(inst.y);
                 }
                 writes = detail::dyn_writes_destination(op);
@@ -5566,8 +5566,7 @@ private:
                 for (std::uint32_t slot = 0U; slot < inst.z; ++slot) {
                     pin(inst.y + slot);
                 }
-            } else if (inst.op == KOp::dyn
-                && detail::dyn_writes_index(static_cast<detail::DynOp>(inst.sub))) {
+            } else if (inst.op == KOp::dyn && detail::dyn_writes_index(inst)) {
                 pin(inst.y);
             } else if (inst.op == KOp::branch) {
                 leader[std::min(inst.y, size)] = 1U;
@@ -8046,6 +8045,11 @@ private:
         using detail::DynFailure;
         using detail::DynOp;
         const auto op = static_cast<DynOp>(inst.sub);
+        if (detail::dyn_text_keys(inst) && op != DynOp::text_default
+            && op != DynOp::assoc_default) {
+            emit_dyn_text_keyed(inst, at, header);
+            return;
+        }
         const bool signed_keys = (inst.imm_a & 2U) != 0U;
         const auto width = inst.width;
         const auto key_mask = width >= 64U ? ~std::uint64_t { 0 }
@@ -8424,7 +8428,7 @@ private:
             emit_dyn_associative(inst, at, header);
             return;
         }
-        const Pair index = detail::dyn_reads_index(op) ? load_register(inst.y) : zero_pair();
+        const Pair index = detail::dyn_reads_index(inst) ? load_register(inst.y) : zero_pair();
         const Pair source = detail::dyn_reads_source(op) ? load_register(inst.x) : zero_pair();
         auto* known = builder_.CreateICmpEQ(index.b, constant(0U));
         // The signed index (sign extended), or the unsigned one.
@@ -8437,10 +8441,11 @@ private:
         auto* requested = builder_.CreateAnd(known,
             builder_.CreateICmpSGE(position, constant(0U)));
         const bool text = (inst.imm_a & detail::dyn_layout_text) != 0U;
+        const bool text_keys = (inst.imm_a & detail::dyn_layout_text_keys) != 0U;
         if (op == DynOp::text_read || op == DynOp::text_write || op == DynOp::append_clear
             || op == DynOp::append_value || op == DynOp::append_text
-            || op == DynOp::append_container
-            || (text && (op == DynOp::resize || op == DynOp::copy))) {
+            || op == DynOp::append_container || (text && op == DynOp::resize)
+            || ((text || text_keys) && op == DynOp::copy)) {
             emit_dyn_text(inst, at, header, requested, position, source);
             return;
         }
@@ -8675,6 +8680,284 @@ private:
 
     static constexpr std::uint64_t text_size_mask = 0xFFFF'FFFFU;
 
+    /// String key `ordinal`'s slot (two words) in an associative array with
+    /// string keys.
+    [[nodiscard]] llvm::Value* dyn_text_key_address(llvm::Value* header, llvm::Value* ordinal)
+    {
+        auto* keys = builder_.CreateLoad(ptr_, dyn_address(header, dyn_keys));
+        return builder_.CreateInBoundsGEP(i64_, keys, builder_.CreateShl(ordinal, constant(1U)));
+    }
+
+    [[nodiscard]] llvm::Value* text_slot_size(llvm::Value* slot)
+    {
+        return builder_.CreateAnd(
+            builder_.CreateLoad(i64_, builder_.CreateConstInBoundsGEP1_64(i64_, slot, 1U)),
+            constant(text_size_mask));
+    }
+
+    /// Whether the bytes (left, left_size) order before (right, right_size)
+    /// as std::string compares them: the first differing byte, unsigned,
+    /// else the shorter.
+    [[nodiscard]] llvm::Value* text_less(llvm::Value* left, llvm::Value* left_size,
+        llvm::Value* right, llvm::Value* right_size)
+    {
+        auto* shorter = builder_.CreateICmpULT(left_size, right_size);
+        auto* count = builder_.CreateSelect(shorter, left_size, right_size);
+        auto* before = builder_.GetInsertBlock();
+        auto* head = llvm::BasicBlock::Create(context_, "text_order", &function_);
+        auto* step = llvm::BasicBlock::Create(context_, "text_byte", &function_);
+        auto* latch = llvm::BasicBlock::Create(context_, "text_next", &function_);
+        auto* done = llvm::BasicBlock::Create(context_, "text_ordered", &function_);
+        builder_.CreateBr(head);
+        builder_.SetInsertPoint(head);
+        llvm::BranchInst::Create(head, latch);
+        auto* index = loop_phi(i64_, constant(0U), before, latch);
+        builder_.CreateCondBr(builder_.CreateICmpULT(index, count), step, done);
+        builder_.SetInsertPoint(step);
+        auto* a = builder_.CreateLoad(i8_, builder_.CreateInBoundsGEP(i8_, left, index));
+        auto* b = builder_.CreateLoad(i8_, builder_.CreateInBoundsGEP(i8_, right, index));
+        auto* next = builder_.CreateAdd(index, constant(1U));
+        auto* byte_less = builder_.CreateICmpULT(a, b);
+        auto* differs = builder_.GetInsertBlock();
+        builder_.CreateCondBr(builder_.CreateICmpEQ(a, b), latch, done);
+        close_loop_phi(index, next);
+        builder_.SetInsertPoint(done);
+        auto* less = builder_.CreatePHI(llvm::Type::getInt1Ty(context_), 2U);
+        less->addIncoming(shorter, head);
+        less->addIncoming(byte_less, differs);
+        return less;
+    }
+
+    /// The position of the first string key not below (key, key_size) (an
+    /// inline binary search).
+    [[nodiscard]] llvm::Value* dyn_lower_text_key(llvm::Value* header, llvm::Value* key,
+        llvm::Value* key_size)
+    {
+        auto* before = builder_.GetInsertBlock();
+        auto* size = dyn_load(header, dyn_size);
+        auto* head = llvm::BasicBlock::Create(context_, "dyn_text_search", &function_);
+        auto* step = llvm::BasicBlock::Create(context_, "dyn_text_probe", &function_);
+        auto* latch = llvm::BasicBlock::Create(context_, "dyn_text_narrow", &function_);
+        auto* done = llvm::BasicBlock::Create(context_, "dyn_text_found", &function_);
+        builder_.CreateBr(head);
+        builder_.SetInsertPoint(head);
+        llvm::BranchInst::Create(head, latch);
+        auto* low = loop_phi(i64_, constant(0U), before, latch);
+        auto* high = loop_phi(i64_, size, before, latch);
+        builder_.CreateCondBr(builder_.CreateICmpULT(low, high), step, done);
+        builder_.SetInsertPoint(step);
+        auto* middle = builder_.CreateAdd(low,
+            builder_.CreateLShr(builder_.CreateSub(high, low), constant(1U)));
+        auto* slot = dyn_text_key_address(header, middle);
+        auto* below = text_less(builder_.CreateLoad(ptr_, slot), text_slot_size(slot), key,
+            key_size);
+        auto* next_low = builder_.CreateSelect(below,
+            builder_.CreateAdd(middle, constant(1U)), low);
+        auto* next_high = builder_.CreateSelect(below, high, middle);
+        builder_.CreateBr(latch);
+        close_loop_phi(low, next_low);
+        close_loop_phi(high, next_high);
+        builder_.SetInsertPoint(done);
+        return low;
+    }
+
+    /// Whether position `at` (<= size) holds string key (key, key_size).
+    [[nodiscard]] llvm::Value* dyn_text_key_present(llvm::Value* header, llvm::Value* at,
+        llvm::Value* key, llvm::Value* key_size)
+    {
+        auto* before = builder_.GetInsertBlock();
+        auto* inside = llvm::BasicBlock::Create(context_, "dyn_text_key", &function_);
+        auto* join = llvm::BasicBlock::Create(context_, "dyn_text_keyed", &function_);
+        builder_.CreateCondBr(builder_.CreateICmpULT(at, dyn_load(header, dyn_size)),
+            inside, join);
+        builder_.SetInsertPoint(inside);
+        auto* slot = dyn_text_key_address(header, at);
+        auto* same_size = builder_.CreateICmpEQ(text_slot_size(slot), key_size);
+        auto* bytes = llvm::BasicBlock::Create(context_, "dyn_text_bytes", &function_);
+        auto* sized = builder_.GetInsertBlock();
+        builder_.CreateCondBr(same_size, bytes, join);
+        builder_.SetInsertPoint(bytes);
+        auto* equal = str_bytes_equal(builder_.CreateLoad(ptr_, slot), key, key_size);
+        auto* compared = builder_.GetInsertBlock();
+        builder_.CreateBr(join);
+        builder_.SetInsertPoint(join);
+        auto* present = builder_.CreatePHI(llvm::Type::getInt1Ty(context_), 3U);
+        present->addIncoming(llvm::ConstantInt::getFalse(context_), before);
+        present->addIncoming(llvm::ConstantInt::getFalse(context_), sized);
+        present->addIncoming(equal, compared);
+        return present;
+    }
+
+    /// String register `id` of `file` holds the text slot at `slot`.
+    void text_to_register(llvm::Value* slot, llvm::Value* file, const std::uint64_t id,
+        const std::uint32_t at)
+    {
+        auto* target = str_object(file, id);
+        auto* size = text_slot_size(slot);
+        str_reserve(target, size, at);
+        str_copy_bytes(str_data(target), builder_.CreateLoad(ptr_, slot), size);
+        str_set_size(target, size);
+    }
+
+    /// KOp::dyn's keyed operations on an associative array with string keys
+    /// (dyn_layout_text_keys): the key is string register y of the string
+    /// file z (7.9).
+    void emit_dyn_text_keyed(const KInst& inst, const std::uint32_t at, llvm::Value* header)
+    {
+        using detail::DynFailure;
+        using detail::DynOp;
+        const auto op = static_cast<DynOp>(inst.sub);
+        const bool text = (inst.imm_a & detail::dyn_layout_text) != 0U;
+        auto* file = dyn_header(inst.z);
+        auto* key_object = str_object(file, inst.y);
+        const auto key_limit = [&](llvm::Value* key_size) {
+            dyn_check(builder_.CreateICmpULE(key_size,
+                          constant(static_cast<std::uint64_t>(runtime::simir::maximum_string_bytes))),
+                at, DynFailure::key_bytes);
+        };
+        if (op == DynOp::first || op == DynOp::last || op == DynOp::next || op == DynOp::prev) {
+            // An empty array selects nothing and reads no key; the key
+            // changes only when one is selected (7.9.4 - 7.9.7).
+            auto* size = dyn_load(header, dyn_size);
+            auto* before = builder_.GetInsertBlock();
+            auto* searching = llvm::BasicBlock::Create(context_, "dyn_text_walk", &function_);
+            auto* join = llvm::BasicBlock::Create(context_, "dyn_text_walked", &function_);
+            builder_.CreateCondBr(builder_.CreateICmpNE(size, constant(0U)), searching, join);
+            builder_.SetInsertPoint(searching);
+            llvm::Value* selected = nullptr;
+            llvm::Value* chosen = nullptr;
+            if (op == DynOp::first) {
+                selected = llvm::ConstantInt::getTrue(context_);
+                chosen = constant(0U);
+            } else if (op == DynOp::last) {
+                selected = llvm::ConstantInt::getTrue(context_);
+                chosen = builder_.CreateSub(size, constant(1U));
+            } else {
+                auto* key_size = str_size(key_object);
+                key_limit(key_size);
+                auto* key = str_data(key_object);
+                auto* position = dyn_lower_text_key(header, key, key_size);
+                if (op == DynOp::next) {
+                    auto* present = dyn_text_key_present(header, position, key, key_size);
+                    chosen = builder_.CreateSelect(present,
+                        builder_.CreateAdd(position, constant(1U)), position);
+                    selected = builder_.CreateICmpULT(chosen, size);
+                } else {
+                    selected = builder_.CreateICmpNE(position, constant(0U));
+                    chosen = builder_.CreateSub(position, constant(1U));
+                }
+            }
+            auto* picking = dyn_when(selected);
+            text_to_register(dyn_text_key_address(header, chosen), file, inst.y, at);
+            dyn_end(picking);
+            auto* walked = builder_.GetInsertBlock();
+            builder_.CreateBr(join);
+            builder_.SetInsertPoint(join);
+            auto* found = builder_.CreatePHI(llvm::Type::getInt1Ty(context_), 2U);
+            found->addIncoming(llvm::ConstantInt::getFalse(context_), before);
+            found->addIncoming(selected, walked);
+            store_register(inst.d, { builder_.CreateZExt(found, i64_), constant(0U) });
+            return;
+        }
+        auto* key_size = str_size(key_object);
+        key_limit(key_size);
+        auto* key = str_data(key_object);
+        Pair source = zero_pair();
+        if (op == DynOp::assoc_write) {
+            source = load_register(inst.x);
+            dyn_check_value(header, source, at, DynFailure::write_mismatch);
+        }
+        auto* position = dyn_lower_text_key(header, key, key_size);
+        auto* present = dyn_text_key_present(header, position, key, key_size);
+        switch (op) {
+        case DynOp::assoc_read:
+            store_register(inst.d, dyn_choose(present,
+                [&] { return dyn_load_element(header, position); },
+                dyn_pair(header, dyn_fill)));
+            break;
+        case DynOp::text_read:
+            // A missing key reads the `default:` text (empty until set).
+            text_to_register(builder_.CreateSelect(present,
+                                 dyn_element_address(header, position),
+                                 dyn_address(header, dyn_fill)),
+                file, inst.offset, at);
+            break;
+        case DynOp::exists:
+            store_register(inst.d, { builder_.CreateZExt(present, i64_), constant(0U) });
+            break;
+        case DynOp::assoc_delete: {
+            auto* removing = dyn_when(present);
+            auto* last = builder_.CreateSub(dyn_load(header, dyn_size), constant(1U));
+            // The removed key and element slots move to the end (their
+            // blocks kept).
+            auto* removed_key = dyn_text_key_address(header, position);
+            const Pair removed_key_words { builder_.CreateLoad(i64_, removed_key),
+                builder_.CreateLoad(i64_, builder_.CreateConstInBoundsGEP1_64(i64_, removed_key, 1U)) };
+            const auto removed = dyn_load_element(header, position);
+            dyn_loop(position, last, false, [&](llvm::Value* ordinal) {
+                auto* above = builder_.CreateAdd(ordinal, constant(1U));
+                text_slot_move(dyn_text_key_address(header, above),
+                    dyn_text_key_address(header, ordinal));
+                dyn_store_element(header, ordinal, dyn_load_element(header, above));
+            });
+            text_slot_store(dyn_text_key_address(header, last), removed_key_words);
+            dyn_store_element(header, last, removed);
+            dyn_store(header, dyn_size, last);
+            dyn_end(removing);
+            break;
+        }
+        case DynOp::assoc_write:
+        case DynOp::text_write: {
+            auto* insert = dyn_when(builder_.CreateNot(present));
+            auto* size = dyn_load(header, dyn_size);
+            dyn_check(builder_.CreateICmpULT(size, dyn_load(header, dyn_limit)), at,
+                text ? DynFailure::text_assoc_budget : DynFailure::assoc_budget);
+            dyn_reserve(header, builder_.CreateAdd(size, constant(1U)), at);
+            // The spare key slot at the end takes the key first (so a failed
+            // allocation leaves the keys in order), then it and the spare
+            // element slot move to the key's place.
+            text_assign(dyn_text_key_address(header, size), key, key_size, at);
+            auto* spare_key = dyn_text_key_address(header, size);
+            const Pair spare_key_words { builder_.CreateLoad(i64_, spare_key),
+                builder_.CreateLoad(i64_, builder_.CreateConstInBoundsGEP1_64(i64_, spare_key, 1U)) };
+            const auto spare = dyn_load_element(header, size);
+            dyn_loop(position, size, true, [&](llvm::Value* ordinal) {
+                auto* above = builder_.CreateAdd(ordinal, constant(1U));
+                text_slot_move(dyn_text_key_address(header, ordinal),
+                    dyn_text_key_address(header, above));
+                dyn_store_element(header, above, dyn_load_element(header, ordinal));
+            });
+            text_slot_store(dyn_text_key_address(header, position), spare_key_words);
+            dyn_store_element(header, position, spare);
+            dyn_store(header, dyn_size, builder_.CreateAdd(size, constant(1U)));
+            dyn_end(insert);
+            if (text) {
+                text_from_register(dyn_element_address(header, position), file, inst.offset,
+                    at);
+            } else {
+                dyn_store_element(header, position, source);
+            }
+            break;
+        }
+        default:
+            throw std::logic_error("static kernel string-keyed operation has no inline form");
+        }
+    }
+
+    /// The two words of the slot at `from` into the slot at `to`.
+    void text_slot_move(llvm::Value* from, llvm::Value* to)
+    {
+        text_slot_store(to, { builder_.CreateLoad(i64_, from),
+                                builder_.CreateLoad(i64_,
+                                    builder_.CreateConstInBoundsGEP1_64(i64_, from, 1U)) });
+    }
+
+    void text_slot_store(llvm::Value* slot, const Pair words)
+    {
+        builder_.CreateStore(words.a, slot);
+        builder_.CreateStore(words.b, builder_.CreateConstInBoundsGEP1_64(i64_, slot, 1U));
+    }
+
     /// Room for `needed` bytes in the text slot at `slot` (DynTextSlot):
     /// fsim_sk_dyn_text_reserve when its capacity is short.
     void text_reserve(llvm::Value* slot, llvm::Value* needed, const std::uint32_t at)
@@ -8873,18 +9156,31 @@ private:
             dyn_store(header, dyn_head, constant(0U));
             dyn_reserve(header, count, at);
             const bool associative = (inst.imm_a & detail::dyn_layout_associative) != 0U;
+            const bool text_keys = (inst.imm_a & detail::dyn_layout_text_keys) != 0U;
             dyn_loop(constant(0U), count, false, [&](llvm::Value* ordinal) {
-                text_copy(dyn_element_address(header, ordinal),
-                    dyn_element_address(other, ordinal), at);
-                if (associative) {
+                if (text) {
+                    text_copy(dyn_element_address(header, ordinal),
+                        dyn_element_address(other, ordinal), at);
+                } else {
+                    dyn_store_element(header, ordinal, dyn_load_element(other, ordinal));
+                }
+                if (text_keys) {
+                    text_copy(dyn_text_key_address(header, ordinal),
+                        dyn_text_key_address(other, ordinal), at);
+                } else if (associative) {
                     builder_.CreateStore(
                         builder_.CreateLoad(i64_, dyn_key_address(other, ordinal)),
                         dyn_key_address(header, ordinal));
                 }
             });
             if (associative) {
-                // The keys and the `default:` text go with the elements.
-                text_copy(dyn_address(header, dyn_fill), dyn_address(other, dyn_fill), at);
+                // The keys and the `default:` go with the elements.
+                if (text) {
+                    text_copy(dyn_address(header, dyn_fill), dyn_address(other, dyn_fill), at);
+                } else {
+                    dyn_store(header, dyn_fill, dyn_load(other, dyn_fill));
+                    dyn_store(header, dyn_fill + 8U, dyn_load(other, dyn_fill + 8U));
+                }
                 auto* flags = dyn_address(header, dyn_flags);
                 auto* other_flags = builder_.CreateLoad(i32_, dyn_address(other, dyn_flags));
                 auto* default_bit = llvm::ConstantInt::get(i32_, dyn_default_flag);

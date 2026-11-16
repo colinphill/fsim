@@ -32,6 +32,9 @@ inline constexpr std::uint32_t dynamic_dense_flag = 64U;
 inline constexpr std::uint32_t dynamic_scalar_flag = 128U;
 /// String elements: each element slot is a DynTextSlot.
 inline constexpr std::uint32_t dynamic_text_flag = 256U;
+/// String keys (an associative array): each key slot is a DynTextSlot,
+/// two words of `keys`, in std::string order.
+inline constexpr std::uint32_t dynamic_text_keys_flag = 512U;
 
 /// A text slot's bytes (DynTextSlot, as the slot's two words).
 [[nodiscard]] inline std::string_view text_of(const kernel_word::Word slot) noexcept
@@ -48,8 +51,9 @@ inline constexpr std::uint32_t dynamic_text_flag = 256U;
 [[nodiscard]] kernel_word::Word assign_text(kernel_word::Word slot, std::string_view text);
 
 /// Whether the kernel holds a container register of this type in a
-/// StaticKernelDynamicContainer: a queue or dynamic array of packed or
-/// scalar elements of at most 64 bits.
+/// StaticKernelDynamicContainer: a queue, dynamic array, associative array
+/// (integral or string keys) or sparse array of packed or scalar elements
+/// of at most 64 bits or of strings.
 [[nodiscard]] bool native_dynamic_type(const ContainerType& type) noexcept;
 
 /// An empty header for a container of `type` (native_dynamic_type).

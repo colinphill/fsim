@@ -2009,11 +2009,13 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             // Generated code's layout choice (dyn_layout_*).
             const auto& type = containers_[container].type;
             inst.imm_a = (type.associative ? static_kernel_detail::dyn_layout_associative : 0U)
-                | (type.associative && type.signed_indices
+                | (type.associative && !type.string_indices && type.signed_indices
                         ? static_kernel_detail::dyn_layout_signed_keys : 0U)
                 | (type.sparse ? static_kernel_detail::dyn_layout_sparse : 0U)
                 | (type.element_kind == ContainerElementKind::String
-                        ? static_kernel_detail::dyn_layout_text : 0U);
+                        ? static_kernel_detail::dyn_layout_text : 0U)
+                | (type.associative && type.string_indices
+                        ? static_kernel_detail::dyn_layout_text_keys : 0U);
         };
         const auto sparse = [&](const std::uint32_t container) {
             return containers_[container].type.sparse;
@@ -2052,8 +2054,23 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
         };
         // An associative array's key operand: an integral value of the
         // index type's width (associative_key's check).
+        // The key operand: a string register (z the string file) for string
+        // keys, else a register of the index width.
         const auto key = [&](const std::uint32_t container, const RegisterId index,
-                             const bool string_index, const char* reason) {
+                             const bool string_index, const bool linear_index,
+                             const char* reason) {
+            if (linear_index) {
+                throw reject(reason);
+            }
+            if (containers_[container].type.string_indices) {
+                if (!string_index) {
+                    throw reject(reason);
+                }
+                inst.y = string_register(index);
+                inst.z = member.string_file;
+                inst.width = 0U;
+                return;
+            }
             if (string_index
                 || w(index) != containers_[container].type.index_width) {
                 throw reject(reason);
@@ -2073,7 +2090,7 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                 set(DynOp::text_read, container);
                 inst.offset = string_register(op.destination);
                 inst.z = member.string_file;
-                key(container, op.index, op.string_index || op.linear_index, "dyn_text_read");
+                key(container, op.index, op.string_index, op.linear_index, "dyn_text_read");
                 return true;
             }
             if (op.string_index || op.linear_index || w(op.index) == 0U || w(op.index) > 64U) {
@@ -2104,7 +2121,7 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                 set(DynOp::text_write, container);
                 inst.offset = string_register(op.source);
                 inst.z = member.string_file;
-                key(container, op.index, op.string_index || op.linear_index, "dyn_text_write");
+                key(container, op.index, op.string_index, op.linear_index, "dyn_text_write");
                 return true;
             }
             if (op.string_index || op.linear_index || op.associative_default
@@ -2162,14 +2179,17 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             if (container == no_container) {
                 return false;
             }
-            if (op.string_index || w(op.destination) != element_width(container)) {
+            if (w(op.destination) != element_width(container)) {
                 throw reject("dyn_read");
             }
             if (associative(container)) {
                 set(DynOp::assoc_read, container);
                 inst.d = narrow(op.destination);
-                key(container, op.index, op.string_index || op.linear_index, "dyn_read");
+                key(container, op.index, op.string_index, op.linear_index, "dyn_read");
                 return true;
+            }
+            if (op.string_index) {
+                throw reject("dyn_read");
             }
             if (sparse(container)) {
                 set(DynOp::read, container);
@@ -2188,7 +2208,7 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             if (container == no_container) {
                 return false;
             }
-            if (op.string_index || w(op.source) != element_width(container)) {
+            if (w(op.source) != element_width(container)) {
                 throw reject("dyn_write");
             }
             if (associative(container)) {
@@ -2199,8 +2219,11 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                 }
                 set(DynOp::assoc_write, container);
                 inst.x = narrow(op.source);
-                key(container, op.index, op.linear_index, "dyn_write");
+                key(container, op.index, op.string_index, op.linear_index, "dyn_write");
                 return true;
+            }
+            if (op.string_index) {
+                throw reject("dyn_write");
             }
             if (op.associative_default) {
                 throw reject("dyn_write");
@@ -2264,7 +2287,7 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             }
             if (op.index && associative(container)) {
                 set(DynOp::assoc_delete, container);
-                key(container, *op.index, op.string_index, "dyn_delete");
+                key(container, *op.index, op.string_index, false, "dyn_delete");
                 return true;
             }
             if (op.index) {
@@ -2332,7 +2355,7 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             }
             set(DynOp::exists, container);
             inst.d = narrow(op.destination);
-            key(container, op.index, op.string_index, "dyn_exists");
+            key(container, op.index, op.string_index, false, "dyn_exists");
             return true;
         } else if constexpr (std::is_same_v<T, TraverseContainer>) {
             const auto container = dyn_container(op.source);
@@ -2348,8 +2371,8 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                                                                : DynOp::prev,
                 container);
             inst.d = narrow(op.destination);
-            key(container, op.index, op.string_index, "dyn_traverse");
-            if (inst.d == inst.y) {
+            key(container, op.index, op.string_index, false, "dyn_traverse");
+            if (!containers_[container].type.string_indices && inst.d == inst.y) {
                 throw reject("dyn_traverse");
             }
             return true;
@@ -4639,7 +4662,9 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                         generic = generic || (vhdl && proxy(op.signal));
                     }
                 } else if constexpr (std::is_same_v<T, ContainerRead>) {
-                    generic = generic || op.string_index;
+                    // A string key of a kernel associative array is KOp::dyn.
+                    generic = generic
+                        || (op.string_index && dyn_container(op.source) == no_container);
                 } else if constexpr (std::is_same_v<T, Display>) {
                     // An attempt-start report tests the bind flag
                     // (KOp::generic, aux 2); it is not a wide operation.

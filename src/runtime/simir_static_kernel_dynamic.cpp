@@ -378,6 +378,15 @@ void erase_at(StaticKernelDynamicContainer& container, const std::uint64_t at) n
 // Frees the blocks of a container's text slots.
 void free_text_blocks(StaticKernelDynamicContainer& container) noexcept
 {
+    if ((container.flags & dynamic_text_keys_flag) != 0U) {
+        for (std::uint64_t slot = 0U; container.keys != nullptr && slot < container.capacity;
+             ++slot) {
+            std::free(reinterpret_cast<char*>(
+                static_cast<std::uintptr_t>(container.keys[2U * slot])));
+            container.keys[2U * slot] = 0U;
+            container.keys[2U * slot + 1U] = 0U;
+        }
+    }
     if ((container.flags & dynamic_text_flag) == 0U) {
         return;
     }
@@ -430,14 +439,72 @@ void insert_key_slot(StaticKernelDynamicContainer& container, const std::uint64_
     ++container.size;
 }
 
+// Key slot `ordinal` (< capacity) of an associative array with string keys.
+[[nodiscard]] Word text_key_slot(const StaticKernelDynamicContainer& container,
+    const std::uint64_t ordinal) noexcept
+{
+    return { container.keys[2U * ordinal], container.keys[2U * ordinal + 1U] };
+}
+
+void set_text_key_slot(StaticKernelDynamicContainer& container, const std::uint64_t ordinal,
+    const Word slot) noexcept
+{
+    container.keys[2U * ordinal] = slot.a;
+    container.keys[2U * ordinal + 1U] = slot.b;
+}
+
+// The position of the first string key not below `key`.
+[[nodiscard]] std::uint64_t lower_text_key(const StaticKernelDynamicContainer& container,
+    const std::string_view key) noexcept
+{
+    std::uint64_t low = 0U;
+    std::uint64_t high = container.size;
+    while (low < high) {
+        const auto middle = low + (high - low) / 2U;
+        if (text_of(text_key_slot(container, middle)) < key) {
+            low = middle + 1U;
+        } else {
+            high = middle;
+        }
+    }
+    return low;
+}
+
+// An associative array with string keys gets key `key` at `at` (<= size):
+// the later key and element slots move up, the spare slots at the end
+// taking the new key's place (their blocks kept). Throws std::bad_alloc.
+void insert_text_key_slot(StaticKernelDynamicContainer& container, const std::uint64_t at,
+    const std::string_view key)
+{
+    ensure_capacity(container, container.size + 1U);
+    const auto new_key = assign_text(text_key_slot(container, container.size), key);
+    const auto spare = dynamic_element(container, container.size);
+    for (auto ordinal = container.size; ordinal > at; --ordinal) {
+        set_text_key_slot(container, ordinal, text_key_slot(container, ordinal - 1U));
+        set_dynamic_element(container, ordinal, dynamic_element(container, ordinal - 1U));
+    }
+    set_dynamic_element(container, at, spare);
+    set_text_key_slot(container, at, new_key);
+    ++container.size;
+}
+
 // An associative array loses key `at` (< size); the removed element slot
 // moves to the end.
 void erase_key_slot(StaticKernelDynamicContainer& container, const std::uint64_t at) noexcept
 {
     const auto removed = dynamic_element(container, at);
-    for (auto ordinal = at; ordinal + 1U < container.size; ++ordinal) {
-        container.keys[ordinal] = container.keys[ordinal + 1U];
-        set_dynamic_element(container, ordinal, dynamic_element(container, ordinal + 1U));
+    if ((container.flags & dynamic_text_keys_flag) != 0U) {
+        const auto removed_key = text_key_slot(container, at);
+        for (auto ordinal = at; ordinal + 1U < container.size; ++ordinal) {
+            set_text_key_slot(container, ordinal, text_key_slot(container, ordinal + 1U));
+            set_dynamic_element(container, ordinal, dynamic_element(container, ordinal + 1U));
+        }
+        set_text_key_slot(container, container.size - 1U, removed_key);
+    } else {
+        for (auto ordinal = at; ordinal + 1U < container.size; ++ordinal) {
+            container.keys[ordinal] = container.keys[ordinal + 1U];
+            set_dynamic_element(container, ordinal, dynamic_element(container, ordinal + 1U));
+        }
     }
     set_dynamic_element(container, container.size - 1U, removed);
     --container.size;
@@ -453,8 +520,8 @@ void erase_key_slot(StaticKernelDynamicContainer& container, const std::uint64_t
 
 bool native_dynamic_type(const ContainerType& type) noexcept
 {
-    if (type.associative
-        && (type.string_indices || type.index_width == 0U || type.index_width > 64U)) {
+    if (type.associative && !type.string_indices
+        && (type.index_width == 0U || type.index_width > 64U)) {
         return false;
     }
     if (type.fixed && !type.sparse) {
@@ -545,6 +612,10 @@ StaticKernelDynamicContainer make_dynamic_header(const ContainerType& type)
         header.flags |= dynamic_associative_flag
             | (type.signed_indices ? dynamic_signed_keys_flag : 0U);
         header.key_width = type.index_width;
+        if (type.string_indices) {
+            header.flags = (header.flags & ~dynamic_signed_keys_flag) | dynamic_text_keys_flag;
+            header.key_width = 0U;
+        }
     }
     if (type.sparse) {
         header.flags |= dynamic_sparse_flag;
@@ -594,15 +665,24 @@ void grow_dynamic(StaticKernelDynamicContainer& container, const std::uint64_t n
     }
     std::uint64_t* keys = nullptr;
     if ((container.flags & (dynamic_associative_flag | dynamic_sparse_flag)) != 0U) {
-        keys = static_cast<std::uint64_t*>(
-            std::malloc(static_cast<std::size_t>(capacity) * sizeof(std::uint64_t)));
+        // A string key takes two words; key slots own their blocks, so
+        // every slot moves and the new ones start empty.
+        const bool text_keys = (container.flags & dynamic_text_keys_flag) != 0U;
+        const std::size_t stride = text_keys ? 2U : 1U;
+        keys = static_cast<std::uint64_t*>(std::malloc(
+            static_cast<std::size_t>(capacity) * stride * sizeof(std::uint64_t)));
         if (keys == nullptr) {
             std::free(data);
             throw std::bad_alloc { };
         }
-        if (container.size != 0U) {
+        const auto kept = text_keys ? container.capacity : container.size;
+        if (kept != 0U) {
             std::memcpy(keys, container.keys,
-                static_cast<std::size_t>(container.size) * sizeof(std::uint64_t));
+                static_cast<std::size_t>(kept) * stride * sizeof(std::uint64_t));
+        }
+        if (text_keys) {
+            std::memset(keys + stride * kept, 0,
+                static_cast<std::size_t>(capacity - kept) * stride * sizeof(std::uint64_t));
         }
     }
     // Text slots own their blocks: every slot moves (in element order), and
@@ -658,6 +738,54 @@ void reshape_dynamic(StaticKernelDynamicContainer& target,
     }
 }
 
+namespace {
+
+// An associative array's keys into the reference's value.
+void read_keys(const StaticKernelDynamicContainer& container, ContainerValue& value)
+{
+    if ((container.flags & dynamic_text_keys_flag) != 0U) {
+        value.string_keys.reserve(static_cast<std::size_t>(container.size));
+        for (std::uint64_t ordinal = 0U; ordinal < container.size; ++ordinal) {
+            value.string_keys.emplace_back(text_of(text_key_slot(container, ordinal)));
+        }
+        return;
+    }
+    value.keys.reserve(static_cast<std::size_t>(container.size));
+    for (std::uint64_t ordinal = 0U; ordinal < container.size; ++ordinal) {
+        value.keys.push_back(PackedLogic4::from_aval_bval(container.key_width,
+            key_value(container.keys[ordinal], container.key_width, signed_keys(container)),
+            0U));
+    }
+}
+
+// The reference value's keys (`count` of them, matching its elements) into
+// an associative array with room for them.
+void write_keys(StaticKernelDynamicContainer& container, const ContainerValue& value,
+    const std::uint64_t count)
+{
+    if ((container.flags & dynamic_text_keys_flag) != 0U) {
+        if (value.string_keys.size() != count) {
+            throw std::invalid_argument { "associative array keys do not match its elements" };
+        }
+        for (std::uint64_t ordinal = 0U; ordinal < count; ++ordinal) {
+            set_text_key_slot(container, ordinal,
+                assign_text(text_key_slot(container, ordinal),
+                    value.string_keys[static_cast<std::size_t>(ordinal)]));
+        }
+        return;
+    }
+    if (value.keys.size() != count) {
+        throw std::invalid_argument { "associative array keys do not match its elements" };
+    }
+    for (std::uint64_t ordinal = 0U; ordinal < count; ++ordinal) {
+        const auto a = value.keys[static_cast<std::size_t>(ordinal)].aval_words();
+        container.keys[ordinal] = order_key(a.empty() ? 0U : a.front(), container.key_width,
+            signed_keys(container));
+    }
+}
+
+} // namespace
+
 ContainerValue dynamic_value(const StaticKernelDynamicContainer& container,
     const ContainerType& type)
 {
@@ -669,13 +797,7 @@ ContainerValue dynamic_value(const StaticKernelDynamicContainer& container,
             value.string_elements.emplace_back(text_of(dynamic_element(container, ordinal)));
         }
         if ((container.flags & dynamic_associative_flag) != 0U) {
-            value.keys.reserve(static_cast<std::size_t>(container.size));
-            for (std::uint64_t ordinal = 0U; ordinal < container.size; ++ordinal) {
-                value.keys.push_back(PackedLogic4::from_aval_bval(container.key_width,
-                    key_value(container.keys[ordinal], container.key_width,
-                        signed_keys(container)),
-                    0U));
-            }
+            read_keys(container, value);
             if ((container.flags & dynamic_default_flag) != 0U) {
                 value.associative_default_text = std::string { default_text(container) };
             }
@@ -705,13 +827,7 @@ ContainerValue dynamic_value(const StaticKernelDynamicContainer& container,
         }
     }
     if ((container.flags & dynamic_associative_flag) != 0U) {
-        value.keys.reserve(static_cast<std::size_t>(container.size));
-        for (std::uint64_t ordinal = 0U; ordinal < container.size; ++ordinal) {
-            value.keys.push_back(PackedLogic4::from_aval_bval(container.key_width,
-                key_value(container.keys[ordinal], container.key_width,
-                    signed_keys(container)),
-                0U));
-        }
+        read_keys(container, value);
         if ((container.flags & dynamic_default_flag) != 0U) {
             value.associative_default = PackedLogic4::from_aval_bval(
                 container.element_width, container.fill_a, container.fill_b);
@@ -783,20 +899,15 @@ void assign_dynamic_value(StaticKernelDynamicContainer& container,
     if ((container.flags & dynamic_text_flag) != 0U) {
         const auto count = static_cast<std::uint64_t>(value.string_elements.size());
         const bool associative = (container.flags & dynamic_associative_flag) != 0U;
-        if (associative && value.keys.size() != value.string_elements.size()) {
-            throw std::invalid_argument { "associative array keys do not match its elements" };
-        }
         container.size = 0U;
         container.head = 0U;
         ensure_capacity(container, count);
         for (std::uint64_t ordinal = 0U; ordinal < count; ++ordinal) {
             set_text_element(container, ordinal,
                 value.string_elements[static_cast<std::size_t>(ordinal)]);
-            if (associative) {
-                const auto key = value.keys[static_cast<std::size_t>(ordinal)].aval_words();
-                container.keys[ordinal] = order_key(key.empty() ? 0U : key.front(),
-                    container.key_width, signed_keys(container));
-            }
+        }
+        if (associative) {
+            write_keys(container, value, count);
         }
         container.size = count;
         if (associative) {
@@ -823,14 +934,7 @@ void assign_dynamic_value(StaticKernelDynamicContainer& container,
     }
     container.size = size;
     if ((container.flags & dynamic_associative_flag) != 0U) {
-        if (value.keys.size() != value.elements.size()) {
-            throw std::invalid_argument { "associative array keys do not match its elements" };
-        }
-        for (std::uint64_t ordinal = 0U; ordinal < size; ++ordinal) {
-            const auto a = value.keys[static_cast<std::size_t>(ordinal)].aval_words();
-            container.keys[ordinal] = order_key(a.empty() ? 0U : a.front(),
-                container.key_width, signed_keys(container));
-        }
+        write_keys(container, value, size);
         if (value.associative_default) {
             const auto a = value.associative_default->aval_words();
             const auto b = value.associative_default->bval_words();
@@ -1021,6 +1125,8 @@ const char* dyn_fail_message(const DynFailure failure) noexcept
         return "string replacement byte contains X or Z";
     case DynFailure::text_assoc_budget:
         return "associative string array exceeds its owning-storage budget";
+    case DynFailure::key_bytes:
+        return "associative-array string index exceeds the byte limit";
     case DynFailure::string_limit:
         return "string value exceeds the byte limit";
     }
@@ -1039,6 +1145,94 @@ namespace {
         return std::nullopt;
     }
     return static_cast<std::uint64_t>(*requested);
+}
+
+// The keyed KOp::dyn operations of an associative array with string keys:
+// key y is string register y (7.9).
+DynFailure execute_text_key_dyn(const KInst& inst, StaticKernelDynamicContainer& container,
+    Word* registers, std::string* strings)
+{
+    const auto op = static_cast<DynOp>(inst.sub);
+    const bool text = (container.flags & dynamic_text_flag) != 0U;
+    auto& key_register = strings[inst.y];
+    if (op == DynOp::first || op == DynOp::last || op == DynOp::next || op == DynOp::prev) {
+        // An empty array selects nothing and reads no key; the key changes
+        // only when one is selected (7.9.4 - 7.9.7).
+        std::optional<std::uint64_t> selected;
+        if (container.size != 0U) {
+            if (op == DynOp::first) {
+                selected = 0U;
+            } else if (op == DynOp::last) {
+                selected = container.size - 1U;
+            } else {
+                if (key_register.size() > maximum_string_bytes) {
+                    return DynFailure::key_bytes;
+                }
+                const auto at = lower_text_key(container, key_register);
+                if (op == DynOp::next) {
+                    const auto following = at < container.size
+                            && text_of(text_key_slot(container, at)) == key_register
+                        ? at + 1U : at;
+                    if (following < container.size) {
+                        selected = following;
+                    }
+                } else if (at != 0U) {
+                    selected = at - 1U;
+                }
+            }
+        }
+        if (selected) {
+            key_register = std::string { text_of(text_key_slot(container, *selected)) };
+        }
+        registers[inst.d] = { selected ? 1U : 0U, 0U };
+        return DynFailure::none;
+    }
+    if (key_register.size() > maximum_string_bytes) {
+        return DynFailure::key_bytes;
+    }
+    if (op == DynOp::assoc_write && (container.flags & two_state_flag) != 0U
+        && (registers[inst.x].b & kernel_word::mask(container.element_width)) != 0U) {
+        return DynFailure::write_mismatch;
+    }
+    const auto at = lower_text_key(container, key_register);
+    const bool present
+        = at < container.size && text_of(text_key_slot(container, at)) == key_register;
+    switch (op) {
+    case DynOp::assoc_read:
+        registers[inst.d] = present ? dynamic_element(container, at)
+                                    : Word { container.fill_a, container.fill_b };
+        return DynFailure::none;
+    case DynOp::text_read:
+        // A missing key reads the `default:` text, else the empty string.
+        strings[inst.offset] = present
+            ? std::string { text_of(dynamic_element(container, at)) }
+            : std::string { default_text(container) };
+        return DynFailure::none;
+    case DynOp::exists:
+        registers[inst.d] = { present ? 1U : 0U, 0U };
+        return DynFailure::none;
+    case DynOp::assoc_delete:
+        if (present) {
+            erase_key_slot(container, at);
+        }
+        return DynFailure::none;
+    case DynOp::assoc_write:
+    case DynOp::text_write:
+        if (!present) {
+            if (container.size >= container.limit) {
+                return text ? DynFailure::text_assoc_budget : DynFailure::assoc_budget;
+            }
+            insert_text_key_slot(container, at, key_register);
+        }
+        if (text) {
+            set_text_element(container, at, strings[inst.offset]);
+        } else {
+            set_dynamic_element(container, at, registers[inst.x]);
+        }
+        return DynFailure::none;
+    default:
+        throw std::logic_error { "static kernel string-keyed operation is invalid" };
+    }
 }
 
 // The KOp::dyn operations of a container of strings and the appends.
@@ -1177,17 +1371,34 @@ DynFailure execute_text_dyn(const KInst& inst, StaticKernelDynamicContainer& con
         container.size = 0U;
         container.head = 0U;
         ensure_capacity(container, other->size);
-        copy_text_elements(container, *other, 0U, other->size);
+        if (text) {
+            copy_text_elements(container, *other, 0U, other->size);
+        } else {
+            for (std::uint64_t ordinal = 0U; ordinal < other->size; ++ordinal) {
+                set_dynamic_element(container, ordinal, dynamic_element(*other, ordinal));
+            }
+        }
         if (associative) {
-            // The keys and the `default:` text go with the elements.
-            if (other->size != 0U) {
+            // The keys and the `default:` go with the elements.
+            if ((container.flags & dynamic_text_keys_flag) != 0U) {
+                for (std::uint64_t ordinal = 0U; ordinal < other->size; ++ordinal) {
+                    set_text_key_slot(container, ordinal,
+                        assign_text(text_key_slot(container, ordinal),
+                            text_of(text_key_slot(*other, ordinal))));
+                }
+            } else if (other->size != 0U) {
                 std::memcpy(container.keys, other->keys,
                     static_cast<std::size_t>(other->size) * sizeof(std::uint64_t));
             }
-            const auto slot = assign_text({ container.fill_a, container.fill_b },
-                default_text(*other));
-            container.fill_a = slot.a;
-            container.fill_b = slot.b;
+            if (text) {
+                const auto slot = assign_text({ container.fill_a, container.fill_b },
+                    default_text(*other));
+                container.fill_a = slot.a;
+                container.fill_b = slot.b;
+            } else {
+                container.fill_a = other->fill_a;
+                container.fill_b = other->fill_b;
+            }
             container.flags = (container.flags & ~dynamic_default_flag)
                 | (other->flags & dynamic_default_flag);
         }
@@ -1208,15 +1419,20 @@ DynFailure execute_dyn(const KInst& inst, StaticKernelDynamicContainer& containe
         const auto op = static_cast<DynOp>(inst.sub);
         const bool appending = op == DynOp::append_clear || op == DynOp::append_value
             || op == DynOp::append_text || op == DynOp::append_container;
-        if (appending || op == DynOp::text_read || op == DynOp::text_write
-            || op == DynOp::text_default
-            || ((container.flags & dynamic_text_flag) != 0U
-                && (op == DynOp::resize || op == DynOp::copy))) {
-            try {
-                return execute_text_dyn(inst, container, other, registers, strings);
-            } catch (const std::bad_alloc&) {
-                return DynFailure::out_of_memory;
+        const bool text_keys = (container.flags & dynamic_text_keys_flag) != 0U;
+        try {
+            if (text_keys && (dyn_reads_index(op) || dyn_writes_index(op))) {
+                return execute_text_key_dyn(inst, container, registers, strings);
             }
+            if (appending || op == DynOp::text_read || op == DynOp::text_write
+                || op == DynOp::text_default
+                || (((container.flags & dynamic_text_flag) != 0U || text_keys)
+                    && op == DynOp::copy)
+                || ((container.flags & dynamic_text_flag) != 0U && op == DynOp::resize)) {
+                return execute_text_dyn(inst, container, other, registers, strings);
+            }
+        } catch (const std::bad_alloc&) {
+            return DynFailure::out_of_memory;
         }
     }
     const auto op = static_cast<DynOp>(inst.sub);
