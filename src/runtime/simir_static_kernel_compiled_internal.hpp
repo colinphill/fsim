@@ -657,6 +657,14 @@ inline void kinst_flow(const KInst& inst, const std::uint32_t at,
         fall();
         break;
     }
+    case KOp::scalar:
+        use.push_back(inst.x);
+        if (scalar_fields(inst.imm_a).has_second) {
+            use.push_back(inst.y);
+        }
+        def = inst.d;
+        fall();
+        break;
     case KOp::random:
         if ((inst.imm_a & 1U) != 0U) {
             use.push_back(inst.x);

@@ -220,6 +220,21 @@ namespace {
     return matches;
 }
 
+// Whether a std::vector of strings starts with its data pointer: generated
+// code reaches an element alias of a fixed string array through it
+// (StaticKernelStringCell).
+[[nodiscard]] bool string_vector_layout_matches()
+{
+    static const bool matches = [] {
+        const std::vector<std::string> elements(3U);
+        std::uint64_t first { };
+        std::memcpy(&first, static_cast<const void*>(&elements), sizeof(first));
+        return first
+            == static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(elements.data()));
+    }();
+    return matches;
+}
+
 } // namespace
 
 bool Interpreter::Impl::StaticKernel::hold_string_file(const std::uint32_t index)
@@ -2640,6 +2655,177 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             return false;
         }
     };
+    // KOp::scalar for real, shortreal and time arithmetic, comparisons and
+    // conversions and the math functions (IEEE 1800-2023 6.12, 20.5, 20.8)
+    // whose operand and result registers the reference accepts; a kind or
+    // width the reference rejects keeps the bridge (its message).
+    const auto emit_scalar = [&](KInst& inst, const Operation& operation) -> bool {
+        using Kind = SystemVerilogScalarKind;
+        const auto real = [](const Kind kind) { return frontend::is_real_scalar_kind(kind); };
+        const auto payload_width = [](const Kind kind) -> std::uint32_t {
+            return kind == Kind::ShortReal ? 32U
+                : kind == Kind::Real || kind == Kind::Realtime || kind == Kind::Time
+                    || kind == Kind::Chandle
+                ? 64U
+                : 0U;
+        };
+        const auto sized = [&](const RegisterId reg, const std::uint32_t bits) {
+            return reg < register_count && width[reg] == bits && bits != 0U;
+        };
+        const auto integral = [&](const RegisterId reg) {
+            return reg < register_count && width[reg] != 0U && width[reg] <= 64U
+                && width[reg] != polymorphic;
+        };
+        ScalarFields fields;
+        if (const auto* binary_op = operation_get_if<SystemVerilogScalarBinary>(&operation)) {
+            const auto* op = binary_op;
+            using Operator = SystemVerilogScalarBinaryOperator;
+            const auto left = op->lhs_kind;
+            const auto right = op->rhs_kind;
+            const auto target = op->result_kind;
+            const bool numeric_left = real(left) || left == Kind::Time;
+            const bool numeric_right = real(right) || right == Kind::Time;
+            if (!sized(op->lhs, payload_width(left))) {
+                return false;
+            }
+            std::uint32_t result_width = 0U;
+            if (op->operation == Operator::Convert) {
+                if (!numeric_left || !(target == Kind::None || target == Kind::Time || real(target))) {
+                    return false;
+                }
+                result_width = target == Kind::None ? 64U : payload_width(target);
+            } else {
+                if (!sized(op->rhs, payload_width(right))) {
+                    return false;
+                }
+                if (op->operation >= Operator::Equal) {
+                    const bool handles = left == Kind::Chandle && right == Kind::Chandle
+                        && (op->operation == Operator::Equal
+                            || op->operation == Operator::NotEqual);
+                    if (!handles && !(numeric_left && numeric_right)) {
+                        return false;
+                    }
+                    result_width = 1U;
+                } else {
+                    // The promoted kind (systemverilog_scalar_arithmetic).
+                    const auto promoted = left == Kind::Real || right == Kind::Real ? Kind::Real
+                        : left == Kind::Realtime || right == Kind::Realtime   ? Kind::Realtime
+                        : left == Kind::ShortReal || right == Kind::ShortReal ? Kind::ShortReal
+                        : left == Kind::Time && right == Kind::Time           ? Kind::Time
+                                                                              : Kind::None;
+                    if (promoted == Kind::None || !numeric_left || !numeric_right) {
+                        return false;
+                    }
+                    const auto final_kind = target == Kind::None ? promoted : target;
+                    if (!(final_kind == Kind::Time || real(final_kind))) {
+                        return false;
+                    }
+                    result_width = payload_width(final_kind);
+                }
+                fields.has_second = true;
+            }
+            if (!sized(op->destination, result_width)) {
+                return false;
+            }
+            fields.operation = static_cast<std::uint8_t>(op->operation);
+            fields.first_kind = static_cast<std::uint8_t>(left);
+            fields.second_kind = static_cast<std::uint8_t>(right);
+            fields.result_kind = static_cast<std::uint8_t>(target);
+            inst.sub = 0U;
+            inst.x = narrow(op->lhs);
+            inst.imm_b = width[op->lhs];
+            if (fields.has_second) {
+                inst.y = narrow(op->rhs);
+                inst.imm_b |= std::uint64_t { width[op->rhs] } << 32U;
+            }
+            inst.d = narrow(op->destination);
+            inst.width = result_width;
+        } else if (const auto* math_op = operation_get_if<SystemVerilogMath>(&operation)) {
+            const auto* op = math_op;
+            using Function = SystemVerilogMathFunction;
+            const auto function = op->function;
+            if (function >= Function::Time) {
+                return false;
+            }
+            const bool binary = function == Function::Pow || function == Function::Atan2
+                || function == Function::Hypot;
+            if (binary != (op->second_width != 0U)) {
+                return false;
+            }
+            // math_number: an integral of 1 to 64 bits, or a real or time
+            // payload.
+            const auto number = [&](const RegisterId reg, const Kind kind) {
+                return kind == Kind::None ? integral(reg)
+                    : (real(kind) || kind == Kind::Time) && sized(reg, payload_width(kind));
+            };
+            std::uint32_t result_width = 64U;
+            switch (function) {
+            case Function::Rtoi:
+                if (!real(op->first_kind) || !sized(op->first, payload_width(op->first_kind))) {
+                    return false;
+                }
+                result_width = 32U;
+                break;
+            case Function::Itor:
+                if (op->first_kind != Kind::None || !integral(op->first)) {
+                    return false;
+                }
+                break;
+            case Function::BitsToReal:
+                if (!sized(op->first, 64U)) {
+                    return false;
+                }
+                break;
+            case Function::RealToBits:
+                if ((op->first_kind != Kind::Real && op->first_kind != Kind::Realtime)
+                    || !sized(op->first, 64U)) {
+                    return false;
+                }
+                break;
+            case Function::BitsToShortReal:
+                if (!sized(op->first, 32U)) {
+                    return false;
+                }
+                result_width = 32U;
+                break;
+            case Function::ShortRealToBits:
+                if (op->first_kind != Kind::ShortReal || !sized(op->first, 32U)) {
+                    return false;
+                }
+                result_width = 32U;
+                break;
+            default:
+                if (!number(op->first, op->first_kind)
+                    || (binary && !number(op->second, op->second_kind))) {
+                    return false;
+                }
+                break;
+            }
+            if (!sized(op->destination, result_width)) {
+                return false;
+            }
+            fields.operation = static_cast<std::uint8_t>(function);
+            fields.first_kind = static_cast<std::uint8_t>(op->first_kind);
+            fields.second_kind = static_cast<std::uint8_t>(op->second_kind);
+            fields.first_signed = op->first_signed;
+            fields.second_signed = op->second_signed;
+            fields.has_second = binary;
+            inst.sub = 1U;
+            inst.x = narrow(op->first);
+            inst.imm_b = width[op->first];
+            if (binary) {
+                inst.y = narrow(op->second);
+                inst.imm_b |= std::uint64_t { width[op->second] } << 32U;
+            }
+            inst.d = narrow(op->destination);
+            inst.width = result_width;
+        } else {
+            return false;
+        }
+        inst.op = KOp::scalar;
+        inst.imm_a = scalar_pack(fields);
+        return true;
+    };
     // KOp::str for a string operation on the member's string registers
     // (its string file, hold_string_file); false when the operation keeps
     // the generic bridge (a register of another width than the reference's
@@ -2739,7 +2925,8 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             }
             const auto& object = impl_.string_objects[op.object];
             if (object.element_alias
-                && (object.element_alias->object >= impl_.container_objects.size()
+                && (!string_vector_layout_matches()
+                    || object.element_alias->object >= impl_.container_objects.size()
                     || object.element_alias->ordinal
                         >= impl_.container_objects[object.element_alias->object]
                                .initial_value.string_elements.size())) {
@@ -3845,6 +4032,10 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                 body.code.push_back(inst);
                 continue;
             }
+        }
+        if (emit_scalar(inst, member.operations()[pc])) {
+            body.code.push_back(inst);
+            continue;
         }
         if (const auto* delayed = operation_get_if<WriteNetDelay>(
                 &member.operations()[pc])) {

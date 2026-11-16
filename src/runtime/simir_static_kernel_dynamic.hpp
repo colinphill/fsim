@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -131,6 +132,15 @@ private:
 /// or the reference's error to report.
 [[nodiscard]] DynFailure execute_str(const KInst& inst, const CompiledBody& body,
     std::string* strings, kernel_word::Word* registers);
+
+/// Executes KOp::scalar `inst` on the bytecode tier with the reference's
+/// scalar routines. Returns the reference's failure message, or nothing.
+[[nodiscard]] std::optional<std::string> execute_scalar(const KInst& inst,
+    kernel_word::Word* registers);
+
+/// The message of a KOp::scalar failure with the reference's error code
+/// `error` (as the behavioral tier reports it).
+[[nodiscard]] std::string scalar_failure_message(const KInst& inst, std::uint32_t error);
 
 /// The predicate graph imm_b of a KOp::dyn instruction (dyn_graph) as the
 /// reference's nodes.

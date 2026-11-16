@@ -1851,6 +1851,9 @@ private:
     /// packed target.
     static void native_dyn_stream_wide(StaticKernelNativeFrame* frame, std::uint32_t at,
         std::uint64_t bits, std::uint64_t width);
+    /// fsim_sk_scalar_fail: a KOp::scalar failure.
+    static void native_scalar_fail(StaticKernelNativeFrame* frame, std::uint32_t at,
+        std::uint64_t error, std::uint64_t fields);
     static void native_sva_grow(StaticKernelNativeFrame* frame,
         std::uint32_t at, std::uint32_t region, std::uint64_t needed);
     static void native_sva_post(StaticKernelNativeFrame* frame, std::uint32_t at);

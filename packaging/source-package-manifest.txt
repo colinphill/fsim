@@ -2040,6 +2040,7 @@ tests/fixtures/compliance/sv_kernel_container_methods.sv
 tests/fixtures/compliance/sv_kernel_count_bits.sv
 tests/fixtures/compliance/sv_kernel_queue_dynamic_array.sv
 tests/fixtures/compliance/sv_kernel_random.sv
+tests/fixtures/compliance/sv_kernel_real_math.sv
 tests/fixtures/compliance/sv_kernel_string_containers.sv
 tests/fixtures/compliance/sv_kernel_string_ops.sv
 tests/fixtures/compliance/sv_kernel_string_variables.sv

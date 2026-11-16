@@ -326,11 +326,49 @@ enum class KOp : std::uint8_t {
     /// its maximum from x (imm_a bit 0) and its minimum from y (imm_a bit
     /// 1); imm_b holds their widths (x's low, y's high).
     random,
+    /// Real, shortreal and time arithmetic, comparisons and conversions
+    /// (sub 0, SystemVerilogScalarBinary; IEEE 1800-2023 6.12, 11.3.1) and
+    /// the math and conversion functions (sub 1, SystemVerilogMath; 20.5,
+    /// 20.8) on the payloads in registers x and y (ScalarFields in imm_a;
+    /// imm_b holds x's width low and y's high), into d (width bits). A
+    /// failure the reference reports reaches fsim_sk_scalar_fail.
+    scalar,
 };
 
-/// Number of kernel instruction kinds (KOp values 0 .. random).
+/// Number of kernel instruction kinds (KOp values 0 .. scalar).
 inline constexpr std::size_t kernel_op_count
-    = static_cast<std::size_t>(KOp::random) + 1U;
+    = static_cast<std::size_t>(KOp::scalar) + 1U;
+
+/// KOp::scalar's imm_a: the operator or function, the operands' and the
+/// result's scalar kinds (SystemVerilogScalarKind values), the operands'
+/// signedness, and whether y is read.
+struct ScalarFields {
+    std::uint8_t operation { };
+    std::uint8_t first_kind { };
+    std::uint8_t second_kind { };
+    std::uint8_t result_kind { };
+    bool first_signed { };
+    bool second_signed { };
+    bool has_second { };
+};
+
+[[nodiscard]] constexpr std::uint64_t scalar_pack(const ScalarFields& fields) noexcept
+{
+    return std::uint64_t { fields.operation } | (std::uint64_t { fields.first_kind } << 8U)
+        | (std::uint64_t { fields.second_kind } << 16U)
+        | (std::uint64_t { fields.result_kind } << 24U)
+        | (fields.first_signed ? std::uint64_t { 1 } << 32U : 0U)
+        | (fields.second_signed ? std::uint64_t { 1 } << 33U : 0U)
+        | (fields.has_second ? std::uint64_t { 1 } << 34U : 0U);
+}
+
+[[nodiscard]] constexpr ScalarFields scalar_fields(const std::uint64_t packed) noexcept
+{
+    return { static_cast<std::uint8_t>(packed), static_cast<std::uint8_t>(packed >> 8U),
+        static_cast<std::uint8_t>(packed >> 16U), static_cast<std::uint8_t>(packed >> 24U),
+        ((packed >> 32U) & 1U) != 0U, ((packed >> 33U) & 1U) != 0U,
+        ((packed >> 34U) & 1U) != 0U };
+}
 
 /// KOp::str operations (KInst::sub). Kernel registers as elsewhere: d the
 /// one written (a numeric result), y an index (width bits, flag_signed:

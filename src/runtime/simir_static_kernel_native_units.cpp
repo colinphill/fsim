@@ -1086,6 +1086,23 @@ void Interpreter::Impl::StaticKernel::native_dyn_stream_wide(StaticKernelNativeF
     }
 }
 
+void Interpreter::Impl::StaticKernel::native_scalar_fail(StaticKernelNativeFrame* frame,
+    const std::uint32_t at, const std::uint64_t error, const std::uint64_t fields)
+{
+    auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
+    try {
+        KInst inst;
+        inst.sub = static_cast<std::uint8_t>(error >> 32U);
+        inst.imm_a = fields;
+        kernel.fail(frame->member, kernel.members_[frame->member].body_begin + at,
+            static_kernel_detail::scalar_failure_message(inst,
+                static_cast<std::uint32_t>(error)));
+    } catch (...) {
+        kernel.scratch().native_exception = std::current_exception();
+        frame->status = 1U;
+    }
+}
+
 void Interpreter::Impl::StaticKernel::native_fail(
     StaticKernelNativeFrame* frame, const std::uint32_t at,
     const std::uint32_t reason)
@@ -2792,6 +2809,13 @@ void Interpreter::Impl::StaticKernel::concatenate_members(CompiledBody& program,
                 }
                 break;
             }
+            case KOp::scalar:
+                reg(inst.d);
+                reg(inst.x);
+                if (scalar_fields(inst.imm_a).has_second) {
+                    reg(inst.y);
+                }
+                break;
             case KOp::random:
                 reg(inst.d);
                 if ((inst.imm_a & 1U) != 0U) {

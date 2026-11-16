@@ -5,6 +5,7 @@
 #include "simir_container_ops.hpp"
 
 #include "fsim/runtime/string_methods.hpp"
+#include "fsim/runtime/systemverilog_scalar.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -1086,6 +1087,48 @@ DynFailure execute_str(const KInst& inst, const CompiledBody& body, std::string*
         break;
     }
     return DynFailure::none;
+}
+
+std::string scalar_failure_message(const KInst& inst, const std::uint32_t error)
+{
+    const auto fields = scalar_fields(inst.imm_a);
+    if (inst.sub == 0U) {
+        return "SystemVerilog scalar binary operation failed (error " + std::to_string(error)
+            + ", lhs kind " + std::to_string(unsigned { fields.first_kind }) + ", rhs kind "
+            + std::to_string(unsigned { fields.second_kind }) + ")";
+    }
+    return "SystemVerilog math function failed (error " + std::to_string(error) + ")";
+}
+
+std::optional<std::string> execute_scalar(const KInst& inst, kernel_word::Word* registers)
+{
+    const auto fields = scalar_fields(inst.imm_a);
+    const auto operand = [&](const std::uint32_t reg, const std::uint64_t bits) {
+        return PackedLogic4::from_aval_bval(static_cast<std::size_t>(bits), registers[reg].a,
+            registers[reg].b);
+    };
+    const auto first = operand(inst.x, inst.imm_b & 0xffffffffU);
+    std::optional<PackedLogic4> second;
+    if (fields.has_second) {
+        second = operand(inst.y, inst.imm_b >> 32U);
+    }
+    const auto kind = [](const std::uint8_t value) {
+        return static_cast<SystemVerilogScalarKind>(value);
+    };
+    const auto result = inst.sub == 0U
+        ? systemverilog_scalar_binary_payload(
+              static_cast<SystemVerilogScalarBinaryOperator>(fields.operation), first,
+              kind(fields.first_kind), second ? *second : PackedLogic4 { },
+              kind(fields.second_kind), kind(fields.result_kind))
+        : systemverilog_math_payload(static_cast<SystemVerilogMathFunction>(fields.operation),
+              first, kind(fields.first_kind), fields.first_signed,
+              second ? &*second : nullptr, kind(fields.second_kind), fields.second_signed);
+    if (!result) {
+        return scalar_failure_message(inst, static_cast<std::uint32_t>(result.error));
+    }
+    const auto low = result.value.low_word();
+    registers[inst.d] = { low.aval, low.bval };
+    return std::nullopt;
 }
 
 const char* dyn_fail_message(const DynFailure failure) noexcept

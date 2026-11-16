@@ -632,6 +632,11 @@ void Interpreter::Impl::StaticKernel::execute_body(
             registers[inst.d] = Word { low.aval, low.bval };
             break;
         }
+        case KOp::scalar:
+            if (const auto failure = static_kernel_detail::execute_scalar(inst, registers)) {
+                fail_at(at, *failure);
+            }
+            break;
         case KOp::str: {
             if (static_cast<static_kernel_detail::StrOp>(inst.sub)
                 == static_kernel_detail::StrOp::plusarg) {
@@ -2992,6 +2997,7 @@ void Interpreter::Impl::StaticKernel::set_instruction_helpers(
     helpers.dyn_text_reserve = &StaticKernel::native_dyn_text_reserve;
     helpers.dyn_scratch = &StaticKernel::native_dyn_scratch;
     helpers.dyn_stream_wide = &StaticKernel::native_dyn_stream_wide;
+    helpers.scalar_fail = &StaticKernel::native_scalar_fail;
     helpers.sva_post = &StaticKernel::native_sva_post;
     helpers.sva_filter = &StaticKernel::native_sva_filter;
     helpers.sva_check = &StaticKernel::native_sva_check;

@@ -607,6 +607,10 @@ void Interpreter::Impl::StaticKernel::build_parallel_plan()
                 // leader's.
                 ok = false;
                 break;
+            case KOp::scalar:
+                // A failure reports through the leader's member state.
+                ok = false;
+                break;
             case KOp::generic:
                 touch_operation(current, inst.x);
                 // A sequential member's output and severity messages wait

@@ -418,6 +418,11 @@ struct StaticKernelNativeHelpers {
     /// both); the run fails.
     void (*dyn_stream_wide)(StaticKernelNativeFrame*, std::uint32_t at, std::uint64_t bits,
         std::uint64_t width) { };
+    /// `fsim_sk_scalar_fail`: reports a KOp::scalar failure, the reference's
+    /// error code (low 32 bits; the instruction's sub above them) of the
+    /// instruction with imm_a `fields`; the run fails.
+    void (*scalar_fail)(StaticKernelNativeFrame*, std::uint32_t at, std::uint64_t error,
+        std::uint64_t fields) { };
     /// Wide-register instructions by kind (`fsim_sk_wide_<op>`): instruction
     /// `at` with the caller's register file, where wide values live, and the
     /// narrow operand words x, y and z; `out` receives a narrow result and

@@ -13,6 +13,7 @@
 #include "fsim/support/native_filesystem.hpp"
 
 #include "../runtime/simir_static_kernel_native.hpp"
+#include "fsim/runtime/systemverilog_scalar.hpp"
 
 #include <llvm/ExecutionEngine/ObjectCache.h>
 #include <llvm/ExecutionEngine/Orc/CompileUtils.h>
@@ -37,6 +38,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <atomic>
 #include <optional>
 #include <sstream>
@@ -164,6 +166,10 @@ using runtime::simir::ContainerReductionOperator;
 using runtime::simir::ContainerOrderingOperator;
 using runtime::simir::ContainerLocatorOperator;
 using runtime::simir::RandomKind;
+using runtime::SystemVerilogMathFunction;
+using runtime::SystemVerilogScalarBinaryOperator;
+using runtime::SystemVerilogScalarError;
+using runtime::SystemVerilogScalarKind;
 using runtime::simir::SignalReadKind;
 using runtime::simir::ProcessSchedulingDomain;
 namespace detail = runtime::simir::static_kernel_detail;
@@ -5474,6 +5480,13 @@ private:
                 writes = detail::dyn_writes_destination(op);
                 return true;
             }
+            case KOp::scalar:
+                reads.push_back(inst.x);
+                if (detail::scalar_fields(inst.imm_a).has_second) {
+                    reads.push_back(inst.y);
+                }
+                writes = true;
+                return true;
             case KOp::random:
                 if ((inst.imm_a & 1U) != 0U) {
                     reads.push_back(inst.x);
@@ -7808,6 +7821,408 @@ private:
             builder_.CreateSelect(builder_.CreateFCmpOLE(sampled, real(low)),
                 llvm::ConstantInt::get(i32_, 0x8000'0000U), truncated));
         return builder_.CreateZExt(result, i64_);
+    }
+
+    /// KOp::scalar's first failure: `code` when `condition` holds and no
+    /// earlier failure was recorded (the reference returns its first error).
+    void scalar_flag(llvm::Value*& error, llvm::Value* condition, const SystemVerilogScalarError code)
+    {
+        auto* first = builder_.CreateAnd(condition,
+            builder_.CreateICmpEQ(error, llvm::ConstantInt::get(i32_, 0U)));
+        error = builder_.CreateSelect(first,
+            llvm::ConstantInt::get(i32_, static_cast<std::uint32_t>(code)), error);
+    }
+
+    /// The rounding mode is not round-to-nearest (the reference's
+    /// fegetround check).
+    [[nodiscard]] llvm::Value* scalar_rounding_changed()
+    {
+        auto* mode = builder_.CreateIntrinsic(i32_, llvm::Intrinsic::get_rounding, {});
+        return builder_.CreateICmpNE(mode, llvm::ConstantInt::get(i32_, 1U));
+    }
+
+    [[nodiscard]] static bool scalar_real(const SystemVerilogScalarKind kind) noexcept
+    {
+        return kind == SystemVerilogScalarKind::ShortReal || kind == SystemVerilogScalarKind::Real
+            || kind == SystemVerilogScalarKind::Realtime;
+    }
+
+    [[nodiscard]] llvm::Type* f64_type() { return llvm::Type::getDoubleTy(context_); }
+    [[nodiscard]] llvm::Type* f32_type() { return llvm::Type::getFloatTy(context_); }
+
+    /// Whether `value` (a double or float) is finite.
+    [[nodiscard]] llvm::Value* scalar_finite(llvm::Value* value)
+    {
+        auto* magnitude = builder_.CreateUnaryIntrinsic(llvm::Intrinsic::fabs, value);
+        return builder_.CreateFCmpONE(magnitude,
+            llvm::ConstantFP::getInfinity(value->getType()));
+    }
+
+    /// A payload's bits (decode_systemverilog_scalar_payload): unknown bits
+    /// fail, or read as zero for a time in a real operation.
+    [[nodiscard]] llvm::Value* scalar_payload(const std::uint32_t reg, const std::uint64_t width,
+        const bool unknown_is_zero, llvm::Value*& error)
+    {
+        const auto value = load_register(reg);
+        auto* m = constant(mask_of(static_cast<std::uint32_t>(width)));
+        auto* unknown = builder_.CreateICmpNE(builder_.CreateAnd(value.b, m), constant(0U));
+        auto* bits = builder_.CreateAnd(value.a, m);
+        if (unknown_is_zero) {
+            return builder_.CreateSelect(unknown, constant(0U), bits);
+        }
+        scalar_flag(error, unknown, SystemVerilogScalarError::UnknownValue);
+        return bits;
+    }
+
+    /// SystemVerilogScalarValue::as_real.
+    [[nodiscard]] llvm::Value* scalar_as_real(llvm::Value* bits, const SystemVerilogScalarKind kind)
+    {
+        switch (kind) {
+        case SystemVerilogScalarKind::ShortReal:
+            return builder_.CreateFPExt(
+                builder_.CreateBitCast(builder_.CreateTrunc(bits, i32_), f32_type()), f64_type());
+        case SystemVerilogScalarKind::Real:
+        case SystemVerilogScalarKind::Realtime:
+            return builder_.CreateBitCast(bits, f64_type());
+        case SystemVerilogScalarKind::Time:
+            return builder_.CreateUIToFP(bits, f64_type());
+        case SystemVerilogScalarKind::None:
+        case SystemVerilogScalarKind::Chandle:
+            break;
+        }
+        return builder_.CreateSIToFP(bits, f64_type());
+    }
+
+    /// real_target: a double as a real kind's payload.
+    [[nodiscard]] llvm::Value* scalar_real_target(llvm::Value* number,
+        const SystemVerilogScalarKind target, llvm::Value*& error)
+    {
+        scalar_flag(error, builder_.CreateNot(scalar_finite(number)),
+            SystemVerilogScalarError::Nonfinite);
+        if (target == SystemVerilogScalarKind::ShortReal) {
+            auto* narrowed = builder_.CreateFPTrunc(number, f32_type());
+            scalar_flag(error, builder_.CreateNot(scalar_finite(narrowed)),
+                SystemVerilogScalarError::Overflow);
+            return builder_.CreateZExt(builder_.CreateBitCast(narrowed, i32_), i64_);
+        }
+        return builder_.CreateBitCast(number, i64_);
+    }
+
+    /// convert_systemverilog_scalar of a payload of kind `from` to kind `to`
+    /// (None: a 64-bit two's-complement integral), rounding to nearest away
+    /// from zero or (truncate) toward zero.
+    [[nodiscard]] llvm::Value* scalar_convert(llvm::Value* bits, const SystemVerilogScalarKind from,
+        const SystemVerilogScalarKind to, const bool truncate, llvm::Value*& error)
+    {
+        using Kind = SystemVerilogScalarKind;
+        if (from == to) {
+            return bits;
+        }
+        if (scalar_real(to)) {
+            if (from == Kind::None || from == Kind::Time) {
+                scalar_flag(error, scalar_rounding_changed(),
+                    SystemVerilogScalarError::UnsupportedRoundingMode);
+            }
+            return scalar_real_target(scalar_as_real(bits, from), to, error);
+        }
+        if (to == Kind::None && from == Kind::Time) {
+            scalar_flag(error, builder_.CreateICmpSLT(bits, constant(0U)),
+                SystemVerilogScalarError::Overflow);
+            return bits;
+        }
+        if (to == Kind::Time && from == Kind::None) {
+            scalar_flag(error, builder_.CreateICmpSLT(bits, constant(0U)),
+                SystemVerilogScalarError::Overflow);
+            return bits;
+        }
+        auto* number = scalar_as_real(bits, from);
+        auto* finite = scalar_finite(number);
+        auto* rounded = builder_.CreateUnaryIntrinsic(
+            truncate ? llvm::Intrinsic::trunc : llvm::Intrinsic::round, number);
+        auto* zero = llvm::ConstantFP::get(f64_type(), 0.0);
+        auto* modulus = llvm::ConstantFP::get(f64_type(), 18446744073709551616.0);
+        if (to == Kind::None) {
+            // An infinity or NaN converts as zero; otherwise the rounded
+            // value keeps its low 64 bits.
+            auto* safe = builder_.CreateSelect(finite, rounded, zero);
+            auto* wrapped = builder_.CreateFRem(safe, modulus);
+            auto* magnitude = builder_.CreateFPToUI(
+                builder_.CreateUnaryIntrinsic(llvm::Intrinsic::fabs, wrapped), i64_);
+            auto* value = builder_.CreateSelect(builder_.CreateFCmpOLT(wrapped, zero),
+                builder_.CreateSub(constant(0U), magnitude), magnitude);
+            return builder_.CreateSelect(finite, value, constant(0U));
+        }
+        // A time: finite, at least zero and below 2^64.
+        scalar_flag(error, builder_.CreateNot(finite), SystemVerilogScalarError::Nonfinite);
+        auto* in_range = builder_.CreateAnd(builder_.CreateFCmpOGE(rounded, zero),
+            builder_.CreateFCmpOLT(rounded, modulus));
+        scalar_flag(error, builder_.CreateAnd(finite, builder_.CreateNot(in_range)),
+            SystemVerilogScalarError::Overflow);
+        return builder_.CreateFPToUI(
+            builder_.CreateSelect(builder_.CreateAnd(finite, in_range), rounded, zero), i64_);
+    }
+
+    /// packed_math_number: an integral register as a double, its set bits
+    /// added from the lowest (the reference's order of roundings); x and z
+    /// bits are zero.
+    [[nodiscard]] llvm::Value* scalar_packed_number(const std::uint32_t reg,
+        const std::uint64_t width, const bool is_signed, llvm::Value*& error)
+    {
+        scalar_flag(error, scalar_rounding_changed(),
+            SystemVerilogScalarError::UnsupportedRoundingMode);
+        const auto value = load_register(reg);
+        const auto bits = static_cast<std::uint32_t>(width);
+        auto* m = constant(mask_of(bits));
+        auto* ones = builder_.CreateAnd(builder_.CreateAnd(value.a, bit_not(value.b)), m);
+        llvm::Value* negative = builder_.getFalse();
+        if (is_signed) {
+            negative = builder_.CreateICmpNE(
+                builder_.CreateAnd(builder_.CreateLShr(ones, constant(bits - 1U)), constant(1U)),
+                constant(0U));
+        }
+        auto* magnitude = builder_.CreateSelect(negative,
+            builder_.CreateAnd(builder_.CreateSub(constant(0U), ones), m), ones);
+        auto* rest = str_slot(i64_, magnitude);
+        auto* sum = str_slot(f64_type(), llvm::ConstantFP::get(f64_type(), 0.0));
+        dyn_while([&] { return builder_.CreateICmpNE(builder_.CreateLoad(i64_, rest), constant(0U)); },
+            [&] {
+                auto* left = builder_.CreateLoad(i64_, rest);
+                auto* bit = builder_.CreateBinaryIntrinsic(llvm::Intrinsic::cttz, left,
+                    builder_.getTrue());
+                auto* power = builder_.CreateBitCast(
+                    builder_.CreateShl(builder_.CreateAdd(bit, constant(1023U)), constant(52U)),
+                    f64_type());
+                builder_.CreateStore(
+                    builder_.CreateFAdd(builder_.CreateLoad(f64_type(), sum), power), sum);
+                builder_.CreateStore(
+                    builder_.CreateAnd(left, builder_.CreateSub(left, constant(1U))), rest);
+            });
+        auto* total = builder_.CreateLoad(f64_type(), sum);
+        return builder_.CreateSelect(negative, builder_.CreateFNeg(total), total);
+    }
+
+    /// A libm function of one or two doubles (the reference's std:: call).
+    [[nodiscard]] llvm::Value* scalar_libm(const char* name, llvm::Value* first, llvm::Value* second)
+    {
+        std::vector<llvm::Type*> parameters { f64_type() };
+        std::vector<llvm::Value*> arguments { first };
+        if (second != nullptr) {
+            parameters.push_back(f64_type());
+            arguments.push_back(second);
+        }
+        auto* type = llvm::FunctionType::get(f64_type(), parameters, false);
+        auto* call = builder_.CreateCall(type, helper_symbol(name, type), arguments);
+        // The library's own result, not a simplified form.
+        call->addFnAttr(llvm::Attribute::NoBuiltin);
+        return call;
+    }
+
+    /// KOp::scalar, sub 0: systemverilog_scalar_binary_payload.
+    [[nodiscard]] llvm::Value* emit_scalar_binary(const KInst& inst,
+        const runtime::simir::static_kernel_detail::ScalarFields& fields, llvm::Value*& error)
+    {
+        using Kind = SystemVerilogScalarKind;
+        using Operator = SystemVerilogScalarBinaryOperator;
+        const auto operation = static_cast<Operator>(fields.operation);
+        const auto left = static_cast<Kind>(fields.first_kind);
+        const auto right = static_cast<Kind>(fields.second_kind);
+        const auto target = static_cast<Kind>(fields.result_kind);
+        const auto payload_width = [](const Kind kind) { return kind == Kind::ShortReal ? 32U : 64U; };
+        const auto partner = operation == Operator::Convert ? target : right;
+        auto* lhs = scalar_payload(inst.x, payload_width(left),
+            left == Kind::Time && (scalar_real(partner) || scalar_real(target)), error);
+        if (operation == Operator::Convert) {
+            return scalar_convert(lhs, left, target, false, error);
+        }
+        auto* rhs = scalar_payload(inst.y, payload_width(right),
+            right == Kind::Time && (scalar_real(left) || scalar_real(target)), error);
+        if (operation >= Operator::Equal) {
+            const auto compare = static_cast<std::size_t>(static_cast<std::uint8_t>(operation)
+                - static_cast<std::uint8_t>(Operator::Equal));
+            static constexpr std::array integer_predicates { llvm::CmpInst::ICMP_EQ,
+                llvm::CmpInst::ICMP_NE, llvm::CmpInst::ICMP_ULT, llvm::CmpInst::ICMP_ULE,
+                llvm::CmpInst::ICMP_UGT, llvm::CmpInst::ICMP_UGE };
+            static constexpr std::array real_predicates { llvm::CmpInst::FCMP_OEQ,
+                llvm::CmpInst::FCMP_UNE, llvm::CmpInst::FCMP_OLT, llvm::CmpInst::FCMP_OLE,
+                llvm::CmpInst::FCMP_OGT, llvm::CmpInst::FCMP_OGE };
+            llvm::Value* result = nullptr;
+            if ((left == Kind::Chandle && right == Kind::Chandle)
+                || (left == Kind::Time && right == Kind::Time)) {
+                result = builder_.CreateICmp(integer_predicates.at(compare), lhs, rhs);
+            } else {
+                if (left == Kind::Time || right == Kind::Time) {
+                    scalar_flag(error, scalar_rounding_changed(),
+                        SystemVerilogScalarError::UnsupportedRoundingMode);
+                }
+                result = builder_.CreateFCmp(real_predicates.at(compare),
+                    scalar_as_real(lhs, left), scalar_as_real(rhs, right));
+            }
+            return builder_.CreateZExt(result, i64_);
+        }
+        // systemverilog_scalar_arithmetic in the promoted kind.
+        const auto kind = left == Kind::Real || right == Kind::Real ? Kind::Real
+            : left == Kind::Realtime || right == Kind::Realtime   ? Kind::Realtime
+            : left == Kind::ShortReal || right == Kind::ShortReal ? Kind::ShortReal
+                                                                  : Kind::Time;
+        llvm::Value* value = nullptr;
+        if (kind == Kind::Time) {
+            switch (operation) {
+            case Operator::Add: {
+                auto* sum = builder_.CreateBinaryIntrinsic(
+                    llvm::Intrinsic::uadd_with_overflow, lhs, rhs);
+                scalar_flag(error, builder_.CreateExtractValue(sum, 1U),
+                    SystemVerilogScalarError::Overflow);
+                value = builder_.CreateExtractValue(sum, 0U);
+                break;
+            }
+            case Operator::Subtract:
+                scalar_flag(error, builder_.CreateICmpULT(lhs, rhs),
+                    SystemVerilogScalarError::Overflow);
+                value = builder_.CreateSub(lhs, rhs);
+                break;
+            case Operator::Multiply: {
+                auto* product = builder_.CreateBinaryIntrinsic(
+                    llvm::Intrinsic::umul_with_overflow, lhs, rhs);
+                scalar_flag(error, builder_.CreateExtractValue(product, 1U),
+                    SystemVerilogScalarError::Overflow);
+                value = builder_.CreateExtractValue(product, 0U);
+                break;
+            }
+            default: {
+                auto* zero = builder_.CreateICmpEQ(rhs, constant(0U));
+                scalar_flag(error, zero, SystemVerilogScalarError::DivideByZero);
+                value = builder_.CreateUDiv(lhs, builder_.CreateSelect(zero, constant(1U), rhs));
+                break;
+            }
+            }
+        } else {
+            scalar_flag(error, scalar_rounding_changed(),
+                SystemVerilogScalarError::UnsupportedRoundingMode);
+            auto* l = scalar_as_real(lhs, left);
+            auto* r = scalar_as_real(rhs, right);
+            if (kind == Kind::ShortReal) {
+                l = builder_.CreateFPTrunc(l, f32_type());
+                r = builder_.CreateFPTrunc(r, f32_type());
+            }
+            llvm::Value* number = nullptr;
+            switch (operation) {
+            case Operator::Add:
+                number = builder_.CreateFAdd(l, r);
+                break;
+            case Operator::Subtract:
+                number = builder_.CreateFSub(l, r);
+                break;
+            case Operator::Multiply:
+                number = builder_.CreateFMul(l, r);
+                break;
+            default:
+                number = builder_.CreateFDiv(l, r);
+                break;
+            }
+            value = kind == Kind::ShortReal
+                ? builder_.CreateZExt(builder_.CreateBitCast(number, i32_), i64_)
+                : builder_.CreateBitCast(number, i64_);
+        }
+        if (target != Kind::None && target != kind) {
+            value = scalar_convert(value, kind, target, false, error);
+        }
+        return value;
+    }
+
+    /// KOp::scalar, sub 1: systemverilog_math_payload.
+    [[nodiscard]] llvm::Value* emit_scalar_math(const KInst& inst,
+        const runtime::simir::static_kernel_detail::ScalarFields& fields, llvm::Value*& error)
+    {
+        using Kind = SystemVerilogScalarKind;
+        using Function = SystemVerilogMathFunction;
+        const auto function = static_cast<Function>(fields.operation);
+        const auto first_kind = static_cast<Kind>(fields.first_kind);
+        const auto first_width = inst.imm_b & 0xffffffffU;
+        switch (function) {
+        case Function::Rtoi: {
+            auto* bits = scalar_payload(inst.x, first_width, false, error);
+            auto* integral = scalar_convert(bits, first_kind, Kind::None, true, error);
+            // systemverilog_scalar_to_packed: a signed 32-bit result.
+            auto* fits = builder_.CreateAnd(
+                builder_.CreateICmpSGE(integral, constant(~std::uint64_t { 0x7fffffffU })),
+                builder_.CreateICmpSLE(integral, constant(0x7fffffffU)));
+            scalar_flag(error, builder_.CreateNot(fits), SystemVerilogScalarError::Overflow);
+            return builder_.CreateAnd(integral, constant(0xffffffffU));
+        }
+        case Function::Itor:
+            return builder_.CreateBitCast(
+                scalar_packed_number(inst.x, first_width, fields.first_signed, error), i64_);
+        case Function::BitsToReal:
+        case Function::RealToBits:
+        case Function::BitsToShortReal:
+        case Function::ShortRealToBits:
+            return scalar_payload(inst.x, first_width, false, error);
+        default:
+            break;
+        }
+        const auto number = [&](const std::uint32_t reg, const Kind kind, const std::uint64_t width,
+                                const bool is_signed) {
+            if (kind == Kind::None) {
+                return scalar_packed_number(reg, width, is_signed, error);
+            }
+            return scalar_as_real(scalar_payload(reg, width, false, error), kind);
+        };
+        auto* lhs = number(inst.x, first_kind, first_width, fields.first_signed);
+        llvm::Value* rhs = nullptr;
+        if (fields.has_second) {
+            rhs = number(inst.y, static_cast<Kind>(fields.second_kind), inst.imm_b >> 32U,
+                fields.second_signed);
+        }
+        const char* name = nullptr;
+        switch (function) {
+        case Function::Ln: name = "log"; break;
+        case Function::Log10: name = "log10"; break;
+        case Function::Exp: name = "exp"; break;
+        case Function::Sqrt: name = "sqrt"; break;
+        case Function::Pow: name = "pow"; break;
+        case Function::Floor: name = "floor"; break;
+        case Function::Ceil: name = "ceil"; break;
+        case Function::Sin: name = "sin"; break;
+        case Function::Cos: name = "cos"; break;
+        case Function::Tan: name = "tan"; break;
+        case Function::Asin: name = "asin"; break;
+        case Function::Acos: name = "acos"; break;
+        case Function::Atan: name = "atan"; break;
+        case Function::Atan2: name = "atan2"; break;
+        case Function::Hypot: name = "hypot"; break;
+        case Function::Sinh: name = "sinh"; break;
+        case Function::Cosh: name = "cosh"; break;
+        case Function::Tanh: name = "tanh"; break;
+        case Function::Asinh: name = "asinh"; break;
+        case Function::Acosh: name = "acosh"; break;
+        case Function::Atanh: name = "atanh"; break;
+        default: name = "sqrt"; break;
+        }
+        return builder_.CreateBitCast(scalar_libm(name, lhs, rhs), i64_);
+    }
+
+    /// KOp::scalar (IEEE 1800-2023 6.12, 11.3.1, 20.5, 20.8).
+    void emit_scalar(const KInst& inst, const std::uint32_t at)
+    {
+        const auto fields = runtime::simir::static_kernel_detail::scalar_fields(inst.imm_a);
+        llvm::Value* error = llvm::ConstantInt::get(i32_, 0U);
+        auto* value = inst.sub == 0U ? emit_scalar_binary(inst, fields, error)
+                                     : emit_scalar_math(inst, fields, error);
+        auto* fail = llvm::BasicBlock::Create(context_, "scalar_fail", &function_);
+        auto* next = llvm::BasicBlock::Create(context_, "scalar_ok", &function_);
+        builder_.CreateCondBr(builder_.CreateICmpEQ(error, llvm::ConstantInt::get(i32_, 0U)),
+            next, fail);
+        builder_.SetInsertPoint(fail);
+        auto* type = llvm::FunctionType::get(llvm::Type::getVoidTy(context_),
+            { ptr_, i32_, i64_, i64_ }, false);
+        builder_.CreateCall(type, helper_symbol("fsim_sk_scalar_fail", type),
+            { frame_, llvm::ConstantInt::get(i32_, at),
+                builder_.CreateOr(builder_.CreateZExt(error, i64_),
+                    constant(std::uint64_t { inst.sub } << 32U)),
+                constant(inst.imm_a) });
+        builder_.CreateBr(failure_block_);
+        builder_.SetInsertPoint(next);
+        store_register(inst.d, { value, constant(0U) });
     }
 
     /// KOp::random (IEEE 1800-2023 18.13, 20.15).
@@ -18525,6 +18940,9 @@ private:
         case KOp::random:
             emit_random(inst);
             break;
+        case KOp::scalar:
+            emit_scalar(inst, at);
+            break;
         case KOp::wide_move:
             // compile_body fuses only moves to an unresolved slot with a
             // one-field selection; the rest stay wide_load, wide_alu and
@@ -20770,6 +21188,35 @@ private:
         add("fsim_sk_dyn_text_reserve", helpers.dyn_text_reserve);
         add("fsim_sk_dyn_scratch", helpers.dyn_scratch);
         add("fsim_sk_dyn_stream_wide", helpers.dyn_stream_wide);
+        add("fsim_sk_scalar_fail", helpers.scalar_fail);
+        // The math library (KOp::scalar; the reference's std:: calls, and
+        // the library forms of rounding and remainder).
+        using Unary = double (*)(double);
+        using Binary = double (*)(double, double);
+        add("log", static_cast<Unary>(&::log));
+        add("log10", static_cast<Unary>(&::log10));
+        add("exp", static_cast<Unary>(&::exp));
+        add("sqrt", static_cast<Unary>(&::sqrt));
+        add("pow", static_cast<Binary>(&::pow));
+        add("floor", static_cast<Unary>(&::floor));
+        add("ceil", static_cast<Unary>(&::ceil));
+        add("round", static_cast<Unary>(&::round));
+        add("trunc", static_cast<Unary>(&::trunc));
+        add("fmod", static_cast<Binary>(&::fmod));
+        add("sin", static_cast<Unary>(&::sin));
+        add("cos", static_cast<Unary>(&::cos));
+        add("tan", static_cast<Unary>(&::tan));
+        add("asin", static_cast<Unary>(&::asin));
+        add("acos", static_cast<Unary>(&::acos));
+        add("atan", static_cast<Unary>(&::atan));
+        add("atan2", static_cast<Binary>(&::atan2));
+        add("hypot", static_cast<Binary>(&::hypot));
+        add("sinh", static_cast<Unary>(&::sinh));
+        add("cosh", static_cast<Unary>(&::cosh));
+        add("tanh", static_cast<Unary>(&::tanh));
+        add("asinh", static_cast<Unary>(&::asinh));
+        add("acosh", static_cast<Unary>(&::acosh));
+        add("atanh", static_cast<Unary>(&::atanh));
         // llvm.memcpy of a run-time length (KOp::str).
         add("memcpy", static_cast<void* (*)(void*, const void*, std::size_t)>(&std::memcpy));
 #if defined(__MINGW32__)
