@@ -2,6 +2,8 @@
 
 #include "simir_static_kernel_dynamic.hpp"
 
+#include "simir_container_ops.hpp"
+
 #include "fsim/runtime/string_methods.hpp"
 
 #include <algorithm>
@@ -1130,6 +1132,10 @@ const char* dyn_fail_message(const DynFailure failure) noexcept
         return "associative-array string index exceeds the byte limit";
     case DynFailure::string_limit:
         return "string value exceeds the byte limit";
+    case DynFailure::stream_short:
+        return "a bit stream is smaller than its targets";
+    case DynFailure::stream_wide:
+        return "a bit stream is wider than its target";
     }
     return "static kernel container operation failed";
 }
@@ -1754,6 +1760,14 @@ DynFailure execute_dyn(const KInst& inst, StaticKernelDynamicContainer& containe
         case DynOp::reduce:
         case DynOp::order:
         case DynOp::locate:
+        case DynOp::stream_clear:
+        case DynOp::stream_append_value:
+        case DynOp::stream_append_container:
+        case DynOp::stream_reverse:
+        case DynOp::stream_to_value:
+        case DynOp::stream_take_value:
+        case DynOp::stream_to_container:
+        case DynOp::stream_take_container:
             throw std::logic_error { "static kernel whole-array operation misplaced" };
         }
     } catch (const std::bad_alloc&) {
@@ -1837,6 +1851,147 @@ void execute_dyn_whole(const KInst& inst, const CompiledBody& body,
     }
     default:
         throw std::logic_error { "static kernel whole-array operation is invalid" };
+    }
+}
+
+namespace {
+
+/// The registers and containers of one bit-stream operation, as the
+/// reference's ContainerBitstream reads them: register `value` (x or d),
+/// container 0 the stream and container 1 the other container.
+class StreamAccess final : public ContainerRegisterAccess {
+public:
+    StreamAccess(Word* registers, const RegisterId value, PackedLogic4 current,
+        ContainerValue& bits, ContainerValue* other)
+        : registers_ { registers }
+        , value_ { value }
+        , current_ { std::move(current) }
+        , bits_ { bits }
+        , other_ { other }
+    {
+    }
+
+    [[nodiscard]] const PackedLogic4& read(const RegisterId id) override
+    {
+        check(id);
+        return current_;
+    }
+
+    void write(const RegisterId id, PackedLogic4 value) override
+    {
+        check(id);
+        const auto low = value.low_word();
+        registers_[id] = Word { low.aval, low.bval };
+    }
+
+    [[nodiscard]] const std::string& read_string(StringRegisterId) override
+    {
+        throw std::logic_error { "static kernel bit stream reads no string" };
+    }
+
+    [[nodiscard]] std::string& string(StringRegisterId) override
+    {
+        throw std::logic_error { "static kernel bit stream writes no string" };
+    }
+
+    [[nodiscard]] ContainerValue& container(const ContainerRegisterId id) override
+    {
+        if (id == 0U) {
+            return bits_;
+        }
+        if (id != 1U || other_ == nullptr) {
+            throw std::logic_error { "static kernel bit stream container is invalid" };
+        }
+        return *other_;
+    }
+
+    [[nodiscard]] const ContainerValue& read_container(const ContainerRegisterId id) override
+    {
+        return container(id);
+    }
+
+    [[nodiscard]] std::uint32_t next_random() override
+    {
+        throw std::logic_error { "static kernel bit stream draws no random number" };
+    }
+
+private:
+    void check(const RegisterId id) const
+    {
+        if (id != value_) {
+            throw std::logic_error { "static kernel bit stream register is invalid" };
+        }
+    }
+
+    Word* registers_;
+    RegisterId value_;
+    PackedLogic4 current_;
+    ContainerValue& bits_;
+    ContainerValue* other_;
+};
+
+} // namespace
+
+void execute_dyn_stream(const KInst& inst, StaticKernelDynamicContainer& bits,
+    const ContainerType& bits_type, StaticKernelDynamicContainer* other,
+    const ContainerType* other_type, Word* registers, const ProcessId process,
+    const InstructionIndex instruction)
+{
+    const auto op = static_cast<DynOp>(inst.sub);
+    ContainerBitstream operation { };
+    operation.bits = 0U;
+    operation.container = 1U;
+    operation.slice = static_cast<std::uint32_t>(inst.imm_b);
+    RegisterId value = 0U;
+    std::uint64_t width = 1U;
+    switch (op) {
+    case DynOp::stream_clear:
+        operation.operation = ContainerBitstreamOperation::clear;
+        break;
+    case DynOp::stream_append_value:
+        operation.operation = ContainerBitstreamOperation::append_value;
+        value = inst.x;
+        width = inst.offset;
+        break;
+    case DynOp::stream_append_container:
+        operation.operation = ContainerBitstreamOperation::append_container;
+        break;
+    case DynOp::stream_reverse:
+        operation.operation = ContainerBitstreamOperation::reverse;
+        break;
+    case DynOp::stream_to_value:
+    case DynOp::stream_take_value:
+        operation.operation = op == DynOp::stream_to_value
+            ? ContainerBitstreamOperation::to_value
+            : ContainerBitstreamOperation::take_value;
+        value = inst.d;
+        width = inst.imm_b;
+        break;
+    case DynOp::stream_to_container:
+        operation.operation = ContainerBitstreamOperation::to_container;
+        break;
+    case DynOp::stream_take_container:
+        operation.operation = ContainerBitstreamOperation::take_container;
+        break;
+    default:
+        throw std::logic_error { "static kernel bit-stream operation is invalid" };
+    }
+    operation.value = value;
+    auto stream = dynamic_value(bits, bits_type);
+    std::optional<ContainerValue> second;
+    if (other != nullptr && other_type != nullptr) {
+        second = dynamic_value(*other, *other_type);
+    }
+    StreamAccess access { registers, value,
+        PackedLogic4::from_aval_bval(static_cast<std::size_t>(width),
+            registers[value].a, registers[value].b), stream,
+        second ? &*second : nullptr };
+    execute_container_operation(operation, access, process, instruction);
+    if (op != DynOp::stream_to_value && op != DynOp::stream_to_container) {
+        assign_dynamic_value(bits, stream);
+    }
+    if ((op == DynOp::stream_to_container || op == DynOp::stream_take_container) && second) {
+        assign_dynamic_value(*other, *second);
     }
 }
 

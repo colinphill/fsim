@@ -8474,6 +8474,10 @@ private:
             emit_dyn_whole(inst, at, header);
             return;
         }
+        if (detail::dyn_stream(op)) {
+            emit_dyn_stream(inst, at, header);
+            return;
+        }
         if ((inst.imm_a & detail::dyn_layout_sparse) != 0U) {
             emit_dyn_sparse(inst, at, header);
             return;
@@ -8706,7 +8710,237 @@ private:
         case DynOp::reduce:
         case DynOp::order:
         case DynOp::locate:
+        case DynOp::stream_clear:
+        case DynOp::stream_append_value:
+        case DynOp::stream_append_container:
+        case DynOp::stream_reverse:
+        case DynOp::stream_to_value:
+        case DynOp::stream_take_value:
+        case DynOp::stream_to_container:
+        case DynOp::stream_take_container:
             throw std::logic_error("static kernel whole-array operation misplaced");
+        }
+    }
+
+    /// Bit `ordinal` of bit stream `bits` (a queue of one-bit elements).
+    [[nodiscard]] Pair stream_bit(llvm::Value* bits, llvm::Value* ordinal)
+    {
+        const auto element = dyn_load_element(bits, ordinal);
+        return { builder_.CreateAnd(element.a, constant(1U)),
+            builder_.CreateAnd(element.b, constant(1U)) };
+    }
+
+    /// Appends bits `width - 1` down to 0 of `value` to bit stream `bits`
+    /// from position `count` (room is reserved); returns the new count.
+    [[nodiscard]] llvm::Value* stream_append_bits(llvm::Value* bits, llvm::Value* count,
+        const Pair value, llvm::Value* width)
+    {
+        dyn_loop(constant(0U), width, false, [&](llvm::Value* step) {
+            auto* bit = builder_.CreateSub(builder_.CreateSub(width, constant(1U)), step);
+            dyn_store_element(bits, builder_.CreateAdd(count, step),
+                { builder_.CreateAnd(builder_.CreateLShr(value.a, bit), constant(1U)),
+                    builder_.CreateAnd(builder_.CreateLShr(value.b, bit), constant(1U)) });
+        });
+        return builder_.CreateAdd(count, width);
+    }
+
+    /// The `width`-bit value of stream bits `begin` .. `begin + width - 1`
+    /// (the first most significant), bits past `size` zero.
+    [[nodiscard]] Pair stream_gather(llvm::Value* bits, llvm::Value* begin, llvm::Value* size,
+        const std::uint64_t width)
+    {
+        auto* result_a = str_slot(i64_, constant(0U));
+        auto* result_b = str_slot(i64_, constant(0U));
+        auto* available = builder_.CreateSelect(builder_.CreateICmpULT(begin, size),
+            builder_.CreateSub(size, begin), constant(0U));
+        auto* end = builder_.CreateSelect(builder_.CreateICmpULT(available, constant(width)),
+            available, constant(width));
+        dyn_loop(constant(0U), end, false, [&](llvm::Value* step) {
+            const auto bit = stream_bit(bits, builder_.CreateAdd(begin, step));
+            auto* shift = builder_.CreateSub(constant(width - 1U), step);
+            builder_.CreateStore(builder_.CreateOr(builder_.CreateLoad(i64_, result_a),
+                                     builder_.CreateShl(bit.a, shift)),
+                result_a);
+            builder_.CreateStore(builder_.CreateOr(builder_.CreateLoad(i64_, result_b),
+                                     builder_.CreateShl(bit.b, shift)),
+                result_b);
+        });
+        return { builder_.CreateLoad(i64_, result_a), builder_.CreateLoad(i64_, result_b) };
+    }
+
+    /// Removes the first `count` bits of bit stream `bits`.
+    void stream_drop(llvm::Value* bits, llvm::Value* count)
+    {
+        dyn_store(bits, dyn_head,
+            builder_.CreateAnd(builder_.CreateAdd(dyn_load(bits, dyn_head), count),
+                builder_.CreateSub(dyn_load(bits, dyn_capacity), constant(1U))));
+        dyn_store(bits, dyn_size, builder_.CreateSub(dyn_load(bits, dyn_size), count));
+    }
+
+    /// ContainerBitstream (11.4.14): bit stream aux, packed register x or
+    /// d, container z.
+    void emit_dyn_stream(const KInst& inst, const std::uint32_t at, llvm::Value* bits)
+    {
+        using detail::DynFailure;
+        using detail::DynOp;
+        const auto op = static_cast<DynOp>(inst.sub);
+        auto* size = dyn_load(bits, dyn_size);
+        switch (op) {
+        case DynOp::stream_clear:
+            dyn_store(bits, dyn_size, constant(0U));
+            dyn_store(bits, dyn_head, constant(0U));
+            return;
+        case DynOp::stream_append_value: {
+            auto* width = constant(inst.offset);
+            dyn_reserve(bits, builder_.CreateAdd(size, width), at);
+            dyn_store(bits, dyn_size,
+                stream_append_bits(bits, size, load_register(inst.x), width));
+            return;
+        }
+        case DynOp::stream_append_container: {
+            // Every element's bits, the leftmost element first; a string
+            // element its bytes, 8 bits each.
+            auto* source = dyn_header(inst.z);
+            auto* count = dyn_load(source, dyn_size);
+            const bool text = (inst.imm_a & detail::dyn_stream_other_text) != 0U;
+            if (!text) {
+                auto* width = constant(inst.offset);
+                dyn_reserve(bits, builder_.CreateAdd(size, builder_.CreateMul(count, width)), at);
+                auto* position = str_slot(i64_, size);
+                dyn_loop(constant(0U), count, false, [&](llvm::Value* ordinal) {
+                    builder_.CreateStore(stream_append_bits(bits,
+                                             builder_.CreateLoad(i64_, position),
+                                             dyn_load_element(source, ordinal), width),
+                        position);
+                });
+                dyn_store(bits, dyn_size, builder_.CreateLoad(i64_, position));
+                return;
+            }
+            auto* bytes = str_slot(i64_, constant(0U));
+            dyn_loop(constant(0U), count, false, [&](llvm::Value* ordinal) {
+                builder_.CreateStore(builder_.CreateAdd(builder_.CreateLoad(i64_, bytes),
+                                         text_slot_size(dyn_element_address(source, ordinal))),
+                    bytes);
+            });
+            dyn_reserve(bits,
+                builder_.CreateAdd(size,
+                    builder_.CreateShl(builder_.CreateLoad(i64_, bytes), constant(3U))),
+                at);
+            auto* position = str_slot(i64_, size);
+            dyn_loop(constant(0U), count, false, [&](llvm::Value* ordinal) {
+                auto* slot = dyn_element_address(source, ordinal);
+                auto* data = builder_.CreateLoad(ptr_, slot);
+                dyn_loop(constant(0U), text_slot_size(slot), false, [&](llvm::Value* byte) {
+                    auto* code = builder_.CreateZExt(
+                        builder_.CreateLoad(i8_, builder_.CreateInBoundsGEP(i8_, data, byte)),
+                        i64_);
+                    builder_.CreateStore(stream_append_bits(bits,
+                                             builder_.CreateLoad(i64_, position),
+                                             { code, constant(0U) }, constant(8U)),
+                        position);
+                });
+            });
+            dyn_store(bits, dyn_size, builder_.CreateLoad(i64_, position));
+            return;
+        }
+        case DynOp::stream_reverse: {
+            // Slices from the right end, the last one possibly short
+            // (11.4.14.2), through a scratch copy.
+            auto* slice = constant(std::max<std::uint64_t>(inst.imm_b, 1U));
+            auto* scratch = dyn_scratch(builder_.CreateShl(builder_.CreateAdd(size, constant(1U)),
+                                            constant(1U)),
+                at);
+            auto* out = str_slot(i64_, constant(0U));
+            auto* end_slot = str_slot(i64_, size);
+            dyn_while(
+                [&] {
+                    return builder_.CreateICmpNE(builder_.CreateLoad(i64_, end_slot),
+                        constant(0U));
+                },
+                [&] {
+                    auto* end = builder_.CreateLoad(i64_, end_slot);
+                    auto* begin = builder_.CreateSelect(builder_.CreateICmpUGT(end, slice),
+                        builder_.CreateSub(end, slice), constant(0U));
+                    dyn_loop(begin, end, false, [&](llvm::Value* bit) {
+                        const auto value = stream_bit(bits, bit);
+                        auto* index = builder_.CreateLoad(i64_, out);
+                        auto* entry = builder_.CreateInBoundsGEP(i64_, scratch,
+                            builder_.CreateShl(index, constant(1U)));
+                        scratch_store(entry, 0U, value);
+                        builder_.CreateStore(builder_.CreateAdd(index, constant(1U)), out);
+                    });
+                    builder_.CreateStore(begin, end_slot);
+                });
+            dyn_loop(constant(0U), size, false, [&](llvm::Value* bit) {
+                auto* entry = builder_.CreateInBoundsGEP(i64_, scratch,
+                    builder_.CreateShl(bit, constant(1U)));
+                dyn_store_element(bits, bit, scratch_load(entry, 0U));
+            });
+            return;
+        }
+        case DynOp::stream_to_value: {
+            auto* fits = builder_.CreateICmpULE(size, constant(inst.imm_b));
+            if (!two_state_) {
+                auto* fail = llvm::BasicBlock::Create(context_, "stream_wide", &function_);
+                auto* next = llvm::BasicBlock::Create(context_, "stream_fits", &function_);
+                builder_.CreateCondBr(fits, next, fail);
+                builder_.SetInsertPoint(fail);
+                auto* type = llvm::FunctionType::get(llvm::Type::getVoidTy(context_),
+                    { ptr_, i32_, i64_, i64_ }, false);
+                builder_.CreateCall(type, helper_symbol("fsim_sk_dyn_stream_wide", type),
+                    { frame_, llvm::ConstantInt::get(i32_, at), size, constant(inst.imm_b) });
+                builder_.CreateBr(failure_block_);
+                builder_.SetInsertPoint(next);
+            }
+            store_register(inst.d, stream_gather(bits, constant(0U), size, inst.imm_b));
+            return;
+        }
+        case DynOp::stream_take_value:
+            dyn_check(builder_.CreateICmpUGE(size, constant(inst.imm_b)), at,
+                DynFailure::stream_short);
+            store_register(inst.d, stream_gather(bits, constant(0U), size, inst.imm_b));
+            stream_drop(bits, constant(inst.imm_b));
+            return;
+        case DynOp::stream_to_container:
+        case DynOp::stream_take_container: {
+            // A queue or dynamic array takes as many elements as the bits
+            // fill (less the bits reserved for later targets), the last one
+            // padded with zero bits (11.4.14.4); 2-state elements take X
+            // and Z bits as 0 (6.22).
+            auto* target = dyn_header(inst.z);
+            const auto width = std::uint64_t { inst.offset };
+            const bool two_state = (inst.imm_a & detail::dyn_stream_other_two_state) != 0U;
+            const bool resize = (inst.imm_a & detail::dyn_stream_other_associative) == 0U;
+            const auto reserved = op == DynOp::stream_take_container ? inst.imm_b : 0U;
+            llvm::Value* count = dyn_load(target, dyn_size);
+            if (resize) {
+                auto* remaining = builder_.CreateSelect(
+                    builder_.CreateICmpUGT(size, constant(reserved)),
+                    builder_.CreateSub(size, constant(reserved)), constant(0U));
+                count = builder_.CreateUDiv(builder_.CreateAdd(remaining, constant(width - 1U)),
+                    constant(width));
+                dyn_reserve(target, count, at);
+                dyn_store(target, dyn_size, count);
+            }
+            dyn_loop(constant(0U), count, false, [&](llvm::Value* ordinal) {
+                auto value = stream_gather(bits, builder_.CreateMul(ordinal, constant(width)),
+                    size, width);
+                if (two_state) {
+                    value = { builder_.CreateAnd(value.a, bit_not(value.b)), constant(0U) };
+                }
+                dyn_store_element(target, ordinal, value);
+            });
+            auto* used = builder_.CreateMul(count, constant(width));
+            auto* position = builder_.CreateSelect(builder_.CreateICmpULT(used, size), used, size);
+            if (op == DynOp::stream_to_container) {
+                dyn_check(builder_.CreateICmpUGE(position, size), at, DynFailure::stream_wide);
+            } else {
+                stream_drop(bits, position);
+            }
+            return;
+        }
+        default:
+            throw std::logic_error("static kernel bit-stream operation is invalid");
         }
     }
 
@@ -20204,6 +20438,7 @@ private:
         add("fsim_sk_str_reserve", helpers.str_reserve);
         add("fsim_sk_dyn_text_reserve", helpers.dyn_text_reserve);
         add("fsim_sk_dyn_scratch", helpers.dyn_scratch);
+        add("fsim_sk_dyn_stream_wide", helpers.dyn_stream_wide);
         // llvm.memcpy of a run-time length (KOp::str).
         add("memcpy", static_cast<void* (*)(void*, const void*, std::size_t)>(&std::memcpy));
 #if defined(__MINGW32__)

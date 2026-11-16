@@ -579,6 +579,15 @@ void Interpreter::Impl::StaticKernel::execute_body(
         case KOp::dyn: {
             auto& header = dynamic_headers_[containers_[inst.aux].dynamic_header];
             const auto sub = static_cast<static_kernel_detail::DynOp>(inst.sub);
+            if (static_kernel_detail::dyn_stream(sub)) {
+                const bool paired = inst.z != no_container;
+                static_kernel_detail::execute_dyn_stream(inst, header, containers_[inst.aux].type,
+                    paired ? &dynamic_headers_[containers_[inst.z].dynamic_header] : nullptr,
+                    paired ? &containers_[inst.z].type : nullptr, registers,
+                    members_[member_index].process,
+                    members_[member_index].original_instruction(origin + at));
+                break;
+            }
             if (static_kernel_detail::dyn_whole(sub)) {
                 const auto* other = inst.z == no_container ? nullptr
                     : &dynamic_headers_[containers_[inst.z].dynamic_header];
@@ -2933,6 +2942,7 @@ void Interpreter::Impl::StaticKernel::set_instruction_helpers(
     };
     helpers.dyn_text_reserve = &StaticKernel::native_dyn_text_reserve;
     helpers.dyn_scratch = &StaticKernel::native_dyn_scratch;
+    helpers.dyn_stream_wide = &StaticKernel::native_dyn_stream_wide;
     helpers.sva_post = &StaticKernel::native_sva_post;
     helpers.sva_filter = &StaticKernel::native_sva_filter;
     helpers.sva_check = &StaticKernel::native_sva_check;

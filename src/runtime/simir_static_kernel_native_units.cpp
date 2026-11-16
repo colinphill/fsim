@@ -1071,6 +1071,21 @@ std::uint64_t* Interpreter::Impl::StaticKernel::native_dyn_scratch(
     }
 }
 
+void Interpreter::Impl::StaticKernel::native_dyn_stream_wide(StaticKernelNativeFrame* frame,
+    const std::uint32_t at, const std::uint64_t bits, const std::uint64_t width)
+{
+    auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
+    try {
+        // The reference's ContainerBitstream to_value text.
+        kernel.fail(frame->member, kernel.members_[frame->member].body_begin + at,
+            "a bit stream of " + std::to_string(bits) + " bits is wider than its "
+                + std::to_string(width) + "-bit target");
+    } catch (...) {
+        kernel.scratch().native_exception = std::current_exception();
+        frame->status = 1U;
+    }
+}
+
 void Interpreter::Impl::StaticKernel::native_fail(
     StaticKernelNativeFrame* frame, const std::uint32_t at,
     const std::uint32_t reason)

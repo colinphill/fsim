@@ -1847,6 +1847,10 @@ private:
     /// thread's own block, grown as needed).
     static std::uint64_t* native_dyn_scratch(StaticKernelNativeFrame* frame,
         std::uint32_t at, std::uint64_t words);
+    /// fsim_sk_dyn_stream_wide: the failure of a bit stream wider than its
+    /// packed target.
+    static void native_dyn_stream_wide(StaticKernelNativeFrame* frame, std::uint32_t at,
+        std::uint64_t bits, std::uint64_t width);
     static void native_sva_grow(StaticKernelNativeFrame* frame,
         std::uint32_t at, std::uint32_t region, std::uint64_t needed);
     static void native_sva_post(StaticKernelNativeFrame* frame, std::uint32_t at);

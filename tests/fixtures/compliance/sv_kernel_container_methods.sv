@@ -6,8 +6,10 @@
 // unknown bits, real and string elements), the conditional operator with a
 // known and an unknown condition, the reduction methods with and without a
 // `with` clause, the ordering methods (stable keyed sorts, signed and
-// four-state elements) and the locator methods (bounded results, the result
-// being the source itself), and arrays kept across a suspension.
+// four-state elements), the locator methods (bounded results, the result
+// being the source itself), streaming to and from arrays (11.4.14: slices,
+// four-state and string elements, a two-state target, several targets),
+// and arrays kept across a suspension.
 module sv_kernel_container_methods;
   int failures;
 
@@ -219,12 +221,56 @@ module sv_kernel_container_methods;
     check_queue("sorted after a wait", q, '{-3, -3, 0, 1, 5, 7});
   endtask
 
+  task automatic streams();
+    byte q[$];
+    bit [3:0] n[$];
+    logic [7:0] l[$];
+    string s[$];
+    bit [31:0] v;
+    logic [15:0] w;
+    byte a, b;
+    q = {8'h12, 8'h34, 8'hAB};
+    v = {>>{q}};
+    check("pack", v, 32'h1234ab00);
+    v = {<<{q}};
+    check("bit reverse", v, 32'hd52c4800);
+    v = {<<8{q}};
+    check("byte slices", v, 32'hab341200);
+    v = {<<4{q}};
+    check("nibble slices", v, 32'hba432100);
+    n = {>>{16'hBEEF}};
+    check("unpack resizes", n.size(), 4);
+    check("unpack first", n[0], 4'hb);
+    check("unpack last", n[3], 4'hf);
+    l = {8'b1010_x0z1, 8'h0f};
+    w = {>>{l}};
+    if (w !== 16'b1010_x0z1_0000_1111) begin
+      $display("FAIL four-state stream: %b", w);
+      failures++;
+    end
+    q = {>>byte{l}};
+    check("two-state target", unsigned'(q[0]), 8'b1010_0001);
+    {>>{a, b, n}} = 32'hDEAD_BEEF;
+    check("first target", unsigned'(a), 8'hde);
+    check("second target", unsigned'(b), 8'had);
+    s = {"AB", "c"};
+    v = {>>{s}};
+    check("strings", v, 32'h41426300);
+    v = {>>{q, 8'h55}};
+    check("array and value", v, 32'ha10f5500);
+    #10;
+    q = {8'h01};
+    v = {<<{q}};
+    check("after a wait", v, 32'h80000000);
+  endtask
+
   initial begin
     equality();
     conditional();
     reductions();
     ordering();
     locators();
+    streams();
     if (failures == 0) $display("PASS");
     $finish;
   end

@@ -127,7 +127,8 @@ bool Interpreter::Impl::StaticKernel::native_dynamic_containers(
                 || std::is_same_v<T, ConditionalContainerSelect>
                 || std::is_same_v<T, ContainerReduction>
                 || std::is_same_v<T, OrderContainer>
-                || std::is_same_v<T, LocateContainer>;
+                || std::is_same_v<T, LocateContainer>
+                || std::is_same_v<T, ContainerBitstream>;
         }, operation);
         if (!native) {
             return false;
@@ -1861,6 +1862,12 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                 } else if constexpr (std::is_same_v<T, CompareContainers>) {
                     // Array equality is one bit (7.12.2, 11.4.5).
                     define(op.destination, 1U);
+                } else if constexpr (std::is_same_v<T, ContainerBitstream>) {
+                    // A bit stream's packed target takes `slice` bits.
+                    if (op.operation == ContainerBitstreamOperation::to_value
+                        || op.operation == ContainerBitstreamOperation::take_value) {
+                        define(op.value, op.slice);
+                    }
                 } else if constexpr (std::is_same_v<T, ContainerReduction>) {
                     // A reduction is of the element type (7.12.3).
                     if (op.source < container_of_register.size()
@@ -2515,6 +2522,84 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             inst.imm_a = (inst.imm_a & ~static_kernel_detail::dyn_layout_signed_elements)
                 | (st.signed_elements ? static_kernel_detail::dyn_layout_signed_elements : 0U);
             inst.offset = static_cast<std::uint32_t>(st.element_width);
+            return true;
+        } else if constexpr (std::is_same_v<T, ContainerBitstream>) {
+            const auto stream = dyn_container(op.bits);
+            if (stream == no_container) {
+                return false;
+            }
+            const auto& st = containers_[stream].type;
+            if (!st.queue || st.associative || st.sparse || text(stream)
+                || st.element_width != 1U) {
+                throw reject("dyn_stream");
+            }
+            using Stream = ContainerBitstreamOperation;
+            const bool paired = op.operation == Stream::append_container
+                || op.operation == Stream::to_container
+                || op.operation == Stream::take_container;
+            auto other = no_container;
+            if (paired) {
+                other = dyn_container(op.container);
+                if (other == no_container) {
+                    return false;
+                }
+                const auto& ot = containers_[other].type;
+                // Elements of a stream target are packed or scalar; a source
+                // may also hold strings.
+                if (ot.sparse
+                    || (text(other) && op.operation != Stream::append_container)) {
+                    throw reject("dyn_stream");
+                }
+            }
+            switch (op.operation) {
+            case Stream::clear:
+                set(DynOp::stream_clear, stream);
+                break;
+            case Stream::append_value:
+                if (w(op.value) == 0U || w(op.value) > 64U) {
+                    throw reject("dyn_stream");
+                }
+                set(DynOp::stream_append_value, stream);
+                inst.x = narrow(op.value);
+                inst.offset = w(op.value);
+                break;
+            case Stream::append_container:
+                set(DynOp::stream_append_container, stream);
+                break;
+            case Stream::reverse:
+                set(DynOp::stream_reverse, stream);
+                break;
+            case Stream::to_value:
+            case Stream::take_value:
+                if (op.slice == 0U || op.slice > 64U || w(op.value) != op.slice) {
+                    throw reject("dyn_stream");
+                }
+                set(op.operation == Stream::to_value ? DynOp::stream_to_value
+                                                     : DynOp::stream_take_value,
+                    stream);
+                inst.d = narrow(op.value);
+                break;
+            case Stream::to_container:
+                set(DynOp::stream_to_container, stream);
+                break;
+            case Stream::take_container:
+                set(DynOp::stream_take_container, stream);
+                break;
+            }
+            inst.imm_b = op.slice;
+            if (paired) {
+                inst.z = other;
+                // The other container's element layout (width, kind) for
+                // the generated loops.
+                const auto& ot = containers_[other].type;
+                inst.offset = text(other) ? 8U : static_cast<std::uint32_t>(ot.element_width);
+                inst.imm_a |= (ot.two_state || ot.element_kind == ContainerElementKind::Scalar
+                                      ? static_kernel_detail::dyn_stream_other_two_state
+                                      : 0U)
+                    | (text(other) ? static_kernel_detail::dyn_stream_other_text : 0U)
+                    | (ot.associative ? static_kernel_detail::dyn_stream_other_associative
+                                      : 0U);
+            }
             return true;
         } else if constexpr (std::is_same_v<T, TraverseContainer>) {
             const auto container = dyn_container(op.source);
@@ -5769,7 +5854,8 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                 || std::is_same_v<T, ConditionalContainerSelect>
                 || std::is_same_v<T, ContainerReduction>
                 || std::is_same_v<T, OrderContainer>
-                || std::is_same_v<T, LocateContainer>) {
+                || std::is_same_v<T, LocateContainer>
+                || std::is_same_v<T, ContainerBitstream>) {
                 // Only a kernel queue, dynamic array or associative array
                 // (IEEE 1800-2023 7.5, 7.8 - 7.10; native_dynamic_containers
                 // admitted the member).

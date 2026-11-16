@@ -137,6 +137,15 @@ private:
 [[nodiscard]] std::vector<ContainerPredicateNode> dyn_graph_nodes(
     const CompiledBody& body, std::uint64_t imm);
 
+/// Executes a bit-stream KOp::dyn `inst` (dyn_stream) on the bytecode tier
+/// through the reference's ContainerBitstream: `bits` (type `bits_type`)
+/// is aux and `other` container z. Errors are the reference's
+/// InterpreterError of `process` at `instruction`.
+void execute_dyn_stream(const KInst& inst, StaticKernelDynamicContainer& bits,
+    const ContainerType& bits_type, StaticKernelDynamicContainer* other,
+    const ContainerType* other_type, kernel_word::Word* registers, ProcessId process,
+    InstructionIndex instruction);
+
 /// Executes a whole-array KOp::dyn `inst` (dyn_whole) on the bytecode tier
 /// through the reference's routines: `container` (type `type`) is aux,
 /// `other` container z and `third` container y; `random` draws the

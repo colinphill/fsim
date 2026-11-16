@@ -485,6 +485,24 @@ enum class DynOp : std::uint8_t {
     /// container z: the graph imm_b is the predicate of the find
     /// locators, else the transformation (7.12.1).
     locate,
+    /// ContainerBitstream (11.4.14): aux is the bit stream, a queue of
+    /// one-bit elements. stream_clear empties it; stream_append_value
+    /// appends the `offset` bits of register x and stream_append_container
+    /// every bit of container z, most significant bit and leftmost element
+    /// first; stream_reverse reverses it in imm_b-bit slices taken from its
+    /// right end; stream_to_value / stream_take_value write its first imm_b
+    /// bits to d (left-justified; take removes them, to requires every bit
+    /// to fit); stream_to_container / stream_take_container fill container
+    /// z's elements (resizing a queue or dynamic array; take leaves imm_b
+    /// bits for the later targets and removes the bits it used).
+    stream_clear,
+    stream_append_value,
+    stream_append_container,
+    stream_reverse,
+    stream_to_value,
+    stream_take_value,
+    stream_to_container,
+    stream_take_container,
 };
 
 /// A container predicate graph of CompiledBody::predicate_words, as
@@ -536,6 +554,8 @@ enum class DynFailure : std::uint32_t {
     string_limit,
     text_assoc_budget,
     key_bytes,
+    stream_short,
+    stream_wide,
 };
 
 /// The native fail reason of the first DynFailure (native_fail_message).
@@ -559,6 +579,12 @@ inline constexpr std::uint64_t dyn_layout_signed_elements = 64U;
 inline constexpr std::uint64_t dyn_layout_scalar_bits = 128U;
 inline constexpr std::uint64_t dyn_layout_scalar_double = 256U;
 inline constexpr std::uint64_t dyn_layout_scalar_float = 512U;
+/// A bit-stream operation's container z (its element width in offset):
+/// two-state elements (X and Z bits stream in as 0), strings, an
+/// associative array.
+inline constexpr std::uint64_t dyn_stream_other_two_state = 1024U;
+inline constexpr std::uint64_t dyn_stream_other_text = 2048U;
+inline constexpr std::uint64_t dyn_stream_other_associative = 4096U;
 
 /// A string element of a kernel container: one element slot (two words)
 /// holding the element's bytes, which the slot owns (malloc'd, no
@@ -586,7 +612,8 @@ static_assert(sizeof(DynTextSlot) == 16U);
 {
     return op == DynOp::write || op == DynOp::resize || op == DynOp::push_back
         || op == DynOp::push_front || op == DynOp::insert || op == DynOp::assoc_write
-        || op == DynOp::assoc_default || op == DynOp::append_value || op == DynOp::select;
+        || op == DynOp::assoc_default || op == DynOp::append_value || op == DynOp::select
+        || op == DynOp::stream_append_value;
 }
 
 /// Whether KInst::y is a third container (bound like aux and z).
@@ -609,6 +636,13 @@ static_assert(sizeof(DynTextSlot) == 16U);
         || op == DynOp::order || op == DynOp::locate;
 }
 
+/// The bit-stream operations (ContainerBitstream), which the bytecode tier
+/// runs through the reference's routine (execute_dyn_stream).
+[[nodiscard]] inline bool dyn_stream(const DynOp op) noexcept
+{
+    return op >= DynOp::stream_clear && op <= DynOp::stream_take_container;
+}
+
 /// Container z is the member's string file (not a second container).
 [[nodiscard]] inline bool dyn_uses_string_file(const DynOp op) noexcept
 {
@@ -621,7 +655,8 @@ static_assert(sizeof(DynTextSlot) == 16U);
     return op == DynOp::read || op == DynOp::size || op == DynOp::pop_front
         || op == DynOp::pop_back || op == DynOp::assoc_read || op == DynOp::exists
         || op == DynOp::first || op == DynOp::last || op == DynOp::next
-        || op == DynOp::prev || op == DynOp::compare || op == DynOp::reduce;
+        || op == DynOp::prev || op == DynOp::compare || op == DynOp::reduce
+        || op == DynOp::stream_to_value || op == DynOp::stream_take_value;
 }
 
 /// A traversal also writes the selected key to its index register y.

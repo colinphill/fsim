@@ -389,6 +389,11 @@ struct StaticKernelNativeHelpers {
     /// not available (the failure is reported).
     std::uint64_t* (*dyn_scratch)(StaticKernelNativeFrame*, std::uint32_t at,
         std::uint64_t words) { };
+    /// `fsim_sk_dyn_stream_wide`: reports a bit stream of `bits` bits that
+    /// does not fit its `width`-bit target (the reference's message names
+    /// both); the run fails.
+    void (*dyn_stream_wide)(StaticKernelNativeFrame*, std::uint32_t at, std::uint64_t bits,
+        std::uint64_t width) { };
     /// Wide-register instructions by kind (`fsim_sk_wide_<op>`): instruction
     /// `at` with the caller's register file, where wide values live, and the
     /// narrow operand words x, y and z; `out` receives a narrow result and
