@@ -155,6 +155,41 @@ module invalid_enum_port;
   second_e value;
   nominal_first_enum_port child(.value(value));
 endmodule
+
+module type_parameter_integral #(type T = int);
+  T value;
+  initial value = 7;
+endmodule
+
+module type_parameter_pattern #(type T = int);
+  T value;
+  T copy;
+  initial begin
+    value = '{a: 3};
+    copy = value;
+  end
+endmodule
+
+module invalid_type_parameter_aggregate;
+  typedef struct { int a; } bound_t;
+  type_parameter_integral #(.T(bound_t)) child();
+endmodule
+
+module child_nominal_assignment;
+  typedef struct { int a; } local_t;
+  local_t value;
+  initial value = 7;
+endmodule
+
+module invalid_child_nominal;
+  child_nominal_assignment child();
+endmodule
+
+module type_parameter_aggregate_host;
+  typedef struct { int a; } bound_t;
+  type_parameter_integral defaulted();
+  type_parameter_pattern #(.T(bound_t)) child();
+endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(nominal_legality.ok());
@@ -185,6 +220,14 @@ endmodule
     rejects("invalid_enum_parameter", "FSIM-ELAB-SVCONST-001");
     rejects("invalid_enum_assignment", "FSIM-ELAB-SVTYPE-004");
     rejects("invalid_enum_raw_assignment", "FSIM-ELAB-SVTYPE-004");
+    // A variable of a type parameter bound to an unpacked structure takes
+    // only a value of that type or a pattern (IEEE 1800-2023 6.22.3).
+    rejects("invalid_type_parameter_aggregate", "FSIM-ELAB-SVTYPE-004");
+    // Every unit instantiated is validated, not only the root.
+    rejects("invalid_child_nominal", "FSIM-ELAB-SVTYPE-004");
+    assert(compile_and_elaborate(nominal_legality.design,
+        "sv:work.type_parameter_aggregate_host")
+               .ok());
     // Packed structures are integral, and integral types are assignment
     // compatible, across arguments, returns, copy-out, nested patterns,
     // casts, and ports (IEEE 1800-2017 6.22.3).

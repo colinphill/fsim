@@ -10011,10 +10011,16 @@ namespace {
         return result;
     }
 
+    // `instance_specialization` is the unit as one instance specializes it: its parameters
+    // bound, so a type parameter's actual types the unit's variables of that
+    // parameter (IEEE 1800-2023 6.20.3) and constants take the instance's
+    // values. Without one, the unit is validated as its defaults bind it.
     std::vector<CompiledSystemVerilogDiagnostic>
     validate_compiled_systemverilog_unit(
         const semantic::CompiledDesign& compiled,
-        const semantic::sv::Unit& unit)
+        const semantic::sv::Unit& unit,
+        const semantic::SpecializedHirUnit* const instance_specialization
+        = nullptr)
     {
         using DeclarationForm = semantic::sv::DeclarationForm;
         using ExpressionKind = semantic::sv::ExpressionKind;
@@ -10536,6 +10542,9 @@ namespace {
             specializations;
         const auto specialization_for = [&](const semantic::UnitId owner)
             -> const semantic::SpecializedHirUnit* {
+            if (owner == unit.id && instance_specialization != nullptr) {
+                return instance_specialization;
+            }
             const auto [found, inserted] = specializations.try_emplace(
                 owner.value(), std::nullopt);
             if (inserted) {
@@ -11447,15 +11456,18 @@ namespace {
                                      const semantic::ExpressionId value_id,
                                      const std::string_view diagnostic,
                                      const std::string_view context) {
-            const auto expected_id = nominal_type_of(expected);
-            if (!expected_id) {
-                return true;
-            }
             const auto expression = compiled.find_expression(value_id);
             if (!expression || expression->systemverilog == nullptr) {
                 return true;
             }
             const auto& value = *expression->systemverilog;
+            // The expected type in this specialization: a type parameter
+            // names the type its actual binds.
+            const auto expected_id
+                = resolved_nominal_type_of(expected, value.scope);
+            if (!expected_id) {
+                return true;
+            }
             const auto actual_id = expression_nominal_type(value_id);
             if (actual_id && *actual_id == *expected_id) {
                 return true;
@@ -16863,14 +16875,23 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit_in_stack(
         return false;
     }
     const auto& unit = *root.systemverilog;
+    const auto report_unit_diagnostics
+        = [&](std::vector<CompiledSystemVerilogDiagnostic> diagnostics) {
+              for (auto& diagnostic : diagnostics) {
+                  if (!reported_systemverilog_unit_diagnostics_
+                           .emplace(diagnostic.code, diagnostic.source.value(),
+                               diagnostic.message)
+                           .second) {
+                      continue;
+                  }
+                  report(std::move(diagnostic.code),
+                      std::move(diagnostic.message),
+                      compiled_source_span(*compiled_, diagnostic.source));
+              }
+          };
     if (path == active_root_) {
-        for (auto& diagnostic : validate_compiled_systemverilog_unit(
-                 *compiled_, unit)) {
-            report(
-                std::move(diagnostic.code),
-                std::move(diagnostic.message),
-                compiled_source_span(*compiled_, diagnostic.source));
-        }
+        report_unit_diagnostics(
+            validate_compiled_systemverilog_unit(*compiled_, unit));
     }
     const auto executable_unit
         = unit.kind == semantic::sv::UnitKind::module
@@ -16959,7 +16980,17 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit_in_stack(
     systemverilog_design_element_instances_.insert(path);
     // Classify before evaluating any constant, so equal specializations
     // share their constant results (overlay_class).
-    static_cast<void>(overlay_class(*specialized));
+    const auto specialization_class = overlay_class(*specialized);
+    // Every other instance's unit is validated as it specializes it, once
+    // per class of equal specializations.
+    if (path != active_root_
+        && (specialization_class == no_overlay_class
+            || validated_systemverilog_overlay_classes_
+                   .insert(specialization_class)
+                   .second)) {
+        report_unit_diagnostics(validate_compiled_systemverilog_unit(
+            *compiled_, unit, &*specialized));
+    }
     for (const auto declaration_id : unit.declarations) {
         const auto declaration = specialized->find_declaration(
             declaration_id);

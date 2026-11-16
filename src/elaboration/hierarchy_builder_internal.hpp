@@ -2479,6 +2479,11 @@ private:
     const std::vector<std::string> systemc_libraries_;
     const std::vector<std::string> search_libraries_;
     std::string active_root_;
+    // The specialization classes (overlay_class) whose unit legality was
+    // validated, and the diagnostics reported for them.
+    std::unordered_set<std::uint32_t> validated_systemverilog_overlay_classes_;
+    std::set<std::tuple<std::string, std::uint32_t, std::string>>
+        reported_systemverilog_unit_diagnostics_;
 
     std::vector<SelectedSystemVerilogClass>
         selected_systemverilog_classes_;
