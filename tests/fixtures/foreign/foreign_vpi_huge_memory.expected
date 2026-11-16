@@ -10,6 +10,10 @@
 #c top.down word 0 down[0]
 #c top.down word 1 down[1]
 #c top.down walked 16777216 words, sum -7
+#c t=1 cb top.bridged[10]=11
+#c t=1 cb top.bridged[40]=5
 #c t=2 cb top.mem[7]=9
 #c t=2 cb top.down[2]=11
 #c t=4 mem[12345678]=42 mem[8]=77 down[16000000]=0 two[-2][3]=x
+#c bridged[0]=1 bridged[1]=2 bridged[300]=45 bridged[1023]=0
+#c bridged[10]=11 bridged[40]=5

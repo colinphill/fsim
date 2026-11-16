@@ -666,13 +666,16 @@ struct Value {
 [[nodiscard]] PackedLogic4 integer_bits(
     const std::uint64_t value, const std::size_t width)
 {
-    PackedLogic4 result { width, Logic4::zero };
-    for (std::size_t bit = 0U; bit < width; ++bit) {
-        result.set(bit,
-            bit < 64U && ((value >> bit) & 1U) != 0U ? Logic4::one
-                                                     : Logic4::zero);
+    if (width == 0U) {
+        return PackedLogic4 { 0U, Logic4::zero };
     }
-    return result;
+    if (width <= 64U) {
+        return PackedLogic4::from_aval_bval(width, value, 0U);
+    }
+    std::vector<std::uint64_t> aval((width + 63U) / 64U);
+    aval[0] = value;
+    const std::vector<std::uint64_t> bval(aval.size());
+    return PackedLogic4::from_word_planes(width, aval, bval);
 }
 
 [[nodiscard]] std::uint64_t low_bits(const PackedLogic4& value)
@@ -1150,6 +1153,9 @@ public:
         }
         // The simulation may outlive the service; no foreign routine may
         // run after it is gone.
+        if (word_writer_set_) {
+            simulation_.systemverilog_vpi_values().set_word_writer({ });
+        }
         for (const auto& [serial, callback] : callbacks_) {
             if (callback->managed) {
                 (void)simulation_.systemverilog_vpi_callbacks()
@@ -4039,10 +4045,14 @@ private:
         std::uint64_t base { };
         std::size_t count { };
         fsim_vpi_handle_v1 model { };
-        // The model's type: whether its value is signed, and whether it is
-        // a string.
+        // The model's type: whether its value is signed, whether it is a
+        // string or a real, and its width.
         bool is_signed { };
         bool string { };
+        bool real { };
+        std::size_t width { };
+        // The memory's unpacked dimensions, left to right.
+        std::vector<std::pair<std::int64_t, std::int64_t>> dimensions;
     };
     struct WordRef {
         std::size_t span { };
@@ -4087,6 +4097,9 @@ private:
         // The selections from the memory to this subarray (`[1]`): its words
         // are the memory's children named by the selections that follow.
         std::string suffix;
+        // The selected rows in declaration order, as one number: the
+        // ordinal of its first word over the words of a row.
+        std::uint64_t prefix { };
     };
     // A constant the object model reaches through a relation, such as a
     // range bound or an index.
@@ -8840,6 +8853,23 @@ private:
     }
 
     // The position of `index` in `range`, counted from its right bound.
+    // The place of `index` in an unpacked dimension, counted from its left
+    // bound (declaration order, IEEE 1800-2023 7.4.2).
+    [[nodiscard]] static std::optional<std::uint64_t> unpacked_position(
+        const std::pair<std::int64_t, std::int64_t>& range,
+        const std::int64_t index)
+    {
+        const auto [left, right] = range;
+        if (left >= right) {
+            return index < right || index > left
+                ? std::nullopt
+                : std::optional { static_cast<std::uint64_t>(left - index) };
+        }
+        return index < left || index > right
+            ? std::nullopt
+            : std::optional { static_cast<std::uint64_t>(index - left) };
+    }
+
     [[nodiscard]] static std::optional<std::uint64_t> position(
         const std::pair<std::int64_t, std::int64_t>& range,
         const std::int64_t index)
@@ -9373,12 +9403,22 @@ private:
     [[nodiscard]] fsim_vpi_handle_v1 index_array(
         const fsim_vpi_handle_v1 memory, const std::size_t depth,
         const std::string& name, const std::string& full_name,
-        const std::string& suffix, const std::int64_t index)
+        const std::string& suffix, const std::int64_t index,
+        const std::uint64_t prefix = 0U)
     {
-        const auto dimensions = dimension_ranges(memory);
-        if (depth >= dimensions.size()
-            || !position(dimensions[depth], index)) {
+        const auto span = word_span(memory);
+        const auto dimensions = span ? word_spans_[*span].dimensions
+                                     : dimension_ranges(memory);
+        const auto at = depth < dimensions.size()
+            ? unpacked_position(dimensions[depth], index)
+            : std::nullopt;
+        if (!at) {
             return 0U;
+        }
+        const auto selected_prefix = prefix * extent(dimensions[depth]) + *at;
+        // A word of an on-demand memory is its ordinal.
+        if (depth + 1U == dimensions.size() && span) {
+            return word_handle(memory, static_cast<std::size_t>(selected_prefix));
         }
         const auto selected = "[" + std::to_string(index) + "]";
         if (depth + 1U == dimensions.size()) {
@@ -9392,7 +9432,7 @@ private:
         }
         subarrays_.push_back({ memory, depth + 1U, name + selected,
             full_name.empty() ? std::string { } : full_name + selected,
-            suffix + selected });
+            suffix + selected, selected_prefix });
         return tagged(Tag::subarray, subarrays_.size() - 1U);
     }
 
@@ -15878,10 +15918,53 @@ private:
         if (!count || *count > serial_mask - next_word_serial_) {
             return std::nullopt;
         }
-        word_spans_.push_back({ memory, next_word_serial_, *count, 0U });
+        WordSpan span;
+        span.memory = memory;
+        span.base = next_word_serial_;
+        span.count = *count;
+        span.dimensions = dimension_ranges(memory);
+        word_spans_.push_back(std::move(span));
         next_word_serial_ += *count;
         word_span_index_.emplace(memory, word_spans_.size() - 1U);
         return word_spans_.size() - 1U;
+    }
+
+    // A queued write of a word with a delay of zero: into its own object
+    // if it has one by now, otherwise into its memory.
+    void write_queued_word(const fsim_vpi_handle_v1 memory,
+        const std::size_t ordinal,
+        const runtime::SystemVerilogVpiStoredValue& value) const
+    {
+        if (!simulation_.vpi_on_demand_word_published(memory, ordinal)) {
+            (void)simulation_.deposit_vpi_on_demand_word(memory, ordinal, value);
+            return;
+        }
+        if (const auto span = word_span(memory)) {
+            if (const auto object = publish_word({ *span, ordinal });
+                object != 0U) {
+                (void)simulation_.systemverilog_vpi_values().apply(object,
+                    runtime::SystemVerilogVpiWriteKind::Deposit, value);
+            }
+        }
+    }
+
+    // The memory and index of an on-demand memory's word that has its own
+    // object `object`, if it is one.
+    [[nodiscard]] std::optional<std::pair<fsim_vpi_handle_v1, std::size_t>>
+    published_word(const runtime::SystemVerilogVpiObjectInfo& object) const
+    {
+        const auto span = word_span_index_.find(object.parent);
+        if (span == word_span_index_.end()) {
+            return std::nullopt;
+        }
+        const auto model = info(word_model(span->second));
+        if (!model || object.ordinal < model->ordinal
+            || object.ordinal - model->ordinal
+                >= word_spans_[span->second].count) {
+            return std::nullopt;
+        }
+        return std::pair { object.parent,
+            static_cast<std::size_t>(object.ordinal - model->ordinal) };
     }
 
     // The word's own object, made now if it has none.
@@ -15919,6 +16002,12 @@ private:
             entry.string = !type || !type.value
                 || type.value->category
                     == runtime::SystemVerilogVpiValueCategory::String;
+            entry.real = type && type.value
+                && (type.value->category
+                        == runtime::SystemVerilogVpiValueCategory::Real
+                    || type.value->category
+                        == runtime::SystemVerilogVpiValueCategory::ShortReal);
+            entry.width = type && type.value ? type.value->width : 0U;
         }
         return entry.model;
     }
@@ -18759,7 +18848,7 @@ private:
         if (const auto* subarray = subarray_of(reference)) {
             const auto copy = *subarray;
             return index_array(copy.memory, copy.depth, copy.name,
-                copy.full_name, copy.suffix, index);
+                copy.full_name, copy.suffix, index, copy.prefix);
         }
         if (const auto* select = select_of(reference)) {
             if (select->declared) {
@@ -18771,6 +18860,14 @@ private:
             const auto copy = *select;
             return make_element(copy.parent, copy.offset, copy.dimensions,
                 copy.suffix, index);
+        }
+        // A word of a one-dimensional on-demand memory by its ordinal.
+        if (const auto span = word_span(reference);
+            span && word_spans_[*span].dimensions.size() == 1U) {
+            if (const auto at = unpacked_position(
+                    word_spans_[*span].dimensions.front(), index)) {
+                return word_handle(reference, static_cast<std::size_t>(*at));
+            }
         }
         const auto object = info(reference);
         if (!object) {
@@ -22306,19 +22403,30 @@ private:
             return succeed(result);
         }
         // A deposit with no delay into a word without an object of its own
-        // writes its memory, as a deposit through its object would (IEEE
-        // 1800-2023 38.34); any other put is the word's own object's.
+        // writes its memory, as a deposit through its object would, and a
+        // put with a delay of zero queues that deposit for the next update
+        // phase (IEEE 1800-2023 38.34); any other put is the word's own
+        // object's.
         if (const auto word = word_of(request.handle)) {
-            const bool deposit = (mode == vpiNoDelay
-                                     || (arguments->time == nullptr
-                                         && (mode == vpiInertialDelay
-                                             || mode == vpiTransportDelay
-                                             || mode == vpiPureTransportDelay)))
-                && (flags & vpiReturnEvent) == 0
+            const bool scheduled_mode = mode == vpiInertialDelay
+                || mode == vpiTransportDelay || mode == vpiPureTransportDelay;
+            const bool shared = (flags & vpiReturnEvent) == 0
                 && arguments->value != nullptr
                 && arguments->value->format != vpiStrengthVal
                 && word_value_shared(*word);
-            if (!deposit) {
+            const bool deposit = shared
+                && (mode == vpiNoDelay
+                    || (arguments->time == nullptr && scheduled_mode));
+            const bool queued = shared && !deposit && scheduled_mode
+                && arguments->time != nullptr
+                && [&] {
+                       const auto delay
+                           = simulation_.systemverilog_vpi_time().convert_delay(
+                               delay_of(*arguments->time,
+                                   word_model(word->span)));
+                       return delay && delay.ticks == 0U;
+                   }();
+            if (!deposit && !queued) {
                 auto published = request;
                 published.handle = publish_word(*word);
                 return published.handle == 0U
@@ -22326,35 +22434,55 @@ private:
                     : put_value(published, result);
             }
             if (read_only_) {
-                error_message_ = "vpi_put_value: no write in a cbReadOnlySynch "
-                                 "callback";
+                error_message_ = queued
+                    ? "vpi_put_value: a cbReadOnlySynch callback cannot "
+                      "schedule an event before the next scheduled event"
+                    : "vpi_put_value: no write in a cbReadOnlySynch callback";
                 error_ = true;
                 return FSIM_VPI_STATUS_INVALID_ARGUMENT;
             }
-            const auto model = info(word_model(word->span));
-            if (!model || !model->type) {
-                return FSIM_VPI_STATUS_NOT_FOUND;
-            }
-            using Category = runtime::SystemVerilogVpiValueCategory;
-            if (arguments->value->format == vpiStringVal
-                && (model->type->category == Category::Real
-                    || model->type->category == Category::ShortReal)) {
+            // word_value_shared made the model.
+            const auto& model = word_spans_[word->span];
+            if (arguments->value->format == vpiStringVal && model.real) {
                 error_message_ = "vpi_put_value: vpiStringVal cannot be put "
                                  "to a real variable (IEEE 1800-2023 38.34)";
                 error_ = true;
                 return FSIM_VPI_STATUS_INVALID_ARGUMENT;
             }
             const auto value = input_value(*arguments->value,
-                std::max<std::size_t>(model->type->width, 1U));
+                std::max<std::size_t>(model.width, 1U));
             if (!value) {
                 return FSIM_VPI_STATUS_NOT_FOUND;
             }
-            const auto& span = word_spans_[word->span];
+            const auto& span = model;
             const auto stored = stored_like(
                 simulation_.vpi_on_demand_word_value(span.memory, word->ordinal),
                 *value);
             if (!stored) {
                 return FSIM_VPI_STATUS_NOT_FOUND;
+            }
+            if (queued) {
+                auto& values = simulation_.systemverilog_vpi_values();
+                if (!word_writer_set_) {
+                    values.set_word_writer(
+                        [this](const fsim_vpi_handle_v1 memory,
+                            const std::size_t ordinal,
+                            const runtime::SystemVerilogVpiStoredValue& value) {
+                            write_queued_word(memory, ordinal, value);
+                        });
+                    word_writer_set_ = true;
+                }
+                return values.schedule_word(span.memory, word->ordinal,
+                           std::move(*stored),
+                           mode == vpiInertialDelay
+                               ? runtime::SystemVerilogVpiDelayPolicy::Inertial
+                               : mode == vpiTransportDelay
+                               ? runtime::SystemVerilogVpiDelayPolicy::
+                                     ModifiedTransport
+                               : runtime::SystemVerilogVpiDelayPolicy::Transport)
+                        == runtime::SystemVerilogVpiWriteControlError::None
+                    ? succeed(result)
+                    : FSIM_VPI_STATUS_NOT_FOUND;
             }
             return simulation_.deposit_vpi_on_demand_word(
                        span.memory, word->ordinal, *stored)
@@ -22549,6 +22677,13 @@ private:
                                  "scheduled event";
                 error_ = true;
                 return FSIM_VPI_STATUS_INVALID_ARGUMENT;
+            }
+        }
+        // An inertial put to a word's own object cancels the writes queued
+        // for the word before it had one (38.34).
+        if (mode == vpiInertialDelay && values.words_queued()) {
+            if (const auto word = published_word(*target)) {
+                values.cancel_word(word->first, word->second);
             }
         }
         const auto scheduled = values.schedule(object,
@@ -23543,6 +23678,8 @@ private:
     mutable std::vector<WordSpan> word_spans_;
     mutable std::unordered_map<fsim_vpi_handle_v1, std::size_t> word_span_index_;
     mutable std::uint64_t next_word_serial_ { };
+    // Whether the value control writes queued words through this service.
+    bool word_writer_set_ { };
     std::unordered_map<std::uint64_t, Iterator> iterators_;
     std::unordered_map<fsim_vpi_handle_v1, void*> user_data_;
     std::array<std::string, 16> strings_;

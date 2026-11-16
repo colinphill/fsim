@@ -94,6 +94,63 @@ struct SystemVerilogVpiValueControl::Impl {
   Scheduler* scheduler{};
   mutable std::mutex mutex;
   std::unordered_map<std::uint64_t, Record> records;
+  // The queued word writes due in the next update phase (schedule_word).
+  // A four-state or two-state value of at most 64 bits is held in the
+  // write itself; any other in `values`.
+  enum class WordForm : std::uint8_t { Stored, Logic4, Bit2 };
+  struct WordWrite {
+    fsim_vpi_handle_v1 memory{};
+    std::uint64_t ordinal{};
+    std::uint64_t aval{};
+    std::uint64_t bval{};
+    std::uint32_t width{};
+    WordForm form{WordForm::Stored};
+  };
+  struct WordKey {
+    fsim_vpi_handle_v1 memory{};
+    std::size_t ordinal{};
+    bool operator==(const WordKey&) const = default;
+  };
+  struct WordKeyHash {
+    std::size_t operator()(const WordKey& key) const noexcept {
+      return std::hash<std::uint64_t>{}(
+          key.memory ^ (key.ordinal * 0x9E3779B97F4A7C15ULL));
+    }
+  };
+  struct WordBatch {
+    std::uint64_t id{};
+    ScheduledTaskHandle scheduler_handle;
+    std::vector<WordWrite> writes;
+    std::vector<SystemVerilogVpiStoredValue> values;
+    // A bit per word with a queued write, by memory.
+    std::unordered_map<fsim_vpi_handle_v1, std::vector<std::uint64_t>>
+        queued;
+    // For a word whose writes an inertial write or cancel_word cancelled:
+    // its writes before this index are cancelled.
+    std::unordered_map<WordKey, std::size_t, WordKeyHash> cancelled_before;
+  };
+  std::optional<WordBatch> word_batch;
+  SystemVerilogVpiValueControl::WordWriter word_writer;
+
+  // The pending records of each object, so a write that supersedes them
+  // finds them without visiting every record.
+  std::unordered_map<fsim_vpi_handle_v1, std::vector<std::uint64_t>>
+      pending_by_object;
+
+  void index_pending(const fsim_vpi_handle_v1 object, const std::uint64_t id) {
+    pending_by_object[object].push_back(id);
+  }
+  // A record that is no longer pending leaves its object's list.
+  void unindex_pending(const fsim_vpi_handle_v1 object, const std::uint64_t id) {
+    const auto found = pending_by_object.find(object);
+    if (found == pending_by_object.end()) {
+      return;
+    }
+    std::erase(found->second, id);
+    if (found->second.empty()) {
+      pending_by_object.erase(found);
+    }
+  }
 };
 
 SystemVerilogVpiValueControl::SystemVerilogVpiValueControl(
@@ -119,6 +176,10 @@ SystemVerilogVpiValueControl::~SystemVerilogVpiValueControl() {
       impl_->scheduler->cancel(record.scheduler_handle);
       record.status = SystemVerilogVpiScheduledWriteStatus::Cancelled;
     }
+  }
+  if (impl_->word_batch) {
+    impl_->scheduler->cancel(impl_->word_batch->scheduler_handle);
+    impl_->word_batch.reset();
   }
 }
 
@@ -196,6 +257,7 @@ struct SystemVerilogVpiValueControlEvents {
             != SystemVerilogVpiScheduledWriteStatus::Pending) {
       return;
     }
+    state->unindex_pending(found->second.object, id);
     if (!found->second.retained) {
       state->records.erase(found);
       return;
@@ -207,9 +269,81 @@ struct SystemVerilogVpiValueControlEvents {
         : SystemVerilogVpiScheduledWriteStatus::Failed;
   }
 
+  // The queued word writes of one update phase, applied in put order
+  // but for those a later inertial write cancelled.
+  struct WordPayload {
+    Impl* owner{};
+    std::uint64_t id{};
+  };
+  struct WordCodec
+      : OwnedFieldsSchedulerEventCodec<WordPayload, Impl, Domain,
+                                       &WordPayload::owner, &WordPayload::id> {
+    static std::uint64_t cancel_key(const WordPayload& payload) {
+      return payload.id;
+    }
+  };
+
+  static Scheduler::Task word_task(Impl* owner, const std::uint64_t id) {
+    return Scheduler::Task{
+        detail::make_scheduler_task_descriptor<WordPayload, &dispatch_words>(
+            WordPayload{owner, id})};
+  }
+
+  static void dispatch_words(Scheduler&, const WordPayload& scheduled) {
+    Impl* const state = scheduled.owner;
+    Impl::WordBatch batch;
+    SystemVerilogVpiValueControl::WordWriter writer;
+    {
+      std::scoped_lock lock{state->mutex};
+      if (!state->word_batch || state->word_batch->id != scheduled.id) {
+        return;
+      }
+      batch = std::move(*state->word_batch);
+      state->word_batch.reset();
+      writer = state->word_writer;
+    }
+    if (!writer) {
+      return;
+    }
+    for (std::size_t index = 0; index < batch.writes.size(); ++index) {
+      const auto& write = batch.writes[index];
+      if (!batch.cancelled_before.empty()) {
+        const auto found = batch.cancelled_before.find(
+            Impl::WordKey{write.memory, write.ordinal});
+        if (found != batch.cancelled_before.end() && index < found->second) {
+          continue;
+        }
+      }
+      SystemVerilogVpiStoredValue value;
+      switch (write.form) {
+        case Impl::WordForm::Stored:
+          value = std::move(batch.values[write.aval]);
+          break;
+        case Impl::WordForm::Logic4:
+          value.payload = write.width == 0U
+              ? PackedLogic4{0U, Logic4::zero}
+              : PackedLogic4::from_aval_bval(write.width, write.aval,
+                                             write.bval);
+          break;
+        case Impl::WordForm::Bit2: {
+          PackedBit2 bits{write.width};
+          if (write.width != 0U) {
+            bits.words()[0] = write.aval;
+          }
+          value.payload = std::move(bits);
+          break;
+        }
+      }
+      writer(write.memory, static_cast<std::size_t>(write.ordinal), value);
+    }
+  }
+
   static void register_kind() {
     static_cast<void>(register_scheduler_event_kind<Payload, &dispatch, Codec>(
         "vpi.scheduled_write", SchedulerEventClass::data));
+    static_cast<void>(
+        register_scheduler_event_kind<WordPayload, &dispatch_words, WordCodec>(
+            "vpi.scheduled_word_writes", SchedulerEventClass::data));
   }
 };
 
@@ -350,6 +484,7 @@ bool SystemVerilogVpiValueControl::restore_pending(
     SystemVerilogVpiSavedWrites saved, std::string& error) {
   std::scoped_lock lock{impl_->mutex};
   impl_->records.clear();
+  impl_->pending_by_object.clear();
   for (auto& write : saved.writes) {
     const auto object = impl_->registry->find(write.object);
     if (!object) {
@@ -369,6 +504,7 @@ bool SystemVerilogVpiValueControl::restore_pending(
     record.status = SystemVerilogVpiScheduledWriteStatus::Pending;
     record.due = write.due;
     record.retained = write.retained;
+    impl_->index_pending(record.object, write.id);
     impl_->records.emplace(write.id, std::move(record));
   }
   impl_->next_id = std::max(impl_->next_id, saved.next_id);
@@ -378,6 +514,109 @@ bool SystemVerilogVpiValueControl::restore_pending(
 void SystemVerilogVpiValueControl::reset_records() {
   std::scoped_lock lock{impl_->mutex};
   impl_->records.clear();
+  impl_->pending_by_object.clear();
+  if (impl_->word_batch) {
+    impl_->scheduler->cancel(impl_->word_batch->scheduler_handle);
+    impl_->word_batch.reset();
+  }
+}
+
+void SystemVerilogVpiValueControl::set_word_writer(WordWriter writer) {
+  std::scoped_lock lock{impl_->mutex};
+  impl_->word_writer = std::move(writer);
+}
+
+bool SystemVerilogVpiValueControl::words_queued() const noexcept {
+  std::scoped_lock lock{impl_->mutex};
+  return impl_->word_batch.has_value();
+}
+
+SystemVerilogVpiWriteControlError SystemVerilogVpiValueControl::schedule_word(
+    const fsim_vpi_handle_v1 memory, const std::size_t ordinal,
+    SystemVerilogVpiStoredValue value,
+    const SystemVerilogVpiDelayPolicy policy) {
+  if (!impl_ || !valid_delay_policy(policy)) {
+    return SystemVerilogVpiWriteControlError::InvalidControl;
+  }
+  std::scoped_lock lock{impl_->mutex};
+  if (!impl_->word_batch) {
+    // The batch takes the stable order a record scheduled now would, so
+    // it applies after the writes put before it and before those put
+    // after it opened.
+    if (impl_->next_id == 0U
+        || impl_->next_id
+            > std::numeric_limits<StableOrder>::max()
+                - impl_->stable_order_base) {
+      return SystemVerilogVpiWriteControlError::ResourceLimit;
+    }
+    const auto id = impl_->next_id++;
+    Impl::WordBatch batch;
+    batch.id = id;
+    try {
+      batch.scheduler_handle = impl_->scheduler->schedule_after_cancelable(
+          0U, SchedulerPhase::update, impl_->stable_order_base + id,
+          SystemVerilogVpiValueControlEvents::word_task(impl_.get(), id));
+    } catch (...) {
+      return SystemVerilogVpiWriteControlError::ResourceLimit;
+    }
+    impl_->word_batch = std::move(batch);
+  }
+  auto& batch = *impl_->word_batch;
+  auto& bits = batch.queued[memory];
+  const auto word = ordinal / 64U;
+  const auto bit = std::uint64_t{1} << (ordinal % 64U);
+  if (word >= bits.size()) {
+    bits.resize(word + 1U);
+  }
+  if ((bits[word] & bit) == 0U) {
+    bits[word] |= bit;
+  } else if (policy == SystemVerilogVpiDelayPolicy::Inertial) {
+    batch.cancelled_before[Impl::WordKey{memory, ordinal}] =
+        batch.writes.size();
+  }
+  Impl::WordWrite write{memory, ordinal};
+  const auto* const logic = std::get_if<PackedLogic4>(&value.payload);
+  const auto* const bits2 = std::get_if<PackedBit2>(&value.payload);
+  if (value.strength) {
+    // Kept whole, with its strength.
+  } else if (logic != nullptr && !logic->is_logic9()
+             && logic->width() <= 64U) {
+    write.form = Impl::WordForm::Logic4;
+    write.width = static_cast<std::uint32_t>(logic->width());
+    if (logic->width() != 0U) {
+      write.aval = logic->aval_words()[0];
+      write.bval = logic->bval_words()[0];
+    }
+  } else if (bits2 != nullptr && bits2->width() <= 64U) {
+    write.form = Impl::WordForm::Bit2;
+    write.width = static_cast<std::uint32_t>(bits2->width());
+    if (bits2->width() != 0U) {
+      write.aval = bits2->words()[0];
+    }
+  }
+  if (write.form == Impl::WordForm::Stored) {
+    write.aval = batch.values.size();
+    batch.values.push_back(std::move(value));
+  }
+  batch.writes.push_back(write);
+  return SystemVerilogVpiWriteControlError::None;
+}
+
+void SystemVerilogVpiValueControl::cancel_word(
+    const fsim_vpi_handle_v1 memory, const std::size_t ordinal) {
+  std::scoped_lock lock{impl_->mutex};
+  if (!impl_->word_batch) {
+    return;
+  }
+  auto& batch = *impl_->word_batch;
+  const auto bits = batch.queued.find(memory);
+  if (bits == batch.queued.end() || ordinal / 64U >= bits->second.size()
+      || (bits->second[ordinal / 64U] & (std::uint64_t{1} << (ordinal % 64U)))
+          == 0U) {
+    return;
+  }
+  batch.cancelled_before[Impl::WordKey{memory, ordinal}] =
+      batch.writes.size();
 }
 
 SystemVerilogVpiScheduleWriteResult
@@ -424,12 +663,17 @@ SystemVerilogVpiValueControl::schedule(
   const auto due = impl_->scheduler->now() + delay;
   std::vector<std::uint64_t> superseded;
   if (policy != SystemVerilogVpiDelayPolicy::Transport) {
-    for (const auto& [id, record] : impl_->records) {
-      if (record.status == SystemVerilogVpiScheduledWriteStatus::Pending
-          && record.object == object
-          && (policy == SystemVerilogVpiDelayPolicy::Inertial
-              || record.due > due)) {
-        superseded.push_back(id);
+    if (const auto pending = impl_->pending_by_object.find(object);
+        pending != impl_->pending_by_object.end()) {
+      for (const auto pending_id : pending->second) {
+        const auto record = impl_->records.find(pending_id);
+        if (record != impl_->records.end()
+            && record->second.status
+                == SystemVerilogVpiScheduledWriteStatus::Pending
+            && (policy == SystemVerilogVpiDelayPolicy::Inertial
+                || record->second.due > due)) {
+          superseded.push_back(pending_id);
+        }
       }
     }
   }
@@ -464,6 +708,7 @@ SystemVerilogVpiValueControl::schedule(
     return schedule_failure(
         SystemVerilogVpiWriteControlError::ResourceLimit);
   }
+  impl_->index_pending(object, id);
 
   for (const auto old_id : superseded) {
     const auto old = impl_->records.find(old_id);
@@ -473,6 +718,7 @@ SystemVerilogVpiValueControl::schedule(
       continue;
     }
     impl_->scheduler->cancel(old->second.scheduler_handle);
+    impl_->unindex_pending(old->second.object, old_id);
     if (old->second.retained) {
       old->second.status =
           SystemVerilogVpiScheduledWriteStatus::Cancelled;
@@ -507,6 +753,7 @@ SystemVerilogVpiWriteControlError SystemVerilogVpiValueControl::cancel(
     return SystemVerilogVpiWriteControlError::NotPending;
   }
   impl_->scheduler->cancel(found->second.scheduler_handle);
+  impl_->unindex_pending(found->second.object, handle.id);
   found->second.status =
       SystemVerilogVpiScheduledWriteStatus::Cancelled;
   return SystemVerilogVpiWriteControlError::None;

@@ -1929,6 +1929,7 @@ tests/fixtures/compliance/b57_textio_ho_codecs.vhd
 tests/fixtures/compliance/b57_textio_radix_slices.vhd
 tests/fixtures/compliance/b58_nonansi_empty_selected_ports_20261013.sv
 tests/fixtures/compliance/elaboration_errors/run_elaboration_error.cmake
+tests/fixtures/compliance/elaboration_errors/sv_stream_unpack_partial_element.sv
 tests/fixtures/compliance/elaboration_errors/unnamed_scope_hierarchical_reference.sv
 tests/fixtures/compliance/mixed_vhdl_delta_after_sv_write.sv
 tests/fixtures/compliance/mixed_vhdl_delta_after_sv_write_ram.vhd.in
@@ -1940,6 +1941,8 @@ tests/fixtures/compliance/mixed_vhdl_port_element_wiring.sv
 tests/fixtures/compliance/mixed_vhdl_port_element_wiring_block.vhd.in
 tests/fixtures/compliance/physical_unit_range.vhd
 tests/fixtures/compliance/run_compliance.cmake
+tests/fixtures/compliance/runtime_errors/run_runtime_error.cmake
+tests/fixtures/compliance/runtime_errors/sv_stream_unpack_partial_element.sv
 tests/fixtures/compliance/sv_array_equality_bounds_20261013.sv
 tests/fixtures/compliance/sv_array_query_class_handles_batch57.sv
 tests/fixtures/compliance/sv_array_query_typedef_dimensions_batch57.sv
@@ -2102,11 +2105,13 @@ tests/fixtures/compliance/sv_static_interface_storage.sv
 tests/fixtures/compliance/sv_static_sparse_arrays.sv
 tests/fixtures/compliance/sv_std_class_names.sv
 tests/fixtures/compliance/sv_stream_unpack_resize.sv
+tests/fixtures/compliance/sv_stream_unpack_stream_source.sv
 tests/fixtures/compliance/sv_streaming_builtin_slice_batch57.sv
 tests/fixtures/compliance/sv_streaming_unpack.sv
 tests/fixtures/compliance/sv_string_containers.sv
 tests/fixtures/compliance/sv_string_conversion_signed.sv
 tests/fixtures/compliance/sv_string_methods_and_updates.sv
+tests/fixtures/compliance/sv_string_nonblocking_order.sv
 tests/fixtures/compliance/sv_sva_clock_declaration_forms.sv
 tests/fixtures/compliance/sv_sva_recursive_properties.sv
 tests/fixtures/compliance/sv_sva_sequence_endpoints.sv

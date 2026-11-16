@@ -7075,6 +7075,16 @@ void Interpreter::Impl::StaticKernel::queue_host_task(const std::uint32_t member
     push_generic_pending(std::move(pending));
 }
 
+void Interpreter::Impl::StaticKernel::queue_string_update(const std::uint32_t member,
+    const StringObjectId object, std::string value)
+{
+    // A string variable has no events (6.16): the update only stores it.
+    queue_host_task(member, running_process(member),
+        [owner = &impl_, object, value = std::move(value)](Scheduler&) {
+            owner->string_object_storage(object) = value;
+        });
+}
+
 void Interpreter::Impl::StaticKernel::schedule_host_after(const std::uint32_t member,
     const SignalId signal, PackedLogic4 value,
     const std::optional<std::uint32_t> offset, const SignalUpdateDomain domain,

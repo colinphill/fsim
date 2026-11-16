@@ -1944,3 +1944,4 @@ foreign.vpi_live	system_value_sites_built_	D	VPI handle tables and model caches,
 foreign.vpi_live	system_value_sites_	D	VPI handle tables and model caches, rebuilt on demand; not saved
 foreign.vpi_live	word_span_index_	D	VPI handle tables and model caches, rebuilt on demand; not saved
 foreign.vpi_live	word_spans_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	word_writer_set_	D	VPI handle tables and model caches, rebuilt on demand; not saved

@@ -425,6 +425,10 @@ enum class StrOp : std::uint8_t {
     read_object,
     /// String variable imm_a = string z (a blocking write).
     write_object,
+    /// String variable imm_a takes string z in the NBA region (a
+    /// nonblocking write, IEEE 1800-2023 10.4.2): queued among the
+    /// thread's nonblocking updates in execution order (fsim_sk_str_nba).
+    write_object_nba,
 };
 
 [[nodiscard]] inline bool str_writes_string(const StrOp op) noexcept
@@ -611,6 +615,7 @@ enum class DynFailure : std::uint32_t {
     key_bytes,
     stream_short,
     stream_wide,
+    stream_partial,
 };
 
 /// The native fail reason of the first DynFailure (native_fail_message).

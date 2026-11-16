@@ -2918,8 +2918,7 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             || std::is_same_v<T, WriteStringObject>) {
             // A string variable (IEEE 1800-2023 6.16), read or written in
             // place: a variable, or a valid element alias of a fixed string
-            // array. A nonblocking write matures in the host's NBA region
-            // and keeps the bridge.
+            // array. A nonblocking write joins the kernel's NBA queue.
             if (op.object >= impl_.string_objects.size()) {
                 return false;
             }
@@ -2939,18 +2938,18 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                 set(StrOp::read_object);
                 inst.offset = op.destination;
             } else {
-                if (op.nonblocking || !string(op.source)) {
+                if (!string(op.source)) {
                     return false;
                 }
                 // A package initializer writes the variable itself, within
                 // its closure (initialize_package_static_string_object).
                 if (member.package_startup
-                    && (object.element_alias
+                    && (op.nonblocking || object.element_alias
                         || !impl_.package_static_closure_allows(member.process,
                             object.package_owner_id, op.object, false))) {
                     return false;
                 }
-                set(StrOp::write_object);
+                set(op.nonblocking ? StrOp::write_object_nba : StrOp::write_object);
                 inst.z = op.source;
             }
             inst.imm_a = op.object;

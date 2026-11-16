@@ -6403,6 +6403,18 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 || *slice > std::numeric_limits<std::uint32_t>::max()) {
                 return assignment_rejected(__LINE__);
             }
+            // A source that is itself a streaming concatenation with a
+            // queue, array or structure operand has no fixed width: its bit
+            // stream, of every operand's bits, is unpacked as it is
+            // (11.4.14.3).
+            if (hir_sv_container_stream(*value)) {
+                const auto streamed = lower_hir_sv_bitstream(*value);
+                if (!streamed
+                    || !lower_hir_sv_stream_target_bits(*target, *streamed)) {
+                    return assignment_rejected(__LINE__);
+                }
+                return true;
+            }
             ContainerType bit_queue;
             bit_queue.element_kind = ContainerElementKind::Packed;
             bit_queue.element_width = 1U;
@@ -6468,6 +6480,74 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         break;
                     }
                     target_width += *width;
+                }
+                // The first variable-size target takes the bits the
+                // fixed-size targets leave, resized as in a cast: when they
+                // are not a whole number of its elements the sizes differ,
+                // an error found here when every width is known (IEEE
+                // 1800-2023 11.4.14.4, 6.24.3).
+                if (!target_width_known) {
+                    std::uint64_t fixed_bits { };
+                    std::optional<std::uint64_t> element_bits;
+                    bool known = true;
+                    for (auto operand = stream.operands.begin() + 1;
+                        known && operand != stream.operands.end(); ++operand) {
+                        if (const auto destination
+                            = hir_container_object_binding(*operand)) {
+                            const auto* const type = destination->type;
+                            if (type == nullptr || type->associative) {
+                                known = false;
+                            } else if (type->fixed) {
+                                const auto width
+                                    = hir_systemverilog_container_bit_width(*type);
+                                known = width.has_value();
+                                fixed_bits += width.value_or(0U);
+                            } else if (!element_bits) {
+                                if (type->element_kind
+                                        == ContainerElementKind::Packed
+                                    || type->element_kind
+                                        == ContainerElementKind::Scalar) {
+                                    element_bits = type->element_width;
+                                } else if (type->element_kind
+                                    == ContainerElementKind::String) {
+                                    element_bits = 8U;
+                                } else {
+                                    known = false;
+                                }
+                            }
+                            continue;
+                        }
+                        const auto width = hir_expression_width(
+                            *operand, hir_process_scope_);
+                        const auto with_operand
+                            = specialized_hir_unit_->find_expression(*operand);
+                        if (!width || *width == 0U || !with_operand
+                            || with_operand->systemverilog == nullptr
+                            || (with_operand->systemverilog->kind
+                                    == semantic::sv::ExpressionKind::call
+                                && with_operand->systemverilog->marker
+                                    != support::ExpressionMarker::none)) {
+                            known = false;
+                        } else {
+                            fixed_bits += *width;
+                        }
+                    }
+                    const auto available
+                        = static_cast<std::uint64_t>(register_width(*lowered));
+                    if (known && element_bits && *element_bits != 0U
+                        && available >= fixed_bits
+                        && (available - fixed_bits) % *element_bits != 0U) {
+                        report("FSIM-ELAB-SVSTREAM-003",
+                            "the " + std::to_string(available - fixed_bits)
+                                + " bits a variable-size target of a "
+                                  "streaming assignment takes are not a "
+                                  "whole number of its "
+                                + std::to_string(*element_bits)
+                                + "-bit elements (IEEE 1800-2023 "
+                                  "11.4.14.4, 6.24.3)",
+                            span);
+                        return true;
+                    }
                 }
                 if (target_width_known
                     && register_width(*lowered) > target_width) {

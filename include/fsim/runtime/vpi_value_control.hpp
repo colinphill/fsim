@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -143,6 +144,24 @@ class SystemVerilogVpiValueControl final {
       SimulationTick delay,
       SystemVerilogVpiDelayPolicy policy,
       bool retain_handle = true);
+
+  // Writes of words of a memory that have no object of their own, due in
+  // the update phase after this one at the current time (a put with a
+  // delay of zero, IEEE 1800-2023 38.34): queued in put order with no
+  // record, a few words each, and applied through the word writer. An
+  // inertial write cancels the word's earlier queued writes; a transport
+  // one cancels none (none is due later).
+  using WordWriter = std::function<void(fsim_vpi_handle_v1 memory,
+      std::size_t ordinal, const SystemVerilogVpiStoredValue& value)>;
+  void set_word_writer(WordWriter writer);
+  [[nodiscard]] SystemVerilogVpiWriteControlError schedule_word(
+      fsim_vpi_handle_v1 memory, std::size_t ordinal,
+      SystemVerilogVpiStoredValue value, SystemVerilogVpiDelayPolicy policy);
+  // Whether any word write is queued.
+  [[nodiscard]] bool words_queued() const noexcept;
+  // Cancels the queued writes of that word, as an inertial put to the
+  // word's own object does.
+  void cancel_word(fsim_vpi_handle_v1 memory, std::size_t ordinal);
 
   [[nodiscard]] SystemVerilogVpiWriteControlError cancel(
       SystemVerilogVpiScheduledWriteHandle handle);

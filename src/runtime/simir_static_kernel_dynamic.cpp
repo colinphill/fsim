@@ -1083,6 +1083,7 @@ DynFailure execute_str(const KInst& inst, const CompiledBody& body, std::string*
     case StrOp::plusarg:
     case StrOp::read_object:
     case StrOp::write_object:
+    case StrOp::write_object_nba:
         // The kernel's own (they read the run's plusargs and variables).
         break;
     }
@@ -1184,6 +1185,8 @@ const char* dyn_fail_message(const DynFailure failure) noexcept
         return "a bit stream is smaller than its targets";
     case DynFailure::stream_wide:
         return "a bit stream is wider than its target";
+    case DynFailure::stream_partial:
+        return "a bit stream does not fill a whole number of elements of its variable-size target";
     }
     return "static kernel container operation failed";
 }

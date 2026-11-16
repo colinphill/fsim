@@ -1843,6 +1843,15 @@ private:
     static std::uint32_t native_dyn_reshape(StaticKernelNativeFrame* frame,
         std::uint32_t at, StaticKernelDynamicContainer* target,
         const StaticKernelDynamicContainer* source);
+    /// `s <= v` of string variable `object` (IEEE 1800-2023 10.4.2, 4.9.4):
+    /// the update waits in the NBA queue among the member's others, in
+    /// execution order (4.6 b)).
+    void queue_string_update(std::uint32_t member, StringObjectId object,
+        std::string value);
+    /// fsim_sk_str_nba: StrOp::write_object_nba of instruction `at`, the
+    /// value the string register at `source` (a std::string).
+    static void native_str_nba(StaticKernelNativeFrame* frame, std::uint32_t at,
+        std::uint64_t object, const void* source);
     /// fsim_sk_str_reserve: capacity for `needed` bytes in a member's
     /// string register (KOp::str), its bytes kept.
     static std::uint32_t native_str_reserve(StaticKernelNativeFrame* frame,

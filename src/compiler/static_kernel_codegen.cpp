@@ -8507,6 +8507,16 @@ private:
             str_set_size(target, size);
             break;
         }
+        case StrOp::write_object_nba: {
+            // Queued among the thread's nonblocking updates (10.4.2).
+            auto* type = llvm::FunctionType::get(llvm::Type::getVoidTy(context_),
+                { ptr_, i32_, i64_, ptr_ }, false);
+            builder_.CreateCall(type, helper_symbol("fsim_sk_str_nba", type),
+                { frame_, llvm::ConstantInt::get(i32_, at), constant(inst.imm_a),
+                    str_object(file, inst.z) });
+            check_status();
+            break;
+        }
         case StrOp::write_object: {
             auto* target = string_variable(inst.imm_a);
             auto* source = str_object(file, inst.z);
@@ -9603,9 +9613,10 @@ private:
         case DynOp::stream_to_container:
         case DynOp::stream_take_container: {
             // A queue or dynamic array takes as many elements as the bits
-            // fill (less the bits reserved for later targets), the last one
-            // padded with zero bits (11.4.14.4); 2-state elements take X
-            // and Z bits as 0 (6.22).
+            // fill (less the bits reserved for later targets; 11.4.14.4),
+            // resized as in a cast: bits left over that do not fill an
+            // element are an error (6.24.3). 2-state elements take X and Z
+            // bits as 0 (6.22).
             auto* target = dyn_header(inst.z);
             const auto width = std::uint64_t { inst.offset };
             const bool two_state = (inst.imm_a & detail::dyn_stream_other_two_state) != 0U;
@@ -9616,8 +9627,10 @@ private:
                 auto* remaining = builder_.CreateSelect(
                     builder_.CreateICmpUGT(size, constant(reserved)),
                     builder_.CreateSub(size, constant(reserved)), constant(0U));
-                count = builder_.CreateUDiv(builder_.CreateAdd(remaining, constant(width - 1U)),
-                    constant(width));
+                dyn_check(builder_.CreateICmpEQ(
+                              builder_.CreateURem(remaining, constant(width)), constant(0U)),
+                    at, DynFailure::stream_partial);
+                count = builder_.CreateUDiv(remaining, constant(width));
                 dyn_reserve(target, count, at);
                 dyn_store(target, dyn_size, count);
             }
@@ -21185,6 +21198,7 @@ private:
         add("fsim_sk_dyn_grow", helpers.dyn_grow);
         add("fsim_sk_dyn_reshape", helpers.dyn_reshape);
         add("fsim_sk_str_reserve", helpers.str_reserve);
+        add("fsim_sk_str_nba", helpers.str_nba);
         add("fsim_sk_dyn_text_reserve", helpers.dyn_text_reserve);
         add("fsim_sk_dyn_scratch", helpers.dyn_scratch);
         add("fsim_sk_dyn_stream_wide", helpers.dyn_stream_wide);

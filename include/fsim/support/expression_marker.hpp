@@ -93,14 +93,25 @@ enum class ExpressionMarker : std::uint8_t {
     vhdl_physical,                // payload: unit name
     vhdl_qualified,               // payload: type mark
     vhdl_subtype,                 // payload: subtype spelling
-    last = vhdl_subtype,
+
+    // Constraints, randomization and constraint expressions.
+    constraint_forms_begin_,
+
+    // Class, callable, built-in method and container forms.
+    class_forms_begin_,
+
+    // VHDL, configuration and design-unit forms.
+    vhdl_unit_forms_begin_,
+
+    // One past the last marker.
+    end_,
 };
 
 [[nodiscard]] constexpr bool expression_marker_valid(
     const ExpressionMarker marker) noexcept
 {
     return static_cast<std::uint8_t>(marker)
-        <= static_cast<std::uint8_t>(ExpressionMarker::last);
+        < static_cast<std::uint8_t>(ExpressionMarker::end_);
 }
 
 [[nodiscard]] constexpr bool sv_container_query(

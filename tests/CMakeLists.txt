@@ -6751,6 +6751,30 @@ if(TARGET fsim)
   endforeach()
 endif()
 
+# Designs whose run must stop with a run-time error, each with the text the
+# error must contain named in its header, on every runtime engine.
+if(TARGET fsim)
+  file(GLOB runtime_error_fixtures CONFIGURE_DEPENDS
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/compliance/runtime_errors/*.sv")
+  foreach(runtime_error_fixture IN LISTS runtime_error_fixtures)
+    get_filename_component(runtime_error_name "${runtime_error_fixture}" NAME_WE)
+    foreach(runtime_error_engine IN LISTS compliance_engines)
+      set(runtime_error_test
+        "fsim.runtime-error.${runtime_error_name}.${runtime_error_engine}")
+      add_test(
+        NAME "${runtime_error_test}"
+        COMMAND "${CMAKE_COMMAND}"
+          "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+          "-DFSIM_FIXTURE=${runtime_error_fixture}"
+          "-DFSIM_ENGINE=${runtime_error_engine}"
+          -P "${PROJECT_SOURCE_DIR}/tests/fixtures/compliance/runtime_errors/run_runtime_error.cmake")
+      set_tests_properties("${runtime_error_test}" PROPERTIES
+        LABELS "application;compliance"
+        TIMEOUT 120)
+    endforeach()
+  endforeach()
+endif()
+
 # Invalid VHDL units that analysis (`fsim compile`) must reject, each with the
 # diagnostic code named in its header.
 if(TARGET fsim)

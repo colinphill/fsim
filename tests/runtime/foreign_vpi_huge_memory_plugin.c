@@ -3,8 +3,9 @@
 // 1800-2023 37.17, 38.34, 38.36.1): words by index, by name and by
 // iteration, their names, sizes and values, vpi_compare_objects on two
 // handles to one word, vpi_put_value at once and with an inertial delay,
-// value change callbacks on words, and the count and order of an
-// iteration over every word.
+// value change callbacks on words, the count and order of an iteration
+// over every word, and puts with an inertial delay of zero (as cocotb makes
+// them) to every word of a memory.
 // Lines starting with "#c " form the checked trace.
 #include "fsim/runtime/vpi_abi.h"
 #include "vpi_user.h"
@@ -37,6 +38,26 @@ static void put(vpiHandle object, int value, PLI_UINT32 delay)
     put_value.value.integer = value;
     vpi_put_value(object, &put_value, delay == 0U ? NULL : &time,
         delay == 0U ? vpiNoDelay : vpiInertialDelay);
+}
+
+// An inertial put of no delay, as cocotb makes it.
+static void put_inertial(vpiHandle object, int value)
+{
+    s_vpi_value put_value = { vpiIntVal, { 0 } };
+    s_vpi_time time = { vpiSimTime, 0, 0, 0.0 };
+    put_value.value.integer = value;
+    vpi_put_value(object, &put_value, &time, vpiInertialDelay);
+}
+
+// Every word of `name` takes its index plus one, through an inertial put
+// of no delay.
+static void fill(const char* name)
+{
+    vpiHandle array = memory(name);
+    const int size = (int)vpi_get(vpiSize, array);
+    for (int index = 0; index < size; ++index) {
+        put_inertial(vpi_handle_by_index(array, index), (index + 1) & 0xFF);
+    }
 }
 
 static void describe(const char* what, vpiHandle word)
@@ -107,6 +128,15 @@ static PLI_INT32 at1(p_cb_data data)
     watch(vpi_handle_by_index(memory("top.down"), 2));
     walk("top.mem");
     walk("top.down");
+    fill("top.bridged");
+    // A later inertial put to a word cancels its earlier ones, and one to
+    // the word's own object cancels those made before it had one.
+    vpiHandle bridged = memory("top.bridged");
+    put_inertial(vpi_handle_by_index(bridged, 10), 99);
+    put_inertial(vpi_handle_by_index(bridged, 10), 11);
+    watch(vpi_handle_by_index(bridged, 10));
+    watch(vpi_handle_by_index(bridged, 40));
+    put_inertial(vpi_handle_by_index(bridged, 40), 5);
     return 0;
 }
 

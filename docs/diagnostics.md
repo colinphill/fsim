@@ -2836,6 +2836,7 @@ scheduler.
 | `FSIM-ELAB-SVASSERT-005` | error | An assertion control task (`$assertcontrol`, `$asserton` and the others) has named arguments, `$assertcontrol` has no control_type, or a list item does not name a scope or an assertion (IEEE 1800-2023 20.11). |
 | `FSIM-ELAB-SVSTREAM-001` | error | A streaming assignment target is malformed, uses the wrong language, or is nested inside another assignment target. |
 | `FSIM-ELAB-SVSTREAM-002` | error | The source of a streaming assignment contains fewer bits than its target requires. |
+| `FSIM-ELAB-SVSTREAM-003` | error | The bits the first variable-size target of a streaming assignment takes (the source's bits less those of the fixed-size targets) are not a whole number of its elements; it is resized as in a cast, where a size difference is an error (IEEE 1800-2023 11.4.14.4, 6.24.3). Found at elaboration when every width is constant, otherwise at run time. |
 | `FSIM-ELAB-SVTOLERANCE-001` | error | An inside tolerance range is used outside the exact SystemVerilog-2023 profile. |
 | `FSIM-ELAB-SVMDARRAY-001` | error | A multidimensional static-array access does not supply exactly one index per declared unpacked dimension. |
 | `FSIM-ELAB-SVMDARRAY-002` | error | A runtime multidimensional static-array index cannot lower to a signed 32-bit integral value. |

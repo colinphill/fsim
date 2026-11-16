@@ -1033,6 +1033,20 @@ std::uint32_t Interpreter::Impl::StaticKernel::native_str_reserve(
     }
 }
 
+void Interpreter::Impl::StaticKernel::native_str_nba(StaticKernelNativeFrame* frame,
+    const std::uint32_t at, const std::uint64_t object, const void* source)
+{
+    auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
+    try {
+        kernel.queue_string_update(frame->member, static_cast<StringObjectId>(object),
+            *static_cast<const std::string*>(source));
+    } catch (...) {
+        (void)at;
+        kernel.scratch().native_exception = std::current_exception();
+        frame->status = 1U;
+    }
+}
+
 std::uint32_t Interpreter::Impl::StaticKernel::native_dyn_text_reserve(
     StaticKernelNativeFrame* frame, const std::uint32_t at, std::uint64_t* slot,
     const std::uint64_t needed)

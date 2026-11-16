@@ -5455,13 +5455,38 @@ Interpreter::container_object_element_snapshot(
             return result;
         }
     }
-    impl_->observe_static_kernel_container(object);
-    const auto& value = impl_->read_container_object_value(object);
-    if (value.type.element_kind == ContainerElementKind::String) {
-        result.text = container_string_element(value, ordinal);
-    } else {
-        result.packed = container_packed_element(value, ordinal);
+    // A container the kernel holds in the signals that bridge it reads
+    // from them; the host's copy may be stale.
+    const auto element = [&](const ContainerValue& value) {
+        if (value.type.element_kind == ContainerElementKind::String) {
+            result.text = container_string_element(value, ordinal);
+        } else {
+            result.packed = container_packed_element(value, ordinal);
+        }
+    };
+    // A flat fixed array one signal bridges whole: the element's bits of
+    // that signal.
+    if (const auto* const alias = impl_->flat_container_signal_bridge(object)) {
+        const auto kernel = kernel_signal_value(alias->signal);
+        const auto& packed = kernel ? *kernel
+                                    : impl_->get_signal(alias->signal).initial_value;
+        const auto& target = impl_->get_container_object(object);
+        const auto element_width = target.initial_value.type.element_width;
+        if (!packed.is_logic9()
+            && packed.width()
+                == element_width * target.initial_value.elements.size()
+            && ordinal < target.initial_value.elements.size()) {
+            result.packed = packed.extract_bits(
+                packed.width() - (ordinal + 1U) * element_width, element_width);
+            return result;
+        }
     }
+    if (const auto kernel = kernel_container_object_value(object)) {
+        element(*kernel);
+        return result;
+    }
+    impl_->observe_static_kernel_container(object);
+    element(impl_->read_container_object_value(object));
     return result;
 }
 
@@ -5488,6 +5513,34 @@ void Interpreter::deposit_container_object(
             impl_->static_kernel->host_deposit(signal);
         }
     }
+}
+
+const ContainerSignalAlias* Interpreter::Impl::flat_container_signal_bridge(
+    const ContainerObjectId object) const
+{
+    if (object >= container_signal_aliases.size()
+        || !container_signal_aliases[object]
+        || !container_signal_aliases[object]->writable) {
+        return nullptr;
+    }
+    const auto& target = get_container_object(object);
+    const auto& type = target.initial_value.type;
+    if (target.slice_alias
+        || (object < container_aggregate_signal_aliases.size()
+            && container_aggregate_signal_aliases[object])
+        || std::ranges::any_of(container_element_signal_aliases.at(object),
+            [](const auto& element) { return element.has_value(); })
+        || container_value_reference_exposed[object] != 0U
+        || !exposed_container_value_references.empty()
+        || !type.fixed || type.sparse || type.associative
+        || (type.element_kind != ContainerElementKind::Packed
+            && type.element_kind != ContainerElementKind::Scalar)
+        || !target.initial_value.nested_elements.empty()
+        || target.initial_value.elements.size()
+            != container_element_count(target.initial_value)) {
+        return nullptr;
+    }
+    return &*container_signal_aliases[object];
 }
 
 void Interpreter::deposit_container_object_element(
@@ -5588,10 +5641,52 @@ void Interpreter::deposit_container_object_element(
             object, { });
         return;
     }
+    // A flat fixed array one signal bridges whole takes the element's bits
+    // of that signal, the same foreign write of the signal as a
+    // whole-container deposit makes.
+    if (const auto* const alias = impl_->flat_container_signal_bridge(object)) {
+        const auto& type = target.initial_value.type;
+        auto packed = [&] {
+            if (auto kernel = kernel_signal_value(alias->signal)) {
+                return std::move(*kernel);
+            }
+            return impl_->get_signal(alias->signal).initial_value;
+        }();
+        const auto element_width = type.element_width;
+        if (!packed.is_logic9()
+            && packed.width() == element_width * target.initial_value.elements.size()) {
+            const auto offset = packed.width() - (ordinal + 1U) * element_width;
+            if (packed.extract_bits(offset, element_width) == value) {
+                return;
+            }
+            packed.insert_bits(value, offset);
+            const auto signal = alias->signal;
+            if (impl_->started) {
+                note_external_signal_write(signal);
+            }
+            impl_->invalidate_container_aggregate_extract(object);
+            target.initial_value.elements[ordinal] = std::move(value);
+            if (!impl_->deposit_kernel_owned(signal, packed)) {
+                impl_->commit(signal, std::move(packed));
+            }
+            impl_->container_materialized_revisions[object].reset();
+            if (impl_->static_kernel && impl_->started) {
+                impl_->static_kernel->host_deposit(signal);
+            }
+            return;
+        }
+    }
     // Otherwise the whole container takes the write, through the signals
-    // that bridge it as any foreign write of the container.
-    impl_->observe_static_kernel_container(object);
-    auto replacement = impl_->read_container_object_value(object);
+    // that bridge it as any foreign write of the container; the kernel's
+    // value of those signals is current, the host's copy may not be.
+    auto replacement = [&] {
+        if (auto kernel = kernel_container_object_value(object)) {
+            return std::move(*kernel);
+        }
+        impl_->prepare_container_value_observation(object);
+        impl_->observe_static_kernel_container(object);
+        return impl_->read_container_object_value(object);
+    }();
     if (container_packed_element(replacement, ordinal) == value) {
         return;
     }

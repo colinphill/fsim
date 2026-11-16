@@ -669,6 +669,12 @@ void Interpreter::Impl::StaticKernel::execute_body(
                     = strings[inst.z];
                 break;
             }
+            if (static_cast<static_kernel_detail::StrOp>(inst.sub)
+                == static_kernel_detail::StrOp::write_object_nba) {
+                queue_string_update(member_index,
+                    static_cast<StringObjectId>(inst.imm_a), strings[inst.z]);
+                break;
+            }
             const auto failure = static_kernel_detail::execute_str(inst, body, strings.data(),
                 registers);
             if (failure != static_kernel_detail::DynFailure::none) {
@@ -2989,6 +2995,7 @@ void Interpreter::Impl::StaticKernel::set_instruction_helpers(
     helpers.sva_grow = &StaticKernel::native_sva_grow;
     helpers.dyn_grow = &StaticKernel::native_dyn_grow;
     helpers.dyn_reshape = &StaticKernel::native_dyn_reshape;
+    helpers.str_nba = &StaticKernel::native_str_nba;
     helpers.str_reserve = [](StaticKernelNativeFrame* frame, const std::uint32_t at,
                               void* target, const std::uint64_t needed) {
         return StaticKernel::native_str_reserve(frame, at, static_cast<std::string*>(target),

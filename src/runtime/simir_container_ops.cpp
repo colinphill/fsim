@@ -144,8 +144,9 @@ std::size_t stream_element_bits(const ContainerType& type)
 
 // Consume bits into a container value's elements; a variable-size
 // container takes as many elements as the remaining bits fill, less the
-// `reserved` bits of the fixed-size targets after it, the last one padded
-// with zero bits (IEEE 1800-2017 11.4.14.4).
+// `reserved` bits of the fixed-size targets after it (IEEE 1800-2023
+// 11.4.14.4). It is resized as in a cast, so bits left over that do not
+// fill a whole element are a size difference, an error (6.24.3).
 void consume_container_bits(
     const ProcessId process,
     const InstructionIndex instruction,
@@ -208,8 +209,11 @@ void consume_container_bits(
         }
         const auto available = bits.size() - std::min(position, bits.size());
         const auto remaining = available - std::min(reserved, available);
-        const auto count = (remaining + element_bits - 1U) / element_bits;
-        resize_container_value(value, count);
+        if (remaining % element_bits != 0U) {
+            container_error(process, instruction,
+                "a bit stream does not fill a whole number of elements of its variable-size target");
+        }
+        resize_container_value(value, remaining / element_bits);
     }
     switch (value.type.element_kind) {
     case ContainerElementKind::Packed:

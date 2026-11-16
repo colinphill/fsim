@@ -402,6 +402,11 @@ struct StaticKernelNativeHelpers {
     /// the memory is not available (the failure is reported).
     std::uint32_t (*str_reserve)(StaticKernelNativeFrame*, std::uint32_t at, void* target,
         std::uint64_t needed) { };
+    /// `fsim_sk_str_nba`: a nonblocking write of string variable `object`
+    /// with the string register at `source` (a std::string), queued among
+    /// the member's nonblocking updates.
+    void (*str_nba)(StaticKernelNativeFrame*, std::uint32_t at, std::uint64_t object,
+        const void* source) { };
     /// `fsim_sk_dyn_text_reserve`: room for `needed` bytes in the text slot
     /// at `slot` (a string element of a kernel container), its bytes kept;
     /// nonzero when the memory is not available (the failure is reported).

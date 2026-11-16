@@ -2472,6 +2472,12 @@ struct Interpreter::Impl : SchedulerBatchTask {
     static constexpr std::uint64_t no_container_extract_revision
         = std::numeric_limits<std::uint64_t>::max();
     std::vector<std::uint64_t> container_aggregate_extract_revisions;
+    /// The signal that bridges a flat fixed array of packed elements whole,
+    /// with no other alias or exposed reference: element k is the k-th
+    /// element width down from the signal's most significant bit
+    /// (pack_container_signal_value). None for any other container.
+    [[nodiscard]] const ContainerSignalAlias* flat_container_signal_bridge(
+        ContainerObjectId object) const;
     void invalidate_container_aggregate_extract(
         const ContainerObjectId id) noexcept
     {

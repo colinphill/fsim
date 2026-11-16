@@ -3860,11 +3860,8 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                 // 1800-2023 10.4.2, 4.9.4), in execution order with the
                 // thread's other nonblocking updates (4.6 b)): the kernel's
                 // queue holds it with them.
-                queue_host_task(member_index, running_process(member_index),
-                    [owner = &impl_, object = op.object,
-                        value = string_register(op.source)](Scheduler&) {
-                        owner->string_object_storage(object) = value;
-                    });
+                queue_string_update(member_index, op.object,
+                    string_register(op.source));
             } else {
                 impl_.string_object_storage(op.object) = string_register(op.source);
             }
