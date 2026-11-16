@@ -1467,7 +1467,7 @@ fsim_status_t fsim_session_get_object_info(
                 : root_handle(value);
             out_info->kind = FSIM_OBJECT_SCOPE;
             out_info->width = 0;
-            out_info->name = view(leaf_name(info.full_name));
+            out_info->name = view(info.name);
             out_info->full_name = view(info.full_name);
             out_info->type_name = view(info.type_name);
             if (scope_entered(value, info)) {
@@ -1490,7 +1490,7 @@ fsim_status_t fsim_session_get_object_info(
                 : process_handle(value, reference.process);
             out_info->kind = FSIM_OBJECT_VARIABLE;
             out_info->width = info.width;
-            out_info->name = view(leaf_name(info.name));
+            out_info->name = view(reference.name);
             out_info->full_name = view(reference.full_name);
             out_info->type_name = view(info.type_name);
             if (variable_initialized(value, reference)) {

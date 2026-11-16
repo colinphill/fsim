@@ -38,7 +38,8 @@ namespace {
         && left.systemverilog_scalar == right.systemverilog_scalar
         && left.storage == right.storage
         && left.role == right.role
-        && same_debug_frame(left.frame, right.frame);
+        && same_debug_frame(left.frame, right.frame)
+        && left.scope_path == right.scope_path && left.leaf == right.leaf;
 }
 
 [[nodiscard]] bool same_debug_string_local(

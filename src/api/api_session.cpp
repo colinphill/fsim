@@ -491,6 +491,7 @@ std::optional<std::size_t> ensure_scope(
     const std::size_t process,
     const std::optional<std::size_t> parent_scope,
     const std::string& full_name,
+    const std::string& name,
     const fsim::runtime::simir::SourceLocation& source) {
   for (std::size_t index = 0; index < session.scopes.size(); ++index) {
     const auto& candidate = session.scopes[index];
@@ -512,7 +513,8 @@ std::optional<std::size_t> ensure_scope(
           full_name,
           "scope",
           source,
-          std::nullopt});
+          std::nullopt,
+          name});
   return session.scopes.size() - 1;
 }
 
@@ -567,6 +569,8 @@ std::optional<std::size_t> append_design_scope(
       > kScopeIndexMask - kScopePayloadBase) {
     return std::nullopt;
   }
+  // A design scope's path is a hierarchical name of the design (23.6).
+  auto name = std::string{leaf_name(full_name)};
   session.scopes.push_back(ScopeObject{
       kind,
       std::nullopt,
@@ -575,7 +579,8 @@ std::optional<std::size_t> append_design_scope(
       std::move(type_name),
       fsim::runtime::simir::SourceLocation{
           std::string{source}, 1, 1},
-      std::nullopt});
+      std::nullopt,
+      std::move(name)});
   return session.scopes.size() - 1;
 }
 
@@ -792,36 +797,21 @@ bool rebuild_debug_objects(Session& session) {
         continue;
       }
       std::optional<std::size_t> parent_scope;
-      const auto leaf_separator = debug_local.name.find_last_of('.');
-      if (leaf_separator != std::string::npos) {
-        const auto scope_path =
-            std::string_view{debug_local.name}.substr(0, leaf_separator);
-        std::size_t segment_begin = 0;
-        while (segment_begin < scope_path.size()) {
-          const auto segment_end =
-              scope_path.find('.', segment_begin);
-          const auto prefix_end =
-              segment_end == std::string_view::npos
-              ? scope_path.size()
-              : segment_end;
-          const auto full_name =
-              occurrence.name + "."
-              + std::string(scope_path.substr(0, prefix_end));
-          parent_scope = ensure_scope(
-              session,
-              process,
-              parent_scope,
-              full_name,
-              debug_local.source);
-          if (!parent_scope) {
-            session.scopes.clear();
-            session.variables.clear();
-            return false;
-          }
-          if (segment_end == std::string_view::npos) {
-            break;
-          }
-          segment_begin = segment_end + 1;
+      auto full_name = occurrence.name;
+      for (const auto& segment : debug_local.scope_path) {
+        full_name += ".";
+        full_name += segment;
+        parent_scope = ensure_scope(
+            session,
+            process,
+            parent_scope,
+            full_name,
+            segment,
+            debug_local.source);
+        if (!parent_scope) {
+          session.scopes.clear();
+          session.variables.clear();
+          return false;
         }
       }
       if (session.variables.size() > kObjectIndexMask) {
@@ -833,7 +823,8 @@ bool rebuild_debug_objects(Session& session) {
           process,
           local,
           parent_scope,
-          occurrence.name + "." + debug_local.name});
+          occurrence.name + "." + debug_local.name,
+          debug_local.leaf});
     }
     auto name = occurrence.name;
     const auto collides_with_scope =

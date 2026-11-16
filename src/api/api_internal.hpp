@@ -42,6 +42,8 @@ struct VariableObject {
   std::size_t local{};
   std::optional<std::size_t> parent_scope;
   std::string full_name;
+  // The simple name the local is declared with.
+  std::string name;
 };
 
 struct DriverObject {
@@ -64,6 +66,8 @@ struct ScopeObject {
   std::string type_name;
   fsim::runtime::simir::SourceLocation source;
   std::optional<std::size_t> systemc_object;
+  // The scope's own name: the last segment of its path.
+  std::string name;
 };
 
 struct DesignSourceLocation {

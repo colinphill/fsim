@@ -75,6 +75,13 @@ struct DebugLocal {
       support::SystemVerilogBuiltinType::none};
   DebugLocalRole role{DebugLocalRole::variable};
   DebugFrameLocal frame{};
+  // The named scopes that enclose the local in its process, outermost first
+  // (named blocks, IEEE 1800-2023 9.3.5; the callable for a local of a call
+  // frame), and the local's own simple name (empty for a method's receiver
+  // and a function's result). A debugger builds its scopes from these, not
+  // from the displayed name.
+  std::vector<std::string> scope_path{};
+  std::string leaf{};
 };
 
 /// Whether the local is the slot of the value a system function with state

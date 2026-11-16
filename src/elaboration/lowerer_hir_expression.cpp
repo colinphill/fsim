@@ -21353,6 +21353,8 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                     : support::SystemVerilogBuiltinType::bit,
                 runtime::simir::DebugLocalRole::call_value,
                 { },
+                { },
+                { },
             });
             emit_debug_point(DebugPointKind::call_value, call_span,
                 call.text);
@@ -23990,6 +23992,8 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 runtime::simir::DebugLocalStorage::packed,
                 support::SystemVerilogBuiltinType::int_type,
                 runtime::simir::DebugLocalRole::call_value,
+                { },
+                { },
                 { },
             });
             emit_debug_point(DebugPointKind::call_value, call_span,

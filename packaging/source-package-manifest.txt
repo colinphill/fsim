@@ -1458,6 +1458,7 @@ tests/api/api_abi_c_test.c
 tests/api/api_abi_contract.h
 tests/api/api_abi_cpp_test.cpp
 tests/api/api_header_c_test.c
+tests/api/api_lexical_scope_test.cpp
 tests/api/api_mapped_library_test.cpp
 tests/api/api_multiple_root_test.cpp
 tests/api/api_sdf_vital_test.cpp

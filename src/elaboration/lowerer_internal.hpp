@@ -256,6 +256,15 @@ fully_effective_systemverilog_type(
     return type;
 }
 
+/// The scope path of a debug local of a call frame: the callable's
+/// displayed name, when the frame has one.
+[[nodiscard]] inline std::vector<std::string> callee_debug_scope_path(
+    const std::string& callee)
+{
+    return callee.empty() ? std::vector<std::string> { }
+                          : std::vector<std::string> { callee };
+}
+
 [[nodiscard]] inline SourceLocation runtime_source_location(
     const frontend::SourceSpan& span)
 {

@@ -1295,6 +1295,8 @@ void Lowerer::add_hir_process_loop_parameter(
         builtin,
         runtime::simir::DebugLocalRole::frame_local,
         { },
+        { },
+        { },
     });
     frame_local_simple_names_.emplace_back(name);
     const runtime::simir::FrameLocalBinding binding {
@@ -1357,6 +1359,8 @@ void Lowerer::add_hir_frame_local(const std::size_t callable,
         builtin,
         runtime::simir::DebugLocalRole::frame_local,
         { },
+        { },
+        { },
     });
     frame_local_simple_names_.emplace_back(name);
     bind_hir_frame_local(
@@ -1396,6 +1400,13 @@ bool Lowerer::initialize_hir_declarations(
         local_frame = hir_callable_frame_local(*active_hir_callable_, name,
             runtime::simir::DebugFrameRole::variable, renamed);
         return result;
+    };
+    // The named scopes enclosing a debug local, outermost first.
+    const auto debug_scope_path = [&]() {
+        return active_hir_callable_
+            ? callee_debug_scope_path(
+                  hir_callable_frames_[*active_hir_callable_].debug_name)
+            : local_scope_;
     };
     const auto capture_scalar_subtype_range = [&](
         const semantic::CompiledDeclarationView& declaration) {
@@ -2917,6 +2928,8 @@ bool Lowerer::initialize_hir_declarations(
                 builtin_type,
                 runtime::simir::DebugLocalRole::variable,
                 std::move(local_frame),
+                debug_scope_path(),
+                std::string { binding->name },
             });
         }
     }

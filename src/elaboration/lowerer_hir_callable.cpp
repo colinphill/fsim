@@ -28714,6 +28714,8 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
             runtime::simir::DebugLocalRole::variable,
             hir_callable_frame_local(callable_index, { },
                 runtime::simir::DebugFrameRole::result, true),
+            callee_debug_scope_path(initial_frame->debug_name),
+            { },
         });
     }
     if (initial_frame->function && declaration->systemverilog != nullptr
@@ -28744,6 +28746,8 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
             runtime::simir::DebugLocalRole::variable,
             hir_callable_frame_local(callable_index, { },
                 runtime::simir::DebugFrameRole::result, true),
+            callee_debug_scope_path(initial_frame->debug_name),
+            { },
         });
     }
 
@@ -28953,6 +28957,8 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
             runtime::simir::DebugLocalRole::variable,
             hir_callable_frame_local(callable_index, { },
                 runtime::simir::DebugFrameRole::receiver, true),
+            callee_debug_scope_path(initial_frame->debug_name),
+            { },
         });
     }
     if (initial_frame->type.container
@@ -29138,6 +29144,8 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
                 runtime::simir::DebugLocalRole::variable,
                 hir_callable_frame_local(callable_index, name,
                     runtime::simir::DebugFrameRole::formal, renamed),
+                callee_debug_scope_path(initial_frame->debug_name),
+                std::string { name },
             });
         } else if (record->vhdl != nullptr && initial_frame->function) {
             // A VHDL function cannot suspend, so its formals are no debug
@@ -29305,6 +29313,8 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
                         runtime::simir::DebugLocalRole::variable,
                         hir_callable_frame_local(callable_index, source.name,
                             runtime::simir::DebugFrameRole::variable, false),
+                        callee_debug_scope_path(initial_frame->debug_name),
+                        source.name,
                     });
                 }
             }

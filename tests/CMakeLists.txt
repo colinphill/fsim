@@ -6407,6 +6407,7 @@ fsim_register_simple_test(
     api/api_systemc_test.cpp
     api/api_mapped_library_test.cpp
     api/api_multiple_root_test.cpp
+    api/api_lexical_scope_test.cpp
     api/api_sdf_vital_test.cpp
   )
   fsim_configure_test(fsim_api_tests)

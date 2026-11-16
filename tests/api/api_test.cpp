@@ -238,6 +238,7 @@ fsim_string_view_t text(const char* value)
 } // namespace
 
 void test_multiple_root_api(const std::filesystem::path& directory);
+void test_lexical_scope_api(const std::filesystem::path& directory);
 void test_mapped_library_api(const std::filesystem::path& directory);
 void test_sdf_vital_api(const std::filesystem::path& directory);
 void test_systemc_api(
@@ -1891,6 +1892,7 @@ endmodule
     test_systemc_api(directory, "systemc");
 
     test_multiple_root_api(directory);
+    test_lexical_scope_api(directory);
     test_mapped_library_api(directory);
     test_sdf_vital_api(directory);
 

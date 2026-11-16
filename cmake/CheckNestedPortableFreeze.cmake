@@ -123,7 +123,7 @@ set(FSIM_DESIGN_TEST
 fsim_require_nested_portable_tokens("${FSIM_DESIGN_HEADER}"
   "kCompiledHirDecodeBudgetBytes")
 fsim_require_nested_portable_tokens("${FSIM_SCHEMA_HEADER}"
-  "kRuntimeStateSchema = 132"
+  "kRuntimeStateSchema = 133"
   "kSemanticStateSchema = 8"
   "kDesignIrStateSchema = 18"
   "kCompiledHirBundleSchema = 12"
@@ -144,7 +144,7 @@ fsim_require_nested_portable_tokens("${FSIM_DESIGN_CODEC}"
   "deserialize<runtime::SystemVerilogCoverageState>"
   "coverage state is inconsistent with compiled HIR")
 fsim_require_nested_portable_tokens("${FSIM_DESIGN_TEST}"
-  "kRuntimeStateSchema == 132"
+  "kRuntimeStateSchema == 133"
   "kDesignIrStateSchema == 18"
   "kCompiledHirBundleSchema == 12"
   "kSystemVerilogConstraintHirStateSchema == 38"

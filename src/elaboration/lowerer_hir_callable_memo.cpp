@@ -784,6 +784,9 @@ void Lowerer::replay_hir_callable_body(
                 ? runtime::simir::DebugFrameRole::formal
                 : runtime::simir::DebugFrameRole::variable,
             renamed_names[name]);
+        local.scope_path = callee_debug_scope_path(
+            hir_callable_frames_[callable].debug_name);
+        local.leaf = body.debug_names[name].name;
         const auto existing = std::ranges::find(process_.debug_locals,
             local.name, &DebugLocal::name);
         if (existing == process_.debug_locals.end()) {
