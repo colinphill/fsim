@@ -3257,6 +3257,11 @@ struct Interpreter::Impl : SchedulerBatchTask {
     void require_package_static_write(std::string_view kind, bool in_range,
         std::uint64_t owner, std::uint32_t object,
         std::optional<ProcessId> process, bool container) const;
+    // Whether package static initializer `process` may write this string or
+    // container object of package `owner` (its direct closure; the static
+    // part of require_package_static_write).
+    [[nodiscard]] bool package_static_closure_allows(ProcessId process,
+        std::uint64_t owner, std::uint32_t object, bool container) const;
     // Mirror a callable register write into the automatic callable context
     // that owns `destination`. Returns true when the write targets a
     // suspended context only, so the live register file is left untouched.

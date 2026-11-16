@@ -40,6 +40,22 @@ namespace kw = kernel_word;
 
 namespace {
 
+/// The state mask a count reduce selects (count_bits_value): `1` for
+/// $countones, the call's mask for $countbits.
+[[nodiscard]] std::uint8_t count_states(const CountOnes&) noexcept
+{
+    return 2U;
+}
+
+[[nodiscard]] std::uint8_t count_states(const CountBits& op) noexcept
+{
+    return static_cast<std::uint8_t>(op.state_mask & 0x0FU);
+}
+
+} // namespace
+
+namespace {
+
 constexpr std::string_view bodies_magic { "fsim-static-kernel-bodies-v12" };
 
 // The not-compiled reason of an operation kind the compiled tier has no form
@@ -2630,6 +2646,22 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
     // result, which that path converts).
     const auto emit_str = [&](KInst& inst, const auto& op) -> bool {
         using T = std::decay_t<decltype(op)>;
+        if constexpr (std::is_same_v<T, PlusArgSelect>) {
+            if (op.host_value != 0U) {
+                // $reset_count and $reset_value (IEEE 1800-2023 D.8): no
+                // string is used.
+                if (op.destination >= register_count || w(op.destination) != 32U) {
+                    return false;
+                }
+                inst.op = KOp::str;
+                inst.sub = static_cast<std::uint8_t>(StrOp::plusarg);
+                inst.aux = member.string_file == no_slot ? 0U : member.string_file;
+                inst.d = narrow(op.destination);
+                inst.imm_a = 2U;
+                inst.imm_b = op.host_value;
+                return true;
+            }
+        }
         if (member.string_file == no_slot) {
             return false;
         }
@@ -2695,6 +2727,61 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             inst.z = op.lhs;
             inst.imm_b = op.rhs;
             inst.imm_a = op.not_equal ? 1U : 0U;
+            return true;
+        } else if constexpr (std::is_same_v<T, ReadStringObject>
+            || std::is_same_v<T, WriteStringObject>) {
+            // A string variable (IEEE 1800-2023 6.16), read or written in
+            // place: a variable, or a valid element alias of a fixed string
+            // array. A nonblocking write matures in the host's NBA region
+            // and keeps the bridge.
+            if (op.object >= impl_.string_objects.size()) {
+                return false;
+            }
+            const auto& object = impl_.string_objects[op.object];
+            if (object.element_alias
+                && (object.element_alias->object >= impl_.container_objects.size()
+                    || object.element_alias->ordinal
+                        >= impl_.container_objects[object.element_alias->object]
+                               .initial_value.string_elements.size())) {
+                return false;
+            }
+            if constexpr (std::is_same_v<T, ReadStringObject>) {
+                if (!string(op.destination)) {
+                    return false;
+                }
+                set(StrOp::read_object);
+                inst.offset = op.destination;
+            } else {
+                if (op.nonblocking || !string(op.source)) {
+                    return false;
+                }
+                // A package initializer writes the variable itself, within
+                // its closure (initialize_package_static_string_object).
+                if (member.package_startup
+                    && (object.element_alias
+                        || !impl_.package_static_closure_allows(member.process,
+                            object.package_owner_id, op.object, false))) {
+                    return false;
+                }
+                set(StrOp::write_object);
+                inst.z = op.source;
+            }
+            inst.imm_a = op.object;
+            return true;
+        } else if constexpr (std::is_same_v<T, PlusArgSelect>) {
+            // $test$plusargs (IEEE 1800-2023 21.6). A $value$plusargs query
+            // (a format whose prefix the run parses) keeps the bridge.
+            if (op.format_query || !string(op.query) || (op.selected && !string(*op.selected))
+                || op.destination >= register_count || w(op.destination) != 32U) {
+                return false;
+            }
+            set(StrOp::plusarg);
+            inst.d = narrow(op.destination);
+            inst.z = op.query;
+            inst.imm_a = op.selected ? 1U : 0U;
+            if (op.selected) {
+                inst.offset = *op.selected;
+            }
             return true;
         } else if constexpr (std::is_same_v<T, StringLength>) {
             if (!string(op.source) || op.destination >= register_count
@@ -3801,7 +3888,10 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                     || std::is_same_v<T, StringLength>
                     || std::is_same_v<T, StringIndex>
                     || std::is_same_v<T, StringReplaceByte>
-                    || std::is_same_v<T, StringMethod>) {
+                    || std::is_same_v<T, StringMethod>
+                    || std::is_same_v<T, PlusArgSelect>
+                    || std::is_same_v<T, ReadStringObject>
+                    || std::is_same_v<T, WriteStringObject>) {
                     if (emit_str(inst, op)) {
                         return;
                     }
@@ -3885,8 +3975,6 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                     || std::is_same_v<T, TimeDisplay>
                     || std::is_same_v<T, Report>
                     || std::is_same_v<T, RandomValue>
-                    || std::is_same_v<T, CountOnes>
-                    || std::is_same_v<T, CountBits>
                     || std::is_same_v<T, ConcatenateStrings>
                     || std::is_same_v<T, LoadStringConstant>
                     || std::is_same_v<T, CopyStringRegister>
@@ -4616,6 +4704,8 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                     || std::is_same_v<T, Shift>
                     || std::is_same_v<T, UnaryNot>
                     || std::is_same_v<T, Reduction>
+                    || std::is_same_v<T, CountOnes>
+                    || std::is_same_v<T, CountBits>
                     || std::is_same_v<T, ConditionalSelect>
                     || std::is_same_v<T, LogicalNot>
                     || std::is_same_v<T, LogicalBinary>
@@ -4699,6 +4789,20 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                         alu.width = width[op.source];
                         place_operand(0U, op.destination);
                         place_operand(1U, op.source);
+                    } else if constexpr (std::is_same_v<T, CountOnes>
+                        || std::is_same_v<T, CountBits>) {
+                        // $countones and $countbits (IEEE 1800-2023 20.9) of
+                        // a wide value: a reduce counting the selected states.
+                        if (!chunked(op.source) || !narrow_operand(op.destination)
+                            || width[op.destination] != 32U) {
+                            return;
+                        }
+                        alu.offset = static_cast<std::uint32_t>(WideFamily::reduce);
+                        alu.sub = static_cast<std::uint8_t>(kernel_word::reduce_count
+                            | count_states(op));
+                        alu.width = width[op.source];
+                        place_operand(0U, op.destination);
+                        place_operand(1U, op.source);
                     } else if constexpr (std::is_same_v<T, ConditionalSelect>) {
                         if (!scalar(op.condition) || !chunked(op.when_true)
                             || !chunked(op.when_false) || !chunked(op.destination)
@@ -4735,6 +4839,8 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                         || std::is_same_v<T, Shift>
                         || std::is_same_v<T, UnaryNot>
                         || std::is_same_v<T, Reduction>
+                        || std::is_same_v<T, CountOnes>
+                        || std::is_same_v<T, CountBits>
                         || std::is_same_v<T, LogicalNot>
                         || std::is_same_v<T, ConvertToTwoState>) {
                         alu.imm_b = alu.width;
@@ -5410,6 +5516,15 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             } else if constexpr (std::is_same_v<T, Reduction>) {
                 inst.op = KOp::reduce;
                 inst.sub = static_cast<std::uint8_t>(op.operation);
+                inst.d = narrow(op.destination);
+                inst.x = narrow(op.source);
+                inst.width = w(op.source);
+            } else if constexpr (std::is_same_v<T, CountOnes>
+                || std::is_same_v<T, CountBits>) {
+                // $countones and $countbits (IEEE 1800-2023 20.9): a reduce
+                // counting the selected states into 32 bits.
+                inst.op = KOp::reduce;
+                inst.sub = static_cast<std::uint8_t>(kernel_word::reduce_count | count_states(op));
                 inst.d = narrow(op.destination);
                 inst.x = narrow(op.source);
                 inst.width = w(op.source);

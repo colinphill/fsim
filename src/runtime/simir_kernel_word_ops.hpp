@@ -120,6 +120,34 @@ struct Word {
     return scalar(logic_not(truth(value)));
 }
 
+/// A KOp::reduce (or wide reduce) sub with this bit set is $countbits
+/// (IEEE 1800-2023 20.9): the number of bits whose state the low four bits
+/// select (bit 0 `0`, 1 `1`, 2 X, 3 Z), as a 32-bit value; $countones
+/// selects `1`.
+inline constexpr std::uint8_t reduce_count = 0x80U;
+
+/// $countbits of `value` (`width` bits) for state mask `states`
+/// (count_bits_value).
+[[nodiscard]] constexpr Word count_bits(const Word value, const std::uint32_t width,
+    const std::uint8_t states) noexcept
+{
+    const auto m = mask(width);
+    std::uint64_t selected { };
+    if ((states & 1U) != 0U) {
+        selected |= ~value.a & ~value.b;
+    }
+    if ((states & 2U) != 0U) {
+        selected |= value.a & ~value.b;
+    }
+    if ((states & 4U) != 0U) {
+        selected |= value.a & value.b;
+    }
+    if ((states & 8U) != 0U) {
+        selected |= ~value.a & value.b;
+    }
+    return { static_cast<std::uint64_t>(std::popcount(selected & m)), 0U };
+}
+
 [[nodiscard]] constexpr Word logical_binary(
     const LogicalBinaryOperator operation, const Word l, const Word r) noexcept
 {
@@ -160,6 +188,15 @@ struct Word {
                                                      : Logic4::zero);
     }
     return scalar(Logic4::x);
+}
+
+/// KOp::reduce's sub: a ReductionOperator, or a count (reduce_count).
+[[nodiscard]] constexpr Word reduce_sub(const std::uint8_t sub, const Word value,
+    const std::uint32_t width) noexcept
+{
+    return (sub & reduce_count) != 0U
+        ? count_bits(value, width, static_cast<std::uint8_t>(sub & 0x0FU))
+        : reduce(static_cast<ReductionOperator>(sub), value, width);
 }
 
 [[nodiscard]] constexpr std::int64_t sign_extend(const std::uint64_t value,

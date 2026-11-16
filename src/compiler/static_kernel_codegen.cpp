@@ -273,6 +273,12 @@ static_assert(offsetof(StaticKernelNativeFrame, variable_hooks) == 144U);
 static_assert(offsetof(StaticKernelNativeFrame, watch_writes) == 152U);
 static_assert(offsetof(StaticKernelNativeFrame, random_states) == 160U);
 static_assert(offsetof(StaticKernelNativeFrame, system_random_seed) == 168U);
+static_assert(offsetof(StaticKernelNativeFrame, plusargs) == 176U);
+static_assert(offsetof(StaticKernelNativeFrame, plusarg_count) == 184U);
+static_assert(offsetof(StaticKernelNativeFrame, reset_count) == 192U);
+static_assert(offsetof(StaticKernelNativeFrame, reset_value) == 200U);
+static_assert(offsetof(StaticKernelNativeFrame, string_objects) == 208U);
+static_assert(sizeof(runtime::simir::StaticKernelStringCell) == 16U);
 static_assert(offsetof(detail::NativeCallStack, entries) == 0U);
 static_assert(offsetof(detail::NativeCallStack, capacity) == 8U);
 static_assert(offsetof(runtime::simir::StaticKernelSvaTable, blocks) == 0U);
@@ -6449,9 +6455,55 @@ private:
             builder_.CreateAnd(builder_.CreateAnd(meta, active), bit_not(either_u)) };
     }
 
+    /// The bits of the planes (a, b) whose state the count mask `states`
+    /// selects (bit 0 `0`, 1 `1`, 2 X, 3 Z; count_bits_value). Works on
+    /// any integer width.
+    [[nodiscard]] llvm::Value* counted_bits(llvm::Value* a, llvm::Value* b,
+        const std::uint8_t states)
+    {
+        llvm::Value* selected = llvm::Constant::getNullValue(a->getType());
+        const auto add = [&](const std::uint8_t state, llvm::Value* bits) {
+            if ((states & state) != 0U) {
+                selected = builder_.CreateOr(selected, bits);
+            }
+        };
+        auto* not_a = builder_.CreateNot(a);
+        auto* not_b = builder_.CreateNot(b);
+        add(1U, builder_.CreateAnd(not_a, not_b));
+        add(2U, builder_.CreateAnd(a, not_b));
+        add(4U, builder_.CreateAnd(a, b));
+        add(8U, builder_.CreateAnd(not_a, b));
+        return selected;
+    }
+
+    /// The population count of a 64-bit word. Outside the optimizing tier
+    /// the bits fold in place (the fast selector has no population count).
+    [[nodiscard]] llvm::Value* population(llvm::Value* word)
+    {
+        if (optimizing_) {
+            return builder_.CreateUnaryIntrinsic(llvm::Intrinsic::ctpop, word);
+        }
+        auto* v = builder_.CreateSub(word,
+            builder_.CreateAnd(builder_.CreateLShr(word, constant(1U)),
+                constant(0x5555555555555555ULL)));
+        v = builder_.CreateAdd(builder_.CreateAnd(v, constant(0x3333333333333333ULL)),
+            builder_.CreateAnd(builder_.CreateLShr(v, constant(2U)),
+                constant(0x3333333333333333ULL)));
+        v = builder_.CreateAnd(builder_.CreateAdd(v, builder_.CreateLShr(v, constant(4U))),
+            constant(0x0f0f0f0f0f0f0f0fULL));
+        return builder_.CreateLShr(builder_.CreateMul(v, constant(0x0101010101010101ULL)),
+            constant(56U));
+    }
+
     [[nodiscard]] Pair emit_reduce(const KInst& inst, const Pair value)
     {
         auto* m = constant(mask_of(inst.width));
+        if ((inst.sub & runtime::simir::kernel_word::reduce_count) != 0U) {
+            // $countbits / $countones: a two-state 32-bit count.
+            const auto states = static_cast<std::uint8_t>(inst.sub & 0x0FU);
+            return { population(builder_.CreateAnd(counted_bits(value.a, value.b, states), m)),
+                constant(0U) };
+        }
         auto* ones = builder_.CreateAnd(builder_.CreateAnd(value.a, bit_not(value.b)), m);
         auto* zeros = builder_.CreateAnd(
             builder_.CreateAnd(bit_not(value.a), bit_not(value.b)), m);
@@ -7821,10 +7873,72 @@ private:
             { builder_.CreateLoad(i64_, result_a), builder_.CreateLoad(i64_, result_b) });
     }
 
+    /// StrOp::plusarg: select_plusarg over the frame's plusargs, or a
+    /// reset query (IEEE 1800-2023 21.6, D.8).
+    void emit_plusarg(const KInst& inst, const std::uint32_t at)
+    {
+        if (inst.imm_a == 2U) {
+            auto* source = builder_.CreateLoad(ptr_, frame_field(inst.imm_b == 1U ? 192U : 200U));
+            store_register(inst.d,
+                { builder_.CreateZExt(builder_.CreateLoad(i32_, source), i64_), constant(0U) });
+            return;
+        }
+        auto* file = dyn_header(inst.aux);
+        auto* query = str_object(file, inst.z);
+        auto* wanted = str_size(query);
+        auto* table = builder_.CreateLoad(ptr_, frame_field(176U));
+        auto* count = builder_.CreateLoad(i64_, frame_field(184U));
+        auto* index = str_slot(i64_, constant(0U));
+        auto* found = str_slot(i64_, constant(0U));
+        auto* found_data = str_slot(ptr_, str_data(query));
+        auto* found_size = str_slot(i64_, constant(0U));
+        dyn_while(
+            [&] {
+                return builder_.CreateAnd(
+                    builder_.CreateICmpEQ(builder_.CreateLoad(i64_, found), constant(0U)),
+                    builder_.CreateICmpULT(builder_.CreateLoad(i64_, index), count));
+            },
+            [&] {
+                auto* position = builder_.CreateLoad(i64_, index);
+                auto* object = builder_.CreateInBoundsGEP(i8_, table,
+                    builder_.CreateMul(position, constant(sizeof(std::string))));
+                // The leading `+` is not part of the plusarg (the byte after
+                // an empty string's end is its terminating zero).
+                auto* data = str_data(object);
+                auto* plus = builder_.CreateZExt(builder_.CreateICmpEQ(
+                    builder_.CreateLoad(i8_, data), llvm::ConstantInt::get(i8_, '+')), i64_);
+                data = builder_.CreateInBoundsGEP(i8_, data, plus);
+                auto* size = builder_.CreateSub(str_size(object), plus);
+                const auto matched = dyn_choose(builder_.CreateICmpUGE(size, wanted), [&] {
+                    return Pair { builder_.CreateZExt(
+                                      str_bytes_equal(data, str_data(query), wanted), i64_),
+                        constant(0U) };
+                }, { constant(0U), constant(0U) });
+                auto* hit = dyn_when(builder_.CreateICmpNE(matched.a, constant(0U)));
+                builder_.CreateStore(constant(1U), found);
+                builder_.CreateStore(data, found_data);
+                builder_.CreateStore(size, found_size);
+                dyn_end(hit);
+                builder_.CreateStore(builder_.CreateAdd(position, constant(1U)), index);
+            });
+        if (inst.imm_a == 1U) {
+            auto* target = str_object(file, inst.offset);
+            auto* size = builder_.CreateLoad(i64_, found_size);
+            str_reserve(target, size, at);
+            str_copy_bytes(str_data(target), builder_.CreateLoad(ptr_, found_data), size);
+            str_set_size(target, size);
+        }
+        store_register(inst.d, { builder_.CreateLoad(i64_, found), constant(0U) });
+    }
+
     void emit_str(const KInst& inst, const std::uint32_t at)
     {
         using detail::DynFailure;
         using detail::StrOp;
+        if (static_cast<StrOp>(inst.sub) == StrOp::plusarg) {
+            emit_plusarg(inst, at);
+            return;
+        }
         auto* file = dyn_header(inst.aux);
         switch (static_cast<StrOp>(inst.sub)) {
         case StrOp::copy: {
@@ -7967,7 +8081,38 @@ private:
         case StrOp::from_integer:
             emit_str_from_integer(inst, file, at);
             break;
+        case StrOp::plusarg:
+            break;
+        case StrOp::read_object: {
+            auto* target = str_object(file, inst.offset);
+            auto* source = string_variable(inst.imm_a);
+            auto* size = str_size(source);
+            str_reserve(target, size, at);
+            str_copy_bytes(str_data(target), str_data(source), size);
+            str_set_size(target, size);
+            break;
         }
+        case StrOp::write_object: {
+            auto* target = string_variable(inst.imm_a);
+            auto* source = str_object(file, inst.z);
+            auto* size = str_size(source);
+            str_reserve(target, size, at);
+            str_copy_bytes(str_data(target), str_data(source), size);
+            str_set_size(target, size);
+            break;
+        }
+        }
+    }
+
+    /// The std::string of string variable `id` (frame string_objects).
+    [[nodiscard]] llvm::Value* string_variable(const std::uint64_t id)
+    {
+        auto* table = builder_.CreateLoad(ptr_, frame_field(208U));
+        auto* cell = builder_.CreateConstInBoundsGEP1_64(i8_, table, id * 16U);
+        auto* holder = builder_.CreateLoad(ptr_, cell);
+        auto* index = builder_.CreateLoad(i64_, builder_.CreateConstInBoundsGEP1_64(i8_, cell, 8U));
+        return builder_.CreateInBoundsGEP(i8_, builder_.CreateLoad(ptr_, holder),
+            builder_.CreateMul(index, constant(sizeof(std::string))));
     }
 
     [[nodiscard]] llvm::AllocaInst* str_slot(llvm::Type* type, llvm::Value* initial)
@@ -15039,6 +15184,15 @@ private:
         const auto count = [&] {
             return builder_.CreateUnaryIntrinsic(llvm::Intrinsic::ctpop, ones);
         };
+        if ((inst.sub & runtime::simir::kernel_word::reduce_count) != 0U) {
+            auto* selected = counted_bits(value.a, value.b,
+                static_cast<std::uint8_t>(inst.sub & 0x0FU));
+            store_register(inst.d,
+                { builder_.CreateTrunc(
+                      builder_.CreateUnaryIntrinsic(llvm::Intrinsic::ctpop, selected), i64_),
+                    constant(0U) });
+            return;
+        }
         switch (static_cast<ReductionOperator>(inst.sub)) {
         case ReductionOperator::one_hot:
             store_register(inst.d,
@@ -17052,6 +17206,18 @@ private:
         using runtime::simir::ReductionOperator;
         const auto bits = inst.width;
         const auto value = operand_words(inst.x, bits, false);
+        if ((inst.sub & runtime::simir::kernel_word::reduce_count) != 0U) {
+            const auto states = static_cast<std::uint8_t>(inst.sub & 0x0FU);
+            const auto total = each_word(bits, { constant(0U) },
+                [&](llvm::Value* k, const Carried& state) -> Carried {
+                    auto* selected = builder_.CreateAnd(
+                        counted_bits(read_word(value, 0U, k), read_word(value, 1U, k), states),
+                        valid_bits(bits, k));
+                    return { builder_.CreateAdd(state[0], population(selected)) };
+                });
+            store_register(inst.d, { total[0], constant(0U) });
+            return;
+        }
         // (a zero, a one, an unknown, the count of ones).
         const auto seen = each_word(bits,
             { builder_.getFalse(), builder_.getFalse(), builder_.getFalse(), constant(0U) },

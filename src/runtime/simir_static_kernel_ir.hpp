@@ -376,6 +376,17 @@ enum class StrOp : std::uint8_t {
     /// imm_a, signed in radix 10, 0 when unknown (itoa, hextoa, octtoa,
     /// bintoa; 6.16.12).
     from_integer,
+    /// imm_a 0 or 1: d = 1 when a plusarg (its leading `+` dropped) starts
+    /// with string z, else 0 (32 bits; $test$plusargs, select_plusarg);
+    /// with imm_a 1 string offset is also set to the matching plusarg, or
+    /// the empty string. imm_a 2: d = $reset_count (imm_b 1) or
+    /// $reset_value (imm_b 2) (IEEE 1800-2023 D.8); no string is used.
+    plusarg,
+    /// String offset = string variable imm_a (a StringObjectId; IEEE
+    /// 1800-2023 6.16), read in place (StaticKernelStringCell).
+    read_object,
+    /// String variable imm_a = string z (a blocking write).
+    write_object,
 };
 
 [[nodiscard]] inline bool str_writes_string(const StrOp op) noexcept
@@ -389,7 +400,7 @@ enum class StrOp : std::uint8_t {
 [[nodiscard]] inline bool str_writes_register(const StrOp op) noexcept
 {
     return op == StrOp::compare || op == StrOp::length || op == StrOp::index
-        || op == StrOp::order || op == StrOp::to_integer;
+        || op == StrOp::order || op == StrOp::to_integer || op == StrOp::plusarg;
 }
 
 /// Reads index register y.

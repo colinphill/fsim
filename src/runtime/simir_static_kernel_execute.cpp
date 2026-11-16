@@ -3,6 +3,7 @@
 // KIR execution of the engine v4 static kernel: the interpreter tier,
 // deoptimization, the generic bridge and the slow instruction semantics.
 #include "simir_static_kernel_compiled_internal.hpp"
+#include "fsim/runtime/file_scanning.hpp"
 #include "fsim/runtime/simir_interpreter.hpp"
 #include "fsim/semantic/sva_plan.hpp"
 #include "fsim/support/index_distance.hpp"
@@ -409,9 +410,7 @@ void Interpreter::Impl::StaticKernel::execute_body(
             }
             break;
         case KOp::reduce:
-            registers[inst.d] = kw::reduce(
-                static_cast<ReductionOperator>(inst.sub), registers[inst.x],
-                inst.width);
+            registers[inst.d] = kw::reduce_sub(inst.sub, registers[inst.x], inst.width);
             break;
         case KOp::unary_not:
             registers[inst.d] = kw::unary_not(registers[inst.x], inst.width);
@@ -634,7 +633,37 @@ void Interpreter::Impl::StaticKernel::execute_body(
             break;
         }
         case KOp::str: {
+            if (static_cast<static_kernel_detail::StrOp>(inst.sub)
+                == static_kernel_detail::StrOp::plusarg) {
+                if (inst.imm_a == 2U) {
+                    // $reset_count and $reset_value (IEEE 1800-2023 D.8).
+                    registers[inst.d] = { static_cast<std::uint32_t>(inst.imm_b == 1U
+                                              ? impl_.reset_count_result
+                                              : impl_.reset_value_result),
+                        0U };
+                    break;
+                }
+                auto& strings = members_[containers_[inst.aux].string_member].strings;
+                const auto selected = select_plusarg(impl_.plusargs, strings[inst.z], false);
+                if (inst.imm_a == 1U) {
+                    strings[inst.offset].assign(selected.value_or(std::string_view { }));
+                }
+                registers[inst.d] = { selected ? 1U : 0U, 0U };
+                break;
+            }
             auto& strings = members_[containers_[inst.aux].string_member].strings;
+            if (static_cast<static_kernel_detail::StrOp>(inst.sub)
+                == static_kernel_detail::StrOp::read_object) {
+                strings[inst.offset] = impl_.string_object_storage(
+                    static_cast<StringObjectId>(inst.imm_a));
+                break;
+            }
+            if (static_cast<static_kernel_detail::StrOp>(inst.sub)
+                == static_kernel_detail::StrOp::write_object) {
+                impl_.string_object_storage(static_cast<StringObjectId>(inst.imm_a))
+                    = strings[inst.z];
+                break;
+            }
             const auto failure = static_kernel_detail::execute_str(inst, body, strings.data(),
                 registers);
             if (failure != static_kernel_detail::DynFailure::none) {
@@ -3257,8 +3286,11 @@ const char* Interpreter::Impl::StaticKernel::execute_wide_alu(const CompiledBody
         result = unary_not(operand(1U, inst.x, inst.width));
         break;
     case WideFamily::reduce:
-        result = reduce_value(static_cast<ReductionOperator>(inst.sub),
-            operand(1U, inst.x, inst.width));
+        result = (inst.sub & kw::reduce_count) != 0U
+            ? count_bits_value(operand(1U, inst.x, inst.width),
+                  static_cast<std::uint8_t>(inst.sub & 0x0FU))
+            : reduce_value(static_cast<ReductionOperator>(inst.sub),
+                  operand(1U, inst.x, inst.width));
         break;
     case WideFamily::conditional:
         result = conditional_value(operand(1U, inst.x, 1U),
@@ -3354,8 +3386,9 @@ const char* Interpreter::Impl::StaticKernel::execute_wide_alu(const CompiledBody
         }
         return nullptr;
     }
-    registers[inst.d] = { front(result.aval_words()) & 1U,
-        front(result.bval_words()) & 1U };
+    // A scalar, or a count's 32 bits.
+    const auto m = kw::mask(static_cast<std::uint32_t>(std::min<std::size_t>(64U, result.width())));
+    registers[inst.d] = { front(result.aval_words()) & m, front(result.bval_words()) & m };
     if (shadowed) {
         registers[body.shadow_base + inst.d] = { };
     }

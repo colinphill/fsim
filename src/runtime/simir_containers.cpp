@@ -2066,25 +2066,30 @@ void Interpreter::Impl::require_package_static_write(
         if (*process != package_static_initialization_process) {
             fail_with(std::string { kind } + " process identity is not active");
         }
-        const auto program = processes.program_view(*process);
-        const auto writable = container
-            ? program.startup_writable_container_object_ids()
-            : program.startup_writable_string_object_ids();
-        // A package's initializer writes its own storage; class code also
-        // that of the packages its class depends on, which it lists.
-        if (!startup_initializer_phase(program.startup_phase())
-            || (program.startup_phase()
-                    == ProcessStartupPhase::package_static_initializer
-                && program.startup_package_owner_id() == 0U)
-            || !startup_owner_writable(program.startup_package_owner_id(),
-                program.startup_writable_package_owner_ids(), owner)
-            || !std::ranges::binary_search(writable, object)) {
+        if (!package_static_closure_allows(*process, owner, object, container)) {
             fail_with("process wrote outside its direct "
                 + std::string { kind } + " closure");
         }
         return;
     }
     fail_with(std::string { kind } + " write is outside its startup process");
+}
+
+bool Interpreter::Impl::package_static_closure_allows(const ProcessId process,
+    const std::uint64_t owner, const std::uint32_t object, const bool container) const
+{
+    const auto program = processes.program_view(process);
+    const auto writable = container
+        ? program.startup_writable_container_object_ids()
+        : program.startup_writable_string_object_ids();
+    // A package's initializer writes its own storage; class code also that
+    // of the packages its class depends on, which it lists.
+    return startup_initializer_phase(program.startup_phase())
+        && !(program.startup_phase() == ProcessStartupPhase::package_static_initializer
+            && program.startup_package_owner_id() == 0U)
+        && startup_owner_writable(program.startup_package_owner_id(),
+            program.startup_writable_package_owner_ids(), owner)
+        && std::ranges::binary_search(writable, object);
 }
 
 void Interpreter::Impl::initialize_package_static_container_object(

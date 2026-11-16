@@ -1079,6 +1079,11 @@ DynFailure execute_str(const KInst& inst, const CompiledBody& body, std::string*
             string_method_integer(registers[inst.y], inst.width).value_or(0),
             static_cast<unsigned>(inst.imm_a));
         return DynFailure::none;
+    case StrOp::plusarg:
+    case StrOp::read_object:
+    case StrOp::write_object:
+        // The kernel's own (they read the run's plusargs and variables).
+        break;
     }
     return DynFailure::none;
 }

@@ -202,6 +202,15 @@ struct StaticKernelSvaTable {
 
 /// Generated code's view of one unit activation. Field offsets are part of
 /// the ABI and are checked by static_asserts in the code generator.
+/// Where a string variable (a StringObjectId) is: the std::string at index
+/// `index` of the array whose first element `*holder` points to (the
+/// kernel's own pointer to the variable, or a fixed string array's element
+/// vector for an element alias).
+struct StaticKernelStringCell {
+    const void* holder { };
+    std::uint64_t index { };
+};
+
 struct StaticKernelNativeFrame {
     /// Kernel word arena (aval words at a slot's offset, bval after them).
     std::uint64_t* arena { };
@@ -281,6 +290,15 @@ struct StaticKernelNativeFrame {
     std::uint64_t* const* random_states { };
     /// The system seed $random draws from (Impl::system_random_seed).
     std::int32_t* system_random_seed { };
+    /// The run's plusargs (Impl::plusargs) for StrOp::plusarg.
+    const std::string* plusargs { };
+    std::uint64_t plusarg_count { };
+    /// $reset_count and $reset_value (Impl::reset_count_result,
+    /// reset_value_result).
+    const std::int32_t* reset_count { };
+    const std::int32_t* reset_value { };
+    /// Per string variable (StaticKernel::string_object_table).
+    const StaticKernelStringCell* string_objects { };
 };
 inline constexpr std::uint32_t static_kernel_no_fast_notify = static_kernel_no_fast_notify_value;
 

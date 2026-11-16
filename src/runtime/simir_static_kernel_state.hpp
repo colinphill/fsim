@@ -2420,6 +2420,11 @@ private:
         frame.watch_writes = watch_writes_ ? &debug_write_flag_ : nullptr;
         frame.random_states = random_state_table();
         frame.system_random_seed = &impl_.system_random_seed;
+        frame.plusargs = impl_.plusargs.data();
+        frame.plusarg_count = impl_.plusargs.size();
+        frame.reset_count = &impl_.reset_count_result;
+        frame.reset_value = &impl_.reset_value_result;
+        frame.string_objects = string_object_table();
         if (sva_table_used_) {
             refresh_sva_table();
             frame.sva = &sva_table_;
@@ -3584,6 +3589,9 @@ private:
     /// first use: its process's state (which never moves) until a fork
     /// child of it runs.
     [[nodiscard]] std::uint64_t* const* random_state_table();
+    /// Per string variable, where generated code finds it (built on first
+    /// use; the variables and fixed string arrays never move).
+    [[nodiscard]] const StaticKernelStringCell* string_object_table();
     /// A thread's random state: while it runs as a fork child, the live
     /// copy generated code draws from (random_live_).
     [[nodiscard]] std::uint64_t& thread_random_state(std::uint32_t thread);
@@ -3591,6 +3599,10 @@ private:
     /// (threads_ may grow under it) and random_states_[member] points there;
     /// random_live_thread_[member] names the thread.
     std::vector<std::uint64_t*> random_states_;
+    /// string_object_table: the cells, and the kernel's pointers to the
+    /// variables that are not element aliases.
+    std::vector<StaticKernelStringCell> string_object_cells_;
+    std::vector<std::string*> string_object_pointers_;
     std::vector<std::uint64_t> random_live_;
     std::vector<std::uint32_t> random_live_thread_;
     /// Whether every live child is detached (none counts).

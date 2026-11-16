@@ -1916,10 +1916,8 @@ const char* Interpreter::Impl::StaticKernel::prove_collapse_ranges(const Member&
         }
         case KOp::reduce: {
             const auto x = exact(inst.x);
-            set(x ? std::optional { kw::reduce(static_cast<ReductionOperator>(inst.sub), *x,
-                                        inst.width) }
-                  : std::nullopt,
-                1U);
+            set(x ? std::optional { kw::reduce_sub(inst.sub, *x, inst.width) } : std::nullopt,
+                (inst.sub & kw::reduce_count) != 0U ? 32U : 1U);
             return true;
         }
         case KOp::unary_not: {

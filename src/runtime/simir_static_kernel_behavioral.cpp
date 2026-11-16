@@ -982,6 +982,31 @@ std::uint64_t* const* Interpreter::Impl::StaticKernel::random_state_table()
     return random_states_.data();
 }
 
+const StaticKernelStringCell* Interpreter::Impl::StaticKernel::string_object_table()
+{
+    const auto count = impl_.string_objects.size();
+    if (string_object_cells_.size() != count) {
+        string_object_pointers_.assign(count, nullptr);
+        string_object_cells_.assign(count, { });
+        for (std::size_t id = 0U; id < count; ++id) {
+            auto& object = impl_.string_objects[id];
+            if (object.element_alias) {
+                // Lowering admits only valid aliases.
+                const auto& alias = *object.element_alias;
+                if (alias.object < impl_.container_objects.size()) {
+                    string_object_cells_[id] = {
+                        &impl_.container_objects[alias.object].initial_value.string_elements,
+                        alias.ordinal };
+                }
+                continue;
+            }
+            string_object_pointers_[id] = &object.initial_value;
+            string_object_cells_[id] = { &string_object_pointers_[id], 0U };
+        }
+    }
+    return string_object_cells_.data();
+}
+
 std::uint64_t& Interpreter::Impl::StaticKernel::thread_random_state(const std::uint32_t thread)
 {
     static_cast<void>(random_state_table());
