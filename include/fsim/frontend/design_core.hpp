@@ -5,6 +5,7 @@
 #include "fsim/frontend/systemverilog_scalars.hpp"
 #include "fsim/frontend/token.hpp"
 #include "fsim/support/dpi_identity.hpp"
+#include "fsim/support/builtin_method.hpp"
 #include "fsim/support/expression_marker.hpp"
 #include "fsim/support/gate_driver.hpp"
 #include "fsim/support/rare_vector.hpp"
@@ -177,6 +178,10 @@ struct Expression {
     // a marked node is empty.
     support::ExpressionMarker marker { support::ExpressionMarker::none };
     std::string marker_argument;
+    // The built-in method (IEEE 1800-2023 6.16, 6.19.5, 7.5-7.12) a method
+    // call `receiver.name(...)` names; `none` for any other node. Readers
+    // take the method from here, never from the call's text.
+    support::BuiltinMethod builtin_method { support::BuiltinMethod::none };
     // The identity of the class a class-member marker (sv_property,
     // sv_method, sv_new_constructor, ...) is bound to: the class declaring
     // the member, or the class itself for a constructor or $cast; empty for
@@ -2003,6 +2008,8 @@ struct Statement {
     std::string loop_variable;
     // SystemVerilog procedural for-loop variable declared in its initializer.
     bool loop_variable_declared { };
+    // The declared loop variable is made by the compiler, not the user.
+    bool loop_variable_synthesized { };
     // The data type of a declared for-loop variable (IEEE 1800-2017 12.7.1).
     support::RareOptional<Type> loop_variable_type;
     // Canonical VHDL opening label for a loop, and the optional label selected

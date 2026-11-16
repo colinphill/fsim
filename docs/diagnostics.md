@@ -2133,7 +2133,7 @@ scheduler.
 | `FSIM-ELAB-SVPROCESS-002` | error | A process-handle statement is not a zero-argument `await()` or `kill()` call on a direct process receiver. |
 | `FSIM-ELAB-SVDISABLE-001` | error | A procedural `disable` target is not visible as a named sequential or parallel block in the current lexical scope. |
 | `FSIM-ELAB-SVSYNC-001` | error | Mailbox or semaphore construction lacks a compatible 64-bit destination or uses more than one count argument. |
-| `FSIM-ELAB-SVSYNC-002` | error | A typed mailbox has no finite positive packed element width. |
+| `FSIM-ELAB-SVSYNC-002` | error | A typed mailbox has no finite positive packed element width, or a message of a typeless mailbox is neither a string nor a singular value of a known type. |
 | `FSIM-ELAB-SVSYNC-003` | error | A mailbox operation has an unsupported method or argument profile. |
 | `FSIM-ELAB-SVSYNC-004` | error | A semaphore operation has an unsupported method or key-count argument profile. |
 | `FSIM-ELAB-SVLOOP-001` | error | A runtime procedural for-loop inline variable shadows an active local. |

@@ -330,7 +330,8 @@ class Lowerer final {
           variable->second, binding_profile(*binding));
     }
     if (expression.kind == sv::ConstraintExpressionKind::call
-        && expression.text == ".size" && expression.operands.size() == 1U) {
+        && expression.builtin_method == support::BuiltinMethod::size
+        && expression.operands.size() == 1U) {
       if (expression.operands.front().kind
           == sv::ConstraintExpressionKind::index) {
         const auto path = aggregate_path(expression.operands.front());
@@ -343,7 +344,8 @@ class Lowerer final {
       }
       if (const auto& locator = expression.operands.front();
           locator.kind == sv::ConstraintExpressionKind::call
-          && is_locator(locator.text) && locator.operands.size() >= 2U) {
+          && is_locator(locator.builtin_method)
+          && locator.operands.size() >= 2U) {
         return locator_size(locator);
       }
       const auto* binding = exact_binding(expression.operands.front());
@@ -385,9 +387,11 @@ class Lowerer final {
       return variable_node(size->second, size_profile());
     }
     if (expression.kind == sv::ConstraintExpressionKind::call
-        && (expression.text == ".sum" || expression.text == ".product"
-            || expression.text == ".and" || expression.text == ".or"
-            || expression.text == ".xor")
+        && (expression.builtin_method == support::BuiltinMethod::sum
+            || expression.builtin_method == support::BuiltinMethod::product
+            || expression.builtin_method == support::BuiltinMethod::reduce_and
+            || expression.builtin_method == support::BuiltinMethod::reduce_or
+            || expression.builtin_method == support::BuiltinMethod::reduce_xor)
         && !expression.operands.empty() && expression.operands.size() <= 3U) {
       // Array reduction methods, optionally through a with-clause (IEEE
       // 1800-2017 7.12.3, 18.5.8.2).
@@ -397,10 +401,14 @@ class Lowerer final {
         return std::nullopt;
       }
       const auto profile = binding_profile(*binding);
-      const auto operation = expression.text == ".sum" ? Operator::Add
-          : expression.text == ".product" ? Operator::Multiply
-          : expression.text == ".and" ? Operator::BitwiseAnd
-          : expression.text == ".or" ? Operator::BitwiseOr
+      const auto reduction = expression.builtin_method;
+      const auto operation = reduction == support::BuiltinMethod::sum
+          ? Operator::Add
+          : reduction == support::BuiltinMethod::product ? Operator::Multiply
+          : reduction == support::BuiltinMethod::reduce_and
+          ? Operator::BitwiseAnd
+          : reduction == support::BuiltinMethod::reduce_or
+          ? Operator::BitwiseOr
           : Operator::BitwiseXor;
       std::optional<ExpressionId> result;
       const auto visited = each_item(expression, *binding,
@@ -2157,10 +2165,13 @@ class Lowerer final {
     return true;
   }
 
-  [[nodiscard]] static bool is_locator(const std::string_view method) {
-    return method == ".find" || method == ".find_index"
-        || method == ".find_first" || method == ".find_first_index"
-        || method == ".find_last" || method == ".find_last_index";
+  [[nodiscard]] static bool is_locator(const support::BuiltinMethod method) {
+    return method == support::BuiltinMethod::find
+        || method == support::BuiltinMethod::find_index
+        || method == support::BuiltinMethod::find_first
+        || method == support::BuiltinMethod::find_first_index
+        || method == support::BuiltinMethod::find_last
+        || method == support::BuiltinMethod::find_last_index;
   }
 
   /// The size of a locator method's result queue (IEEE 1800-2017 7.12.1):
@@ -2184,7 +2195,8 @@ class Lowerer final {
         });
     if (!visited) return std::nullopt;
     if (!count) return zero;
-    if (locator.text == ".find" || locator.text == ".find_index") {
+    if (locator.builtin_method == support::BuiltinMethod::find
+        || locator.builtin_method == support::BuiltinMethod::find_index) {
       return count;
     }
     return builder_.conditional(
@@ -2462,7 +2474,8 @@ class Lowerer final {
       return static_cast<std::int64_t>(*value);
     }
     if (expression.kind == sv::ConstraintExpressionKind::call
-        && expression.text == ".size" && expression.operands.size() == 1U) {
+        && expression.builtin_method == support::BuiltinMethod::size
+        && expression.operands.size() == 1U) {
       if (expression.operands.front().kind
           == sv::ConstraintExpressionKind::index) {
         const auto path = aggregate_path(expression.operands.front());

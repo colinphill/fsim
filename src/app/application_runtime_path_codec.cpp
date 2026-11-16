@@ -298,8 +298,11 @@ template <typename ProcessTable>
                 [&](const auto& item) {
                     using Type = std::remove_cvref_t<decltype(item)>;
                     if constexpr (std::is_same_v<Type, MailboxCreate>) {
-                        valid = valid_kind_width(
-                                    item.element_kind, item.element_width)
+                        valid = (valid_kind_width(
+                                     item.element_kind, item.element_width)
+                                    || (item.element_kind
+                                            == MailboxElementKind::dynamic
+                                        && item.element_width == 0U))
                             && item.destination
                                 < process_template.register_count
                             && item.capacity

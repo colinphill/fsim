@@ -2538,7 +2538,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             && specialization.unit.value() < project.semantics.units().size()
             && project.semantics.units()
                    .at(specialization.unit.value())
-                   .name.starts_with("$unit$udp$")) {
+                   .udp_holder) {
             continue;
         }
         relevant_specializations.insert(specialization.id.value());
@@ -4888,7 +4888,6 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
                 > std::numeric_limits<runtime::simir::StringObjectId>::max()
             || object.name.empty()
             || object.origin != support::GeneratedObjectOrigin::none
-            || object.name.starts_with('@')
             || (object.declaration_value
                 && synthesized_values.contains(
                     object.declaration_value->value()))) {

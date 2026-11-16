@@ -986,6 +986,9 @@ struct Interpreter::Impl : SchedulerBatchTask {
         RegisterId destination { };
         StringRegisterId string_destination { };
         bool peek { };
+        // A typeless mailbox's reader: its variable's type and kind.
+        std::uint64_t message_type { };
+        bool string { };
     };
 
     struct SampledHistoryKey {
@@ -1047,6 +1050,18 @@ struct Interpreter::Impl : SchedulerBatchTask {
         ProcessId process { };
         PackedLogic4 value;
         std::string string_value;
+        // A typeless mailbox's message: its type and kind.
+        std::uint64_t message_type { };
+        bool string { };
+    };
+
+    // A message of a typeless mailbox (IEEE 1800-2023 15.4.5): its value
+    // and the type put() gave it.
+    struct MailboxMessage {
+        std::uint64_t type { };
+        bool string { };
+        PackedLogic4 value;
+        std::string string_value;
     };
 
     struct MailboxState {
@@ -1059,6 +1074,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
         std::size_t string_bytes { };
         std::deque<MailboxReader> readers;
         std::deque<MailboxWriter> writers;
+        // The messages of a typeless mailbox, in FIFO order.
+        std::deque<MailboxMessage> messages;
     };
 
     struct SemaphoreWaiter {
@@ -3752,6 +3769,14 @@ struct Interpreter::Impl : SchedulerBatchTask {
     enum class SynchronizationResult { other, completed, waiting };
     [[nodiscard]] SynchronizationResult run_synchronization(
         SynchronizationClient& client, const Operation& operation);
+    // put/get/peek and their try_ forms on a typeless mailbox (IEEE
+    // 1800-2023 15.4.3-15.4.9).
+    [[nodiscard]] SynchronizationResult run_typeless_mailbox_put(
+        SynchronizationClient& client, const MailboxPut& put,
+        MailboxState& mailbox);
+    [[nodiscard]] SynchronizationResult run_typeless_mailbox_get(
+        SynchronizationClient& client, const MailboxGet& get,
+        MailboxState& mailbox);
     // A waiter in the object tables: a reference process, or a static
     // kernel thread by its process order.
     [[nodiscard]] bool synchronization_halted(ProcessId id);

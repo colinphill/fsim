@@ -2,6 +2,7 @@
 #include "lowerer_internal.hpp"
 
 #include <fsim/semantic/systemverilog_type_descriptor.hpp>
+#include <fsim/support/payload_checksum.hpp>
 
 #include <algorithm>
 #include <cstdlib>
@@ -46,6 +47,11 @@ std::optional<Lowerer::HirMailboxElement> Lowerer::hir_mailbox_element(
     const semantic::sv::TypeReference* mailbox_type,
     const std::string_view message, const frontend::SourceSpan& span)
 {
+    // `mailbox` with no parameter is typeless (15.4.9).
+    if (synchronization_type(mailbox_type, StandardClass::mailbox)
+        && mailbox_type->interface_parameter_actuals.empty()) {
+        return HirMailboxElement { false, 0U, true };
+    }
     const auto* element = mailbox_element_type(mailbox_type);
     const auto resolver = hir_resolver();
     // A typedef's bounds use the names visible where it is declared (a
@@ -181,6 +187,108 @@ std::optional<Lowerer::HirMailboxElement> Lowerer::hir_mailbox_element(
         return std::nullopt;
     }
     return HirMailboxElement { false, static_cast<std::uint32_t>(*width) };
+}
+
+std::optional<Lowerer::HirMailboxMessage>
+Lowerer::hir_typeless_mailbox_message(const semantic::ExpressionId message,
+    const frontend::SourceSpan& span)
+{
+    using Kind = semantic::SystemVerilogTypeDescriptor::Kind;
+    // The message's static type: a cast's target type (`T'(x)`, `T'{...}`,
+    // 6.24.1, 10.9), the declared type of a variable, member, element or
+    // class property, else the type of the expression's form.
+    auto declared = hir_systemverilog_cast_type(message);
+    if (!declared) {
+        declared = hir_systemverilog_value_type(message);
+    }
+    if (!declared) {
+        // A typed assignment pattern's type, as its lowering names it.
+        const auto pattern = specialized_hir_unit_->find_expression(message);
+        if (pattern && pattern->systemverilog != nullptr
+            && pattern->systemverilog->kind
+                == semantic::sv::ExpressionKind::assignment_pattern
+            && !pattern->systemverilog->nominal_type.empty()) {
+            declared = hir_systemverilog_named_type(
+                pattern->systemverilog->nominal_type,
+                pattern->systemverilog->scope);
+        }
+    }
+    const auto described = declared
+        ? semantic::describe_systemverilog_type(
+              *specialized_hir_unit_, *declared, hir_process_scope_)
+        : semantic::describe_systemverilog_expression_type(
+              *specialized_hir_unit_, message);
+    const auto refuse = [&]() -> std::optional<HirMailboxMessage> {
+        report("FSIM-ELAB-SVSYNC-002",
+            "a typeless mailbox message must be a string or a singular "
+            "value of a known type (IEEE 1800-2023 15.4.9)",
+            span);
+        return std::nullopt;
+    };
+    if (!described || !described->unpacked.empty()) {
+        return refuse();
+    }
+    if (described->kind == Kind::string) {
+        return HirMailboxMessage { true, 0U,
+            support::Xxh64::digest("string") | 1U };
+    }
+    // The type's equivalence class (6.22.2): a packed integral type by its
+    // total width, signedness and 2- or 4-state values; an enumeration or a
+    // class only by itself; realtime is real.
+    std::string identity;
+    switch (described->kind) {
+    case Kind::integer_atom:
+    case Kind::integer_vector:
+        break;
+    case Kind::structure:
+    case Kind::union_type:
+        if (!described->packed_aggregate) {
+            return refuse();
+        }
+        break;
+    case Kind::real:
+    case Kind::realtime:
+        identity = "real";
+        break;
+    case Kind::shortreal:
+        identity = "shortreal";
+        break;
+    case Kind::chandle:
+        identity = "chandle";
+        break;
+    case Kind::enumeration:
+    case Kind::class_handle:
+        if (!described->nominal && described->nominal_name.empty()) {
+            return refuse();
+        }
+        identity = (described->kind == Kind::enumeration ? "enum:" : "class:")
+            + (described->nominal
+                    ? std::to_string(described->nominal->value())
+                    : std::string { })
+            + ":" + described->nominal_name;
+        break;
+    case Kind::string:
+    case Kind::event:
+    case Kind::interface:
+    case Kind::other:
+        return refuse();
+    }
+    // A class or chandle value is the 64-bit handle.
+    const auto width = described->kind == Kind::class_handle
+            || described->kind == Kind::chandle
+        ? std::optional<std::uint64_t> { 64U }
+        : described->total_bits();
+    if (!width || *width == 0U
+        || *width > std::numeric_limits<std::uint32_t>::max()) {
+        return refuse();
+    }
+    if (identity.empty()) {
+        identity = "packed:" + std::to_string(*width)
+            + (described->is_signed ? ":signed" : ":unsigned")
+            + (described->four_state ? ":4" : ":2");
+    }
+    return HirMailboxMessage { false, static_cast<std::uint32_t>(*width),
+        support::Xxh64::digest(identity) | 1U };
 }
 
 std::optional<Lowerer::HirSynchronizationTaskProfile>
@@ -336,8 +444,8 @@ bool Lowerer::lower_hir_synchronization_statement(
         if (!mailbox_element) {
             return true;
         }
-        const bool string_element = mailbox_element->string;
-        const auto width = mailbox_element->width;
+        bool string_element = mailbox_element->string;
+        auto width = mailbox_element->width;
         if ((profile->method != "put" && profile->method != "get"
                 && profile->method != "peek")
             || statement.task_arguments.size() != 1U) {
@@ -349,6 +457,18 @@ bool Lowerer::lower_hir_synchronization_statement(
             return true;
         }
         const auto argument = *statement.task_arguments.front().actual;
+        // A typeless mailbox's message has the argument's own type.
+        std::uint64_t message_type { };
+        if (mailbox_element->dynamic) {
+            const auto message = hir_typeless_mailbox_message(
+                argument, hir_source_span(statement.source));
+            if (!message) {
+                return true;
+            }
+            string_element = message->string;
+            width = message->width;
+            message_type = message->type;
+        }
         if (profile->method == "put") {
             if (string_element) {
                 const auto value = lower_hir_string_expression(argument);
@@ -357,7 +477,7 @@ bool Lowerer::lower_hir_synchronization_statement(
                 }
                 process_.operations.emplace_back(MailboxPut {
                     receiver, 0U, 0U, std::nullopt,
-                    MailboxElementKind::string, *value,
+                    MailboxElementKind::string, *value, message_type,
                 });
             } else {
                 auto value = lower_hir_expression(argument, width);
@@ -370,7 +490,8 @@ bool Lowerer::lower_hir_synchronization_statement(
                 }
                 process_.operations.emplace_back(MailboxPut {
                     receiver, *value, width,
-                    std::nullopt,
+                    std::nullopt, MailboxElementKind::packed, { },
+                    message_type,
                 });
             }
             return true;
@@ -380,7 +501,7 @@ bool Lowerer::lower_hir_synchronization_statement(
             process_.operations.emplace_back(MailboxGet {
                 receiver, 0U, 0U, std::nullopt,
                 profile->method == "peek", MailboxElementKind::string,
-                value,
+                value, message_type,
             });
             return lower_hir_string_copy_out(argument, value);
         }
@@ -391,6 +512,7 @@ bool Lowerer::lower_hir_synchronization_statement(
         process_.operations.emplace_back(MailboxGet {
             receiver, value, width,
             std::nullopt, profile->method == "peek",
+            MailboxElementKind::packed, { }, message_type,
         });
         return lower_hir_packed_copy_out(argument, value);
     }
@@ -488,8 +610,9 @@ Lowerer::lower_hir_synchronization_expression(
             process_.operations.emplace_back(MailboxCreate {
                 destination, *count,
                 width,
-                string_element ? MailboxElementKind::string
-                               : MailboxElementKind::packed });
+                mailbox_element->dynamic ? MailboxElementKind::dynamic
+                    : string_element     ? MailboxElementKind::string
+                                         : MailboxElementKind::packed });
         } else {
             process_.operations.emplace_back(
                 SemaphoreCreate { destination, *count });
@@ -544,14 +667,17 @@ Lowerer::lower_hir_synchronization_expression(
     };
     const auto mailbox_result_truth = [&](const RegisterId result) {
         // try_get/try_peek expose an int result, while their copyout guard is
-        // a SimIR scalar branch condition.
-        const auto is_zero = allocate_register(
-            1U, frontend::ValueDomain::Logic4);
-        process_.operations.emplace_back(LogicalNot { is_zero, result });
+        // a SimIR scalar branch condition: a positive result took a message
+        // (a negative one is a typeless mailbox's message of another type,
+        // IEEE 1800-2023 15.4.6, 15.4.8).
+        const auto zero = allocate_register(
+            32U, frontend::ValueDomain::Integer);
+        process_.operations.emplace_back(LoadConstant {
+            zero, PackedLogic4::from_aval_bval(32U, 0U, 0U) });
         const auto succeeded = allocate_register(
             1U, frontend::ValueDomain::Logic4);
-        process_.operations.emplace_back(
-            LogicalNot { succeeded, is_zero });
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::greater_signed, succeeded, result, zero });
         return succeeded;
     };
 
@@ -564,8 +690,20 @@ Lowerer::lower_hir_synchronization_expression(
         if (!mailbox_element) {
             return { true, false, std::nullopt };
         }
-        const bool string_element = mailbox_element->string;
-        const auto element_width = mailbox_element->width;
+        bool string_element = mailbox_element->string;
+        auto element_width = mailbox_element->width;
+        // A typeless mailbox's message has the argument's own type.
+        std::uint64_t message_type { };
+        if (mailbox_element->dynamic && argument_count == 1U) {
+            const auto message = hir_typeless_mailbox_message(
+                source.operands[1], hir_source_span(source.source));
+            if (!message) {
+                return { true, false, std::nullopt };
+            }
+            string_element = message->string;
+            element_width = message->width;
+            message_type = message->type;
+        }
         if (method == "num" && argument_count == 0U) {
             const auto destination = result();
             process_.operations.emplace_back(
@@ -586,7 +724,7 @@ Lowerer::lower_hir_synchronization_expression(
                 }
                 process_.operations.emplace_back(MailboxPut {
                     *receiver, 0U, 0U, destination,
-                    MailboxElementKind::string, *value,
+                    MailboxElementKind::string, *value, message_type,
                 });
                 return { true, true,
                     destination ? std::optional { resize_result(*destination) }
@@ -604,12 +742,14 @@ Lowerer::lower_hir_synchronization_expression(
             }
             if (method == "put") {
                 process_.operations.emplace_back(MailboxPut {
-                    *receiver, *value, element_width, std::nullopt });
+                    *receiver, *value, element_width, std::nullopt,
+                    MailboxElementKind::packed, { }, message_type });
                 return { true, true, std::nullopt };
             }
             const auto destination = result();
             process_.operations.emplace_back(MailboxPut {
-                *receiver, *value, element_width, destination });
+                *receiver, *value, element_width, destination,
+                MailboxElementKind::packed, { }, message_type });
             return { true, true, resize_result(destination) };
         }
         const bool get = method == "get" || method == "try_get";
@@ -623,7 +763,7 @@ Lowerer::lower_hir_synchronization_expression(
                 }
                 process_.operations.emplace_back(MailboxGet {
                     *receiver, 0U, 0U, success, peek,
-                    MailboxElementKind::string, value,
+                    MailboxElementKind::string, value, message_type,
                 });
                 if (success) {
                     const auto condition
@@ -660,7 +800,8 @@ Lowerer::lower_hir_synchronization_expression(
                 success = result();
             }
             process_.operations.emplace_back(MailboxGet {
-                *receiver, value, element_width, success, peek });
+                *receiver, value, element_width, success, peek,
+                MailboxElementKind::packed, { }, message_type });
             if (success) {
                 const auto condition
                     = mailbox_result_truth(*success);

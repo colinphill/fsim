@@ -450,6 +450,8 @@ std::optional<SystemVerilogTypeDescriptor> describe_systemverilog_type(
         if (resolved.target.target.valid()) {
             result.nominal = resolved.target.target;
         }
+        result.packed_aggregate = form == sv::TypeForm::packed_structure
+            || form == sv::TypeForm::packed_union;
         result.nominal_name = form == sv::TypeForm::class_handle
                 && !resolved.class_identity.empty()
             ? resolved.class_identity
@@ -535,6 +537,14 @@ describe_systemverilog_expression_type(const SpecializedHirUnit& unit,
         }
         return describe_declaration(unit, *record.referenced_name->selected);
     }
+    case sv::ExpressionKind::logic_literal:
+        // An unbased unsized literal ('0, '1, 'x, 'z) is one bit when
+        // self-determined (IEEE 1800-2023 5.7.1); a based literal has its
+        // size, signedness and 4-state values like an integer literal.
+        if (record.text.starts_with('\'')) {
+            return vector_type(1U, false, true);
+        }
+        [[fallthrough]];
     case sv::ExpressionKind::integer_literal: {
         if (record.decimal_literal) {
             SystemVerilogTypeDescriptor result;
@@ -573,8 +583,6 @@ describe_systemverilog_expression_type(const SpecializedHirUnit& unit,
                 || record.text[quote + 1U] == 'S');
         return vector_type(width == 0U ? 32U : width, is_signed, true);
     }
-    case sv::ExpressionKind::logic_literal:
-        return vector_type(1U, false, true);
     case sv::ExpressionKind::boolean_literal:
         return vector_type(1U, false, false);
     case sv::ExpressionKind::string_literal: {
@@ -634,6 +642,17 @@ describe_systemverilog_expression_type(const SpecializedHirUnit& unit,
         return vector_type(std::max(*left->bits, *right->bits),
             left->is_signed && right->is_signed,
             left->four_state || right->four_state);
+    }
+    case sv::ExpressionKind::assignment_pattern: {
+        // A typed assignment pattern `T'{...}` has the type T (IEEE
+        // 1800-2023 10.9); an untyped one takes its type from its context.
+        if (!record.nominal_type_target) {
+            return std::nullopt;
+        }
+        sv::TypeReference pattern_type;
+        pattern_type.target.target = *record.nominal_type_target;
+        pattern_type.named = true;
+        return describe_systemverilog_type(unit, pattern_type, record.scope);
     }
     case sv::ExpressionKind::concatenation: {
         std::uint64_t bits { };

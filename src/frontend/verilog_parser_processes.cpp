@@ -2153,6 +2153,7 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
             value.marker = support::ExpressionMarker::none;
             value.marker_argument.clear();
             value.text = ".delete";
+            value.builtin_method = support::BuiltinMethod::delete_entries;
         } else if (value.kind == ExpressionKind::Identifier
             && value.text.ends_with(".delete")
             && value.text.size() > 7U) {
@@ -2161,6 +2162,7 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
             value = Expression {
                 ExpressionKind::Call, ".delete", { std::move(receiver) },
                 value.span };
+            value.builtin_method = support::BuiltinMethod::delete_entries;
         }
         expect(
             TokenKind::Semicolon,

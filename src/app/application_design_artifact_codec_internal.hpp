@@ -370,7 +370,7 @@ namespace codec_detail {
         } else if constexpr (
             std::same_as<T, support::GeneratedObjectOrigin>) {
             return value >= support::GeneratedObjectOrigin::none
-                && value <= support::GeneratedObjectOrigin::procedural_assign_driver;
+                && value <= support::GeneratedObjectOrigin::vhdl_support_storage;
         } else if constexpr (std::same_as<T, support::GateDriverSlot>) {
             return value >= support::GateDriverSlot::none
                 && value <= support::GateDriverSlot::switch_right;
@@ -640,7 +640,7 @@ namespace codec_detail {
         } else if constexpr (
             std::same_as<T, runtime::simir::MailboxElementKind>) {
             return value >= runtime::simir::MailboxElementKind::packed
-                && value <= runtime::simir::MailboxElementKind::string;
+                && value <= runtime::simir::MailboxElementKind::dynamic;
         } else if constexpr (
             std::same_as<T, runtime::CodeCoverageMetric>) {
             return value >= runtime::CodeCoverageMetric::Statement
@@ -908,6 +908,9 @@ namespace codec_detail {
         } else if constexpr (std::same_as<T, fsim::runtime::simir::DebugLocalRole>) {
             return value >= fsim::runtime::simir::DebugLocalRole::variable
                 && value <= fsim::runtime::simir::DebugLocalRole::frame_local;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::DebugFrameRole>) {
+            return value >= fsim::runtime::simir::DebugFrameRole::none
+                && value <= fsim::runtime::simir::DebugFrameRole::result;
         } else if constexpr (std::same_as<T, fsim::runtime::simir::DebugPointKind>) {
             return value >= fsim::runtime::simir::DebugPointKind::statement
                 && value <= fsim::runtime::simir::DebugPointKind::call_value;
@@ -1225,6 +1228,9 @@ namespace codec_detail {
                 && value <= fsim::support::SystemVerilogNetKind::uwire;
         } else if constexpr (std::same_as<T, fsim::support::ExpressionMarker>) {
             return fsim::support::expression_marker_valid(value);
+        } else if constexpr (std::same_as<T, fsim::support::BuiltinMethod>) {
+            return value >= fsim::support::BuiltinMethod::none
+                && value <= fsim::support::BuiltinMethod::map;
         } else if constexpr (std::same_as<T, fsim::semantic::sv::CallKind>) {
             return value >= fsim::semantic::sv::CallKind::user
                 && value <= fsim::semantic::sv::CallKind::system;
@@ -1679,10 +1685,10 @@ namespace codec_detail {
     {
         // Every member is listed: one added to the record and not here
         // fails the build (the binding names each member).
-        [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5, m6] = value;
+        [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5, m6, m7] = value;
         return std::tie(value.kind, value.source, value.scope, value.callee,
             value.callee_declaration, value.callee_receiver,
-            value.callee_receiver_instance);
+            value.callee_receiver_instance, value.callee_lowering);
     }
 
     template <typename T>

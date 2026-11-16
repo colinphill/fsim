@@ -3512,6 +3512,7 @@ void Resolver::retain_result_type(
       if (function) {
         Expression call{ExpressionKind::Call, "." + member, {},
             expression.span};
+        call.builtin_method = support::builtin_method_named(member);
         call.operands.push_back(Expression{ExpressionKind::Identifier,
             expression.text.substr(0, dot), {}, expression.span});
         expression = std::move(call);

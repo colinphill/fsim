@@ -567,6 +567,7 @@ include/fsim/support/active_set.hpp
 include/fsim/support/allocation_hooks.hpp
 include/fsim/support/atomic_shared_ptr.hpp
 include/fsim/support/bounded_bytes.hpp
+include/fsim/support/builtin_method.hpp
 include/fsim/support/ctype_whitespace.hpp
 include/fsim/support/design_library.hpp
 include/fsim/support/dpi_identity.hpp
@@ -1949,6 +1950,7 @@ tests/fixtures/compliance/physical_unit_range.vhd
 tests/fixtures/compliance/run_compliance.cmake
 tests/fixtures/compliance/runtime_errors/run_runtime_error.cmake
 tests/fixtures/compliance/runtime_errors/sv_stream_unpack_partial_element.sv
+tests/fixtures/compliance/runtime_errors/sv_typeless_mailbox_get_mismatch.sv
 tests/fixtures/compliance/sv_array_equality_bounds_20261013.sv
 tests/fixtures/compliance/sv_array_query_class_handles_batch57.sv
 tests/fixtures/compliance/sv_array_query_typedef_dimensions_batch57.sv
@@ -2131,6 +2133,7 @@ tests/fixtures/compliance/sv_typed_packed_pattern_edges_batch59.sv
 tests/fixtures/compliance/sv_typedef_nonintegral_cast_batch56.sv
 tests/fixtures/compliance/sv_typedef_real_declarations.sv
 tests/fixtures/compliance/sv_typedef_string_declarations.sv
+tests/fixtures/compliance/sv_typeless_mailbox.sv
 tests/fixtures/compliance/sv_unnamed_block_import_batch58.sv
 tests/fixtures/compliance/sv_upward_generated_scope_callable_batch58_20261013.sv
 tests/fixtures/compliance/sv_values_and_assertion_items.sv

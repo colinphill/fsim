@@ -960,6 +960,7 @@ namespace {
                 = systemverilog_hir_detail::systemverilog_call_kind(input);
             output.marker = input.marker;
             output.marker_argument = input.marker_argument;
+            output.builtin_method = input.builtin_method;
             if (input.kind == frontend::ExpressionKind::Identifier
                 || (input.kind == frontend::ExpressionKind::Pattern
                     && input.systemverilog_pattern
@@ -1937,6 +1938,7 @@ namespace {
                 if (declares_loop_variable) {
                     frontend::VariableDeclaration loop_variable;
                     loop_variable.name = input.loop_variable;
+                    loop_variable.synthesized = input.loop_variable_synthesized;
                     // A declaration in the for initializer has automatic
                     // lifetime even inside a static callable (12.7.1).
                     loop_variable.systemverilog_automatic = true;

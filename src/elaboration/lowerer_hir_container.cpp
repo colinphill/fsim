@@ -7,24 +7,37 @@
 namespace fsim::elaboration {
 namespace {
 
-    bool is_container_reduction(const std::string_view method) noexcept
+    using support::BuiltinMethod;
+
+    bool is_container_reduction(const BuiltinMethod method) noexcept
     {
-        return method == ".sum" || method == ".product"
-            || method == ".and" || method == ".or" || method == ".xor";
+        return method == BuiltinMethod::sum || method == BuiltinMethod::product
+            || method == BuiltinMethod::reduce_and
+            || method == BuiltinMethod::reduce_or
+            || method == BuiltinMethod::reduce_xor;
     }
 
-    bool is_container_locator(const std::string_view method) noexcept
+    bool is_container_locator(const BuiltinMethod method) noexcept
     {
-        return method == ".min" || method == ".max"
-            || method == ".unique" || method == ".unique_index"
-            || method == ".find" || method == ".find_index"
-            || method == ".find_first" || method == ".find_first_index"
-            || method == ".find_last" || method == ".find_last_index";
+        return method == BuiltinMethod::min || method == BuiltinMethod::max
+            || method == BuiltinMethod::unique
+            || method == BuiltinMethod::unique_index
+            || method == BuiltinMethod::find
+            || method == BuiltinMethod::find_index
+            || method == BuiltinMethod::find_first
+            || method == BuiltinMethod::find_first_index
+            || method == BuiltinMethod::find_last
+            || method == BuiltinMethod::find_last_index;
     }
 
-    bool is_predicate_locator(const std::string_view method) noexcept
+    bool is_predicate_locator(const BuiltinMethod method) noexcept
     {
-        return method.starts_with(".find");
+        return method == BuiltinMethod::find
+            || method == BuiltinMethod::find_index
+            || method == BuiltinMethod::find_first
+            || method == BuiltinMethod::find_first_index
+            || method == BuiltinMethod::find_last
+            || method == BuiltinMethod::find_last_index;
     }
 
 } // namespace
@@ -403,20 +416,24 @@ Lowerer::lower_hir_systemverilog_container_expression(
     // `h.p.exists(k)` of a container property held by an object
     // (a container-method marker on the handle) queries a copy of the
     // property's container (IEEE 1800-2017 7.9, 7.10, 8.4).
-    std::string text = call.text;
+    support::BuiltinMethod method = call.builtin_method;
     std::optional<HirStaticContainerValue> class_source;
     if ((call.marker == support::ExpressionMarker::sv_container_size
             || call.marker == support::ExpressionMarker::sv_container_method
             || call.marker == support::ExpressionMarker::sv_container_push_back)
         && !call.operands.empty()) {
         // The size query is marked by itself; any other method is marked as
-        // a container method whose text is the method's name.
-        text = call.marker == support::ExpressionMarker::sv_container_size
-            ? std::string { ".size" }
-            : "." + call.text;
-        if (text != ".size" && text != ".num" && text != ".exists"
-            && text != ".first" && text != ".last" && text != ".next"
-            && text != ".prev") {
+        // a container method that carries its built-in method.
+        if (call.marker == support::ExpressionMarker::sv_container_size) {
+            method = support::BuiltinMethod::size;
+        }
+        if (method != support::BuiltinMethod::size
+            && method != support::BuiltinMethod::num
+            && method != support::BuiltinMethod::exists
+            && method != support::BuiltinMethod::first
+            && method != support::BuiltinMethod::last
+            && method != support::BuiltinMethod::next
+            && method != support::BuiltinMethod::prev) {
             return std::nullopt;
         }
         const std::string_view identity { call.marker_argument };
@@ -435,10 +452,15 @@ Lowerer::lower_hir_systemverilog_container_expression(
             unsigned_value(0U, width), frontend::ValueDomain::Bit2);
         return std::optional<RegisterId> { destination };
     };
-    const bool reduction = is_container_reduction(text);
-    const bool locator = is_container_locator(text);
-    const bool ordering = text == ".reverse" || text == ".sort"
-        || text == ".rsort" || text == ".shuffle";
+    // The method's name with its dot, for diagnostics only.
+    const std::string text
+        = "." + std::string { support::builtin_method_name(method) };
+    const bool reduction = is_container_reduction(method);
+    const bool locator = is_container_locator(method);
+    const bool ordering = method == support::BuiltinMethod::reverse
+        || method == support::BuiltinMethod::sort
+        || method == support::BuiltinMethod::rsort
+        || method == support::BuiltinMethod::shuffle;
     if (ordering) {
         report(
             "FSIM-ELAB-SVORDER-004",
@@ -448,7 +470,7 @@ Lowerer::lower_hir_systemverilog_container_expression(
     }
     if (locator) {
         report(
-            is_predicate_locator(text)
+            is_predicate_locator(method)
                 ? "FSIM-ELAB-SVFIND-006"
                 : "FSIM-ELAB-SVLOCATOR-004",
             "container locator results require a compatible whole-queue "
@@ -457,11 +479,15 @@ Lowerer::lower_hir_systemverilog_container_expression(
         return invalid_result();
     }
     // num() is size() for an associative array (IEEE 1800-2017 7.9.1).
-    const bool size_query = text == ".size" || text == ".num";
-    const bool query = size_query || text == ".exists"
-        || text == ".first" || text == ".last"
-        || text == ".next" || text == ".prev";
-    const bool pop = text == ".pop_front" || text == ".pop_back";
+    const bool size_query = method == support::BuiltinMethod::size
+        || method == support::BuiltinMethod::num;
+    const bool query = size_query || method == support::BuiltinMethod::exists
+        || method == support::BuiltinMethod::first
+        || method == support::BuiltinMethod::last
+        || method == support::BuiltinMethod::next
+        || method == support::BuiltinMethod::prev;
+    const bool pop = method == support::BuiltinMethod::pop_front
+        || method == support::BuiltinMethod::pop_back;
     if (!reduction && !query && !pop) {
         return std::nullopt;
     }
@@ -581,7 +607,7 @@ Lowerer::lower_hir_systemverilog_container_expression(
             && source->type.dimensions.size() > 1U) {
             const auto transform_id = call.operands[explicit_iterator ? 2U : 1U];
             const auto reduced = lower_hir_container_reduction_loop(
-                text, source->value, source->type, iterator_name,
+                method, source->value, source->type, iterator_name,
                 transform_id);
             if (!reduced) {
                 report(
@@ -615,7 +641,7 @@ Lowerer::lower_hir_systemverilog_container_expression(
                     diagnostics_.end());
                 diagnostics_.resize(diagnostic_count);
                 if (const auto reduced = lower_hir_container_reduction_loop(
-                        text, source->value, source->type,
+                        method, source->value, source->type,
                         iterator_name, transform_id)) {
                     return expected_width != 0U
                             && expected_width != register_width(*reduced)
@@ -632,13 +658,13 @@ Lowerer::lower_hir_systemverilog_container_expression(
             transformation = std::move(*lowered);
         }
         auto operation = ContainerReductionOperator::sum;
-        if (text == ".product") {
+        if (method == support::BuiltinMethod::product) {
             operation = ContainerReductionOperator::product;
-        } else if (text == ".and") {
+        } else if (method == support::BuiltinMethod::reduce_and) {
             operation = ContainerReductionOperator::bit_and;
-        } else if (text == ".or") {
+        } else if (method == support::BuiltinMethod::reduce_or) {
             operation = ContainerReductionOperator::bit_or;
-        } else if (text == ".xor") {
+        } else if (method == support::BuiltinMethod::reduce_xor) {
             operation = ContainerReductionOperator::bit_xor;
         }
         const auto destination = allocate_register(
@@ -670,7 +696,8 @@ Lowerer::lower_hir_systemverilog_container_expression(
                 ? frontend::ValueDomain::Bit2
                 : frontend::ValueDomain::Logic4);
         process_.operations.emplace_back(PopContainer {
-            destination, source->value, text == ".pop_front" });
+            destination, source->value,
+            method == support::BuiltinMethod::pop_front });
         if (!lower_hir_sv_value_path_write(
                 *pop_path, std::nullopt, source->value)) {
             return invalid_result();
@@ -707,7 +734,8 @@ Lowerer::lower_hir_systemverilog_container_expression(
                 ? frontend::ValueDomain::Bit2
                 : frontend::ValueDomain::Logic4);
         process_.operations.emplace_back(PopContainer {
-            destination, source->value, text == ".pop_front" });
+            destination, source->value,
+            method == support::BuiltinMethod::pop_front });
         if (!binding->local) {
             process_.operations.emplace_back(WriteContainerObject {
                 binding->object, source->value, std::nullopt });
@@ -740,7 +768,7 @@ Lowerer::lower_hir_systemverilog_container_expression(
     }
     const auto destination = allocate_register(
         32U, frontend::ValueDomain::Bit2);
-    if (text == ".exists") {
+    if (method == support::BuiltinMethod::exists) {
         auto converted = *index;
         if (!string_index
             && register_width(converted) != source->type.index_width) {
@@ -771,11 +799,11 @@ Lowerer::lower_hir_systemverilog_container_expression(
             return invalid_result();
         }
         auto traversal = ContainerTraversal::first;
-        if (text == ".last") {
+        if (method == support::BuiltinMethod::last) {
             traversal = ContainerTraversal::last;
-        } else if (text == ".next") {
+        } else if (method == support::BuiltinMethod::next) {
             traversal = ContainerTraversal::next;
-        } else if (text == ".prev") {
+        } else if (method == support::BuiltinMethod::prev) {
             traversal = ContainerTraversal::previous;
         }
         process_.operations.emplace_back(TraverseContainer {
@@ -804,11 +832,11 @@ Lowerer::lower_hir_systemverilog_container_expression(
             return invalid_result();
         }
         auto traversal = ContainerTraversal::first;
-        if (text == ".last") {
+        if (method == support::BuiltinMethod::last) {
             traversal = ContainerTraversal::last;
-        } else if (text == ".next") {
+        } else if (method == support::BuiltinMethod::next) {
             traversal = ContainerTraversal::next;
-        } else if (text == ".prev") {
+        } else if (method == support::BuiltinMethod::prev) {
             traversal = ContainerTraversal::previous;
         }
         process_.operations.emplace_back(TraverseContainer {
@@ -835,11 +863,11 @@ bool Lowerer::lower_hir_container_locator_assignment(
     if (!expression || expression->systemverilog == nullptr
         || expression->systemverilog->kind
             != semantic::sv::ExpressionKind::call
-        || !is_container_locator(expression->systemverilog->text)) {
+        || !is_container_locator(semantic::sv::member_builtin_method(*expression->systemverilog))) {
         return false;
     }
     const auto& call = *expression->systemverilog;
-    const bool predicate = is_predicate_locator(call.text);
+    const bool predicate = is_predicate_locator(semantic::sv::member_builtin_method(call));
     const auto span = hir_source_span(call.source);
     const auto target = declared_target != nullptr
         ? std::optional { *declared_target }
@@ -899,10 +927,11 @@ bool Lowerer::lower_hir_container_locator_assignment(
             span);
         return true;
     }
-    const bool index_result = call.text == ".unique_index"
-        || call.text == ".find_index"
-        || call.text == ".find_first_index"
-        || call.text == ".find_last_index";
+    const bool index_result
+        = semantic::sv::member_builtin_method(call) == support::BuiltinMethod::unique_index
+        || semantic::sv::member_builtin_method(call) == support::BuiltinMethod::find_index
+        || semantic::sv::member_builtin_method(call) == support::BuiltinMethod::find_first_index
+        || semantic::sv::member_builtin_method(call) == support::BuiltinMethod::find_last_index;
     const bool compatible = target->type->queue
         && !target->type->associative && !target->type->fixed
         && (index_result
@@ -965,7 +994,7 @@ bool Lowerer::lower_hir_container_locator_assignment(
             const auto destination = target->local
                 ? *target->local
                 : allocate_container_register(*target->type);
-            if (lower_hir_container_locator_loop(call.text, source->value,
+            if (lower_hir_container_locator_loop(semantic::sv::member_builtin_method(call), source->value,
                     source->type, destination, iterator_name,
                     predicate_id)) {
                 if (!target->local) {
@@ -992,23 +1021,23 @@ bool Lowerer::lower_hir_container_locator_assignment(
         transformation = std::move(*lowered);
     }
     auto operation = ContainerLocatorOperator::minimum;
-    if (call.text == ".max") {
+    if (semantic::sv::member_builtin_method(call) == support::BuiltinMethod::max) {
         operation = ContainerLocatorOperator::maximum;
-    } else if (call.text == ".unique") {
+    } else if (semantic::sv::member_builtin_method(call) == support::BuiltinMethod::unique) {
         operation = ContainerLocatorOperator::unique;
-    } else if (call.text == ".unique_index") {
+    } else if (semantic::sv::member_builtin_method(call) == support::BuiltinMethod::unique_index) {
         operation = ContainerLocatorOperator::unique_index;
-    } else if (call.text == ".find") {
+    } else if (semantic::sv::member_builtin_method(call) == support::BuiltinMethod::find) {
         operation = ContainerLocatorOperator::find;
-    } else if (call.text == ".find_index") {
+    } else if (semantic::sv::member_builtin_method(call) == support::BuiltinMethod::find_index) {
         operation = ContainerLocatorOperator::find_index;
-    } else if (call.text == ".find_first") {
+    } else if (semantic::sv::member_builtin_method(call) == support::BuiltinMethod::find_first) {
         operation = ContainerLocatorOperator::find_first;
-    } else if (call.text == ".find_first_index") {
+    } else if (semantic::sv::member_builtin_method(call) == support::BuiltinMethod::find_first_index) {
         operation = ContainerLocatorOperator::find_first_index;
-    } else if (call.text == ".find_last") {
+    } else if (semantic::sv::member_builtin_method(call) == support::BuiltinMethod::find_last) {
         operation = ContainerLocatorOperator::find_last;
-    } else if (call.text == ".find_last_index") {
+    } else if (semantic::sv::member_builtin_method(call) == support::BuiltinMethod::find_last_index) {
         operation = ContainerLocatorOperator::find_last_index;
     }
     const auto destination = target->local
@@ -1029,7 +1058,7 @@ bool Lowerer::lower_hir_container_locator_assignment(
 }
 
 bool Lowerer::lower_hir_container_locator_loop(
-    const std::string_view method,
+    const support::BuiltinMethod method,
     const runtime::simir::ContainerRegisterId source,
     const runtime::simir::ContainerType& source_type,
     const runtime::simir::ContainerRegisterId destination,
@@ -1037,9 +1066,14 @@ bool Lowerer::lower_hir_container_locator_loop(
     const semantic::ExpressionId predicate)
 {
     using runtime::simir::BinaryOperator;
-    const bool index_result = method.ends_with("_index");
-    const bool first = method.starts_with(".find_first");
-    const bool last = method.starts_with(".find_last");
+    const bool index_result = method == support::BuiltinMethod::unique_index
+        || method == support::BuiltinMethod::find_index
+        || method == support::BuiltinMethod::find_first_index
+        || method == support::BuiltinMethod::find_last_index;
+    const bool first = method == support::BuiltinMethod::find_first
+        || method == support::BuiltinMethod::find_first_index;
+    const bool last = method == support::BuiltinMethod::find_last
+        || method == support::BuiltinMethod::find_last_index;
     // The predicate's references to the iterator and to `iterator.index`.
     const auto references
         = hir_container_iterator_references(predicate, iterator_name);
@@ -1306,7 +1340,7 @@ bool Lowerer::lower_hir_container_keyed_order_loop(
 }
 
 std::optional<RegisterId> Lowerer::lower_hir_container_reduction_loop(
-    const std::string_view method,
+    const support::BuiltinMethod method,
     const runtime::simir::ContainerRegisterId source,
     const runtime::simir::ContainerType& source_type,
     const std::string_view iterator_name,
@@ -1375,8 +1409,8 @@ std::optional<RegisterId> Lowerer::lower_hir_container_reduction_loop(
     }
     const auto accumulator_domain = frontend::ValueDomain::Logic4;
     const auto accumulator = allocate_register(*width, accumulator_domain);
-    const bool product = method == ".product";
-    const bool all_ones = method == ".and";
+    const bool product = method == support::BuiltinMethod::product;
+    const bool all_ones = method == support::BuiltinMethod::reduce_and;
     auto initial = PackedLogic4 { *width,
         all_ones ? runtime::Logic4::one : runtime::Logic4::zero };
     if (product) {
@@ -1433,11 +1467,12 @@ std::optional<RegisterId> Lowerer::lower_hir_container_reduction_loop(
     }
     const auto combined = allocate_register(*width, accumulator_domain);
     process_.operations.emplace_back(Binary {
-        method == ".sum" ? BinaryOperator::add_unsigned
+        method == support::BuiltinMethod::sum ? BinaryOperator::add_unsigned
             : product    ? BinaryOperator::multiply_unsigned
             : all_ones   ? BinaryOperator::bit_and
-            : method == ".or" ? BinaryOperator::bit_or
-                              : BinaryOperator::bit_xor,
+            : method == support::BuiltinMethod::reduce_or
+                ? BinaryOperator::bit_or
+                : BinaryOperator::bit_xor,
         combined, accumulator, *value });
     process_.operations.emplace_back(CopyRegister { accumulator, combined });
     const auto advanced = allocate_register(32U, frontend::ValueDomain::Bit2);
@@ -1480,8 +1515,8 @@ Lowerer::hir_container_iterator_references(
         // A nested array method whose with clause names the same iterator
         // hides this one there (IEEE 1800-2023 7.12.4).
         if (node.kind == semantic::sv::ExpressionKind::call
-            && (is_container_reduction(node.text)
-                || is_container_locator(node.text))
+            && (is_container_reduction(semantic::sv::member_builtin_method(node))
+                || is_container_locator(semantic::sv::member_builtin_method(node)))
             && node.operands.size() >= 2U) {
             const auto inner = node.operands.size() == 3U
                 ? specialized_hir_unit_->find_expression(node.operands[1])
@@ -1674,6 +1709,15 @@ Lowerer::hir_systemverilog_enumeration_method(
         return std::nullopt;
     }
     const auto& source = *expression->systemverilog;
+    const auto enumeration_method = [](const support::BuiltinMethod method) {
+        using support::BuiltinMethod;
+        return method == BuiltinMethod::first || method == BuiltinMethod::last
+            || method == BuiltinMethod::next || method == BuiltinMethod::prev
+            || method == BuiltinMethod::num || method == BuiltinMethod::name;
+    };
+    // The method a `variable.method` name denotes is read from the name's
+    // text: the name carries no built-in method of its own.
+    // ITEM46-LEFT: a dotted name is split by text before it is resolved.
     const auto method_name = [](const std::string_view text) {
         return text == "first" || text == "last" || text == "next"
             || text == "prev" || text == "num" || text == "name";
@@ -1681,10 +1725,10 @@ Lowerer::hir_systemverilog_enumeration_method(
     HirEnumerationMethod result;
     std::optional<semantic::DeclarationId> declaration_id;
     if (source.kind == semantic::sv::ExpressionKind::call
-        && source.text.size() > 1U && source.text.front() == '.'
-        && method_name(std::string_view { source.text }.substr(1U))
+        && enumeration_method(semantic::sv::member_builtin_method(source))
         && !source.operands.empty() && source.operands.size() <= 2U) {
-        result.method = source.text.substr(1U);
+        result.method
+            = std::string { support::builtin_method_name(semantic::sv::member_builtin_method(source)) };
         result.receiver = source.operands.front();
         if (source.operands.size() == 2U) {
             if (result.method != "next" && result.method != "prev") {

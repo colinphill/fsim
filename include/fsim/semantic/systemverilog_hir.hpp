@@ -3,6 +3,7 @@
 
 #include "fsim/semantic/model.hpp"
 #include "fsim/support/dpi_identity.hpp"
+#include "fsim/support/builtin_method.hpp"
 #include "fsim/support/expression_marker.hpp"
 #include "fsim/support/gate_driver.hpp"
 #include "fsim/support/rare_vector.hpp"
@@ -403,6 +404,11 @@ struct Expression {
     // Expression::marker); `none` and empty on a source node.
     support::ExpressionMarker marker { support::ExpressionMarker::none };
     std::string marker_argument;
+    // The built-in method a method call names (frontend
+    // Expression::builtin_method); `none` otherwise. A marked call (a
+    // method of a container held in a class property) keeps its method here
+    // for that marker's lowering; member_builtin_method reads plain calls.
+    support::BuiltinMethod builtin_method { support::BuiltinMethod::none };
     // A name that is a built-in data type keyword (frontend
     // Expression::systemverilog_keyword_type); `none` otherwise.
     support::SystemVerilogBuiltinType keyword_type {
@@ -420,6 +426,17 @@ struct Expression {
     // (`C#(int)::f()`, IEEE 1800-2017 8.25.1); at most one element.
     std::vector<TypeReference> class_owner;
 };
+
+/// The built-in method of a plain member call `receiver.m(...)` (IEEE
+/// 1800-2023 6.16, 6.19.5, 7.5-7.12); `none` for any other node, including a
+/// marked call, whose marker tells its lowering what it is.
+[[nodiscard]] constexpr support::BuiltinMethod member_builtin_method(
+    const Expression& expression) noexcept
+{
+    return expression.marker == support::ExpressionMarker::none
+        ? expression.builtin_method
+        : support::BuiltinMethod::none;
+}
 
 /// The expression-sized cast introduced by the frontend stores its constant
 /// size expression first and its value operand second. Keep that source shape
@@ -1089,6 +1106,8 @@ struct ConstraintExpression {
     // with an empty text, as on Expression.
     support::ExpressionMarker marker { support::ExpressionMarker::none };
     std::string marker_argument;
+    // As Expression::builtin_method.
+    support::BuiltinMethod builtin_method { support::BuiltinMethod::none };
     // As Expression::call_kind.
     CallKind call_kind { CallKind::user };
     // A cast `T'(e)` (6.24.1): what T is. A cast to a typedef of a packed

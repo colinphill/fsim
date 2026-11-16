@@ -298,7 +298,9 @@ UnitId Model::add_unit(
     std::string name,
     std::string secondary_name,
     const SourceSpanId source,
-    const OriginId origin) {
+    const OriginId origin,
+    const bool udp_holder,
+    std::string udp_primitive) {
     require_id(source, source_spans_, "unit has an invalid source span");
     require_id(origin, origins_, "unit has an invalid origin");
     const auto unit_id = next_id<UnitId>(units_.size());
@@ -314,7 +316,9 @@ UnitId Model::add_unit(
         std::move(name),
         std::move(secondary_name),
         source,
-        origin});
+        origin,
+        udp_holder,
+        std::move(udp_primitive)});
     return unit_id;
 }
 

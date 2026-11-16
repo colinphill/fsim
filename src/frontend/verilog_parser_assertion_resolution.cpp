@@ -2386,7 +2386,8 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             match.statements.push_back(std::move(stop));
             if (ranged) {
                 const auto counter_name
-                    // ITEM46-LEFT: name of a synthesized counter variable that must not clash with a user identifier; never matched back; a typed form needs a hidden-variable flag on the declaration
+                    // A name no user identifier can spell; the loop variable is marked
+                    // synthesized so the design hides it.
                     = "@assertion_eventually_counter_" + std::to_string(index);
                 const Expression counter {
                     ExpressionKind::Identifier,
@@ -2436,6 +2437,7 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                 loop.kind = StatementKind::Loop;
                 loop.loop_runtime = true;
                 loop.loop_variable_declared = true;
+                loop.loop_variable_synthesized = true;
                 loop.loop_variable = counter_name;
                 loop.target = counter;
                 loop.loop_initial = Expression {
@@ -2505,7 +2507,8 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             }
         } else if (ranged_always) {
             const auto counter_name
-                // ITEM46-LEFT: name of a synthesized counter variable that must not clash with a user identifier; never matched back; a typed form needs a hidden-variable flag on the declaration
+                // A name no user identifier can spell; the loop variable is marked
+                // synthesized so the design hides it.
                 = "@assertion_always_counter_" + std::to_string(index);
             const Expression counter {
                 ExpressionKind::Identifier,
@@ -2571,6 +2574,7 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             loop.kind = StatementKind::Loop;
             loop.loop_runtime = true;
             loop.loop_variable_declared = true;
+            loop.loop_variable_synthesized = true;
             loop.loop_variable = counter_name;
             loop.target = counter;
             loop.loop_initial = Expression {
@@ -2686,7 +2690,8 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             auto failure_statements = assertion.else_statements;
             if (sequence_maximum_cycle_count) {
                 const auto counter_name
-                    // ITEM46-LEFT: name of a synthesized counter variable that must not clash with a user identifier; never matched back; a typed form needs a hidden-variable flag on the declaration
+                    // A name no user identifier can spell; the loop variable is marked
+                    // synthesized so the design hides it.
                     = "@assertion_sequence_counter_" + std::to_string(index);
                 const Expression counter {
                     ExpressionKind::Identifier,
@@ -2741,6 +2746,7 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                 loop.kind = StatementKind::Loop;
                 loop.loop_runtime = true;
                 loop.loop_variable_declared = true;
+                loop.loop_variable_synthesized = true;
                 loop.loop_variable = counter_name;
                 loop.target = counter;
                 loop.loop_initial = *sequence_cycle_count;

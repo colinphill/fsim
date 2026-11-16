@@ -2,6 +2,7 @@
 #include "hierarchy_builder_internal.hpp"
 #include "lowerer_driver_regions.hpp"
 #include "lowerer_internal.hpp"
+#include "fsim/support/design_library.hpp"
 #include "fsim/support/sha256.hpp"
 #include "fsim/support/systemverilog_builtin_type.hpp"
 
@@ -1145,11 +1146,15 @@ bool HierarchyBuilder::instantiate_compiled_udp(
     profile.unit = "sv:" + library + "." + declaration.name;
     profile.instance = path;
     profile.source_instance = instance.id;
-    const auto owner = compiled_->find_unit(
-        semantic::UnitKind::systemverilog_compilation_unit,
-        library, "$unit$udp$" + declaration.name);
-    if (owner && owner->identity->source == declaration.source) {
-        profile.source_unit = owner->identity->id;
+    for (const auto& holder : compiled_->semantics.units()) {
+        if (holder.udp_holder && holder.udp_primitive == declaration.name
+            && holder.kind
+                == semantic::UnitKind::systemverilog_compilation_unit
+            && support::normalized_library(holder.library) == library
+            && holder.source == declaration.source) {
+            profile.source_unit = holder.id;
+            break;
+        }
     }
     profile.source_span = declaration.source;
     profile.origin = declaration.origin;

@@ -792,6 +792,10 @@ Expression VerilogParser::parse_postfix(Expression expression)
                     cover(receiver_span, previous().span)
                 };
                 expression.call_argument_names = std::move(argument_names);
+                // Resolved once against the LRM member lists; the
+                // receiver's type tells which list applies.
+                expression.builtin_method
+                    = support::builtin_method_named(member.text);
                 if (member.text == "atoreal") {
                     expression.call_result_width = 64;
                     expression.call_result_domain = ValueDomain::Bit2;

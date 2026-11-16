@@ -65,11 +65,7 @@ std::vector<VpiFrameModel::Occurrence> VpiFrameModel::apply(
         started.callee_receiver = point.callee_receiver;
         started.callee_receiver_instance = point.callee_receiver_instance;
         started.host_serial = point.host_frame_serial;
-        if (const auto suffix = started.callee.find('@');
-            suffix != std::string::npos) {
-            started.lowering = started.callee.substr(suffix);
-            started.callee.resize(suffix);
-        }
+        started.lowering = point.callee_lowering;
         // The caller's active statement holds the call (37.43 detail 5).
         if (started.parent != 0U) {
             const auto& caller = frames_.at(started.parent);

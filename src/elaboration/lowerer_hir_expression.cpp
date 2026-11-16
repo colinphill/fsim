@@ -69,6 +69,70 @@
 
 namespace fsim::elaboration {
 
+namespace {
+
+// String methods that read a string and are lowered as a runtime string
+// method (IEEE 1800-2023 6.16.3, 6.16.7 to 6.16.9).
+[[nodiscard]] constexpr bool is_runtime_string_call_method(
+    const support::BuiltinMethod method) noexcept
+{
+    switch (method) {
+    case support::BuiltinMethod::getc:
+    case support::BuiltinMethod::compare:
+    case support::BuiltinMethod::icompare:
+    case support::BuiltinMethod::atoi:
+    case support::BuiltinMethod::atohex:
+    case support::BuiltinMethod::atooct:
+    case support::BuiltinMethod::atobin:
+    case support::BuiltinMethod::atoreal:
+        return true;
+    default:
+        return false;
+    }
+}
+
+// Array, associative array, queue and enumeration methods that the container
+// expression lowering handles.
+[[nodiscard]] constexpr bool is_container_expression_method(
+    const support::BuiltinMethod method) noexcept
+{
+    switch (method) {
+    case support::BuiltinMethod::size:
+    case support::BuiltinMethod::num:
+    case support::BuiltinMethod::sum:
+    case support::BuiltinMethod::product:
+    case support::BuiltinMethod::reduce_and:
+    case support::BuiltinMethod::reduce_or:
+    case support::BuiltinMethod::reduce_xor:
+    case support::BuiltinMethod::exists:
+    case support::BuiltinMethod::first:
+    case support::BuiltinMethod::last:
+    case support::BuiltinMethod::next:
+    case support::BuiltinMethod::prev:
+    case support::BuiltinMethod::pop_front:
+    case support::BuiltinMethod::pop_back:
+    case support::BuiltinMethod::reverse:
+    case support::BuiltinMethod::sort:
+    case support::BuiltinMethod::rsort:
+    case support::BuiltinMethod::shuffle:
+    case support::BuiltinMethod::min:
+    case support::BuiltinMethod::max:
+    case support::BuiltinMethod::unique:
+    case support::BuiltinMethod::unique_index:
+    case support::BuiltinMethod::find:
+    case support::BuiltinMethod::find_index:
+    case support::BuiltinMethod::find_first:
+    case support::BuiltinMethod::find_first_index:
+    case support::BuiltinMethod::find_last:
+    case support::BuiltinMethod::find_last_index:
+        return true;
+    default:
+        return false;
+    }
+}
+
+} // namespace
+
 std::optional<double> systemverilog_real_literal(
     const std::string_view spelling) noexcept
 {
@@ -17819,7 +17883,8 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
     if (expression->systemverilog != nullptr
         && expression->systemverilog->kind
             == semantic::sv::ExpressionKind::call
-        && expression->systemverilog->text == ".len"
+        && semantic::sv::member_builtin_method(*expression->systemverilog)
+            == support::BuiltinMethod::len
         && expression->systemverilog->operands.size() == 1U
         && hir_expression_is_string(
             expression->systemverilog->operands.front(),
@@ -17853,22 +17918,19 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
     } else if (expression->systemverilog != nullptr
         && expression->systemverilog->kind
             == semantic::sv::ExpressionKind::call
-        && (expression->systemverilog->text == ".getc"
-            || expression->systemverilog->text == ".compare"
-            || expression->systemverilog->text == ".icompare"
-            || expression->systemverilog->text == ".atoi"
-            || expression->systemverilog->text == ".atohex"
-            || expression->systemverilog->text == ".atooct"
-            || expression->systemverilog->text == ".atobin"
-            || expression->systemverilog->text == ".atoreal")
+        && is_runtime_string_call_method(
+            semantic::sv::member_builtin_method(*expression->systemverilog))
         && !expression->systemverilog->operands.empty()
         && hir_expression_is_string(
             expression->systemverilog->operands.front(),
             hir_process_scope_)) {
         const auto& call = *expression->systemverilog;
-        const bool conversion = call.text == ".atoi"
-            || call.text == ".atohex" || call.text == ".atooct"
-            || call.text == ".atobin" || call.text == ".atoreal";
+        const auto method_kind = semantic::sv::member_builtin_method(call);
+        const bool conversion = method_kind == support::BuiltinMethod::atoi
+            || method_kind == support::BuiltinMethod::atohex
+            || method_kind == support::BuiltinMethod::atooct
+            || method_kind == support::BuiltinMethod::atobin
+            || method_kind == support::BuiltinMethod::atoreal;
         const auto expected_arguments = conversion ? 1U : 2U;
         if (call.operands.size() != expected_arguments) {
             report(
@@ -17886,22 +17948,24 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         }
         StringMethod method;
         method.source = *source_string;
-        const auto method_width = call.text == ".atoreal" ? 64U : 32U;
+        const auto method_width
+            = method_kind == support::BuiltinMethod::atoreal ? 64U : 32U;
         method.destination = allocate_register(
             method_width,
-            call.text == ".getc" ? frontend::ValueDomain::Bit2
+            method_kind == support::BuiltinMethod::getc
+                ? frontend::ValueDomain::Bit2
                                   : frontend::ValueDomain::Integer);
         if (conversion) {
-            method.operation = call.text == ".atoi"
+            method.operation = method_kind == support::BuiltinMethod::atoi
                 ? StringMethodOperator::atoi
-                : call.text == ".atohex"
+                : method_kind == support::BuiltinMethod::atohex
                 ? StringMethodOperator::atohex
-                : call.text == ".atooct"
+                : method_kind == support::BuiltinMethod::atooct
                 ? StringMethodOperator::atooct
-                : call.text == ".atobin"
+                : method_kind == support::BuiltinMethod::atobin
                 ? StringMethodOperator::atobin
                 : StringMethodOperator::atoreal;
-        } else if (call.text == ".getc") {
+        } else if (method_kind == support::BuiltinMethod::getc) {
             auto index = lower_hir_expression(call.operands[1], 32U);
             if (!index) {
                 report(
@@ -17931,7 +17995,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             if (!argument) {
                 return std::nullopt;
             }
-            method.operation = call.text == ".compare"
+            method.operation = method_kind == support::BuiltinMethod::compare
                 ? StringMethodOperator::compare
                 : StringMethodOperator::icompare;
             method.argument = *argument;
@@ -18993,34 +19057,8 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
     } else if (expression->systemverilog != nullptr
         && expression->systemverilog->kind
             == semantic::sv::ExpressionKind::call
-        && (expression->systemverilog->text == ".size"
-            || expression->systemverilog->text == ".num"
-            || expression->systemverilog->text == ".sum"
-            || expression->systemverilog->text == ".product"
-            || expression->systemverilog->text == ".and"
-            || expression->systemverilog->text == ".or"
-            || expression->systemverilog->text == ".xor"
-            || expression->systemverilog->text == ".exists"
-            || expression->systemverilog->text == ".first"
-            || expression->systemverilog->text == ".last"
-            || expression->systemverilog->text == ".next"
-            || expression->systemverilog->text == ".prev"
-            || expression->systemverilog->text == ".pop_front"
-            || expression->systemverilog->text == ".pop_back"
-            || expression->systemverilog->text == ".reverse"
-            || expression->systemverilog->text == ".sort"
-            || expression->systemverilog->text == ".rsort"
-            || expression->systemverilog->text == ".shuffle"
-            || expression->systemverilog->text == ".min"
-            || expression->systemverilog->text == ".max"
-            || expression->systemverilog->text == ".unique"
-            || expression->systemverilog->text == ".unique_index"
-            || expression->systemverilog->text == ".find"
-            || expression->systemverilog->text == ".find_index"
-            || expression->systemverilog->text == ".find_first"
-            || expression->systemverilog->text == ".find_first_index"
-            || expression->systemverilog->text == ".find_last"
-            || expression->systemverilog->text == ".find_last_index")) {
+        && is_container_expression_method(
+            semantic::sv::member_builtin_method(*expression->systemverilog))) {
         result = lower_hir_systemverilog_container_expression(
             expression_id, expected_width);
     } else if (expression->systemverilog != nullptr
@@ -21292,6 +21330,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                     ? support::SystemVerilogBuiltinType::int_type
                     : support::SystemVerilogBuiltinType::bit,
                 runtime::simir::DebugLocalRole::call_value,
+                { },
             });
             emit_debug_point(DebugPointKind::call_value, call_span,
                 call.text);
@@ -23929,6 +23968,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 runtime::simir::DebugLocalStorage::packed,
                 support::SystemVerilogBuiltinType::int_type,
                 runtime::simir::DebugLocalRole::call_value,
+                { },
             });
             emit_debug_point(DebugPointKind::call_value, call_span,
                 call.text);
@@ -30712,8 +30752,10 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
     if (const auto call = specialized_hir_unit_->find_expression(expression_id);
         call && call->systemverilog != nullptr
         && call->systemverilog->kind == semantic::sv::ExpressionKind::call
-        && (call->systemverilog->text == ".pop_front"
-            || call->systemverilog->text == ".pop_back")
+        && (semantic::sv::member_builtin_method(*call->systemverilog)
+                == support::BuiltinMethod::pop_front
+            || semantic::sv::member_builtin_method(*call->systemverilog)
+                == support::BuiltinMethod::pop_back)
         && call->systemverilog->operands.size() == 1U) {
         const auto binding = hir_container_object_binding(
             call->systemverilog->operands.front());
@@ -30744,7 +30786,8 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
             process_.operations.emplace_back(Branch {
                 nonempty, branch + 1U, 0U, UnknownBranchPolicy::when_false });
             auto index = zero;
-            if (call->systemverilog->text == ".pop_back") {
+            if (semantic::sv::member_builtin_method(*call->systemverilog)
+                == support::BuiltinMethod::pop_back) {
                 const auto one = load_constant(
                     unsigned_value(1U, 32U), frontend::ValueDomain::Bit2);
                 index = allocate_register(32U, frontend::ValueDomain::Bit2);
@@ -32098,13 +32141,14 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
         return lower_hir_string_format_expression(expression_id);
     }
     if (source.kind == semantic::sv::ExpressionKind::call
-        && (source.text == ".toupper"
-            || source.text == ".tolower"
-            || source.text == ".substr")
+        && (semantic::sv::member_builtin_method(source) == support::BuiltinMethod::toupper
+            || semantic::sv::member_builtin_method(source) == support::BuiltinMethod::tolower
+            || semantic::sv::member_builtin_method(source) == support::BuiltinMethod::substr)
         && !source.operands.empty()
         && hir_expression_is_string(
             source.operands.front(), hir_process_scope_)) {
-        const auto expected = source.text == ".substr" ? 3U : 1U;
+        const auto expected
+            = semantic::sv::member_builtin_method(source) == support::BuiltinMethod::substr ? 3U : 1U;
         if (source.operands.size() != expected) {
             report(
                 "FSIM-ELAB-SVSTRING-018",
@@ -32119,14 +32163,15 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
             return std::nullopt;
         }
         StringMethod method;
-        method.operation = source.text == ".toupper"
+        method.operation
+            = semantic::sv::member_builtin_method(source) == support::BuiltinMethod::toupper
             ? StringMethodOperator::toupper
-            : source.text == ".tolower"
+            : semantic::sv::member_builtin_method(source) == support::BuiltinMethod::tolower
             ? StringMethodOperator::tolower
             : StringMethodOperator::substr;
         method.source = *source_string;
         method.string_destination = allocate_string_register();
-        if (source.text == ".substr") {
+        if (semantic::sv::member_builtin_method(source) == support::BuiltinMethod::substr) {
             auto first = lower_hir_expression(source.operands[1], 32U);
             auto second = lower_hir_expression(source.operands[2], 32U);
             if (!first || !second) {
@@ -32761,7 +32806,8 @@ bool Lowerer::hir_queue_pop(const semantic::sv::Expression& call) const
     // same way.
     return call.kind == semantic::sv::ExpressionKind::call
         && call.operands.size() == 1U
-        && (call.text == ".pop_front" || call.text == ".pop_back");
+        && (semantic::sv::member_builtin_method(call) == support::BuiltinMethod::pop_front
+            || semantic::sv::member_builtin_method(call) == support::BuiltinMethod::pop_back);
 }
 
 std::optional<RegisterId> Lowerer::lower_hir_string_to_packed(

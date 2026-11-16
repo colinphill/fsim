@@ -2269,10 +2269,14 @@ struct ExecutionPoint {
     std::string compatibility_profile;
     // The callable of a frame point.
     std::string callee;
-    // A frame point's DebugPoint::callee_declaration and callee_receiver.
+    // A frame point's DebugPoint::callee_declaration, callee_receiver and
+    // callee_lowering.
     std::uint32_t callee_declaration { };
     std::string callee_receiver;
     bool callee_receiver_instance { };
+    // The invocation identity of the lowering of the callable (the debug
+    // locals of that lowering carry the same number); 0 when unknown.
+    std::uint32_t callee_lowering { };
     // The serial of the executing frame of a method the host class executor
     // runs (frame points only); 0 for a frame of generated code.
     std::uint64_t host_frame_serial { };

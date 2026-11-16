@@ -57,6 +57,85 @@ void mark_task(Statement& statement, const support::ExpressionMarker marker,
           && marker <= support::ExpressionMarker::builtin_get_randstate);
 }
 
+// Array methods whose call takes an iterator with-clause (IEEE 1800-2023
+// 7.12).
+[[nodiscard]] bool iterator_method(
+    const support::BuiltinMethod method) noexcept
+{
+  switch (method) {
+  case support::BuiltinMethod::find:
+  case support::BuiltinMethod::find_index:
+  case support::BuiltinMethod::find_first:
+  case support::BuiltinMethod::find_first_index:
+  case support::BuiltinMethod::find_last:
+  case support::BuiltinMethod::find_last_index:
+  case support::BuiltinMethod::min:
+  case support::BuiltinMethod::max:
+  case support::BuiltinMethod::unique:
+  case support::BuiltinMethod::unique_index:
+  case support::BuiltinMethod::sort:
+  case support::BuiltinMethod::rsort:
+  case support::BuiltinMethod::sum:
+  case support::BuiltinMethod::product:
+  case support::BuiltinMethod::reduce_and:
+  case support::BuiltinMethod::reduce_or:
+  case support::BuiltinMethod::reduce_xor:
+  case support::BuiltinMethod::map:
+    return true;
+  default:
+    return false;
+  }
+}
+
+// Built-in array methods that may omit the parentheses of a call without
+// arguments (IEEE 1800-2023 7.12, 13.4.1) when used in an expression.
+[[nodiscard]] bool argumentless_array_method(
+    const support::BuiltinMethod method) noexcept
+{
+  switch (method) {
+  case support::BuiltinMethod::size:
+  case support::BuiltinMethod::num:
+  case support::BuiltinMethod::delete_entries:
+  case support::BuiltinMethod::pop_front:
+  case support::BuiltinMethod::pop_back:
+  case support::BuiltinMethod::sum:
+  case support::BuiltinMethod::product:
+  case support::BuiltinMethod::reduce_and:
+  case support::BuiltinMethod::reduce_or:
+  case support::BuiltinMethod::reduce_xor:
+  case support::BuiltinMethod::min:
+  case support::BuiltinMethod::max:
+  case support::BuiltinMethod::unique:
+  case support::BuiltinMethod::unique_index:
+  case support::BuiltinMethod::reverse:
+  case support::BuiltinMethod::sort:
+  case support::BuiltinMethod::rsort:
+  case support::BuiltinMethod::shuffle:
+    return true;
+  default:
+    return false;
+  }
+}
+
+// Built-in array methods that may omit their parentheses as a statement
+// (IEEE 1800-2023 7.10.2, 7.12, 13.4.1).
+[[nodiscard]] bool argumentless_statement_method(
+    const support::BuiltinMethod method) noexcept
+{
+  switch (method) {
+  case support::BuiltinMethod::delete_entries:
+  case support::BuiltinMethod::reverse:
+  case support::BuiltinMethod::sort:
+  case support::BuiltinMethod::rsort:
+  case support::BuiltinMethod::shuffle:
+  case support::BuiltinMethod::pop_front:
+  case support::BuiltinMethod::pop_back:
+    return true;
+  default:
+    return false;
+  }
+}
+
 } // namespace
 
 [[nodiscard]] std::optional<MethodMatch> Resolver::select_method(
@@ -885,28 +964,44 @@ void Resolver::retain_task_profile(
         // The marked methods are the ones the container method lowering
         // reads (IEEE 1800-2017 7.5.1, 7.10.2, 7.12.3).
         using Marker = support::ExpressionMarker;
-        const auto container_marker = method == "pop_front"
-            ? Marker::sv_container_pop_front
-            : method == "pop_back" ? Marker::sv_container_pop_back
-            : method == "size" ? Marker::sv_container_size
-            : method == "sum" ? Marker::sv_container_sum
-            : method == "product" ? Marker::sv_container_product
-            : method == "and" ? Marker::sv_container_and
-            : method == "or" ? Marker::sv_container_or
-            : method == "xor" ? Marker::sv_container_xor
-            : Marker::none;
+        using Method = support::BuiltinMethod;
+        const auto builtin = support::builtin_method_named(method);
+        const auto container_marker = [&] {
+          switch (builtin) {
+          case Method::pop_front:
+            return Marker::sv_container_pop_front;
+          case Method::pop_back:
+            return Marker::sv_container_pop_back;
+          case Method::size:
+            return Marker::sv_container_size;
+          case Method::sum:
+            return Marker::sv_container_sum;
+          case Method::product:
+            return Marker::sv_container_product;
+          case Method::reduce_and:
+            return Marker::sv_container_and;
+          case Method::reduce_or:
+            return Marker::sv_container_or;
+          case Method::reduce_xor:
+            return Marker::sv_container_xor;
+          default:
+            return Marker::none;
+          }
+        }();
         if (container_marker != Marker::none) {
           mark_expression(expression, container_marker, property);
         } else {
-          // Any other built-in array method keeps its name as the text;
-          // push_back has its own marker, as in a task call statement.
+          // Any other built-in array method keeps its name as the text
+          // for display; push_back has its own marker, as in a task call
+          // statement.
           const std::string method_name { method };
           mark_expression(expression,
-              method == "push_back" ? Marker::sv_container_push_back
-                                    : Marker::sv_container_method,
+              builtin == Method::push_back ? Marker::sv_container_push_back
+                                           : Marker::sv_container_method,
               property);
           expression.text = method_name;
         }
+        expression.builtin_method = builtin;
         expression.operands = std::move(operands);
       } else {
         // A with-clause's iterator (`item` by default) hides a class
@@ -1048,13 +1143,8 @@ void Resolver::retain_task_profile(
       bool deferring{false};
       const auto resolve_caller_names = [&](const auto& self,
                                             Expression& node) -> void {
-        static const std::set<std::string_view> iterator_methods{
-            ".find", ".find_index", ".find_first", ".find_first_index",
-            ".find_last", ".find_last_index", ".min", ".max", ".unique",
-            ".unique_index", ".sort", ".rsort", ".sum", ".product", ".and",
-            ".or", ".xor", ".map"};
         if (node.kind != ExpressionKind::Identifier
-            && iterator_methods.contains(node.text)
+            && iterator_method(node.builtin_method)
             && node.operands.size() >= 2U) {
           self(self, node.operands.front());
           bound_iterators.push_back(
@@ -1202,6 +1292,8 @@ void Resolver::retain_task_profile(
               operand.operands.insert(operand.operands.begin(),
                   Expression{ExpressionKind::Identifier, "this", {},
                       operand.span});
+              operand.builtin_method
+                  = support::builtin_method_named(operand.text);
               operand.text = "." + operand.text;
             }
             deferring = true;
@@ -1235,6 +1327,7 @@ void Resolver::retain_task_profile(
                 node.operands.insert(
                     node.operands.begin(), *unresolved_receiver);
                 node.text = "." + callee;
+                node.builtin_method = support::builtin_method_named(callee);
               } else if (!deferring) {
                 node.text = callee;
               }
@@ -1426,6 +1519,8 @@ void Resolver::retain_task_profile(
       expression.call_argument_names.insert(
           expression.call_argument_names.begin(), std::string{});
     }
+    expression.builtin_method
+        = support::builtin_method_named(expression.text);
     expression.text = "." + expression.text;
     return resolve_call(
         expression, scope, expected_class, expected_scalar);
@@ -1654,18 +1749,14 @@ std::optional<Type> Resolver::resolve_expression(
     }
     // A built-in array method without arguments may omit its parentheses
     // (IEEE 1800-2017 7.12, 13.4.1): `a[i].size` is `a[i].size()`.
-    constexpr std::array<std::string_view, 18> argumentless_methods{
-        "size", "num", "delete", "pop_front", "pop_back", "sum", "product",
-        "and", "or", "xor", "min", "max", "unique", "unique_index",
-        "reverse", "sort", "rsort", "shuffle"};
     const auto member = std::string_view{expression.text}.substr(
         std::string_view{"index."}.size());
     if (element_type && element_type->systemverilog_container
         && member.find('.') == std::string_view::npos
-        && std::ranges::find(argumentless_methods, member)
-            != argumentless_methods.end()) {
+        && argumentless_array_method(support::builtin_method_named(member))) {
       Expression call{ExpressionKind::Call, "." + std::string{member},
           {std::move(element)}, expression.span};
+      call.builtin_method = support::builtin_method_named(member);
       call.systemverilog_source_order = expression.systemverilog_source_order;
       expression = std::move(call);
       return resolve_expression(
@@ -2124,17 +2215,12 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
         && statement.task_arguments.empty()) {
       // A built-in array method without arguments may omit its parentheses
       // (IEEE 1800-2017 7.10.2, 7.12, 13.4.1): `q.delete;`, `a.sort;`.
-      static constexpr std::array argument_free_methods{
-          std::string_view{"delete"}, std::string_view{"reverse"},
-          std::string_view{"sort"}, std::string_view{"rsort"},
-          std::string_view{"shuffle"}, std::string_view{"pop_front"},
-          std::string_view{"pop_back"}};
       const auto name = std::string_view{statement.task_name}.substr(
           dot + 1U);
-      if (std::ranges::find(argument_free_methods, name)
-          != argument_free_methods.end()) {
+      if (argumentless_statement_method(support::builtin_method_named(name))) {
         Expression call{ExpressionKind::Call, "." + std::string{name}, {},
             statement.span};
+        call.builtin_method = support::builtin_method_named(name);
         call.operands.push_back(Expression{ExpressionKind::Identifier,
             statement.task_name.substr(0, dot), {}, statement.span});
         resolve_expression(call, scope);
@@ -2160,6 +2246,8 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
             != nullptr) {
       Expression call{ExpressionKind::Call,
           "." + statement.task_name.substr(dot + 1U), {}, statement.span};
+      call.builtin_method = support::builtin_method_named(
+          std::string_view{statement.task_name}.substr(dot + 1U));
       call.operands.push_back(std::move(receiver));
       for (auto& argument : statement.task_arguments) {
         call.operands.push_back(std::move(argument));
@@ -2244,6 +2332,7 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
         // The parser's member-call form: `.name` with the receiver first.
         Expression call{
             ExpressionKind::Call, "." + std::string{name}, {}, statement.span};
+        call.builtin_method = support::builtin_method_named(name);
         call.operands.push_back(Expression{
             ExpressionKind::Identifier,
             statement.task_name.substr(0, dot),

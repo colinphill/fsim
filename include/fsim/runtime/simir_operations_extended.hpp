@@ -55,6 +55,10 @@ private:
 enum class MailboxElementKind : std::uint8_t {
     packed,
     string,
+    // A typeless mailbox (IEEE 1800-2023 15.4.9, `mailbox m = new;`): any
+    // singular message, kept with its type; only MailboxCreate names it,
+    // and the puts and gets name each message's own kind.
+    dynamic,
 };
 
 /// Construct a typed mailbox. A zero capacity selects the bounded unbounded
@@ -77,11 +81,15 @@ struct MailboxPut {
     std::optional<RegisterId> result;
     MailboxElementKind element_kind { MailboxElementKind::packed };
     StringRegisterId string_source { };
+    // The message's type (an equivalence class, IEEE 1800-2023 6.22.2) on
+    // a typeless mailbox; zero on a parameterized one.
+    std::uint64_t message_type { };
 };
 
 /// Get or peek one typed value. Packed messages use `destination`; string
 /// messages use `string_destination`. A result register selects the
-/// corresponding nonblocking `try_*` form and receives one on success.
+/// corresponding nonblocking `try_*` form and receives one on success (a
+/// negative one when a typeless mailbox's message has another type).
 struct MailboxGet {
     RegisterId receiver { };
     RegisterId destination { };
@@ -90,6 +98,9 @@ struct MailboxGet {
     bool peek { };
     MailboxElementKind element_kind { MailboxElementKind::packed };
     StringRegisterId string_destination { };
+    // The receiving variable's type (an equivalence class, 6.22.2) on a
+    // typeless mailbox; zero on a parameterized one.
+    std::uint64_t message_type { };
 };
 
 struct MailboxNum {
@@ -481,6 +492,10 @@ struct DebugPoint {
     // The receiver is the absolute path of an instance, not a name written
     // in the calling instance's scope.
     bool callee_receiver_instance { };
+    // The invocation identity of the lowering of the callable a frame point
+    // belongs to (0 for other points): the debug locals of that lowering
+    // carry the same number.
+    std::uint32_t callee_lowering { };
 
     DebugPoint() = default;
     DebugPoint(

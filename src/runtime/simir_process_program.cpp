@@ -9,6 +9,20 @@
 namespace fsim::runtime::simir {
 namespace {
 
+// Whether two debug locals belong to the same frame of the same callable. A
+// lowering identity counts only for a local whose displayed name carries it
+// (a renamed one), as the name did before; a plain-named local of two
+// otherwise identical programs may come from lowerings with other numbers.
+[[nodiscard]] bool same_debug_frame(
+    const DebugFrameLocal& left, const DebugFrameLocal& right)
+{
+    return left.callable_declaration == right.callable_declaration
+        && left.variable == right.variable && left.role == right.role
+        && left.renamed == right.renamed
+        && (!left.renamed || left.lowering == right.lowering)
+        && (left.lowering == 0U) == (right.lowering == 0U);
+}
+
 [[nodiscard]] bool same_debug_local(
     const DebugLocal& left, const DebugLocal& right)
 {
@@ -23,7 +37,8 @@ namespace {
         && left.enumeration_literals == right.enumeration_literals
         && left.systemverilog_scalar == right.systemverilog_scalar
         && left.storage == right.storage
-        && left.role == right.role;
+        && left.role == right.role
+        && same_debug_frame(left.frame, right.frame);
 }
 
 [[nodiscard]] bool same_debug_string_local(
@@ -31,7 +46,8 @@ namespace {
 {
     return left.name == right.name
         && left.register_id == right.register_id
-        && left.source == right.source;
+        && left.source == right.source
+        && same_debug_frame(left.frame, right.frame);
 }
 
 [[nodiscard]] bool same_debug_container_local(
@@ -40,7 +56,8 @@ namespace {
     return left.name == right.name
         && left.register_id == right.register_id
         && left.type == right.type
-        && left.source == right.source;
+        && left.source == right.source
+        && same_debug_frame(left.frame, right.frame);
 }
 
 template<class LeftRange, class RightRange, class Equal>

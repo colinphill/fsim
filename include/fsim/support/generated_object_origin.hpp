@@ -77,6 +77,9 @@ enum class GeneratedObjectOrigin : std::uint8_t {
     // 1800-2023 10.6.1); VPI publishes it under its generated name, hidden
     // from iteration.
     procedural_assign_driver,
+    // The bookkeeping containers of VHDL protected objects, file objects and
+    // constants, named with a leading `@`; they stand for no declaration.
+    vhdl_support_storage,
 };
 
 // Whether the objects of this origin are named with a leading `$` and are
@@ -102,6 +105,7 @@ enum class GeneratedObjectOrigin : std::uint8_t {
     case GeneratedObjectOrigin::class_static:
     case GeneratedObjectOrigin::class_static_local:
     case GeneratedObjectOrigin::local_event:
+    case GeneratedObjectOrigin::vhdl_support_storage:
         return true;
     case GeneratedObjectOrigin::none:
     case GeneratedObjectOrigin::monitor_driver:

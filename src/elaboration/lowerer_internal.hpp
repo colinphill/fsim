@@ -2952,6 +2952,9 @@ private:
     // An enumeration method (IEEE 1800-2017 6.19.5): `e.first()`, or the
     // parenthesis-free `e.next` that the frontend keeps as a dotted name.
     struct HirEnumerationMethod {
+        // ITEM46-LEFT: the method is held as its name and compared by name
+        // in lowerer_hir_expression.cpp too; it should become a
+        // support::BuiltinMethod once that file is converted.
         std::string method;
         std::optional<semantic::ExpressionId> receiver;
         semantic::DeclarationId receiver_declaration;
@@ -3437,7 +3440,20 @@ private:
     struct HirMailboxElement {
         bool string { };
         std::uint32_t width { };
+        // A typeless mailbox (IEEE 1800-2023 15.4.9): each message has its
+        // own type (hir_typeless_mailbox_message).
+        bool dynamic { };
     };
+    // A message put into or taken from a typeless mailbox: its kind, width
+    // and the identity of its type's equivalence class (6.22.2).
+    struct HirMailboxMessage {
+        bool string { };
+        std::uint32_t width { };
+        std::uint64_t type { };
+    };
+    [[nodiscard]] std::optional<HirMailboxMessage>
+    hir_typeless_mailbox_message(semantic::ExpressionId message,
+        const frontend::SourceSpan& span);
     [[nodiscard]] std::optional<HirMailboxElement> hir_mailbox_element(
         const semantic::sv::TypeReference* mailbox_type,
         std::string_view message, const frontend::SourceSpan& span);
@@ -5969,7 +5985,7 @@ private:
     // 1800-2017 7.12.1); used when the bounded predicate graph cannot
     // express the predicate.
     [[nodiscard]] bool lower_hir_container_locator_loop(
-        std::string_view method, runtime::simir::ContainerRegisterId source,
+        support::BuiltinMethod method, runtime::simir::ContainerRegisterId source,
         const runtime::simir::ContainerType& source_type,
         runtime::simir::ContainerRegisterId destination,
         std::string_view iterator_name, semantic::ExpressionId predicate);
@@ -5983,7 +5999,7 @@ private:
     // A reduction (`sum with (e)`) accumulated element by element; the
     // result has the with expression's width (IEEE 1800-2017 7.12.3).
     [[nodiscard]] std::optional<RegisterId> lower_hir_container_reduction_loop(
-        std::string_view method, runtime::simir::ContainerRegisterId source,
+        support::BuiltinMethod method, runtime::simir::ContainerRegisterId source,
         const runtime::simir::ContainerType& source_type,
         std::string_view iterator_name, semantic::ExpressionId transformation);
     // The with-clause expressions naming the iterator (`true` for
@@ -6026,7 +6042,8 @@ private:
         const frontend::SourceSpan& span,
         std::string_view callee = { },
         semantic::DeclarationId callee_declaration = { },
-        const InterfaceReceiver& callee_receiver = { });
+        const InterfaceReceiver& callee_receiver = { },
+        std::uint32_t callee_lowering = 0U);
     [[nodiscard]] std::string debug_scope_name() const;
     /// debug_scope_name() interned; the last result is reused when the
     /// recomputed text is unchanged, which skips the intern table.
@@ -6444,14 +6461,23 @@ private:
         std::vector<HirCallableBodyRecording::DebugName> debug_names) const;
     // A process-unique debug local name for the local `declaration` called
     // `name` of the callable `callable`; logged while a body is recorded.
+    // `renamed` tells whether the plain name was taken, so the name got a
+    // suffix that only makes the displayed text unique.
     [[nodiscard]] std::string hir_callable_debug_local_name(
         std::size_t callable, semantic::DeclarationId declaration,
-        std::string_view name);
+        std::string_view name, bool& renamed);
     // The debug name of a formal of `callable`'s body: the frame's name and
     // the formal's, with the invocation identity on a collision.
     [[nodiscard]] std::string hir_callable_formal_debug_name(
         std::size_t callable, semantic::DeclarationId formal,
-        std::string_view name);
+        std::string_view name, bool& renamed);
+    // The frame a debug local of `callable`'s body belongs to: the
+    // callable's lowering and declaration, the declared simple name of the
+    // local, what it is for the frame, and whether its displayed name got
+    // the uniquifying suffix.
+    [[nodiscard]] runtime::simir::DebugFrameLocal hir_callable_frame_local(
+        std::size_t callable, std::string_view variable,
+        runtime::simir::DebugFrameRole role, bool renamed) const;
     // Records a formal, local or loop parameter of `callable`'s body in the
     // process's frame-local table (`Process::frame_locals`), named
     // `<subprogram>.<name>` with the invocation identity on a collision, for

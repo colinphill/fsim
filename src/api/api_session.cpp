@@ -783,9 +783,12 @@ bool rebuild_debug_objects(Session& session) {
     for (std::size_t local = 0;
          local < program.debug_locals.size(); ++local) {
       const auto& debug_local = program.debug_locals[local];
-      // A function's result register belongs to the foreign interfaces.
-      if (debug_local.name.find(".@result@") != std::string::npos
-          || debug_local.name.find(".@receiver@") != std::string::npos) {
+      // A function's result register and a method's receiver belong to the
+      // foreign interfaces.
+      if (debug_local.frame.role
+              == fsim::runtime::simir::DebugFrameRole::result
+          || debug_local.frame.role
+              == fsim::runtime::simir::DebugFrameRole::receiver) {
         continue;
       }
       std::optional<std::size_t> parent_scope;

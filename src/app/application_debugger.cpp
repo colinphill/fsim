@@ -1467,10 +1467,10 @@ DebuggerFrameInfo DebuggerSession::frame(const std::size_t index) const
   for (std::size_t local_index = 0U;
       local_index < program.debug_locals.size(); ++local_index) {
     const auto& local = program.debug_locals[local_index];
-    // A function's result register (lowerer_hir_callable.cpp) is read by
-    // the foreign interfaces only.
-    if (local.name.find(".@result@") != std::string::npos
-        || local.name.find(".@receiver@") != std::string::npos) {
+    // A function's result register and a method's receiver
+    // (lowerer_hir_callable.cpp) are read by the foreign interfaces only.
+    if (local.frame.role == runtime::simir::DebugFrameRole::result
+        || local.frame.role == runtime::simir::DebugFrameRole::receiver) {
       continue;
     }
     std::string value;
@@ -2111,8 +2111,8 @@ void DebuggerSession::show_locals()  {
     for (std::size_t index = 0; index < process.debug_locals.size();
          ++index) {
       const auto& local = process.debug_locals[index];
-      if (local.name.find(".@result@") != std::string::npos
-          || local.name.find(".@receiver@") != std::string::npos) {
+      if (local.frame.role == runtime::simir::DebugFrameRole::result
+          || local.frame.role == runtime::simir::DebugFrameRole::receiver) {
         continue;
       }
       output_ << local.name << " = ";

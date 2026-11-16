@@ -4607,9 +4607,16 @@ Lowerer::hir_inline_constraints(
                 return TemplateKind::Index;
             }
             if (source.kind == semantic::sv::ExpressionKind::call
-                && (source.text == ".size" || source.text == ".sum"
-                    || source.text == ".product" || source.text == ".and"
-                    || source.text == ".or" || source.text == ".xor"
+                && (source.builtin_method == support::BuiltinMethod::size
+                    || source.builtin_method == support::BuiltinMethod::sum
+                    || source.builtin_method
+                        == support::BuiltinMethod::product
+                    || source.builtin_method
+                        == support::BuiltinMethod::reduce_and
+                    || source.builtin_method
+                        == support::BuiltinMethod::reduce_or
+                    || source.builtin_method
+                        == support::BuiltinMethod::reduce_xor
                     || source.marker == support::ExpressionMarker::sv_cast
                     || source.text == "$countones"
                     || source.text == "$onehot"
@@ -4849,7 +4856,8 @@ Lowerer::hir_inline_constraints(
         }
         // The size of an array of the calling scope is passed as its value
         // for use when the randomized object has no array of that name.
-        if (output.kind == TemplateKind::Method && output.text == ".size"
+        if (output.kind == TemplateKind::Method
+            && source.builtin_method == support::BuiltinMethod::size
             && output.operands.size() == 1U
             && output.operands.front().kind == TemplateKind::Name
             && output.operands.front().operands.empty() && !solved_array()
@@ -28673,9 +28681,9 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
     // The value a user function call returned (IEEE 1800-2023 38.15,
     // 37.42): the result register is a slot of the process program's
     // call-result table (`Process::call_results`, not a debug local, so the
-    // debug-local listings and gates do not see it), named
-    // `<callable>.@result` behind the lowering's suffix, which a run with the
-    // execution probes reads at the frame's end (`frame_exit`). A string or
+    // debug-local listings and gates do not see it), tagged with the frame
+    // role `result` and the lowering, which a run with the execution probes
+    // reads at the frame's end (`frame_exit`). A string or
     // container result is a slot of that table too, numbering a string or
     // container register (DebugLocalStorage); a void result has none.
     if (initial_frame->function && declaration->systemverilog != nullptr
@@ -28704,6 +28712,8 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
                 ? function_record.type->builtin
                 : support::SystemVerilogBuiltinType::none,
             runtime::simir::DebugLocalRole::variable,
+            hir_callable_frame_local(callable_index, { },
+                runtime::simir::DebugFrameRole::result, true),
         });
     }
     if (initial_frame->function && declaration->systemverilog != nullptr
@@ -28732,6 +28742,8 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
                 ? function_record.type->builtin
                 : support::SystemVerilogBuiltinType::logic,
             runtime::simir::DebugLocalRole::variable,
+            hir_callable_frame_local(callable_index, { },
+                runtime::simir::DebugFrameRole::result, true),
         });
     }
 
@@ -28908,10 +28920,10 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
     active_hir_callable_ = callable_index;
     hir_class_receiver_register_ = initial_frame->class_receiver;
     // The object a class method runs on (`this`, IEEE 1800-2023 8.11) is a
-    // debug local of the frame bound to the method, named
-    // `<callable>.@receiver` behind the lowering's suffix so that the
-    // debug-local listings skip it: inside a call, VPI reads the members of
-    // that object (37.29 example 2).
+    // debug local of the frame bound to the method, tagged with the frame
+    // role `receiver` and the lowering so that the debug-local listings skip
+    // it: inside a call, VPI reads the members of that object (37.29
+    // example 2). Its displayed name only has to be unique.
     if (initial_frame->class_receiver && !initial_frame->debug_name.empty()
         && declaration->systemverilog != nullptr) {
         const auto storage = *initial_frame->class_receiver;
@@ -28939,6 +28951,8 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
             DebugLocalStorage::packed,
             support::SystemVerilogBuiltinType::none,
             runtime::simir::DebugLocalRole::variable,
+            hir_callable_frame_local(callable_index, { },
+                runtime::simir::DebugFrameRole::receiver, true),
         });
     }
     if (initial_frame->type.container
@@ -28954,8 +28968,11 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
         auto debug_name = initial_frame->debug_name.empty()
             ? source.name
             : initial_frame->debug_name + "." + source.name;
+        bool renamed { };
         if (!debug_local_names_.emplace(debug_name).second) {
-            // ITEM46-LEFT: uniquifying suffix of debug local names that users see; never parsed back; rewriting it changes the visible names, which is an owner decision
+            // The suffix only makes the displayed name unique; no consumer
+            // reads it back.
+            renamed = true;
             debug_name += "@hir-callable-"
                 + std::to_string(initial_frame->invocation_identity);
             debug_local_names_.emplace(debug_name);
@@ -28965,6 +28982,8 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
             *initial_frame->container_result,
             *initial_frame->type.container,
             runtime_source_location(span),
+            hir_callable_frame_local(callable_index, source.name,
+                runtime::simir::DebugFrameRole::variable, renamed),
         });
     }
     for (std::size_t index = 0U;
@@ -29001,8 +29020,11 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
                     : record->vhdl->source;
                 const auto span = hir_source_span(source);
                 auto debug_name = initial_frame->debug_name + "." + name;
+                bool renamed { };
                 if (!debug_local_names_.emplace(debug_name).second) {
-                    // ITEM46-LEFT: uniquifying suffix of debug local names that users see; never parsed back; rewriting it changes the visible names, which is an owner decision
+                    // The suffix only makes the displayed name unique; no
+                    // consumer reads it back.
+                    renamed = true;
                     debug_name += "@hir-callable-"
                         + std::to_string(
                             initial_frame->invocation_identity);
@@ -29017,6 +29039,8 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
                         storage,
                         type,
                         runtime_source_location(span),
+                        hir_callable_frame_local(callable_index, name,
+                            runtime::simir::DebugFrameRole::formal, renamed),
                     });
             }
             continue;
@@ -29039,8 +29063,11 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
                     : record->vhdl->source;
                 const auto span = hir_source_span(source);
                 auto debug_name = initial_frame->debug_name + "." + name;
+                bool renamed { };
                 if (!debug_local_names_.emplace(debug_name).second) {
-                    // ITEM46-LEFT: uniquifying suffix of debug local names that users see; never parsed back; rewriting it changes the visible names, which is an owner decision
+                    // The suffix only makes the displayed name unique; no
+                    // consumer reads it back.
+                    renamed = true;
                     debug_name += "@hir-callable-"
                         + std::to_string(
                             initial_frame->invocation_identity);
@@ -29053,6 +29080,8 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
                     std::move(debug_name),
                     initial_frame->string_arguments[index],
                     runtime_source_location(span),
+                    hir_callable_frame_local(callable_index, name,
+                        runtime::simir::DebugFrameRole::formal, renamed),
                 });
             }
             continue;
@@ -29078,8 +29107,9 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
                 : std::string { };
             const auto span = hir_source_span(source);
             const auto storage = initial_frame->arguments[index];
+            bool renamed { };
             auto debug_name = hir_callable_formal_debug_name(
-                callable_index, formal, name);
+                callable_index, formal, name, renamed);
             bind_hir_frame_local(callable_index, formal, false,
                 process_.debug_locals.size());
             if (record->vhdl != nullptr) {
@@ -29106,6 +29136,8 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
                     ? record->systemverilog->type->builtin
                     : support::SystemVerilogBuiltinType::none,
                 runtime::simir::DebugLocalRole::variable,
+                hir_callable_frame_local(callable_index, name,
+                    runtime::simir::DebugFrameRole::formal, renamed),
             });
         } else if (record->vhdl != nullptr && initial_frame->function) {
             // A VHDL function cannot suspend, so its formals are no debug
@@ -29225,6 +29257,10 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
                             std::move(debug_name),
                             storage,
                             runtime_source_location(span),
+                            hir_callable_frame_local(callable_index,
+                                source.name,
+                                runtime::simir::DebugFrameRole::variable,
+                                false),
                         });
                 }
             }
@@ -29267,6 +29303,8 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
                             ? source.type->builtin
                             : support::SystemVerilogBuiltinType::none,
                         runtime::simir::DebugLocalRole::variable,
+                        hir_callable_frame_local(callable_index, source.name,
+                            runtime::simir::DebugFrameRole::variable, false),
                     });
                 }
             }
@@ -29384,14 +29422,13 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
     // A SystemVerilog callable's frame is activated once its automatic
     // variables exist (IEEE 1800-2023 37.43); the probe plan of simulate
     // --foreign-probes reports it, any other plan compiles the point away.
-    // The point names the lowering by the suffix its debug locals carry
-    // when another lowering of the callable took their names.
+    // The point names the lowering by the invocation identity its debug
+    // locals carry.
     const auto* const frame_declaration = declaration->systemverilog;
     const auto frame_point_name = frame_declaration == nullptr
         ? std::string { }
-        // ITEM46-LEFT: uniquifying suffix of debug local names that users see; never parsed back; rewriting it changes the visible names, which is an owner decision
-        : frame_declaration->name + "@hir-callable-"
-            + std::to_string(initial_frame->invocation_identity);
+        : frame_declaration->name;
+    const auto frame_lowering = initial_frame->invocation_identity;
     if (frame_declaration != nullptr && declarations_ready) {
         // The point names the callable by its declaration, and the
         // instance it belongs to by the receiver of a call through an
@@ -29400,7 +29437,8 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
         emit_debug_point(DebugPointKind::frame_entry,
             hir_source_span(frame_declaration->source), frame_point_name,
             hir_callable_frames_[callable_index].declaration,
-            hir_callable_frames_[callable_index].interface_receiver);
+            hir_callable_frames_[callable_index].interface_receiver,
+            frame_lowering);
     }
     if (declarations_ready && initial_frame->class_receiver) {
         cache_hir_class_container_properties(
@@ -29426,7 +29464,8 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
         // Every return reaches the frame's end (IEEE 1800-2023 37.43).
         if (frame_declaration != nullptr) {
             emit_debug_point(DebugPointKind::frame_exit,
-                hir_source_span(frame_declaration->source), frame_point_name);
+                hir_source_span(frame_declaration->source), frame_point_name,
+                { }, { }, frame_lowering);
         }
         flush_hir_class_container_caches();
         flush_hir_vhdl_protected_caches();

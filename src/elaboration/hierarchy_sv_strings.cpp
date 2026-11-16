@@ -92,14 +92,16 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_string_declaration(
             // tolower, and substr of a constant receiver.
             if (source.kind == semantic::sv::ExpressionKind::call
                 && !source.operands.empty()
-                && (source.text == ".toupper" || source.text == ".tolower"
-                    || source.text == ".substr")) {
+                && (source.builtin_method == support::BuiltinMethod::toupper
+                    || source.builtin_method == support::BuiltinMethod::tolower
+                    || source.builtin_method
+                        == support::BuiltinMethod::substr)) {
                 auto receiver = self(self, source.operands.front());
                 if (!receiver) {
                     erase();
                     return std::nullopt;
                 }
-                if (source.text == ".substr") {
+                if (source.builtin_method == support::BuiltinMethod::substr) {
                     const auto first = source.operands.size() == 3U
                         ? working_specialization.evaluate_integral_expression(
                               source.operands[1])
@@ -124,7 +126,8 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_string_declaration(
                 }
                 for (auto& character : *receiver) {
                     const auto byte = static_cast<unsigned char>(character);
-                    character = static_cast<char>(source.text == ".toupper"
+                    character = static_cast<char>(source.builtin_method
+                            == support::BuiltinMethod::toupper
                             ? std::toupper(byte)
                             : std::tolower(byte));
                 }

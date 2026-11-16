@@ -20,6 +20,42 @@ enum class DebugLocalRole : std::uint8_t {
   frame_local,
 };
 
+/// What a local of a call frame is for the frame it belongs to.
+enum class DebugFrameRole : std::uint8_t {
+  // Not a local of a call frame (a process local).
+  none,
+  // A variable the body of a task or function declares.
+  variable,
+  // A formal of a task or function.
+  formal,
+  // The class handle of the object a method runs on (`this`, IEEE 1800-2023
+  // 8.11); no declared variable.
+  receiver,
+  // The register that holds the value a function returns.
+  result,
+};
+
+/// The frame a debug local belongs to, set by the lowering that creates the
+/// local so that no consumer has to read it back from the local's displayed
+/// name. The name only tells locals apart for a user.
+struct DebugFrameLocal {
+  // The invocation identity of the lowering of the callable that owns the
+  // local; 0 for a local that belongs to no call frame.
+  std::uint32_t lowering{};
+  // The HIR declaration of that callable (index plus one, 0 for none).
+  std::uint32_t callable_declaration{};
+  // The simple name the declaration of the local has in the source; empty
+  // for the receiver and the result.
+  std::string variable;
+  DebugFrameRole role{DebugFrameRole::none};
+  // The displayed name carries the lowering's suffix because another local
+  // already had the plain name.
+  bool renamed{};
+
+  friend bool operator==(
+      const DebugFrameLocal&, const DebugFrameLocal&) = default;
+};
+
 struct DebugLocal {
   std::string name;
   std::string type_name;
@@ -38,6 +74,7 @@ struct DebugLocal {
   support::SystemVerilogBuiltinType systemverilog_builtin{
       support::SystemVerilogBuiltinType::none};
   DebugLocalRole role{DebugLocalRole::variable};
+  DebugFrameLocal frame{};
 };
 
 /// Whether the local is the slot of the value a system function with state
@@ -122,6 +159,7 @@ struct DebugStringLocal {
   std::string name;
   StringRegisterId register_id{};
   SourceLocation source;
+  DebugFrameLocal frame{};
 };
 
 struct DebugContainerLocal {
@@ -129,6 +167,7 @@ struct DebugContainerLocal {
   ContainerRegisterId register_id{};
   ContainerType type;
   SourceLocation source;
+  DebugFrameLocal frame{};
 };
 
 /// A static variable declared in a block of the process (IEEE 1800-2023

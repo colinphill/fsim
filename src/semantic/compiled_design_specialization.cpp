@@ -11247,8 +11247,10 @@ private:
         const auto& source = *view->systemverilog;
         if (source.kind == sv::ExpressionKind::call
             && !source.operands.empty()
-            && (source.text == ".next" || source.text == ".prev"
-                || source.text == ".first" || source.text == ".last")) {
+            && (source.builtin_method == support::BuiltinMethod::next
+                || source.builtin_method == support::BuiltinMethod::prev
+                || source.builtin_method == support::BuiltinMethod::first
+                || source.builtin_method == support::BuiltinMethod::last)) {
             return systemverilog_enumeration_literals(
                 source.operands.front());
         }
@@ -14632,10 +14634,19 @@ private:
             // value's enumerated type (its width and signedness) that
             // `$signed` and mixed-sign comparisons depend on (11.8.1).
             if (expression.kind == Kind::call
-                && (expression.text == ".first" || expression.text == ".last"
-                    || expression.text == ".next" || expression.text == ".prev"
-                    || expression.text == ".num")) {
-                if (call_frames_.empty() && expression.text != ".num") {
+                && (expression.builtin_method
+                        == support::BuiltinMethod::first
+                    || expression.builtin_method
+                        == support::BuiltinMethod::last
+                    || expression.builtin_method
+                        == support::BuiltinMethod::next
+                    || expression.builtin_method
+                        == support::BuiltinMethod::prev
+                    || expression.builtin_method
+                        == support::BuiltinMethod::num)) {
+                if (call_frames_.empty()
+                    && expression.builtin_method
+                        != support::BuiltinMethod::num) {
                     return std::nullopt;
                 }
                 return evaluate_systemverilog_enumeration_method(expression);
@@ -15081,7 +15092,8 @@ private:
                             : 2U])
                     : std::nullopt;
             }
-            if (expression.kind == Kind::call && expression.text == ".name"
+            if (expression.kind == Kind::call
+                && expression.builtin_method == support::BuiltinMethod::name
                 && expression.operands.size() == 1U) {
                 const auto* literals = systemverilog_enumeration_literals(
                     expression.operands.front());

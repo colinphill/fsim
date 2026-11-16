@@ -12666,9 +12666,10 @@ private:
         // locals (owner decision 2026-11-07).
         const auto& locals
             = simulation_.process_program(frame.design_process).call_results;
-        const auto wanted = ".@result" + frame.lowering;
         for (std::size_t index = 0U; index < locals.size(); ++index) {
-            if (!locals[index].name.ends_with(wanted)) {
+            const auto& slot_frame = locals[index].frame;
+            if (slot_frame.role != runtime::simir::DebugFrameRole::result
+                || slot_frame.lowering != frame.lowering) {
                 continue;
             }
             try {
@@ -13502,32 +13503,10 @@ private:
         return { std::nullopt, 0U };
     }
 
-    // The variable a debug local named `name` is of the callable `callee`:
-    // `callee.variable`, possibly behind the scope the callable's name
-    // carries (`Class::method.variable`), without the suffix that tells a
-    // second frame's declaration apart.
-    [[nodiscard]] static std::optional<std::string> frame_local_name(
-        std::string name, const std::string& callee)
-    {
-        name.resize(std::min(name.size(), name.find('@')));
-        const auto prefix = callee + ".";
-        if (name.starts_with(prefix)) {
-            return name.substr(prefix.size());
-        }
-        for (const auto& separator : { std::string { "." }, std::string { "::" } }) {
-            const auto found = name.find(separator + prefix);
-            if (found != std::string::npos) {
-                return name.substr(found + separator.size() + prefix.size());
-            }
-        }
-        return std::nullopt;
-    }
-
     // The object a frame of a class method runs on (`this`, IEEE 1800-2023
     // 8.11), by its heap handle: the receiver local the lowering bound to
-    // the method and named after the frame's lowering
-    // (`<method>.@receiver@hir-callable-<n>`); none for a frame of any other
-    // callable, of the host executor, or with a null receiver.
+    // the method and tagged with the frame's lowering; none for a frame of
+    // any other callable, of the host executor, or with a null receiver.
     [[nodiscard]] std::optional<std::uint64_t> frame_receiver(
         const VpiFrameModel::Frame& frame)
     {
@@ -13539,18 +13518,15 @@ private:
             return std::nullopt;
         }
         const auto& program = simulation_.process_program(frame.design_process);
-        const auto marker = ".@receiver" + frame.lowering;
         for (const auto& binding : program.call_frames.locals) {
             if (!binding.receiver || binding.frame_table
                 || binding.declaration + 1U != frame.callee_declaration
                 || binding.index >= program.debug_locals.size()) {
                 continue;
             }
-            const auto& name = program.debug_locals[binding.index].name;
-            const auto at = name.find(marker);
-            if (at == std::string::npos
-                || (at + marker.size() != name.size()
-                    && name[at + marker.size()] != '#')) {
+            const auto& receiver = program.debug_locals[binding.index].frame;
+            if (receiver.role != runtime::simir::DebugFrameRole::receiver
+                || receiver.lowering != frame.lowering) {
                 continue;
             }
             FrameVariable variable;
@@ -13645,9 +13621,10 @@ private:
 
     // vpi_iterate(vpiAutomatics, frame): the variables of the frame's task
     // or function, in declaration order (37.43). A callable that was lowered
-    // more than once into the process keeps one set per lowering; a set
-    // whose names another lowering took carries the frame's lowering suffix,
-    // and the unsuffixed names are the first lowering's.
+    // more than once into the process keeps one set per lowering; a local
+    // whose plain name another lowering took is marked renamed and carries
+    // the frame's lowering, and the locals that kept their plain names are
+    // the first lowering's.
     [[nodiscard]] std::vector<fsim_vpi_handle_v1> frame_automatics(
         const VpiFrameModel::Frame& frame)
     {
@@ -13673,63 +13650,55 @@ private:
             return host_frame_automatics(frame, *serial, scope_name);
         }
         const auto& program = simulation_.process_program(frame.design_process);
-        // The lowering a debug local belongs to: its suffix up to the
-        // declaration part (`@hir-callable-<n>-declaration-...`).
-        const auto local_lowering = [](const std::string& debug_name) {
-            const auto suffix = debug_name.find('@');
-            if (suffix == std::string::npos) {
-                return std::string_view { };
-            }
-            const std::string_view text { debug_name };
-            const auto declaration = text.find("-declaration-", suffix);
-            return text.substr(suffix,
-                declaration == std::string_view::npos
-                    ? std::string_view::npos
-                    : declaration - suffix);
-        };
         bool own_pass { true };
-        const auto consider = [&](const std::string& debug_name,
+        const auto consider = [&](const runtime::simir::DebugFrameLocal& owner,
                                   const runtime::simir::SourceLocation& source,
                                   const FrameStorage storage,
                                   const std::size_t index) {
-            const auto lowering = local_lowering(debug_name);
-            if (own_pass ? frame.lowering.empty() || lowering != frame.lowering
-                         : !lowering.empty()) {
+            if ((owner.role != runtime::simir::DebugFrameRole::variable
+                    && owner.role != runtime::simir::DebugFrameRole::formal)
+                || owner.callable_declaration != frame.callee_declaration) {
                 return;
             }
-            auto name = frame_local_name(debug_name, frame.callee);
-            if (!name || name->empty() || !seen.insert(*name).second) {
+            if (own_pass ? frame.lowering == 0U || !owner.renamed
+                    || owner.lowering != frame.lowering
+                         : owner.renamed) {
                 return;
             }
+            if (owner.variable.empty()
+                || !seen.insert(owner.variable).second) {
+                return;
+            }
+            auto name = owner.variable;
             // Only automatic variables are the frame's (37.43 detail 1): a
             // static local or formal of a static task lives on after the
             // frame (6.21).
             if (scope && !(statement_model().local_automatic(
-                             *scope, *name).value_or(true))) {
+                             *scope, name).value_or(true))) {
                 return;
             }
             entries.push_back(
-                { source.line, source.column, storage, index, std::move(*name) });
+                { source.line, source.column, storage, index, std::move(name) });
         };
-        // The locals of the frame's own lowering first, then the unsuffixed
-        // ones it shares no name with.
+        // The locals of the frame's own lowering first, then the ones that
+        // kept their plain names and that it shares no name with.
         for (const bool own : { true, false }) {
             own_pass = own;
             for (std::size_t index = 0U; index < program.debug_locals.size();
                  ++index) {
                 const auto& local = program.debug_locals[index];
-                consider(local.name, local.source, FrameStorage::packed, index);
+                consider(local.frame, local.source, FrameStorage::packed, index);
             }
             for (std::size_t index = 0U;
                  index < program.debug_string_locals.size(); ++index) {
                 const auto& local = program.debug_string_locals[index];
-                consider(local.name, local.source, FrameStorage::string, index);
+                consider(local.frame, local.source, FrameStorage::string, index);
             }
             for (std::size_t index = 0U;
                  index < program.debug_container_locals.size(); ++index) {
                 const auto& local = program.debug_container_locals[index];
                 consider(
-                    local.name, local.source, FrameStorage::container, index);
+                    local.frame, local.source, FrameStorage::container, index);
             }
         }
         // Declaration order: formals, then locals, as the source has them.
@@ -17447,15 +17416,10 @@ private:
             const auto object = info(handle);
             // A generated object (a process, driver or assertion the
             // service made, or storage the elaborator made for no
-            // declaration) is no design object, and neither is a name
-            // starting `@`.
-            // ITEM31-LEFT: the `@` names are the frame locals and counters
-            // the elaborator and the frontend name with a leading `@`; they
-            // carry no recorded origin yet.
+            // declaration) is no design object.
             if (!object
-                || ((object->synthesized
-                        && object->kind != SystemVerilogVpiObjectKind::ClockingBlock)
-                    || object->name.starts_with('@'))) {
+                || (object->synthesized
+                    && object->kind != SystemVerilogVpiObjectKind::ClockingBlock)) {
                 continue;
             }
             // An array of virtual interfaces iterates as its elements (37.29

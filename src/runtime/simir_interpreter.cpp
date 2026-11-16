@@ -1944,8 +1944,10 @@ ProcessId Interpreter::Impl::add_process_program_impl(
                     : width == 0U);
         };
         if (const auto* create = operation_get_if<MailboxCreate>(&operation)) {
-            if (!valid_mailbox_shape(
-                    create->element_kind, create->element_width)
+            if ((!valid_mailbox_shape(
+                     create->element_kind, create->element_width)
+                    && !(create->element_kind == MailboxElementKind::dynamic
+                        && create->element_width == 0U))
                 || create->destination >= registered.register_count()
                 || create->capacity >= registered.register_count()) {
                 throw std::invalid_argument {

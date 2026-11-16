@@ -419,6 +419,7 @@ void objects_io(RunStateArchive& ar, Impl& impl)
     FSIM_RS_CUSTOM("interp.mailbox", string_bytes);
     FSIM_RS_CUSTOM("interp.mailbox", readers);
     FSIM_RS_CUSTOM("interp.mailbox", writers);
+    FSIM_RS_CUSTOM("interp.mailbox", messages);
     FSIM_RS_CUSTOM("interp.semaphore", keys);
     FSIM_RS_CUSTOM("interp.semaphore", waiters);
     FSIM_RS_CUSTOM("interp.dynamic_event", waiters);

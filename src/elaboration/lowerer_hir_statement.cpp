@@ -1386,6 +1386,40 @@ namespace {
 
 } // namespace
 
+namespace {
+
+    // The array locator methods that find elements (IEEE 1800-2023 7.12.1).
+    bool is_array_find_method(const support::BuiltinMethod method) noexcept
+    {
+        switch (method) {
+        case support::BuiltinMethod::find:
+        case support::BuiltinMethod::find_index:
+        case support::BuiltinMethod::find_first:
+        case support::BuiltinMethod::find_first_index:
+        case support::BuiltinMethod::find_last:
+        case support::BuiltinMethod::find_last_index:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    // All array locator methods: the finders, min, max and the unique ones.
+    bool is_array_locator_method(const support::BuiltinMethod method) noexcept
+    {
+        switch (method) {
+        case support::BuiltinMethod::min:
+        case support::BuiltinMethod::max:
+        case support::BuiltinMethod::unique:
+        case support::BuiltinMethod::unique_index:
+            return true;
+        default:
+            return is_array_find_method(method);
+        }
+    }
+
+} // namespace
+
 std::string_view hir_statement_kind_name(
     const semantic::sv::StatementKind kind) noexcept
 {
@@ -7728,25 +7762,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
             && container_value_expression->systemverilog != nullptr
             && container_value_expression->systemverilog->kind
                 == semantic::sv::ExpressionKind::call
-            && (container_value_expression->systemverilog->text == ".min"
-                || container_value_expression->systemverilog->text
-                    == ".max"
-                || container_value_expression->systemverilog->text
-                    == ".unique"
-                || container_value_expression->systemverilog->text
-                    == ".unique_index"
-                || container_value_expression->systemverilog->text
-                    == ".find"
-                || container_value_expression->systemverilog->text
-                    == ".find_index"
-                || container_value_expression->systemverilog->text
-                    == ".find_first"
-                || container_value_expression->systemverilog->text
-                    == ".find_first_index"
-                || container_value_expression->systemverilog->text
-                    == ".find_last"
-                || container_value_expression->systemverilog->text
-                    == ".find_last_index");
+            && is_array_locator_method(
+                semantic::sv::member_builtin_method(*container_value_expression->systemverilog));
         if (locator_assignment) {
             const auto& input = *statement->systemverilog;
             if (signal_assignment || nonblocking
@@ -26047,6 +26064,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 return synchronization.succeeded;
             }
             const auto& container_call = *call->systemverilog;
+            const auto call_method = semantic::sv::member_builtin_method(container_call);
+            using Method = support::BuiltinMethod;
             // A function call whose result is discarded: `void'(f(...));`
             // or a void function called as a statement (IEEE 1800-2017
             // 13.4.1).
@@ -26182,14 +26201,14 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 }
             }
             const bool string_mutation
-                = container_call.text == ".putc"
-                || container_call.text == ".itoa"
-                || container_call.text == ".hextoa"
-                || container_call.text == ".octtoa"
-                || container_call.text == ".bintoa"
-                || container_call.text == ".realtoa";
+                = call_method == Method::putc
+                || call_method == Method::itoa
+                || call_method == Method::hextoa
+                || call_method == Method::octtoa
+                || call_method == Method::bintoa
+                || call_method == Method::realtoa;
             if (string_mutation) {
-                const auto expected = container_call.text == ".putc"
+                const auto expected = call_method == Method::putc
                     ? 3U
                     : 2U;
                 const auto receiver = !container_call.operands.empty()
@@ -26247,13 +26266,13 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 const auto string_target = lower_hir_string_expression(
                     container_call.operands.front());
                 const auto first_width
-                    = container_call.text == ".realtoa" ? 64U : 32U;
+                    = call_method == Method::realtoa ? 64U : 32U;
                 auto first = lower_hir_expression(
                     container_call.operands[1], first_width);
                 if (!string_target || !first) {
                     report(
                         "FSIM-ELAB-SVSTRING-018",
-                        container_call.text == ".realtoa"
+                        call_method == Method::realtoa
                             ? "realtoa argument must be a 64-bit real value"
                             : "mutating string method argument must be a "
                               "32-bit integral value",
@@ -26269,7 +26288,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 StringMethod method;
                 method.source = *string_target;
                 method.first = *first;
-                if (container_call.text == ".putc") {
+                if (call_method == Method::putc) {
                     auto character = lower_hir_expression(
                         container_call.operands[2], 32U);
                     if (!character) {
@@ -26290,13 +26309,13 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     method.operation = StringMethodOperator::putc;
                     method.second = *character;
                 } else {
-                    method.operation = container_call.text == ".itoa"
+                    method.operation = call_method == Method::itoa
                         ? StringMethodOperator::itoa
-                        : container_call.text == ".hextoa"
+                        : call_method == Method::hextoa
                         ? StringMethodOperator::hextoa
-                        : container_call.text == ".octtoa"
+                        : call_method == Method::octtoa
                         ? StringMethodOperator::octtoa
-                        : container_call.text == ".bintoa"
+                        : call_method == Method::bintoa
                         ? StringMethodOperator::bintoa
                         : StringMethodOperator::realtoa;
                 }
@@ -26311,32 +26330,32 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 }
                 return true;
             }
-            const bool ordering_method = container_call.text == ".reverse"
-                || container_call.text == ".sort"
-                || container_call.text == ".rsort"
-                || container_call.text == ".shuffle";
+            const bool ordering_method = call_method == Method::reverse
+                || call_method == Method::sort
+                || call_method == Method::rsort
+                || call_method == Method::shuffle;
             const bool direct_mutation
-                = container_call.text == ".delete"
-                || container_call.text == ".insert"
-                || container_call.text == ".push_front"
-                || container_call.text == ".push_back"
-                || container_call.text == ".pop_front"
-                || container_call.text == ".pop_back";
-            const bool reduction_method = container_call.text == ".sum"
-                || container_call.text == ".product"
-                || container_call.text == ".and"
-                || container_call.text == ".or"
-                || container_call.text == ".xor";
-            const bool locator_method = container_call.text == ".min"
-                || container_call.text == ".max"
-                || container_call.text == ".unique"
-                || container_call.text == ".unique_index"
-                || container_call.text == ".find"
-                || container_call.text == ".find_index"
-                || container_call.text == ".find_first"
-                || container_call.text == ".find_first_index"
-                || container_call.text == ".find_last"
-                || container_call.text == ".find_last_index";
+                = call_method == Method::delete_entries
+                || call_method == Method::insert
+                || call_method == Method::push_front
+                || call_method == Method::push_back
+                || call_method == Method::pop_front
+                || call_method == Method::pop_back;
+            const bool reduction_method = call_method == Method::sum
+                || call_method == Method::product
+                || call_method == Method::reduce_and
+                || call_method == Method::reduce_or
+                || call_method == Method::reduce_xor;
+            const bool locator_method = call_method == Method::min
+                || call_method == Method::max
+                || call_method == Method::unique
+                || call_method == Method::unique_index
+                || call_method == Method::find
+                || call_method == Method::find_index
+                || call_method == Method::find_first
+                || call_method == Method::find_first_index
+                || call_method == Method::find_last
+                || call_method == Method::find_last_index;
             // A nonvoid function may be called as a statement, its value
             // discarded (IEEE 1800-2017 13.4.1); without a call in its
             // operands or `with` clause, the method has no other effect.
@@ -26380,18 +26399,18 @@ bool Lowerer::lower_hir_statement_unsuspended(
             }
             if (locator_method) {
                 report(
-                    container_call.text.starts_with(".find")
+                    is_array_find_method(call_method)
                         ? "FSIM-ELAB-SVFIND-005"
                         : "FSIM-ELAB-SVLOCATOR-005",
                     "container locator results cannot be discarded",
                     hir_source_span(container_call.source));
                 return true;
             }
-            if (container_call.text == ".exists"
-                || container_call.text == ".first"
-                || container_call.text == ".last"
-                || container_call.text == ".next"
-                || container_call.text == ".prev") {
+            if (call_method == Method::exists
+                || call_method == Method::first
+                || call_method == Method::last
+                || call_method == Method::next
+                || call_method == Method::prev) {
                 const auto diagnostics_before = diagnostics_.size();
                 const auto lowered
                     = lower_hir_systemverilog_container_expression(
@@ -26451,8 +26470,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                             });
                     }
                 };
-                if (container_call.text == ".pop_front"
-                    || container_call.text == ".pop_back") {
+                if (call_method == Method::pop_front
+                    || call_method == Method::pop_back) {
                     if (!container_binding->type->queue
                         || container_call.operands.size() != 1U) {
                         report(
@@ -26469,12 +26488,12 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     process_.operations.emplace_back(PopContainer {
                         discarded,
                         target_register,
-                        container_call.text == ".pop_front",
+                        call_method == Method::pop_front,
                     });
                     publish();
                     return true;
                 }
-                if (container_call.text == ".delete") {
+                if (call_method == Method::delete_entries) {
                     if (container_call.operands.size() > 2U) {
                         return false;
                     }
@@ -26534,7 +26553,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     return true;
                 }
                 if (!container_binding->type->queue
-                    || (container_call.text == ".insert"
+                    || (call_method == Method::insert
                             ? container_call.operands.size() != 3U
                             : container_call.operands.size() != 2U)) {
                     report(
@@ -26548,8 +26567,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         *container_binding->type,
                         container_binding->declaration,
                         container_call.operands.back(),
-                        container_call.text == ".push_front",
-                        container_call.text == ".insert"
+                        call_method == Method::push_front,
+                        call_method == Method::insert
                             ? std::optional { container_call.operands[1] }
                             : std::nullopt)) {
                     return false;
@@ -26565,8 +26584,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 return true;
             }
             if (ordering_method) {
-                const bool keyed = container_call.text == ".sort"
-                    || container_call.text == ".rsort";
+                const bool keyed = call_method == Method::sort
+                    || call_method == Method::rsort;
                 const bool valid_arity = keyed
                     ? container_call.operands.size() >= 1U
                         && container_call.operands.size() <= 3U
@@ -27005,11 +27024,11 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         base, selection->base.object });
                 }
                 auto operation = ContainerOrderingOperator::reverse;
-                if (container_call.text == ".sort") {
+                if (call_method == Method::sort) {
                     operation = ContainerOrderingOperator::ascending;
-                } else if (container_call.text == ".rsort") {
+                } else if (call_method == Method::rsort) {
                     operation = ContainerOrderingOperator::descending;
-                } else if (container_call.text == ".shuffle") {
+                } else if (call_method == Method::shuffle) {
                     operation = ContainerOrderingOperator::shuffle;
                 }
                 const auto order = [&](const ContainerRegisterId target,

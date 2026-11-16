@@ -63,10 +63,10 @@ public:
         std::string callee_receiver;
         // The receiver is an absolute instance path.
         bool callee_receiver_instance { };
-        // The suffix naming the lowering of the callable the frame runs
-        // (`@hir-callable-<n>`), which its debug locals carry when another
-        // lowering in the process took their names.
-        std::string lowering;
+        // The invocation identity of the lowering of the callable the frame
+        // runs (0 when unknown); the debug locals of that lowering carry the
+        // same number.
+        std::uint32_t lowering { };
         // The serial of the host class executor's frame when the callable is
         // a method the host executor runs, whose automatic variables the VPI
         // reads (IEEE 1800-2023 37.43); 0 for a frame of generated code.

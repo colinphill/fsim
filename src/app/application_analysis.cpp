@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
 #include "fsim/support/native_filesystem.hpp"
+#include "fsim/support/payload_checksum.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <iterator>
 #include <memory>
@@ -12,6 +16,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <unordered_map>
 #include <utility>
 
@@ -495,6 +500,43 @@ void assign_dpi_source_metadata(
 
 namespace {
 
+// Only copies of one file's text are one unit (a package in a header that
+// several files include); the same text in two files is two declarations of
+// one name. The parser's digest covers the text; this adds the file, named
+// by its resolved path the way cache keys name sources (relative to the
+// project directory when it lies there), so every spelling that reaches it
+// (relative, absolute, through a link) names it once and the digest is the
+// same when the project moves.
+void add_unit_file_to_digest(frontend::DesignUnit& unit,
+    const std::filesystem::path& base_directory)
+{
+    if (unit.content_digest == 0U) {
+        return;
+    }
+    const auto written
+        = fsim::support::path_from_utf8(physical_source(unit.span));
+    std::error_code error;
+    const auto resolved = written.empty()
+        ? written
+        : support::native_fs::weakly_canonical(written, error);
+    std::error_code base_error;
+    const auto base = base_directory.empty()
+        ? base_directory
+        : support::native_fs::weakly_canonical(base_directory, base_error);
+    const auto name = stable_cache_source_name(
+        error ? written : resolved, base_error ? base_directory : base);
+    support::Xxh64 state;
+    const auto digest = unit.content_digest;
+    std::array<std::byte, 8U> bytes { };
+    for (std::size_t index = 0U; index < bytes.size(); ++index) {
+        bytes[index] = static_cast<std::byte>((digest >> (8U * index)) & 0xffU);
+    }
+    state.update(bytes);
+    state.update(name);
+    const auto combined = state.finish();
+    unit.content_digest = combined == 0U ? 1U : combined;
+}
+
 void append_snapshot(ParsedSnapshot& into, ParsedSnapshot&& part)
 {
   const auto append = [](auto& target, auto& source) {
@@ -638,6 +680,7 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
         group.package_member_lookup,
         group.package_assertion_lookup);
     for (auto& unit : snapshot.result.design.units) {
+        add_unit_file_to_digest(unit, group.base_directory);
         const auto unit_source = fsim::support::path_from_utf8(physical_source(unit.span));
         auto source_order = group.inputs.empty()
             ? std::size_t { }
@@ -831,6 +874,7 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
                 fsim::support::path_to_utf8(input.path), std::move(text) },
             input.vhdl_standard, identifiers);
   for (auto& unit : snapshot.result.design.units) {
+      add_unit_file_to_digest(unit, group.base_directory);
       unit.library = input.library;
       unit.compilation_unit_identity = source.compilation_unit_digest;
       unit.standard_revision = input.standard_revision;

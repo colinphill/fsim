@@ -315,6 +315,11 @@ struct Unit {
     std::string secondary_name;
     SourceSpanId source;
     OriginId origin;
+    // The unit stands for no source unit: it owns one user-defined primitive
+    // that has no language-unit record, and `udp_primitive` names that
+    // primitive.
+    bool udp_holder{};
+    std::string udp_primitive;
 };
 
 struct Type {
@@ -404,7 +409,9 @@ public:
         std::string name,
         std::string secondary_name,
         SourceSpanId source,
-        OriginId origin);
+        OriginId origin,
+        bool udp_holder = false,
+        std::string udp_primitive = {});
     [[nodiscard]] ScopeId add_scope(
         UnitId unit,
         std::optional<ScopeId> parent,

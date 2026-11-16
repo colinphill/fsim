@@ -2754,6 +2754,7 @@ void Interpreter::Impl::notify_execution_point(
             point.callee_declaration = frame->callee_declaration;
             point.callee_receiver = frame->callee_receiver.str();
             point.callee_receiver_instance = frame->callee_receiver_instance;
+            point.callee_lowering = frame->callee_lowering;
         }
         execution_point_hook(scheduler, point);
     }

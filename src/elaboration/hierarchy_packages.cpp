@@ -83,6 +83,26 @@ using namespace hierarchy_sv_parameters_detail;
 
 namespace {
 
+// Methods the container call checks treat as container methods when a call
+// carries no container marker.
+[[nodiscard]] constexpr bool is_legacy_container_method(
+    const support::BuiltinMethod method) noexcept
+{
+    switch (method) {
+    case support::BuiltinMethod::delete_entries:
+    case support::BuiltinMethod::exists:
+    case support::BuiltinMethod::first:
+    case support::BuiltinMethod::last:
+    case support::BuiltinMethod::next:
+    case support::BuiltinMethod::prev:
+    case support::BuiltinMethod::num:
+    case support::BuiltinMethod::size:
+        return true;
+    default:
+        return false;
+    }
+}
+
     bool compiled_vhdl_name_equal(
         const std::string_view left,
         const std::string_view right)
@@ -13134,14 +13154,7 @@ namespace {
             const bool legacy_container_method
                 = receiver_type != nullptr
                 && receiver_type->container_form
-                && (expression.text == ".delete"
-                    || expression.text == ".exists"
-                    || expression.text == ".first"
-                    || expression.text == ".last"
-                    || expression.text == ".next"
-                    || expression.text == ".prev"
-                    || expression.text == ".num"
-                    || expression.text == ".size");
+                && is_legacy_container_method(expression.builtin_method);
             const bool container_method_call
                 = support::sv_container_method_family(expression.marker)
                 || legacy_container_method;
@@ -25928,6 +25941,8 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
                 frontend::PortDirection::Unknown,
                 std::nullopt,
             });
+            design_.container_object_info_.back().origin
+                = support::GeneratedObjectOrigin::vhdl_support_storage;
             design_.container_objects_.push_back(ContainerObject {
                 anchor_name,
                 default_container_value(anchor_type),

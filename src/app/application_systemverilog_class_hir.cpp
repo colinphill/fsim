@@ -510,6 +510,7 @@ sv::ConstraintExpression SystemVerilogHirBuilder::constraint_expression(
     output.text = input.text;
     output.marker = input.marker;
     output.marker_argument = input.marker_argument;
+    output.builtin_method = input.builtin_method;
     output.call_kind = systemverilog_call_kind(input);
     output.cast_target = input.systemverilog_cast_target;
     output.cast_builtin = input.systemverilog_cast_builtin;
@@ -1004,6 +1005,8 @@ void SystemVerilogHirBuilder::resolve_constraint_expression(
 {
     // `a.size` without parentheses calls the size method of array `a`
     // (IEEE 1800-2017 13.4.5).
+    // ITEM46-LEFT: a dotted name spelling `array.size`; no call node exists
+    // yet, so the spelling is the only form the parser leaves for it.
     if (expression.kind == sv::ConstraintExpressionKind::name
         && expression.text.ends_with(".size")
         && expression.text.size() > 5U) {
@@ -1027,6 +1030,7 @@ void SystemVerilogHirBuilder::resolve_constraint_expression(
             receiver.source = expression.source;
             expression.kind = sv::ConstraintExpressionKind::call;
             expression.text = ".size";
+            expression.builtin_method = support::BuiltinMethod::size;
             expression.operands = { std::move(receiver) };
         }
     }

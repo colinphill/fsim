@@ -600,6 +600,7 @@ interp.mailbox	string_entries	P	mailbox contents and blocked processes (ids)
 interp.mailbox	string_bytes	P	mailbox contents and blocked processes (ids)
 interp.mailbox	readers	P	mailbox contents and blocked processes (ids)
 interp.mailbox	writers	P	mailbox contents and blocked processes (ids)
+interp.mailbox	messages	P	mailbox contents and blocked processes (ids)
 interp.semaphore	keys	P	key count and waiters (ids)
 interp.semaphore	waiters	P	key count and waiters (ids)
 interp.dynamic_event	waiters	P	event waiters and last trigger time

@@ -58,6 +58,8 @@ struct SystemVerilogTypeDescriptor {
     // The width of one element: the packed width without unpacked
     // dimensions.
     std::optional<std::uint64_t> bits;
+    // A packed structure or union (IEEE 1800-2023 7.2.1, 7.3.1).
+    bool packed_aggregate { };
 
     /// The bit-stream width (IEEE 1800-2017 20.6.2): the element width times
     /// every fixed unpacked dimension; nullopt for a variable-size dimension.

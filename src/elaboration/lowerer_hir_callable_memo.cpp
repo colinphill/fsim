@@ -752,13 +752,17 @@ void Lowerer::replay_hir_callable_body(
     // The body's locals take this process's debug names, in the order the
     // body asked for them.
     std::vector<std::string> names;
+    std::vector<bool> renamed_names;
     names.reserve(body.debug_names.size());
+    renamed_names.reserve(body.debug_names.size());
     for (const auto& entry : body.debug_names) {
+        bool renamed { };
         names.push_back(entry.formal
                 ? hir_callable_formal_debug_name(
-                      callable, entry.declaration, entry.name)
+                      callable, entry.declaration, entry.name, renamed)
                 : hir_callable_debug_local_name(
-                      callable, entry.declaration, entry.name));
+                      callable, entry.declaration, entry.name, renamed));
+        renamed_names.push_back(renamed);
     }
     for (auto& value : body.call_values) {
         if (std::ranges::none_of(process_.call_results,
@@ -772,6 +776,14 @@ void Lowerer::replay_hir_callable_body(
     std::vector<std::size_t> debug_slots;
     for (auto& [name, local] : body.debug_locals) {
         local.name = names[name];
+        // The recorded local belongs to the frame of the process that
+        // recorded the body; it now belongs to this process's frame.
+        local.frame = hir_callable_frame_local(callable,
+            body.debug_names[name].name,
+            body.debug_names[name].formal
+                ? runtime::simir::DebugFrameRole::formal
+                : runtime::simir::DebugFrameRole::variable,
+            renamed_names[name]);
         const auto existing = std::ranges::find(process_.debug_locals,
             local.name, &DebugLocal::name);
         if (existing == process_.debug_locals.end()) {

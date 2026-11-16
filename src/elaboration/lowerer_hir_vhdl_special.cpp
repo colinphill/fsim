@@ -669,6 +669,7 @@ ContainerObjectId Lowerer::hir_vhdl_protected_pool(
     design_.container_object_info_.push_back(ContainerObjectInfo {
         counter, name + ".@issued", issued, source, false,
         frontend::PortDirection::Unknown, std::nullopt });
+    design_.container_object_info_.back().origin = support::GeneratedObjectOrigin::vhdl_support_storage;
     design_.container_objects_.push_back(ContainerObject {
         name + ".@issued", default_container_value(issued), std::nullopt });
     design_.container_by_name_.emplace(name + ".@issued", counter);
@@ -1185,6 +1186,7 @@ ContainerObjectId Lowerer::create_hir_vhdl_protected_anchor(
     design_.container_object_info_.push_back(ContainerObjectInfo {
         storage, name + ".@protected", type, source, false,
         frontend::PortDirection::Unknown, std::nullopt });
+    design_.container_object_info_.back().origin = support::GeneratedObjectOrigin::vhdl_support_storage;
     design_.container_objects_.push_back(ContainerObject {
         name + ".@protected", default_container_value(type), std::nullopt });
     design_.container_by_name_.emplace(name + ".@protected", storage);
@@ -1373,6 +1375,8 @@ std::vector<Lowerer::HirVhdlGlobalFile> Lowerer::bind_hir_vhdl_global_files(
                 design_.container_object_info_.push_back(ContainerObjectInfo {
                     storage, name, type, hir_source_span(declaration->source),
                     false, frontend::PortDirection::Unknown, std::nullopt });
+                design_.container_object_info_.back().origin
+                    = support::GeneratedObjectOrigin::vhdl_support_storage;
                 design_.container_objects_.push_back(ContainerObject {
                     name, default_container_value(type), std::nullopt });
                 found = design_.container_by_name_.emplace(name, storage)
@@ -1524,6 +1528,8 @@ bool Lowerer::materialize_hir_vhdl_global_constant(
         design_.container_object_info_.push_back(ContainerObjectInfo {
             storage, flag_name, type, hir_source_span(declaration->source),
             false, frontend::PortDirection::Unknown, std::nullopt });
+        design_.container_object_info_.back().origin
+            = support::GeneratedObjectOrigin::vhdl_support_storage;
         design_.container_objects_.push_back(ContainerObject {
             flag_name, default_container_value(type), std::nullopt });
         flag = design_.container_by_name_.emplace(flag_name, storage).first;
@@ -1579,6 +1585,8 @@ bool Lowerer::materialize_hir_vhdl_global_constant(
         design_.container_object_info_.push_back(ContainerObjectInfo {
             storage, value_name, type, hir_source_span(declaration->source),
             false, frontend::PortDirection::Unknown, std::nullopt });
+        design_.container_object_info_.back().origin
+            = support::GeneratedObjectOrigin::vhdl_support_storage;
         design_.container_objects_.push_back(ContainerObject {
             value_name, default_container_value(type), std::nullopt });
         stored = design_.container_by_name_.emplace(value_name, storage).first;

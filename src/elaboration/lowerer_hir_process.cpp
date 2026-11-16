@@ -683,7 +683,8 @@ void Lowerer::emit_debug_point(
     const frontend::SourceSpan& span,
     const std::string_view callee,
     const semantic::DeclarationId callee_declaration,
-    const InterfaceReceiver& callee_receiver)
+    const InterfaceReceiver& callee_receiver,
+    const std::uint32_t callee_lowering)
 {
     DebugPoint point {
         kind,
@@ -691,6 +692,7 @@ void Lowerer::emit_debug_point(
         debug_scope(),
         callee.empty() ? InternedString { } : InternedString { callee },
     };
+    point.callee_lowering = callee_lowering;
     if (callee_declaration.valid()) {
         point.callee_declaration = callee_declaration.value() + 1U;
     }
@@ -1139,20 +1141,38 @@ bool Lowerer::hir_retained_static_local(
             != semantic::sv::Lifetime::automatic;
 }
 
+runtime::simir::DebugFrameLocal Lowerer::hir_callable_frame_local(
+    const std::size_t callable, const std::string_view variable,
+    const runtime::simir::DebugFrameRole role, const bool renamed) const
+{
+    const auto& frame = hir_callable_frames_[callable];
+    return runtime::simir::DebugFrameLocal {
+        frame.invocation_identity,
+        frame.declaration.value() + 1U,
+        std::string { variable },
+        role,
+        renamed,
+    };
+}
+
 std::string Lowerer::hir_callable_debug_local_name(
     const std::size_t callable, const semantic::DeclarationId declaration,
-    const std::string_view name)
+    const std::string_view name, bool& renamed)
 {
     const auto& frame = hir_callable_frames_[callable];
     const auto base = frame.debug_name.empty()
-        // ITEM46-LEFT: uniquifying suffix of debug local names that users see; never parsed back; rewriting it changes the visible names, which is an owner decision
+        // The suffix only makes the displayed name of a local unique; no
+        // consumer reads it back.
         ? "@hir-callable-" + std::to_string(frame.declaration.value()) + "::"
             + std::string { name }
         : frame.debug_name + "." + std::string { name };
     auto result = base;
     std::size_t occurrence { };
+    renamed = false;
     while (!debug_local_names_.emplace(result).second) {
-        // ITEM46-LEFT: uniquifying suffix of debug local names that users see; never parsed back; rewriting it changes the visible names, which is an owner decision
+        // The suffix only makes the displayed name unique; no consumer reads
+        // it back (the frame of the local is in its DebugFrameLocal).
+        renamed = true;
         result = base + "@hir-callable-"
             + std::to_string(frame.invocation_identity) + "-declaration-"
             + std::to_string(declaration.value()) + "-"
@@ -1167,12 +1187,15 @@ std::string Lowerer::hir_callable_debug_local_name(
 
 std::string Lowerer::hir_callable_formal_debug_name(
     const std::size_t callable, const semantic::DeclarationId formal,
-    const std::string_view name)
+    const std::string_view name, bool& renamed)
 {
     const auto& frame = hir_callable_frames_[callable];
     auto result = frame.debug_name + "." + std::string { name };
+    renamed = false;
     if (!debug_local_names_.emplace(result).second) {
-        // ITEM46-LEFT: uniquifying suffix of debug local names that users see; never parsed back; rewriting it changes the visible names, which is an owner decision
+        // The suffix only makes the displayed name unique; no consumer reads
+        // it back (the frame of the local is in its DebugFrameLocal).
+        renamed = true;
         result += "@hir-callable-" + std::to_string(frame.invocation_identity);
         debug_local_names_.emplace(result);
     }
@@ -1198,7 +1221,8 @@ std::string Lowerer::hir_frame_local_name(
     }
     auto result = callee + "." + std::string { name };
     if (!frame_local_names_.emplace(result).second) {
-        // ITEM46-LEFT: uniquifying suffix of debug local names that users see; never parsed back; rewriting it changes the visible names, which is an owner decision
+        // The suffix only makes the displayed name unique; nothing reads it
+        // back.
         result += "@hir-callable-" + std::to_string(frame.invocation_identity);
         frame_local_names_.emplace(result);
     }
@@ -1270,6 +1294,7 @@ void Lowerer::add_hir_process_loop_parameter(
         runtime::simir::DebugLocalStorage::packed,
         builtin,
         runtime::simir::DebugLocalRole::frame_local,
+        { },
     });
     frame_local_simple_names_.emplace_back(name);
     const runtime::simir::FrameLocalBinding binding {
@@ -1331,6 +1356,7 @@ void Lowerer::add_hir_frame_local(const std::size_t callable,
         runtime::simir::DebugLocalStorage::packed,
         builtin,
         runtime::simir::DebugLocalRole::frame_local,
+        { },
     });
     frame_local_simple_names_.emplace_back(name);
     bind_hir_frame_local(
@@ -1343,8 +1369,12 @@ bool Lowerer::initialize_hir_declarations(
     if (specialized_hir_unit_ == nullptr) {
         return false;
     }
+    // The displayed name of a local, and in `local_frame` the call frame it
+    // belongs to (none outside a callable).
     const auto debug_name = [&](const semantic::DeclarationId declaration_id,
-                                const std::string_view name) {
+                                const std::string_view name,
+                                runtime::simir::DebugFrameLocal& local_frame) {
+        local_frame = { };
         if (!active_hir_callable_) {
             std::string result;
             for (const auto& scope_name : local_scope_) {
@@ -1360,8 +1390,12 @@ bool Lowerer::initialize_hir_declarations(
             (void)declaration_id;
             return result;
         }
-        return hir_callable_debug_local_name(
-            *active_hir_callable_, declaration_id, name);
+        bool renamed { };
+        auto result = hir_callable_debug_local_name(
+            *active_hir_callable_, declaration_id, name, renamed);
+        local_frame = hir_callable_frame_local(*active_hir_callable_, name,
+            runtime::simir::DebugFrameRole::variable, renamed);
+        return result;
     };
     const auto capture_scalar_subtype_range = [&](
         const semantic::CompiledDeclarationView& declaration) {
@@ -1628,10 +1662,12 @@ bool Lowerer::initialize_hir_declarations(
                                 && local.string == storage->string
                                 && local.container == storage->container;
                         })) {
+                    runtime::simir::DebugFrameLocal static_frame;
                     process_.debug_static_locals.push_back(
                         runtime::simir::DebugStaticLocal {
                             debug_name(declaration_id,
-                                declaration->systemverilog->name),
+                                declaration->systemverilog->name,
+                                static_frame),
                             storage->signal,
                             storage->string,
                             storage->container,
@@ -1765,7 +1801,8 @@ bool Lowerer::initialize_hir_declarations(
                     declaration_id.value(), *type);
             }
             const auto span = hir_source_span(input.source);
-            auto name = debug_name(declaration_id, input.name);
+            runtime::simir::DebugFrameLocal local_frame;
+            auto name = debug_name(declaration_id, input.name, local_frame);
             const bool first_debug_name = active_hir_callable_
                 || debug_local_names_.emplace(name).second;
             if (first_initialization && first_debug_name) {
@@ -1780,6 +1817,7 @@ bool Lowerer::initialize_hir_declarations(
                         destination,
                         *type,
                         runtime_source_location(span),
+                        std::move(local_frame),
                     });
             }
             if (input.initializer && !retained_static) {
@@ -1922,8 +1960,9 @@ bool Lowerer::initialize_hir_declarations(
             }
             const auto span = hir_source_span(
                 declaration->vhdl->source);
+            runtime::simir::DebugFrameLocal local_frame;
             auto name = debug_name(
-                declaration_id, declaration->vhdl->name);
+                declaration_id, declaration->vhdl->name, local_frame);
             const bool first_debug_name = active_hir_callable_
                 || debug_local_names_.emplace(name).second;
             if (first_initialization && first_debug_name) {
@@ -1933,6 +1972,7 @@ bool Lowerer::initialize_hir_declarations(
                         destination,
                         type,
                         runtime_source_location(span),
+                        std::move(local_frame),
                     });
             }
             const bool retained_static
@@ -2206,7 +2246,8 @@ bool Lowerer::initialize_hir_declarations(
                     destination, *initial });
             }
             const auto span = hir_source_span(source);
-            auto name = debug_name(declaration_id, string_binding->name);
+            runtime::simir::DebugFrameLocal local_frame;
+            auto name = debug_name(declaration_id, string_binding->name, local_frame);
             const bool first_debug_name = active_hir_callable_
                 || debug_local_names_.emplace(name).second;
             if (first_initialization && first_debug_name) {
@@ -2219,6 +2260,7 @@ bool Lowerer::initialize_hir_declarations(
                     std::move(name),
                     destination,
                     runtime_source_location(span),
+                    std::move(local_frame),
                 });
             }
             continue;
@@ -2821,7 +2863,8 @@ bool Lowerer::initialize_hir_declarations(
         const bool loop_control = declaration_scope.valid()
             && declaration_scope.value() < scopes.size()
             && scopes[declaration_scope.value()].name == "<loop>";
-        auto name = debug_name(declaration_id, binding->name);
+        runtime::simir::DebugFrameLocal local_frame;
+        auto name = debug_name(declaration_id, binding->name, local_frame);
         // A declaration initialized again (a fork's block item in a loop)
         // keeps one debug local.
         const bool first_debug_name = active_hir_callable_
@@ -2873,6 +2916,7 @@ bool Lowerer::initialize_hir_declarations(
                 runtime::simir::DebugLocalStorage::packed,
                 builtin_type,
                 runtime::simir::DebugLocalRole::variable,
+                std::move(local_frame),
             });
         }
     }

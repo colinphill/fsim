@@ -4446,10 +4446,10 @@ CompiledLinkResult extract_compiled_objects_impl(
     auto result = project_compiled_design(design,
         [&](const Unit& unit) {
             if (unit.kind == UnitKind::systemverilog_compilation_unit
-                && unit.name.starts_with("$unit$udp$")) {
+                && unit.udp_holder) {
                 return std::ranges::any_of(design.systemverilog_hir.udps(),
                     [&](const sv::UdpDeclaration& declaration) {
-                        return unit.name == "$unit$udp$" + declaration.name
+                        return unit.udp_primitive == declaration.name
                             && unit.source == declaration.source
                             && normalized_library(unit.library)
                                 == normalized_library(declaration.library)
@@ -4474,7 +4474,9 @@ CompiledLinkResult extract_compiled_objects_impl(
                     return unit.kind == sv::UnitKind::compilation_unit
                         && normalized_library(unit.library)
                             == normalized_library(library)
-                        && unit.name == name
+                        && output.semantics.units()[unit.id.value()].udp_holder
+                        && output.semantics.units()[unit.id.value()]
+                                .udp_primitive == declaration.name
                         && unit.source == declaration.source;
                 })) {
             continue;
@@ -4484,7 +4486,7 @@ CompiledLinkResult extract_compiled_objects_impl(
         // borrows an unrelated module's semantic identity from the same file.
         const auto id = output.semantics.add_unit(declaration.language,
             UnitKind::systemverilog_compilation_unit, library, name, {},
-            declaration.source, declaration.origin);
+            declaration.source, declaration.origin, true, declaration.name);
         sv::Unit unit;
         unit.id = id;
         unit.scope = output.semantics.units()[id.value()].scope;
