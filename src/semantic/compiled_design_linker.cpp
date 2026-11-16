@@ -3975,7 +3975,7 @@ void refresh_compiled_design_metadata(CompiledDesign& design)
     for (const auto& unit : design.systemverilog_hir.units()) {
         if (unit.kind == sv::UnitKind::package
             && !unit.compilation_unit_identity.empty()
-            && !unit.name.starts_with("fsim_unit_")) {
+            && !unit.compilation_unit_package) {
             unit_packages[unit.compilation_unit_identity].push_back(&unit);
         }
     }

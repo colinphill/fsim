@@ -1182,6 +1182,7 @@ struct FstTraceType {
         };
     }
     if (language == semantic::Language::vhdl
+        // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
         && (signal.nominal_type == "@builtin:time"
             || (signal.nominal_type.empty() && signal.type_name == "time"))) {
         metadata.kind = runtime::FstExtendedTypeKind::VhdlTime;
@@ -1300,13 +1301,16 @@ std::unique_ptr<TraceState> attach_trace(
         }
         // A variable of an unnamed block has no hierarchical name, so no
         // trace scope declares it (a VCD scope has an identifier, IEEE
-        // 1800-2023 21.7.2.3); nor is a root-relative lookup name one.
+        // 1800-2023 21.7.2.3); nor is a root-relative lookup name one. An
+        // object the elaborator generated is no declaration, so no scope is
+        // made for it (21.7.2.2).
         for (const auto& object : simulation.design_ir().objects()) {
             if (!design_object_is_signal_bearing(object)
                 || object.runtime_index
                     > std::numeric_limits<SignalId>::max()
                 || object.no_hierarchical_name
-                || object.root_relative_alias) {
+                || object.root_relative_alias
+                || object.origin != support::GeneratedObjectOrigin::none) {
                 continue;
             }
             const auto signal_id = static_cast<SignalId>(object.runtime_index);
@@ -1372,7 +1376,9 @@ std::unique_ptr<TraceState> attach_trace(
                         "FST string trace lacks DesignIR ownership");
                 }
                 if (design_object->second->no_hierarchical_name
-                    || design_object->second->root_relative_alias) {
+                    || design_object->second->root_relative_alias
+                    || design_object->second->origin
+                        != support::GeneratedObjectOrigin::none) {
                     continue;
                 }
                 const auto fst_object = canonical_fst_trace_object(

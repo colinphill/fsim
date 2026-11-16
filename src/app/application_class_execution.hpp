@@ -2,6 +2,7 @@
 #pragma once
 #include "fsim/runtime/class_heap.hpp"
 #include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/simir.hpp"
 #include "fsim/runtime/uvm_component.hpp"
 #include "fsim/runtime/uvm_phase.hpp"
 #include <cstddef>
@@ -28,20 +29,24 @@ public:
         std::string_view allocation_scope);
     [[nodiscard]] runtime::PackedLogic4 invoke_source_randomization_mode(
         runtime::SystemVerilogClassHandle handle,
-        std::string_view method,
+        bool random_mode,
+        std::string_view target,
         std::span<const runtime::PackedLogic4> actuals);
     [[nodiscard]] static runtime::PackedLogic4 resize_packed(
         const runtime::PackedLogic4& value,
         std::size_t width);
     [[nodiscard]] static runtime::PackedLogic4 packed_property_value(
         const runtime::SystemVerilogClassPropertyValue& value);
+    // A handle-container access: `hook` names the operation, `property` the
+    // class property that holds the container.
     [[nodiscard]] runtime::PackedLogic4 invoke_class_container(
         runtime::SystemVerilogClassHandle receiver,
-        std::string_view operation,
+        std::string_view property,
+        runtime::simir::ClassMethodHook hook,
         std::span<const runtime::PackedLogic4> actuals);
     [[nodiscard]] runtime::PackedLogic4 invoke_checked_class_cast(
         runtime::SystemVerilogClassHandle handle,
-        std::string_view operation) const;
+        std::string_view owner_identity) const;
     [[nodiscard]] static std::pair<std::string_view, std::string_view>
     static_property_parts(std::string_view identity);
 

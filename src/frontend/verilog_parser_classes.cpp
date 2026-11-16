@@ -396,30 +396,28 @@ Expression VerilogParser::parse_dist_list(Expression subject)
                 TokenKind::RightBracket,
                 "']' after dist range",
                 "FSIM-SV-PARSE-270");
-            choice = Expression {
-                ExpressionKind::Call,
-                "@inside-range",
+            choice = marked_expression(
+                support::ExpressionMarker::inside_range, { },
                 { std::move(low), std::move(high) },
-                cover(range_start.span, previous().span)
-            };
+                cover(range_start.span, previous().span));
         } else {
             choice = parse_expression();
         }
-        std::string weight_kind;
+        auto weight_kind = support::ExpressionMarker::constraint_dist_equal;
         std::optional<Expression> weight;
         if (match(TokenKind::ColonEqual)) {
-            weight_kind = "@dist-:=";
+            weight_kind = support::ExpressionMarker::constraint_dist_equal;
         } else if (match(TokenKind::Colon)) {
             expect(
                 TokenKind::Slash,
                 "'/' after ':' in dist weight",
                 "FSIM-SV-PARSE-271");
-            weight_kind = "@dist-:/";
+            weight_kind = support::ExpressionMarker::constraint_dist_divide;
         } else if (at(TokenKind::Comma)
             || at(TokenKind::RightBrace)) {
             // An item without a weight has weight `:= 1` (IEEE
             // 1800-2017 18.5.4).
-            weight_kind = "@dist-:=";
+            weight_kind = support::ExpressionMarker::constraint_dist_equal;
             weight = Expression {
                 ExpressionKind::IntegerLiteral, "1", { },
                 choice.span };
@@ -428,17 +426,16 @@ Expression VerilogParser::parse_dist_list(Expression subject)
                 current(),
                 "FSIM-SV-PARSE-272",
                 "a dist item requires ':=' or ':/' weight syntax");
-            weight_kind = "@dist-:=";
+            weight_kind = support::ExpressionMarker::constraint_dist_equal;
         }
         if (!weight) {
             weight = parse_expression();
         }
         const auto item_span = cover(dist.span, weight->span);
-        operands.push_back(Expression {
-            ExpressionKind::Call,
-            std::move(weight_kind),
+        operands.push_back(marked_expression(
+            weight_kind, { },
             { std::move(choice), std::move(*weight) },
-            item_span });
+            item_span));
         if (!match(TokenKind::Comma))
             break;
     }
@@ -474,8 +471,9 @@ std::vector<Expression> VerilogParser::parse_constraint_block_expressions(
             expect(TokenKind::Semicolon, "';' after disable soft",
                 "FSIM-SV-PARSE-265");
             const auto span = cover(disable_token.span, previous().span);
-            return Expression { ExpressionKind::Call, "@disable-soft",
-                { std::move(target) }, span };
+            return marked_expression(
+                support::ExpressionMarker::constraint_disable_soft, { },
+                { std::move(target) }, span);
         }
         const auto soft = keyword("soft")
             || (at(TokenKind::Identifier)
@@ -506,12 +504,10 @@ std::vector<Expression> VerilogParser::parse_constraint_block_expressions(
         if (match(TokenKind::ThinArrow)) {
             auto consequent = parse_constraint_set();
             const auto implication_span = cover(expression.span, consequent.span);
-            return Expression {
-                ExpressionKind::Call,
-                "@constraint-implies",
+            return marked_expression(
+                support::ExpressionMarker::constraint_implies, { },
                 { std::move(expression), std::move(consequent) },
-                implication_span
-            };
+                implication_span);
         }
         expect(
             TokenKind::Semicolon,
@@ -531,12 +527,10 @@ std::vector<Expression> VerilogParser::parse_constraint_block_expressions(
             TokenKind::RightBrace,
             "'}' after structured constraint set",
             "FSIM-SV-PARSE-274");
-        return Expression {
-            ExpressionKind::Call,
-            "@constraint-block",
+        return marked_expression(
+            support::ExpressionMarker::constraint_block, { },
             std::move(items),
-            cover(block_start.span, previous().span)
-        };
+            cover(block_start.span, previous().span));
     };
     parse_constraint_item = [&]() {
         if (match_keyword("unique")) {
@@ -569,12 +563,10 @@ std::vector<Expression> VerilogParser::parse_constraint_block_expressions(
                 TokenKind::Semicolon,
                 "';' after unique constraint",
                 "FSIM-SV-PARSE-380");
-            return Expression {
-                ExpressionKind::Call,
-                "@constraint-unique",
+            return marked_expression(
+                support::ExpressionMarker::constraint_unique, { },
                 std::move(operands),
-                cover(unique_token.span, previous().span)
-            };
+                cover(unique_token.span, previous().span));
         }
         if (match_keyword("solve")) {
             const auto solve_token = previous();
@@ -596,24 +588,16 @@ std::vector<Expression> VerilogParser::parse_constraint_block_expressions(
                 TokenKind::Semicolon,
                 "';' after solve-before constraint",
                 "FSIM-SV-PARSE-280");
-            Expression earlier_list {
-                ExpressionKind::Call,
-                "@solve-list",
-                std::move(earlier),
-                solve_token.span
-            };
-            Expression later_list {
-                ExpressionKind::Call,
-                "@solve-list",
-                std::move(later),
-                previous().span
-            };
-            return Expression {
-                ExpressionKind::Call,
-                "@solve-before",
+            auto earlier_list = marked_expression(
+                support::ExpressionMarker::constraint_solve_list, { },
+                std::move(earlier), solve_token.span);
+            auto later_list = marked_expression(
+                support::ExpressionMarker::constraint_solve_list, { },
+                std::move(later), previous().span);
+            return marked_expression(
+                support::ExpressionMarker::constraint_solve_before, { },
                 { std::move(earlier_list), std::move(later_list) },
-                cover(solve_token.span, previous().span)
-            };
+                cover(solve_token.span, previous().span));
         }
         if (match_keyword("if")) {
             const auto if_token = previous();
@@ -634,12 +618,9 @@ std::vector<Expression> VerilogParser::parse_constraint_block_expressions(
                 operands.push_back(parse_constraint_set());
             }
             const auto item_span = cover(if_token.span, operands.back().span);
-            return Expression {
-                ExpressionKind::Call,
-                "@constraint-if",
-                std::move(operands),
-                item_span
-            };
+            return marked_expression(
+                support::ExpressionMarker::constraint_if, { },
+                std::move(operands), item_span);
         }
         if (match_keyword("foreach")) {
             const auto foreach_token = previous();
@@ -702,12 +683,9 @@ std::vector<Expression> VerilogParser::parse_constraint_block_expressions(
                 "FSIM-SV-PARSE-278");
             auto body = parse_constraint_set();
             const auto item_span = cover(foreach_token.span, body.span);
-            auto result = Expression {
-                ExpressionKind::Call,
-                "@constraint-foreach",
-                { selection, std::move(body) },
-                item_span
-            };
+            auto result = marked_expression(
+                support::ExpressionMarker::constraint_foreach, { },
+                { selection, std::move(body) }, item_span);
             // Wrap each outer dimension around the loop over its elements.
             const auto* outer = &selection;
             for (std::size_t level = 1; level < loop_variables; ++level) {
@@ -716,12 +694,9 @@ std::vector<Expression> VerilogParser::parse_constraint_block_expressions(
                     break;
                 }
                 outer = &outer->operands.front();
-                result = Expression {
-                    ExpressionKind::Call,
-                    "@constraint-foreach",
-                    { *outer, std::move(result) },
-                    item_span
-                };
+                result = marked_expression(
+                    support::ExpressionMarker::constraint_foreach, { },
+                    { *outer, std::move(result) }, item_span);
             }
             return result;
         }
@@ -1379,7 +1354,9 @@ void VerilogParser::check_class_randomization_rules(
               ? "a distribution constraint"
               : expression.text == "soft" && names_cyclic(expression)
               ? "a soft constraint"
-              : expression.text == "@solve-before" && names_cyclic(expression)
+              : expression.marker
+                      == support::ExpressionMarker::constraint_solve_before
+                  && names_cyclic(expression)
               ? "a solve-before constraint"
               : nullptr;
           if (form != nullptr) {

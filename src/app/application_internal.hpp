@@ -513,7 +513,8 @@ void configure_systemverilog_randomize_selection(
 invoke_systemverilog_randomization_mode(
     runtime::SystemVerilogClassHeap& heap,
     runtime::SystemVerilogClassHandle handle,
-    std::string_view method,
+    bool random_mode,
+    std::string_view target,
     std::span<const runtime::PackedLogic4> actuals);
 
 void complete_systemverilog_executable_hir(

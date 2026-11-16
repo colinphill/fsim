@@ -12721,7 +12721,7 @@ private:
 
     // The value a system function with state returned at the call (IEEE
     // 1800-2023 38.15, 37.58): the lowering names the register in the call-
-    // result table (`<function>.@value@<line>:<column>`) and a probe point
+    // result table (a call-value debug local at the call's position) and a probe point
     // after the call reports it, so the value is kept under the call's
     // position like a user function's.
     void record_system_call_value(const runtime::simir::ExecutionPoint& point)
@@ -12895,6 +12895,7 @@ private:
         auto instance_path = std::string { design.path(
             design.instances().at(specialization.instance.value()).path) };
         // The receiver as the lowerer resolved it (Lowerer::record_vpi_callee).
+        // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
         constexpr std::string_view absolute { "@instance:" };
         if (frame.callee_receiver.starts_with(absolute)) {
             instance_path = frame.callee_receiver.substr(absolute.size());
@@ -16652,10 +16653,11 @@ private:
     }
 
     // The compilation-unit package is `$unit` (IEEE 1800-2023 3.12.1).
-    [[nodiscard]] static std::string package_name(const std::string& name)
+    [[nodiscard]] static std::string package_name(
+        const runtime::SystemVerilogVpiObjectInfo& package,
+        const std::string& name)
     {
-        return name.starts_with("fsim_unit_") ? std::string { "$unit" }
-                                              : name;
+        return package.compilation_unit ? std::string { "$unit" } : name;
     }
 
     // A package's full name ends in `::`, and so begins its members' full
@@ -16674,7 +16676,7 @@ private:
         if (package.ends_with("::")) {
             package.resize(package.size() - 2U);
         }
-        const auto presented = package_name(package) + "::";
+        const auto presented = package_name(*root, package) + "::";
         if (object.full_name == root->full_name) {
             return presented;
         }
@@ -17474,6 +17476,9 @@ private:
             const auto object = info(handle);
             // Names starting `$` or `@` are the elaborator's own storage,
             // not design objects.
+            // ITEM31-LEFT: the VPI registry's object info has no flag for
+            // the `$process_N` and `$assertion` display names it holds, so
+            // the `$` test stays until the descriptor and info carry one.
             if (!object
                 || ((object->name.starts_with('$')
                         && object->kind != SystemVerilogVpiObjectKind::ClockingBlock)
@@ -18581,7 +18586,7 @@ private:
                     if (package.ends_with("::")) {
                         package.resize(package.size() - 2U);
                     }
-                    if (package_name(package) != "$unit") {
+                    if (!unit->compilation_unit) {
                         continue;
                     }
                     if (member.empty()) {
@@ -19532,7 +19537,7 @@ private:
         // vpiUnit set (IEEE 1800-2023 37.10).
         if (property == vpiUnit
             && object->kind == SystemVerilogVpiObjectKind::Package) {
-            return integer(object->name.starts_with("fsim_unit_") ? 1 : 0);
+            return integer(object->compilation_unit ? 1 : 0);
         }
         // Whether a virtual interface variable is of a modport (37.29).
         if (property == vpiIsModPort && virtual_interface_variable(*object)) {
@@ -20634,7 +20639,7 @@ private:
                 }
             }
             if (object->kind == SystemVerilogVpiObjectKind::Package) {
-                return text(package_name(object->name));
+                return text(package_name(*object, object->name));
             }
             // An unnamed scope has no name (37.12 detail 1); it and what it
             // holds have no full name (9.3.5).

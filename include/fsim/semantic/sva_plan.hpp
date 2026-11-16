@@ -17,7 +17,7 @@ namespace fsim::semantic::sva {
 
 // The assertion control word of one assertion or expect statement (IEEE
 // 1800-2023 20.11): what an assertion control read (runtime::simir::
-// SvaKind::control, `$__fsim_assertion_control`) gives. The host sets it
+// SvaKind::control, the assertion control call) gives. The host sets it
 // whenever a control task or VPI control changes the assertion's state;
 // generated code reads it inline. Bit control_on: the assertion is checked
 // (On, Off, Kill); control_pass, control_fail and control_vacuous: the pass
@@ -47,7 +47,7 @@ inline constexpr std::uint32_t control_cover = 2U;
 inline constexpr std::uint32_t control_assume = 4U;
 
 // The monitor flags of a monitor tick (runtime::simir::SvaOperation::
-// monitor_flags; the `$__fsim_sva_tick` operand after the wake bit and the
+// monitor_flags; the tick call operand after the wake bit and the
 // abort net). monitor_every_step: the monitor is woken at the start of every
 // time step while an attempt is in progress, as its disable or abort
 // condition reads sampled value functions, `.triggered` or automatic

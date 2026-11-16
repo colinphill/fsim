@@ -693,7 +693,7 @@ inline constexpr bool static_kernel_class_container_operation
     || std::is_same_v<T, ScopeRandomize>;
 
 /// Calls `visit(id)` for each container register a with-clause names (an
-/// inline_container_prefix name, bind_inline_constraint_containers).
+/// inline_container_register node, bind_inline_constraint_containers).
 template <typename Visit>
 inline void static_kernel_inline_constraint_containers(
     const std::span<const SystemVerilogConstraintTemplate> constraints,
@@ -701,9 +701,9 @@ inline void static_kernel_inline_constraint_containers(
 {
     const auto walk = [&](const auto& self,
                           const SystemVerilogConstraintTemplate& node) -> void {
-        if (node.text.starts_with(inline_container_prefix)) {
-            visit(static_cast<ContainerRegisterId>(std::stoul(
-                node.text.substr(inline_container_prefix.size()))));
+        if (node.role
+            == SystemVerilogConstraintTemplateRole::inline_container_register) {
+            visit(static_cast<ContainerRegisterId>(node.slot));
             return;
         }
         for (const auto& operand : node.operands) {

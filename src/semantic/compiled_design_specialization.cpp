@@ -502,7 +502,7 @@ bool vhdl_predefined_operator_selected(const Expression& expression)
 {
     if constexpr (std::is_same_v<Expression, vhdl::Expression>) {
         return !expression.resolved_declaration
-            && (expression.resolved_type
+            && (expression.resolved_type || expression.ambiguous_literal
                 || !expression.resolved_builtin_type.empty());
     } else {
         return false;
@@ -7832,6 +7832,7 @@ private:
                     const auto view = unit_.find_expression(operand);
                     if (!view || view->vhdl == nullptr
                         || (!view->vhdl->nominal_type.empty()
+                            // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
                             && view->vhdl->nominal_type != "@builtin:integer")) {
                         return false;
                     }
@@ -11736,7 +11737,7 @@ private:
             }
             if (inside_matching
                 && source.kind == sv::ExpressionKind::call
-                && source.text == "@inside-range") {
+                && source.marker == support::ExpressionMarker::inside_range) {
                 if (source.operands.size() != 2U) {
                     return std::nullopt;
                 }
@@ -13954,7 +13955,7 @@ private:
         // that follows reports it.
         if constexpr (!systemverilog) {
             if (expression.kind == Kind::logic_literal
-                && expression.resolved_builtin_type == "@ambiguous-literal") {
+                && expression.ambiguous_literal) {
                 return std::nullopt;
             }
         }
@@ -19857,9 +19858,14 @@ SpecializedHirAssociationResult resolve_specialized_hir_associations_impl(
         for (std::size_t index = 0U; index < formals.size(); ++index) {
             // A hidden parameter of an interface port is bound from the
             // connected interface when the instance is elaborated.
+            const auto formal_declaration
+                = design.find_declaration(formals[index].declaration);
             if (bound[index] || !formals[index].type_parameter
                 || association_formal_has_default(design, formals[index])
-                || formals[index].name.starts_with("__fsim_ifp_")) {
+                || (formal_declaration
+                    && formal_declaration->systemverilog != nullptr
+                    && !formal_declaration->systemverilog->interface_port
+                            .empty())) {
                 continue;
             }
             AssociationActual missing;

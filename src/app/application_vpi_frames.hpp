@@ -15,6 +15,7 @@ namespace fsim::app::application_detail {
 /// The callee suffix of a frame of a method the host class executor runs:
 /// `<method>@host-frame-<serial>`, the serial naming the executor's frame
 /// whose automatic variables the VPI reads (IEEE 1800-2023 37.43).
+// ITEM46-LEFT: suffix of a host frame lowering name matched by starts_with in the VPI frame model; needs a typed lowering kind on the frame record
 inline constexpr std::string_view host_frame_suffix { "@host-frame-" };
 
 /// The live frames and threads of a run with the execution probes (simulate

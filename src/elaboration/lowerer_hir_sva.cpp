@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // The concurrent-property monitor calls of a generated assertion process
-// (IEEE 1800-2017 16.14): `$__fsim_sva_tick(site, plan, guard_count, guards,
-// start, disabled, bounds..., witnesses... [, wake, abort, flags, ticks...])`
-// and `$__fsim_sva_outcome(site)`,
+// (IEEE 1800-2017 16.14): the tick call (site, plan, guard_count, guards,
+// start, disabled, bounds..., witnesses... [, wake, abort, flags, ticks...])
+// and the outcome call (site),
 // and the local-variable requests of a tick (IEEE 1800-2023 16.10):
-// `$__fsim_sva_request(site, r)`, `$__fsim_sva_local(site, r, k)` and
-// `$__fsim_sva_answer(site, r, value)`, and the queued subroutine calls of a
-// tick (16.11): `$__fsim_sva_call(site)`. See runtime::simir::SvaOperation.
+// the request call (site, r), the local call (site, r, k) and
+// the answer call (site, r, value), and the queued subroutine calls of a
+// tick (16.11): the queued call (site). See runtime::simir::SvaOperation.
 #include "lowerer_internal.hpp"
 
 #include "fsim/semantic/sva_plan.hpp"
@@ -21,15 +21,15 @@ std::optional<RegisterId> Lowerer::lower_hir_sva_call(
     const semantic::sv::Expression& call,
     const std::size_t expected_width)
 {
-    const bool tick = call.text == "$__fsim_sva_tick";
-    const bool request = call.text == "$__fsim_sva_request";
-    const bool local = call.text == "$__fsim_sva_local";
-    const bool answer = call.text == "$__fsim_sva_answer";
-    const bool queued_call = call.text == "$__fsim_sva_call";
+    const bool tick = call.marker == support::ExpressionMarker::sva_tick;
+    const bool request = call.marker == support::ExpressionMarker::sva_request;
+    const bool local = call.marker == support::ExpressionMarker::sva_local;
+    const bool answer = call.marker == support::ExpressionMarker::sva_answer;
+    const bool queued_call
+        = call.marker == support::ExpressionMarker::sva_call;
     const auto malformed = [&] {
         report("FSIM-ELAB-SVA-001",
-            "the generated concurrent-property monitor call " + call.text
-                + " is malformed",
+            "the generated concurrent-property monitor call is malformed",
             hir_source_span(call.source));
         return std::optional<RegisterId> { };
     };
@@ -318,8 +318,7 @@ std::optional<StringRegisterId> Lowerer::lower_hir_sva_string_local(
         || !sva_string_locals_.contains({ static_cast<std::uint32_t>(*site),
             static_cast<std::uint32_t>(*index) })) {
         report("FSIM-ELAB-SVA-001",
-            "the generated concurrent-property monitor call " + call.text
-                + " is malformed",
+            "the generated concurrent-property monitor call is malformed",
             hir_source_span(call.source));
         return std::nullopt;
     }
@@ -355,8 +354,7 @@ std::optional<RegisterId> Lowerer::lower_hir_assertion_control_call(
             != semantic::sv::ExpressionKind::string_literal
         || !name->systemverilog->decoded_string) {
         report("FSIM-ELAB-SVA-001",
-            "the generated assertion control call " + call.text
-                + " is malformed",
+            "the generated assertion control call is malformed",
             hir_source_span(call.source));
         return std::nullopt;
     }

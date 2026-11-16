@@ -818,7 +818,6 @@ void Simulation::Impl::add_constraint_state_variables(
 [[nodiscard]] runtime::PackedLogic4 Simulation::Impl::invoke_source_randomize(
     const runtime::SystemVerilogClassHandle handle,
     const std::span<const std::string> names,
-    const std::span<const runtime::PackedLogic4> actuals,
     const std::span<const runtime::SystemVerilogConstraintTemplate>
         source_constraints,
     const bool no_properties,
@@ -837,48 +836,12 @@ void Simulation::Impl::add_constraint_state_variables(
             "randomize() solve outside its lowered call"
         };
     }
-    constexpr std::string_view inline_value_prefix = "@inline-value:";
-    std::vector<std::string> selected_names;
-    std::vector<runtime::PackedLogic4> inline_values;
-    for (std::size_t index = 0; index < names.size(); ++index) {
-        if (!names[index].starts_with(inline_value_prefix)) {
-            selected_names.push_back(names[index]);
-            continue;
-        }
-        if (index >= actuals.size()) {
-            throw std::invalid_argument {
-                "randomize inline value has no actual"
-            };
-        }
-        inline_values.push_back(actuals[index]);
-    }
-    // Fill each calling-scope value placeholder (IEEE 1800-2017 18.7).
-    std::vector<runtime::SystemVerilogConstraintTemplate> inline_constraints {
-        source_constraints.begin(), source_constraints.end()
-    };
-    const auto fill = [&](auto&& self,
-                          runtime::SystemVerilogConstraintTemplate& node)
-        -> void {
-        if (node.kind == runtime::SystemVerilogConstraintTemplateKind::Constant
-            && node.text.starts_with(inline_value_prefix)) {
-            const auto slot = std::stoull(
-                node.text.substr(inline_value_prefix.size()));
-            if (slot >= inline_values.size()
-                || inline_values[slot].width() != node.constant.width()) {
-                throw std::invalid_argument {
-                    "randomize inline value does not match its constraint"
-                };
-            }
-            node.constant = inline_values[slot];
-            return;
-        }
-        for (auto& operand : node.operands) {
-            self(self, operand);
-        }
-    };
-    for (auto& constraint : inline_constraints) {
-        fill(fill, constraint);
-    }
+    const std::vector<std::string> selected_names { names.begin(), names.end() };
+    // The calling-scope values the with-clause reads are already bound into
+    // its constraints (IEEE 1800-2017 18.7).
+    const std::vector<runtime::SystemVerilogConstraintTemplate>
+        inline_constraints { source_constraints.begin(),
+            source_constraints.end() };
 
     // A static random variable is randomized with the object, shared by
     // every instance (IEEE 1800-2017 18.4): its stored value and random
@@ -2116,7 +2079,7 @@ runtime::PackedLogic4 Simulation::Impl::invoke_lowered_randomize_step(
     // A kill (IEEE 1800-2023 9.7) that ends the killing process ends the
     // randomize() calls and callbacks it is in: they are set aside before
     // the kill and come back only when the kill returns.
-    if (hook == Hook::none && step == "@process-kill-begin") {
+    if (hook == Hook::process_kill_begin) {
         killing_randomize_state = KilledRandomizeState {
             process,
             std::exchange(lowered_randomize_calls, { }),
@@ -2124,7 +2087,7 @@ runtime::PackedLogic4 Simulation::Impl::invoke_lowered_randomize_step(
         };
         return done;
     }
-    if (hook == Hook::none && step == "@process-kill-end") {
+    if (hook == Hook::process_kill_end) {
         if (!killing_randomize_state
             || killing_randomize_state->process != process) {
             throw std::logic_error { "process kill returned unmatched" };
@@ -2185,15 +2148,14 @@ runtime::PackedLogic4 Simulation::Impl::invoke_lowered_randomize_step(
 
 [[nodiscard]] runtime::PackedLogic4 Simulation::Impl::invoke_source_randomization_mode(
     const runtime::SystemVerilogClassHandle handle,
-    const std::string_view method,
+    const bool random_mode,
+    const std::string_view target,
     const std::span<const runtime::PackedLogic4> actuals)
 {
     // A static constraint's mode belongs to its class (IEEE 1800-2017
     // 18.9): every object reads and updates the same mode.
-    constexpr std::string_view constraint_prefix { "@builtin-constraint-mode:" };
-    if (method.starts_with(constraint_prefix)
-        && static_constraint(method.substr(constraint_prefix.size()))) {
-        const auto identity = method.substr(constraint_prefix.size());
+    if (!random_mode && static_constraint(target)) {
+        const auto identity = target;
         if (actuals.size() > 1U) {
             throw std::invalid_argument {
                 "randomization mode method accepts zero or one argument"
@@ -2217,11 +2179,10 @@ runtime::PackedLogic4 Simulation::Impl::invoke_lowered_randomize_step(
     }
     // A static random variable's mode is shared by every instance (IEEE
     // 1800-2017 18.8): it lives with the variable in the static store.
-    constexpr std::string_view random_prefix { "@builtin-rand-mode:" };
     std::vector<runtime::SystemVerilogClassRandomState*> static_states;
     std::optional<runtime::SystemVerilogClassRandomState*> named_static;
-    if (method.starts_with(random_prefix) && handle != 0U) {
-        const auto identity = method.substr(random_prefix.size());
+    if (random_mode && handle != 0U) {
+        const auto identity = target;
         for (std::string current {
                  class_heap.object(handle).specialization_identity };
              !current.empty();) {
@@ -2269,9 +2230,9 @@ runtime::PackedLogic4 Simulation::Impl::invoke_lowered_randomize_step(
             32, (*named_static)->enabled ? 1U : 0U, 0);
     }
     auto result = class_execution.invoke_source_randomization_mode(
-        handle, method, actuals);
-    if (method == std::string { random_prefix } + "@object"
-        && !actuals.empty()) {
+        handle, random_mode, target, actuals);
+    // ITEM46-LEFT: the whole-object target of rand_mode / constraint_mode
+    if (random_mode && target == "@object" && !actuals.empty()) {
         for (auto* const state : static_states) {
             state->enabled = actuals.front().low_word().aval != 0;
         }
@@ -2401,18 +2362,19 @@ void Simulation::Impl::assign_property_value(
 
 [[nodiscard]] runtime::PackedLogic4 Simulation::Impl::invoke_class_container(
     const runtime::SystemVerilogClassHandle receiver,
-    const std::string_view operation,
+    const std::string_view property,
+    const runtime::simir::ClassMethodHook hook,
     const std::span<const runtime::PackedLogic4> actuals)
 {
     return class_execution.invoke_class_container(
-        receiver, operation, actuals);
+        receiver, property, hook, actuals);
 }
 
 [[nodiscard]] runtime::PackedLogic4 Simulation::Impl::invoke_checked_class_cast(
     const runtime::SystemVerilogClassHandle handle,
-    const std::string_view operation) const
+    const std::string_view owner_identity) const
 {
-    return class_execution.invoke_checked_class_cast(handle, operation);
+    return class_execution.invoke_checked_class_cast(handle, owner_identity);
 }
 
 [[nodiscard]] std::pair<std::string_view, std::string_view>
@@ -2554,7 +2516,7 @@ std::string Simulation::Impl::static_property_specialization(
     return class_heap.allocate(descriptor);
 }
 
-std::string Simulation::Impl::service_construct_identity(
+runtime::simir::ClassConstruction Simulation::Impl::service_construction(
     const std::string_view specialization)
 {
     const auto& selected = class_specialization(specialization);
@@ -2562,13 +2524,14 @@ std::string Simulation::Impl::service_construct_identity(
         || !is_systemverilog_uvm_type(
             built.compiled_systemverilog_class_specializations, selected,
             support::UvmRole::object)) {
-        return std::string { specialization };
+        return runtime::simir::ClassConstruction::run_constructor;
     }
-    return "@service-construct:" + std::string { specialization };
+    return runtime::simir::ClassConstruction::service;
 }
 
 [[nodiscard]] runtime::SystemVerilogClassHandle Simulation::Impl::construct_class(
     const std::string_view specialization_identity,
+    const runtime::simir::ClassConstruction construction,
     const std::string_view declared_type,
     const std::span<const runtime::PackedLogic4> actuals,
     const std::span<const std::string> string_actuals,
@@ -2579,28 +2542,18 @@ std::string Simulation::Impl::service_construct_identity(
     const runtime::SystemVerilogClassHandle owner_context_handle,
     const std::optional<runtime::simir::ProcessId> report_process)
 {
-    // `@no-constructor:` allocates the object for a constructor the
-    // elaborated process runs itself.
-    constexpr std::string_view lowered_constructor { "@no-constructor:" };
-    // `@api-construct:` allocates a UVM object for the API: its constructor
-    // chain runs as generated code in the dispatch process.
-    constexpr std::string_view api_constructor { "@api-construct:" };
-    // `@service-construct:` is the same for a host service a design process
-    // can call (clone, the factory): inside the running design the calling
-    // process runs the chain, so the object waits for it.
-    constexpr std::string_view service_constructor { "@service-construct:" };
-    const bool service_chain
-        = specialization_identity.starts_with(service_constructor);
-    bool api_chain = service_chain
-        || specialization_identity.starts_with(api_constructor);
-    bool run_constructor
-        = !api_chain && !specialization_identity.starts_with(lowered_constructor);
-    const auto identity = api_chain
-        ? specialization_identity.substr(service_chain
-              ? service_constructor.size() : api_constructor.size())
-        : run_constructor
-        ? specialization_identity
-        : specialization_identity.substr(lowered_constructor.size());
+    // A lowered constructor allocates the object for a constructor the
+    // elaborated process runs itself. An API construction allocates a UVM
+    // object for the API: its constructor chain runs as generated code in
+    // the dispatch process. A service construction is the same for a host
+    // service a design process can call (clone, the factory): inside the
+    // running design the calling process runs the chain, so the object
+    // waits for it.
+    using Construction = runtime::simir::ClassConstruction;
+    const bool service_chain = construction == Construction::service;
+    bool api_chain = service_chain || construction == Construction::api;
+    bool run_constructor = construction == Construction::run_constructor;
+    const auto identity = specialization_identity;
     const auto& specialization = class_specialization(identity);
     // A construction the host makes outside the running design (the API,
     // the factory's and clone services called from the host) runs the
@@ -3077,7 +3030,8 @@ runtime::SystemVerilogClassHandle Simulation::Impl::allocate_uvm_lowered(
         return { };
     }
     return construct_class(
-        "@no-constructor:" + registered.specialization_identity,
+        registered.specialization_identity,
+        runtime::simir::ClassConstruction::lowered_constructor,
         registered.declaration_identity,
         std::span<const runtime::PackedLogic4> { },
         std::span<const std::string> { },
@@ -3135,7 +3089,8 @@ void Simulation::Impl::construct_uvm_component_ports(
             const std::array<std::string, 2U> names {
                 property.name, std::string { } };
             const auto created = construct_class(
-                "@no-constructor:" + std::string { identity },
+                identity,
+                runtime::simir::ClassConstruction::lowered_constructor,
                 class_specialization(identity).declaration_identity,
                 actuals, names, std::span<const std::string> { },
                 allocation_scope);
@@ -3622,7 +3577,7 @@ void Simulation::Impl::register_foreign_net_delays(
     if (nets.empty()) {
         return;
     }
-    // The copy drivers (split_sdf_net_delays names them ".$mipd_driver"):
+    // The copy drivers (split_sdf_net_delays makes them, origin mipd_driver):
     // a load whose drivers read the net itself has one delay for every
     // source, which the net's change already carries to the copy. A load
     // whose drivers read shadows of the net (one for each group of sources)
@@ -3635,7 +3590,7 @@ void Simulation::Impl::register_foreign_net_delays(
     for (std::size_t index = 0U; index < design_process_count; ++index) {
         const auto driver = running_process(static_cast<ProcessId>(index));
         const auto& program = target.process_program(driver);
-        if (program.name.find(".$mipd_driver") == std::string::npos) {
+        if (program.origin != support::GeneratedObjectOrigin::mipd_driver) {
             continue;
         }
         std::optional<SignalId> read;

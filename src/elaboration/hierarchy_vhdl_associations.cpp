@@ -1028,7 +1028,8 @@ HierarchyBuilder::compiled_vhdl_component_port_signals(
                 context.working_read_only_signals, context.string_objects,
                 context.read_only_strings, context.container_objects,
                 context.read_only_containers, context.specialization_id,
-                context.concurrent_order, nullptr, ".$local_");
+                context.concurrent_order, nullptr,
+                support::GeneratedObjectOrigin::local_signal);
             if (!local) {
                 failed = true;
                 return signals;

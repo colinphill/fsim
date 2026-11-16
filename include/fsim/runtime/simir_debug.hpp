@@ -10,6 +10,16 @@ enum class DebugLocalStorage : std::uint8_t {
   container,
 };
 
+/// What a debug local stands for: a declared variable or formal, the value a
+/// system function with state returned (a probe-only slot that the execution
+/// probes read and nothing else depends on), or a local of a call frame that
+/// the frame-local table holds.
+enum class DebugLocalRole : std::uint8_t {
+  variable,
+  call_value,
+  frame_local,
+};
+
 struct DebugLocal {
   std::string name;
   std::string type_name;
@@ -27,14 +37,15 @@ struct DebugLocal {
   // 6.12); none for a user-defined type, whose name type_name holds.
   support::SystemVerilogBuiltinType systemverilog_builtin{
       support::SystemVerilogBuiltinType::none};
+  DebugLocalRole role{DebugLocalRole::variable};
 };
 
-/// The slot name of the value a system function with state returned
-/// (`<function>.@value@<line>:<column>`): a probe-only slot that the
-/// execution probes read and nothing else depends on.
+/// Whether the local is the slot of the value a system function with state
+/// returned: a probe-only slot that the execution probes read and nothing
+/// else depends on.
 [[nodiscard]] inline bool is_system_call_value_slot(const DebugLocal& local)
 {
-  return local.name.find(".@value@") != std::string::npos;
+  return local.role == DebugLocalRole::call_value;
 }
 
 /// Whether a call-result table holds the result register of a user function

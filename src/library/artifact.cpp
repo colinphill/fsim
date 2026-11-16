@@ -351,7 +351,6 @@ std::optional<Metadata> parse_metadata(
       dependency = &metadata.dependencies.back();
       section = Section::root;
       section_keys.clear();
-      section_keys.insert("@dependency");
       continue;
     }
     if (line == "[[standard]]") {

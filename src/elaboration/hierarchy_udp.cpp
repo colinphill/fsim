@@ -449,6 +449,7 @@ public:
         process_.name = std::move(path) + (declaration.sequential
                 ? ".$udp_state"
                 : ".$udp");
+        process_.origin = support::GeneratedObjectOrigin::udp_table_process;
         process_.language_standard = declaration.standard;
         process_.compatibility_profile = declaration.compatibility_profile;
         process_.scheduling_domain
@@ -931,6 +932,8 @@ bool HierarchyBuilder::instantiate_compiled_udp(
         info.source_domain = frontend::ValueDomain::Logic4;
         info.is_port = is_port;
         info.direction = direction;
+        info.origin = is_port ? support::GeneratedObjectOrigin::none
+                              : support::GeneratedObjectOrigin::udp_signal;
         info.declaration_span = compiled_source_span(
             *compiled_, declaration.source);
         design_.signal_info_.push_back(std::move(info));
@@ -1177,6 +1180,7 @@ bool HierarchyBuilder::instantiate_compiled_udp(
         process.id = static_cast<runtime::simir::ProcessId>(
             design_.process_count());
         process.name = path + ".$udp_input_" + std::to_string(order);
+        process.origin = support::GeneratedObjectOrigin::udp_input_process;
         process.language_standard = declaration.standard;
         process.compatibility_profile = declaration.compatibility_profile;
         process.scheduling_domain
@@ -1222,6 +1226,7 @@ bool HierarchyBuilder::instantiate_compiled_udp(
         process.id = static_cast<runtime::simir::ProcessId>(
             design_.process_count());
         process.name = path + ".$udp_output";
+        process.origin = support::GeneratedObjectOrigin::udp_output_process;
         process.language_standard = declaration.standard;
         process.compatibility_profile = declaration.compatibility_profile;
         process.scheduling_domain

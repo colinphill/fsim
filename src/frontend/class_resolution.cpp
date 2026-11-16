@@ -464,7 +464,7 @@ void resolve_declaration_types(
               effective_library(unit.library) + "::" + unit.name + "::";
           const bool lexical =
               declaration.canonical_identity.starts_with(prefix)
-              || (unit.name.starts_with("fsim_unit_")
+              || (unit.systemverilog_compilation_unit_package
                   && unit.compilation_unit_identity
                       == owner.compilation_unit_identity);
           if (!lexical) continue;

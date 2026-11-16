@@ -11,6 +11,7 @@
 #include "fsim/runtime/simir_shared_vector.hpp"
 #include "fsim/runtime/sva_storage.hpp"
 #include "fsim/runtime/systemverilog_scalar.hpp"
+#include "fsim/support/generated_object_origin.hpp"
 #include "fsim/support/rare_vector.hpp"
 #include "fsim/support/sva_marker.hpp"
 #include <algorithm>
@@ -2095,6 +2096,11 @@ struct Process {
         ProcessSchedulingDomain::generic
     };
     ProcessStartupPhase startup_phase { ProcessStartupPhase::ordinary };
+    // The elaboration step that made this process for no process of the
+    // source; `none` for a process of the source.
+    support::GeneratedObjectOrigin origin {
+        support::GeneratedObjectOrigin::none
+    };
     std::uint64_t startup_order { };
     /// Opaque design-local semantic unit identity of a package initializer.
     /// Zero is reserved for processes outside package startup.

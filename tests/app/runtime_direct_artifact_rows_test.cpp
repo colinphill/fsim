@@ -96,7 +96,7 @@ void test_tagged_fork_runtime_roundtrip()
 
 void test_schema_and_direct_row_roundtrip()
 {
-    assert(fsim::app::kRuntimeStateSchema == 128U);
+    assert(fsim::app::kRuntimeStateSchema == 129U);
     const auto source_bytes = encode_startup_metadata_design();
     assert(source_bytes.has_value());
     const auto wire_payload = read_runtime_wire_payload(*source_bytes);

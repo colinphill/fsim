@@ -60,11 +60,12 @@ SystemVerilogClassExecution::component_root(
 runtime::PackedLogic4
 SystemVerilogClassExecution::invoke_source_randomization_mode(
     const runtime::SystemVerilogClassHandle handle,
-    const std::string_view method,
+    const bool random_mode,
+    const std::string_view target,
     const std::span<const runtime::PackedLogic4> actuals)
 {
     return application_detail::invoke_systemverilog_randomization_mode(
-        heap_, handle, method, actuals);
+        heap_, handle, random_mode, target, actuals);
 }
 
 runtime::PackedLogic4 SystemVerilogClassExecution::resize_packed(
@@ -87,43 +88,26 @@ runtime::PackedLogic4 SystemVerilogClassExecution::packed_property_value(
 
 runtime::PackedLogic4 SystemVerilogClassExecution::invoke_class_container(
     const runtime::SystemVerilogClassHandle receiver,
-    const std::string_view operation,
+    const std::string_view property_identity,
+    const runtime::simir::ClassMethodHook hook,
     const std::span<const runtime::PackedLogic4> actuals)
 {
-    constexpr std::string_view read_prefix { "@container-read:" };
-    constexpr std::string_view write_prefix { "@container-write:" };
-    constexpr std::string_view resize_prefix { "@container-resize:" };
-    constexpr std::string_view push_back_prefix {
-        "@container-push-back:"
-    };
-    constexpr std::string_view pop_front_prefix {
-        "@container-pop-front:"
-    };
-    constexpr std::string_view pop_back_prefix {
-        "@container-pop-back:"
-    };
-    constexpr std::string_view size_prefix { "@container-size:" };
-    const auto prefix = operation.starts_with(read_prefix)
-        ? read_prefix
-        : operation.starts_with(write_prefix)
-        ? write_prefix
-        : operation.starts_with(resize_prefix)
-        ? resize_prefix
-        : operation.starts_with(push_back_prefix)
-        ? push_back_prefix
-        : operation.starts_with(pop_front_prefix)
-        ? pop_front_prefix
-        : operation.starts_with(pop_back_prefix)
-        ? pop_back_prefix
-        : operation.starts_with(size_prefix)
-        ? size_prefix
-        : std::string_view { };
-    if (prefix.empty()) {
+    using Hook = runtime::simir::ClassMethodHook;
+    switch (hook) {
+    case Hook::container_read:
+    case Hook::container_write:
+    case Hook::container_resize:
+    case Hook::container_push_back:
+    case Hook::container_pop_front:
+    case Hook::container_pop_back:
+    case Hook::container_size:
+        break;
+    default:
         throw std::invalid_argument {
             "unknown class handle container operation"
         };
     }
-    auto& property = heap_.property(receiver, operation.substr(prefix.size()));
+    auto& property = heap_.property(receiver, property_identity);
     if (!property.handle_container) {
         throw std::invalid_argument {
             "class property is not a handle container"
@@ -144,7 +128,7 @@ runtime::PackedLogic4 SystemVerilogClassExecution::invoke_class_container(
         }
         return word.aval;
     };
-    if (prefix == resize_prefix) {
+    if (hook == Hook::container_resize) {
         if (actuals.size() != 1U
             || !std::in_range<std::size_t>(known_word(0))) {
             throw std::length_error {
@@ -154,7 +138,7 @@ runtime::PackedLogic4 SystemVerilogClassExecution::invoke_class_container(
         container.resize(static_cast<std::size_t>(known_word(0)));
         return runtime::PackedLogic4::from_aval_bval(64, 0, 0);
     }
-    if (prefix == push_back_prefix) {
+    if (hook == Hook::container_push_back) {
         if (actuals.size() != 1U) {
             throw std::invalid_argument {
                 "class handle queue push_back has inconsistent actuals"
@@ -164,18 +148,19 @@ runtime::PackedLogic4 SystemVerilogClassExecution::invoke_class_container(
         container.push_back(heap_, value);
         return runtime::PackedLogic4::from_aval_bval(64, value, 0);
     }
-    if (prefix == pop_front_prefix || prefix == pop_back_prefix) {
+    if (hook == Hook::container_pop_front
+        || hook == Hook::container_pop_back) {
         if (!actuals.empty()) {
             throw std::invalid_argument {
                 "class handle queue pop has inconsistent actuals"
             };
         }
         return runtime::PackedLogic4::from_aval_bval(64,
-            prefix == pop_front_prefix ? container.pop_front()
+            hook == Hook::container_pop_front ? container.pop_front()
                                        : container.pop_back(),
             0);
     }
-    if (prefix == size_prefix) {
+    if (hook == Hook::container_size) {
         if (!actuals.empty()) {
             throw std::invalid_argument {
                 "class handle container size has inconsistent actuals"
@@ -184,7 +169,7 @@ runtime::PackedLogic4 SystemVerilogClassExecution::invoke_class_container(
         return runtime::PackedLogic4::from_aval_bval(
             32, container.size(), 0);
     }
-    if (actuals.size() != (prefix == read_prefix ? 1U : 2U)) {
+    if (actuals.size() != (hook == Hook::container_read ? 1U : 2U)) {
         throw std::invalid_argument {
             "class handle container operation has inconsistent actuals"
         };
@@ -194,7 +179,7 @@ runtime::PackedLogic4 SystemVerilogClassExecution::invoke_class_container(
             == runtime::SystemVerilogClassContainerKind::AssociativeArray
         || container.kind()
             == runtime::SystemVerilogClassContainerKind::UnpackedAggregate;
-    if (prefix == read_prefix) {
+    if (hook == Hook::container_read) {
         const auto value = keyed
             ? container.at(std::to_string(index))
             : container.at(static_cast<std::size_t>(index));
@@ -211,11 +196,10 @@ runtime::PackedLogic4 SystemVerilogClassExecution::invoke_class_container(
 runtime::PackedLogic4
 SystemVerilogClassExecution::invoke_checked_class_cast(
     const runtime::SystemVerilogClassHandle handle,
-    const std::string_view operation) const
+    const std::string_view owner_identity) const
 {
-    constexpr std::string_view prefix { "@checked-cast:" };
     try {
-        (void)heap_.checked_cast(handle, operation.substr(prefix.size()));
+        (void)heap_.checked_cast(handle, owner_identity);
         return runtime::PackedLogic4::from_aval_bval(1, 1, 0);
     } catch (const std::invalid_argument&) {
         return runtime::PackedLogic4::from_aval_bval(1, 0, 0);

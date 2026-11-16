@@ -1540,6 +1540,7 @@ namespace {
                 descriptor.ordinal,
                 std::move(descriptor.name_prefix),
                 descriptor.anonymous,
+                descriptor.compilation_unit,
             });
         if (!created) {
             const auto existing = registry.find(identity);
@@ -1631,19 +1632,10 @@ void defer_child(runtime::SystemVerilogVpiObjectRegistry& registry,
         process_type, project, specialization);
     apply_vpi_source(process_type, project, process.source);
     descriptor.type = process_type;
+    // A process the frontend or the elaborator generated (a declaration or
+    // event initializer) is never published, so a name here is a source
+    // name.
     auto published_name = std::move(name);
-    // An elaborator process named after an escaped declaration
-    // (`$declaration_initializer_\a.b `) holds the escaped identifier's
-    // period or terminating white space, which a simple identifier cannot
-    // (IEEE 1800-2023 5.6.1): it is published under its process number, as
-    // the elaborator's other unnamed processes are.
-    if (published_name.starts_with('$')
-        && std::ranges::any_of(published_name, [](const char character) {
-               return character == '.'
-                   || std::isspace(static_cast<unsigned char>(character)) != 0;
-           })) {
-        published_name = "$process_" + std::to_string(process.runtime_index);
-    }
     descriptor.name_prefix = std::move(name_prefix);
     // A checker-expanded assertion's name is unique under its prefix.
     for (std::uint32_t collision = 0U; descriptor.name_prefix.empty();
@@ -2861,7 +2853,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             // package and are published there under their own names.
             if (dpi.direction != semantic::sv::DpiDirection::import
                 || !dpi.validated || dpi.systemverilog_name.empty()
-                || (in_package && unit.name.starts_with("fsim_unit_"))) {
+                || (in_package && unit.compilation_unit_package)) {
                 continue;
             }
             publish_scope(dpi.callable_kind == semantic::sv::DpiCallableKind::function
@@ -3116,14 +3108,15 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         }
     }
     std::ranges::stable_partition(package_units, [](const auto* unit) {
-        return unit->name.starts_with("fsim_unit_");
+        return unit->compilation_unit_package;
     });
     const bool vpi_language_present = !relevant_specializations.empty();
     fsim_vpi_handle_v1 unit_stub { };
     if (vpi_language_present && (package_units.empty()
-            || !package_units.front()->name.starts_with("fsim_unit_"))) {
+            || !package_units.front()->compilation_unit_package)) {
         runtime::SystemVerilogVpiObjectDescriptor descriptor;
         descriptor.kind = runtime::SystemVerilogVpiObjectKind::Package;
+        descriptor.compilation_unit = true;
         descriptor.name = "fsim_unit_";
         descriptor.type = runtime::SystemVerilogVpiTypeInfo { };
         unit_stub = create_checked(
@@ -3134,6 +3127,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         const auto& unit = *package_unit;
         runtime::SystemVerilogVpiObjectDescriptor descriptor;
         descriptor.kind = runtime::SystemVerilogVpiObjectKind::Package;
+        descriptor.compilation_unit = unit.compilation_unit_package;
         descriptor.name = unit.name;
         runtime::SystemVerilogVpiTypeInfo type;
         if (const auto revision = project.verilog_unit_revisions.find(
@@ -3164,7 +3158,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         std::vector<fsim_vpi_handle_v1> unit_packages;
         std::vector<const semantic::sv::Unit*> unit_package_units;
         for (const auto* const package_unit : package_units) {
-            if (package_unit->name.starts_with("fsim_unit_")) {
+            if (package_unit->compilation_unit_package) {
                 unit_packages.push_back(
                     packages.at(package_unit->name));
                 unit_package_units.push_back(package_unit);
@@ -4101,10 +4095,11 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             || (object.declaration_value
                 && synthesized_values.contains(
                     object.declaration_value->value()))
-            || (object.runtime_index < project.design.signals().size()
-                && project.design.signals()
-                       .at(static_cast<std::size_t>(object.runtime_index))
-                       .generated)) {
+            // The value a monitor watches is no object of the design; the
+            // other signals the elaborator makes (port adapters, delayed
+            // copies) are what connectivity and driver queries reach.
+            || object.origin
+                == support::GeneratedObjectOrigin::monitored_value) {
             continue;
         }
         const auto& specialization = project.design_ir.specializations().at(
@@ -4883,7 +4878,8 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             || object.kind != semantic::design::ObjectKind::string
             || object.runtime_index
                 > std::numeric_limits<runtime::simir::StringObjectId>::max()
-            || object.name.empty() || object.name.starts_with('$')
+            || object.name.empty()
+            || object.origin != support::GeneratedObjectOrigin::none
             || object.name.starts_with('@')
             || (object.declaration_value
                 && synthesized_values.contains(

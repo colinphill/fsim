@@ -44,6 +44,11 @@ namespace sv = semantic::sv;
 [[nodiscard]] inline sv::CallKind systemverilog_call_kind(
     const frontend::Expression& input) noexcept
 {
+    // The generated assertion monitor calls are system functions of the
+    // generated assertion processes.
+    if (support::sva_monitor_call(input.marker)) {
+        return sv::CallKind::system;
+    }
     return input.marker == support::ExpressionMarker::none
         ? systemverilog_call_kind(input.text)
         : sv::CallKind::user;

@@ -123,6 +123,7 @@ vhdl_character_control_literal_code(const std::string_view name)
 [[nodiscard]] inline std::string vhdl_package_object_key(
     const semantic::DeclarationId instance, const std::string_view name)
 {
+    // ITEM46-LEFT: binding key string of a VHDL package-instance object in the design name maps; needs a typed key in those maps
     return "@pkgobj:" + std::to_string(instance.value()) + "."
         + lowercase_ascii_copy(name);
 }
@@ -134,6 +135,7 @@ vhdl_character_control_literal_code(const std::string_view name)
     const std::span<const semantic::DeclarationId> path,
     const std::string_view name)
 {
+    // ITEM46-LEFT: binding key string of a VHDL package-instance object in the design name maps; needs a typed key in those maps
     std::string key { "@pkgobj:" };
     for (const auto instance : path) {
         key += std::to_string(instance.value());

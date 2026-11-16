@@ -746,6 +746,10 @@ namespace systemverilog_hir_detail {
             return sv::ExpressionKind::class_static_property;
         case support::ExpressionMarker::sv_method:
         case support::ExpressionMarker::sv_base_method:
+        case support::ExpressionMarker::builtin_randomize:
+        case support::ExpressionMarker::builtin_rand_mode:
+        case support::ExpressionMarker::builtin_constraint_mode:
+        case support::ExpressionMarker::builtin_get_randstate:
             return sv::ExpressionKind::class_method_call;
         case support::ExpressionMarker::sv_static_method:
             return sv::ExpressionKind::class_static_method_call;
@@ -1452,6 +1456,8 @@ namespace systemverilog_hir_detail {
         output.scope = common.scope;
         output.kind = unit_kind(input.kind);
         output.external = input.systemverilog_extern;
+        output.compilation_unit_package
+            = input.systemverilog_compilation_unit_package;
         output.library = input.library;
         output.name = input.name;
         output.port_slots = input.systemverilog_port_slots;
@@ -1566,6 +1572,8 @@ namespace systemverilog_hir_detail {
                 input_import.name.empty(),
                 source(input_import.span) };
             imported.source_order = input_import.systemverilog_source_order;
+            imported.compilation_unit_package
+                = input_import.compilation_unit_package;
             output.imports.push_back(std::move(imported));
         }
         for (const auto& input_export : input.systemverilog_exports) {

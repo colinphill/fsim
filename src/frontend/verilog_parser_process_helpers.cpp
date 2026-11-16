@@ -234,11 +234,10 @@ Statement VerilogParser::parse_case_statement(
                     auto high = parse_expression();
                     expect(TokenKind::RightBracket, "']' after case inside range",
                         "FSIM-SV-PARSE-182");
-                    alternative.choices.push_back(Expression {
-                        ExpressionKind::Call,
-                        "@inside-range",
+                    alternative.choices.push_back(marked_expression(
+                        support::ExpressionMarker::inside_range, { },
                         { std::move(low), std::move(high) },
-                        cover(range_start.span, previous().span) });
+                        cover(range_start.span, previous().span)));
                     return;
                 }
                 alternative.choices.push_back(parse_expression());

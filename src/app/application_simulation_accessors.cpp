@@ -1130,7 +1130,7 @@ runtime::SystemVerilogClassHandle Simulation::allocate_uvm_component(
     };
     std::array string_actuals { std::move(name), std::string { } };
     const auto handle = impl_->construct_class(
-        "@api-construct:" + std::string { specialization_identity },
+        specialization_identity, runtime::simir::ClassConstruction::api,
         declared_type, actuals, string_actuals,
         std::span<const std::string> { }, "$api", root);
     if (impl_->uvm_components.contains(handle))

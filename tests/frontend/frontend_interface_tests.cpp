@@ -1623,7 +1623,8 @@ endmodule
     const auto is_monitor_tick = [](const Statement& statement) {
         return statement.kind == StatementKind::Assignment
             && statement.value.kind == ExpressionKind::Call
-            && statement.value.text == "$__fsim_sva_tick";
+            && statement.value.marker
+                == fsim::support::ExpressionMarker::sva_tick;
     };
     const auto find_process = [](const auto& result, std::string_view name) {
         const Process* found { nullptr };

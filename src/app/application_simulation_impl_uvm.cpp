@@ -585,7 +585,9 @@ runtime::SystemVerilogClassHandle Simulation::Impl::uvm_root_report_handle()
             built.compiled_systemverilog_class_specializations,
             support::UvmRole::report_object);
         uvm_root_report_object = construct_class(
-            "@no-constructor:" + report_object, report_object,
+            report_object,
+            runtime::simir::ClassConstruction::lowered_constructor,
+            report_object,
             std::span<const runtime::PackedLogic4> { },
             std::span<const std::string> { },
             std::span<const std::string> { }, "$uvm-root");
@@ -600,7 +602,9 @@ runtime::SystemVerilogClassHandle Simulation::Impl::uvm_singleton(
     auto found = uvm_singletons.find(identity);
     if (found == uvm_singletons.end()) {
         found = uvm_singletons.emplace(identity,
-            construct_class("@no-constructor:" + identity, identity,
+            construct_class(identity,
+                runtime::simir::ClassConstruction::lowered_constructor,
+                identity,
                 std::span<const runtime::PackedLogic4> { },
                 std::span<const std::string> { },
                 std::span<const std::string> { }, "$uvm-root")).first;
@@ -790,6 +794,7 @@ std::optional<runtime::PackedLogic4> Simulation::Impl::invoke_uvm_root_method(
         return runtime::PackedLogic4::from_aval_bval(32, value ? 1U : 0U, 0);
     };
     const bool string_result = !actual_names.empty()
+        // ITEM46-LEFT: the trailing string actual of a call is marked by a reserved actual name that travels through every class hook, the VPI and VHPI call models and the class executor; a typed result flag on the call operations and the hook signatures is needed
         && actual_names.back() == "@result-string" && !string_actuals.empty();
     const auto name_argument = [&]() -> std::string {
         return string_actuals.empty() ? std::string { } : string_actuals.front();

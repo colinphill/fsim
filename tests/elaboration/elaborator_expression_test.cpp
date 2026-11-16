@@ -2074,7 +2074,8 @@ endmodule
         != malformed.mutable_systemverilog().mutable_expressions().end());
     malformed_expression->kind
         = fsim::semantic::sv::ExpressionKind::call;
-    malformed_expression->text = "@inside-range";
+    malformed_expression->text.clear();
+    malformed_expression->marker = fsim::support::ExpressionMarker::inside_range;
     malformed_expression->operands.clear();
     malformed.refresh_lookup_indexes();
     const auto malformed_result = fsim::elaboration::elaborate(

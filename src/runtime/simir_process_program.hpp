@@ -72,6 +72,9 @@ struct ProcessInstanceProgram {
     bool postponed { };
     bool final { };
     ProcessStartupPhase startup_phase { ProcessStartupPhase::ordinary };
+    support::GeneratedObjectOrigin origin {
+        support::GeneratedObjectOrigin::none
+    };
     std::uint64_t startup_order { };
     std::uint32_t startup_package_owner_id { };
     std::vector<std::uint32_t> startup_writable_package_owner_ids;
@@ -232,6 +235,8 @@ public:
         scheduling_domain() const noexcept;
     [[nodiscard]] const ProcessStartupPhase&
         startup_phase() const noexcept;
+    [[nodiscard]] const support::GeneratedObjectOrigin&
+        origin() const noexcept;
     [[nodiscard]] const std::uint64_t& startup_order() const noexcept;
     [[nodiscard]] const std::uint32_t&
     startup_package_owner_id() const noexcept;

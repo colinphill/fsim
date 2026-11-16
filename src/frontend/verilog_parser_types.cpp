@@ -1480,6 +1480,7 @@ std::optional<Type> VerilogParser::parse_type_operator_type()
         result = parse_parameter_type();
     } else {
         auto expression = parse_expression();
+        // ITEM46-LEFT: placeholder type spelling of a type(expr) operator; the typed carrier systemverilog_type_of exists but an empty spelling reads as an implicit type in frontend resolution, which needs an audit of every empty-spelling test
         set_systemverilog_type_name(result, "@type-of");
         result.named_type_span = cover(start.span, expression.span);
         result.systemverilog_type_of

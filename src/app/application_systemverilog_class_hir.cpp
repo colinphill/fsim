@@ -466,32 +466,37 @@ sv::ConstraintExpressionKind SystemVerilogHirBuilder::constraint_kind(
     case FrontendKind::Conditional:
         return HirKind::conditional;
     case FrontendKind::Call:
+        switch (input.marker) {
+        case support::ExpressionMarker::inside_range:
+            return HirKind::inside_range;
+        case support::ExpressionMarker::constraint_dist_equal:
+        case support::ExpressionMarker::constraint_dist_divide:
+            return HirKind::distribution_item;
+        case support::ExpressionMarker::constraint_block:
+            return HirKind::constraint_block;
+        case support::ExpressionMarker::constraint_implies:
+            return HirKind::implication;
+        case support::ExpressionMarker::constraint_if:
+            return HirKind::conditional_constraint;
+        case support::ExpressionMarker::constraint_foreach:
+            return HirKind::foreach_constraint;
+        case support::ExpressionMarker::constraint_solve_before:
+            return HirKind::solve_before;
+        case support::ExpressionMarker::constraint_solve_list:
+            return HirKind::solve_list;
+        case support::ExpressionMarker::constraint_unique:
+            return HirKind::unique_constraint;
+        default:
+            break;
+        }
         if (input.text == "?:")
             return HirKind::conditional;
         if (input.text == "inside")
             return HirKind::inside_set;
-        if (input.text == "@inside-range")
-            return HirKind::inside_range;
         if (input.text == "dist")
             return HirKind::distribution;
-        if (input.text == "@dist-:=" || input.text == "@dist-:/")
-            return HirKind::distribution_item;
         if (input.text == "soft")
             return HirKind::soft;
-        if (input.text == "@constraint-block")
-            return HirKind::constraint_block;
-        if (input.text == "@constraint-implies")
-            return HirKind::implication;
-        if (input.text == "@constraint-if")
-            return HirKind::conditional_constraint;
-        if (input.text == "@constraint-foreach")
-            return HirKind::foreach_constraint;
-        if (input.text == "@solve-before")
-            return HirKind::solve_before;
-        if (input.text == "@solve-list")
-            return HirKind::solve_list;
-        if (input.text == "@constraint-unique")
-            return HirKind::unique_constraint;
         return HirKind::call;
     }
     return HirKind::invalid;
@@ -1501,6 +1506,8 @@ semantic::ScopeId SystemVerilogHirBuilder::class_parent_scope(
                 input_import.name.empty(),
                 source(input_import.span) };
             imported.source_order = input_import.systemverilog_source_order;
+            imported.compilation_unit_package
+                = input_import.compilation_unit_package;
             unit.imports.push_back(std::move(imported));
         }
     };

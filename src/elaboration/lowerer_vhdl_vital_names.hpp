@@ -64,10 +64,6 @@ namespace fsim::elaboration::vital_detail {
         return std::nullopt;
     }
     auto name = std::string_view { expression.text };
-    constexpr std::string_view prefix { "@fsim-enum:" };
-    if (name.starts_with(prefix)) {
-        name.remove_prefix(prefix.size());
-    }
     return vital_simple_name(name);
 }
 

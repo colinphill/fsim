@@ -78,7 +78,7 @@ bool is_connection(const Process& process)
 {
     const auto leaf = leaf_of(process.name);
     return leaf.starts_with("port_actual_") || leaf.starts_with("port_result_")
-        || leaf.starts_with("$inout_");
+        || process.origin == support::GeneratedObjectOrigin::inout_adapter;
 }
 
 // The signals a connection process takes its value from: what it reads (its
@@ -288,7 +288,7 @@ std::string rename_reads(Process& process,
         || (process.switch_bidirectional && named(process.switch_source))) {
         // The inout port's own connection to a select or concatenation of
         // its actual is a connection of the net, not a switch of the design.
-        if (leaf_of(process.name).starts_with("$inout_")
+        if (process.origin == support::GeneratedObjectOrigin::inout_adapter
             && named(process.switch_target) && !named(process.switch_source)) {
             return { };
         }
@@ -730,7 +730,7 @@ SdfNetDelaySplitResult split_sdf_net_delays(ElaboratedDesignState& state)
     // The drivers of each signal, by process.
     std::map<SignalId, std::vector<ProcessId>> writers_of;
     for (const auto& process : state.processes) {
-        if (process.name.find(".$mipd_driver") != std::string::npos) {
+        if (process.origin == support::GeneratedObjectOrigin::mipd_driver) {
             continue;
         }
         const auto add = [&](const SignalId signal) {
@@ -1053,7 +1053,7 @@ SdfNetDelaySplitResult split_sdf_net_delays(ElaboratedDesignState& state)
             ++index) {
             const auto& process = state.processes[index];
             // The delayed copies of an earlier split read the net itself.
-            if (process.name.find(".$mipd_driver") != std::string::npos) {
+            if (process.origin == support::GeneratedObjectOrigin::mipd_driver) {
                 continue;
             }
             std::map<SignalId, SignalId> renames;
@@ -1213,7 +1213,8 @@ SdfNetDelaySplitResult split_sdf_net_delays(ElaboratedDesignState& state)
     // as the net resolves its drivers.
     using namespace runtime::simir;
     const auto copy_signal = [&](const SignalId net, const SignalId id,
-                                 std::string name, const bool resolves) {
+                                 std::string name, const bool resolves,
+                                 const support::GeneratedObjectOrigin origin) {
         auto signal = state.signals[net];
         signal.name = name;
         if (!resolves) {
@@ -1244,12 +1245,13 @@ SdfNetDelaySplitResult split_sdf_net_delays(ElaboratedDesignState& state)
         info.name = std::move(name);
         info.is_port = false;
         info.direction = frontend::PortDirection::Unknown;
+        info.origin = origin;
         state.signals.push_back(std::move(signal));
         state.signal_info.push_back(std::move(info));
     };
     for (const auto& [key, load] : loads) {
         copy_signal(key.signal, copies.at(key), load.object + ".$mipd",
-            !load.groups.empty());
+            !load.groups.empty(), support::GeneratedObjectOrigin::mipd_copy);
     }
     // Each run of bits with equal delays has a driver of its own, like a
     // continuous assignment of that select (a select of the port delays only
@@ -1293,6 +1295,7 @@ SdfNetDelaySplitResult split_sdf_net_delays(ElaboratedDesignState& state)
                     + ".$mipd_driver" + tag
                     + (number == 0U ? std::string { }
                                     : '.' + std::to_string(number));
+                process.origin = support::GeneratedObjectOrigin::mipd_driver;
                 process.scheduling_domain
                     = ProcessSchedulingDomain::systemverilog;
                 process.drive_strength = feeds[number].strength;
@@ -1399,7 +1402,7 @@ SdfNetDelaySplitResult split_sdf_net_delays(ElaboratedDesignState& state)
                 copy_signal(signal, copy->second,
                     state.signals[signal].name + ".$mipd_source"
                         + std::to_string(group_copies.size() - 1U),
-                    false);
+                    false, support::GeneratedObjectOrigin::mipd_source);
             }
             known.emplace(signal, copy->second);
             return copy->second;
@@ -1477,6 +1480,7 @@ SdfNetDelaySplitResult split_sdf_net_delays(ElaboratedDesignState& state)
                 process.id = static_cast<ProcessId>(state.processes.size());
                 process.name += ".$mipd_clone"
                     + std::to_string(connection_copies.size() - 1U);
+                process.origin = support::GeneratedObjectOrigin::mipd_clone;
                 clone->second = process.id;
                 state.processes.push_back(std::move(process));
                 ++result.dual_written;
@@ -1642,7 +1646,7 @@ sdf_net_delay_retiming(
         }
     }
     for (const auto& process : processes) {
-        if (process.name.find(".$mipd_driver") == std::string::npos) {
+        if (process.origin != support::GeneratedObjectOrigin::mipd_driver) {
             continue;
         }
         if (const auto table = net_delay_of(process)) {
@@ -1773,6 +1777,7 @@ std::optional<SdfNetDelayGraft> plan_tranif_control_graft(
         info.name = signal.name;
         info.is_port = false;
         info.direction = frontend::PortDirection::Unknown;
+        info.origin = support::GeneratedObjectOrigin::switch_control;
         state.signals.push_back(std::move(signal));
         state.signal_info.push_back(std::move(info));
     }

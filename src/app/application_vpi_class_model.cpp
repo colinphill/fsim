@@ -61,8 +61,8 @@ struct SourcePlace {
 }
 
 
-// An internal marker call (a cast, a member select, `@inside-range`,
-// `@dist-:=`, ...) is no function call.
+// An internal marker call (a cast, a member select, an inside range, a dist
+// item, ...) is no function call.
 [[nodiscard]] bool marker_call(const sv::ConstraintExpression& expression)
 {
     return expression.marker != support::ExpressionMarker::none
@@ -414,7 +414,8 @@ namespace {
 [[nodiscard]] bool disable_soft(const sv::ConstraintExpression& expression)
 {
     return expression.kind == sv::ConstraintExpressionKind::call
-        && expression.text == "@disable-soft";
+        && expression.marker
+            == support::ExpressionMarker::constraint_disable_soft;
 }
 
 } // namespace
@@ -1686,7 +1687,9 @@ std::optional<std::int64_t> VpiClassModel::item_property(
         return node.soft ? 1 : 0;
     case vpiDistType:
         if (expression.kind == sv::ConstraintExpressionKind::distribution_item) {
-            return expression.text == "@dist-:/" ? vpiDivDist : vpiEqualDist;
+            return expression.marker
+                    == support::ExpressionMarker::constraint_dist_divide
+                ? vpiDivDist : vpiEqualDist;
         }
         return std::nullopt;
     case vpiOpType:

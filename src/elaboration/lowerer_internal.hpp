@@ -4709,6 +4709,11 @@ private:
     struct HirClassMethodProfile {
         semantic::DeclarationId declaration;
         std::string identity;
+        // The built-in method of a class object the call is (IEEE 1800-2023
+        // 18.6, 18.8, 18.9, 18.13.4); its identity is then empty, or the
+        // target of a mode call.
+        runtime::simir::ClassMethodHook builtin {
+            runtime::simir::ClassMethodHook::none };
         std::optional<semantic::ExpressionId> receiver;
         std::vector<HirClassMethodActual> actuals;
         std::size_t result_width { };
@@ -4732,8 +4737,8 @@ private:
         runtime::SystemVerilogConstraintTemplate>>
     // `runtime_values`, when given, receives each calling-scope name read
     // at the call; its template carries a placeholder constant operand
-    // that the runtime fills from the matching `@inline-value:` actual
-    // (IEEE 1800-2017 18.7).
+    // that the runtime fills from the matching inline-value actual (IEEE
+    // 1800-2017 18.7).
     hir_inline_constraints(
         semantic::ExpressionId expression,
         semantic::ScopeId process_scope,
@@ -5298,7 +5303,7 @@ private:
     // process (runtime::simir::SvaOperation).
     [[nodiscard]] std::optional<RegisterId> lower_hir_sva_call(
         const semantic::sv::Expression& call, std::size_t expected_width);
-    // `$__fsim_assertion_control(type, directive, "name")`: the assertion
+    // The assertion control call (type, directive, "name"): the assertion
     // control word of the concurrent assertion or expect statement the
     // frontend generated the call for.
     [[nodiscard]] std::optional<RegisterId> lower_hir_assertion_control_call(
@@ -6617,7 +6622,7 @@ private:
     std::set<std::pair<std::uint32_t, std::uint32_t>> sva_string_locals_;
     // The site's string table, made at its first use.
     const SvaStringTable& sva_string_table(std::uint32_t site);
-    // A string local's read (`$__fsim_sva_local` in a string context).
+    // A string local's read (the local call in a string context).
     [[nodiscard]] std::optional<StringRegisterId> lower_hir_sva_string_local(
         const semantic::sv::Expression& call);
     std::optional<runtime::SchedulerPhase>

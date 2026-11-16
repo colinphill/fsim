@@ -2405,6 +2405,12 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
             } else if (name == "$assertvacuousoff") {
                 statement.assertion_control = SystemVerilogAssertionControlKind::VacuousOff;
             }
+            if (start.marker != support::ExpressionMarker::none) {
+                // A generated name token: the callee's kind is the token's.
+                statement.task_marker = start.marker;
+                statement.task_marker_argument = start.marker_argument;
+                name.clear();
+            }
             statement.task_name = std::move(name);
             statement.systemverilog_task_class_selection
                 = std::move(class_selection);

@@ -333,6 +333,9 @@ struct SystemVerilogVpiObjectDescriptor {
     /// has no name and no full name, and neither it nor anything under it
     /// can be found by name (6.21).
     bool anonymous { };
+    /// A package that holds a design file's compilation-unit declarations
+    /// (`$unit`, IEEE 1800-2023 3.12.1).
+    bool compilation_unit { };
 };
 
 struct SystemVerilogVpiObjectInfo {
@@ -345,6 +348,7 @@ struct SystemVerilogVpiObjectInfo {
     std::string full_name;
     std::optional<SystemVerilogVpiSourceLocation> source;
     std::optional<SystemVerilogVpiTypeInfo> type;
+    bool compilation_unit { };
 };
 
 struct SystemVerilogVpiObjectResult {
@@ -638,6 +642,8 @@ private:
         std::string state_key { };
         // Its deferred children are created on demand (defer_children).
         bool on_demand_children { };
+        // SystemVerilogVpiObjectDescriptor::compilation_unit.
+        bool compilation_unit { };
     };
     struct IteratorRecord {
         std::uint16_t epoch { };

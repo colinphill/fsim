@@ -494,6 +494,10 @@ struct Expression {
     // callable profile yields one consistent type per implicit formal.
     std::vector<std::string> inferred_type_identities;
     bool unspecified_type_inference_unique { };
+    // A user-defined attribute occurrence replaced by the value of its
+    // specification (frontend Expression::vhdl_user_attribute_value);
+    // `nominal_type` then holds `entity:designator`.
+    bool user_attribute_value { };
     ResidualDependencies dependencies;
     bool folded { };
     BuiltinOperatorIdentity builtin_operator {
@@ -507,6 +511,9 @@ struct Expression {
     // the name of a predefined type whose declaration is not retained.
     std::optional<TypeId> resolved_type;
     std::string resolved_builtin_type;
+    // The pass found a character literal that fits more than one overload
+    // (12.5); no type is recorded for it.
+    bool ambiguous_literal { };
     // The function call this literal replaced when normalization folded a
     // static call (IEEE 1076-2019 9.4); the folded literal stays the value
     // that simulation uses, and only the VHPI static model reads the call
@@ -1258,6 +1265,7 @@ struct Unit {
 }
 
 /// Spelling prefix of a compiler-supplied (built-in) declaration name.
+// ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
 inline constexpr std::string_view builtin_prefix = "@builtin:";
 
 /// `spelling` without a leading builtin_prefix.

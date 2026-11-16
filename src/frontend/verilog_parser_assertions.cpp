@@ -1701,6 +1701,7 @@ void VerilogParser::declare_inline_property(
     }
     SystemVerilogAssertionDeclaration declaration;
     declaration.kind = SystemVerilogAssertionDeclarationKind::Property;
+    declaration.synthesized = true;
     const auto& first = assertion.property_tokens.front();
     declaration.name = "$inline_property$"
         + std::to_string(first.span.begin.offset) + "$"

@@ -1149,6 +1149,7 @@ namespace {
         Process process;
         process.kind = ProcessKind::VerilogAlways;
         process.name = "$coverage$" + instance.name;
+        process.synthesized = true;
         process.span = sampling.span;
         for (const auto* event_object : event_objects) {
             const auto position = static_cast<std::size_t>(

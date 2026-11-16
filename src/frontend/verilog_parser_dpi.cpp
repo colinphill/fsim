@@ -759,6 +759,10 @@ constexpr std::string_view dpi_serve_import =
 }
 
 // Whether a declaration is one of the hidden imports of an export service.
+// ITEM28-LEFT: the DPI export service is a name protocol end to end: the
+// parser generates the hidden imports and hooks as text, and the runtime
+// reads the mask and linkage out of their C identity; it needs a typed DPI
+// call identity (runtime operation fields, codec) before the names can go.
 [[nodiscard]] bool dpi_hidden_import(
     const SystemVerilogDpiDeclaration& declaration) {
   return declaration.c_identifier.value_or(declaration.systemverilog_name)
@@ -910,6 +914,10 @@ void VerilogParser::generate_dpi_export_service(
     const auto& name = declaration.systemverilog_name;
     const auto linkage = declaration.c_identifier.value_or(name);
     const auto recorded = tokens.find(name);
+    // ITEM28-LEFT: the DPI export service is a name protocol end to end: the
+    // parser generates the hidden imports and hooks as text, and the runtime
+    // reads the mask and linkage out of their C identity; it needs a typed DPI
+    // call identity (runtime operation fields, codec) before the names can go.
     if (recorded == tokens.end()
         || recorded->second.function != function_export
         || linkage.starts_with("__fsim_dpi_export_")) {
@@ -932,6 +940,10 @@ void VerilogParser::generate_dpi_export_service(
   if (exports == 0 && (package || !context_import)) {
     return;
   }
+  // ITEM28-LEFT: the DPI export service is a name protocol end to end: the
+  // parser generates the hidden imports and hooks as text, and the runtime
+  // reads the mask and linkage out of their C identity; it needs a typed DPI
+  // call identity (runtime operation fields, codec) before the names can go.
   const bool serve_declared = std::ranges::any_of(
       declarations, [](const SystemVerilogDpiDeclaration& declaration) {
         return declaration.systemverilog_name == "__fsim_dpi_export_serve";
@@ -1048,6 +1060,10 @@ void VerilogParser::finish_generate_block_dpi_exports(
     const auto& name = declaration.systemverilog_name;
     const auto linkage = declaration.c_identifier.value_or(name);
     const auto recorded = callable_type_tokens_.find(name);
+    // ITEM28-LEFT: the DPI export service is a name protocol end to end: the
+    // parser generates the hidden imports and hooks as text, and the runtime
+    // reads the mask and linkage out of their C identity; it needs a typed DPI
+    // call identity (runtime operation fields, codec) before the names can go.
     if (recorded == callable_type_tokens_.end()
         || recorded->second.function != function_export
         || linkage.starts_with("__fsim_dpi_export_")) {

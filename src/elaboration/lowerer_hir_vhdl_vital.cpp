@@ -980,11 +980,6 @@ Lowerer::lower_hir_vhdl_vital_expression(
                 return std::nullopt;
             }
             auto text = std::string_view { value->vhdl->text };
-            constexpr auto enum_prefix
-                = std::string_view { "@fsim-enum:" };
-            if (text.starts_with(enum_prefix)) {
-                text.remove_prefix(enum_prefix.size());
-            }
             if (text.size() >= 3U && text.front() == '\''
                 && text.back() == '\'') {
                 text.remove_prefix(1U);

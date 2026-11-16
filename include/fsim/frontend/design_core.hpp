@@ -176,6 +176,11 @@ struct Expression {
     // the member, or the class itself for a constructor or $cast; empty for
     // every other marker and for a built-in or library intrinsic payload.
     std::string marker_owner;
+    // A VHDL user-defined attribute occurrence replaced by the value of its
+    // specification (IEEE 1076-2008 6.7): `nominal_type` then holds the
+    // specified entity and the designator, `entity:designator`, from which
+    // the declared attribute subtype is recovered.
+    bool vhdl_user_attribute_value { };
     // The data type of `type(data_type)` (IEEE 1800-2017 6.23); a
     // `type(expression)` keeps its expression as the only operand.
     std::shared_ptr<const Type> systemverilog_type_operand;
@@ -222,6 +227,19 @@ struct Expression {
     return index < expression.aggregate_choice_markers.size()
         ? expression.aggregate_choice_markers[index]
         : support::ExpressionMarker::none;
+}
+
+/// Appends an aggregate choice spelling and the marker that goes with it,
+/// keeping the marker list parallel (a missing entry reads as `none`).
+inline void push_aggregate_choice(Expression& expression,
+    std::string spelling, const support::ExpressionMarker marker)
+{
+    const auto index = expression.aggregate_choices.size();
+    expression.aggregate_choices.push_back(std::move(spelling));
+    if (marker != support::ExpressionMarker::none) {
+        expression.aggregate_choice_markers.resize(index + 1U);
+        expression.aggregate_choice_markers[index] = marker;
+    }
 }
 
 /// A synthesized call node of kind `marker` with payload `argument`.
@@ -1558,6 +1576,12 @@ struct ParameterDeclaration {
     // Its full declaration must appear in the corresponding package body.
     bool vhdl_deferred { };
     std::optional<SourceSpan> vhdl_completion_span;
+    // A hidden parameter that carries a parameter of the interface connected
+    // to an interface port (IEEE 1800-2023 25.5): the port (with the nested
+    // instance names that lead to the interface) and the parameter's name in
+    // the interface. Empty on every other parameter.
+    std::string interface_port;
+    std::string interface_member;
     ParameterDeclaration() = default;
 
     ParameterDeclaration(std::string parameter_name, Type parameter_type,
@@ -1877,6 +1901,9 @@ struct SystemVerilogImport {
     SourceSpan span;
     // One-based preprocessed-token ordinal of the import declaration.
     std::uint64_t systemverilog_source_order { };
+    // The import of the compilation-unit package of the design file (IEEE
+    // 1800-2023 3.12.1).
+    bool compilation_unit_package { };
 };
 
 enum class SystemVerilogAssertionControlKind {

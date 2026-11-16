@@ -34,6 +34,7 @@ void HierarchyBuilder::add_systemverilog_alias_connections(
         process.id = process_id;
         process.name = std::string { path } + ".$alias_"
             + std::to_string(ordinal++);
+        process.origin = support::GeneratedObjectOrigin::alias_adapter;
         process.scheduling_domain
             = ProcessSchedulingDomain::systemverilog;
         process.switch_source = left->second;
@@ -57,6 +58,7 @@ void HierarchyBuilder::add_systemverilog_alias_connections(
         process.id = process_id;
         process.name = std::string { path } + ".$alias_"
             + std::to_string(ordinal++);
+        process.origin = support::GeneratedObjectOrigin::alias_adapter;
         process.scheduling_domain
             = ProcessSchedulingDomain::systemverilog;
         process.switch_source = left;

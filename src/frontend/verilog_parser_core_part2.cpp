@@ -710,19 +710,26 @@ void VerilogParser::resolve_implicit_nets(DesignUnit& unit) {
   const std::function<void(const GenerateRegion&)> remember_generate_labels
       = [&](const GenerateRegion& region) {
           const auto remember_branch = [&](const std::string& label,
+                                           const std::size_t implicit_ordinal,
                                            const GenerateBody& body) {
-            if (!label.empty() && !label.starts_with('@')) {
+            if (!label.empty()) {
               generate_labels.insert(label);
-            } else if (label.empty()) {
+            } else if (implicit_ordinal == 0U) {
               for (const auto& nested : body.generate_regions) {
                 remember_generate_labels(nested);
               }
             }
           };
-          remember_branch(region.then_scope, region.then_body);
-          remember_branch(region.else_scope, region.else_body);
+          remember_branch(
+              region.then_scope, region.then_implicit_scope_ordinal,
+              region.then_body);
+          remember_branch(
+              region.else_scope, region.else_implicit_scope_ordinal,
+              region.else_body);
           for (const auto& alternative : region.alternatives) {
-            remember_branch(alternative.scope, alternative.body);
+            remember_branch(
+                alternative.scope, alternative.implicit_scope_ordinal,
+                alternative.body);
           }
         };
   for (const auto& region : unit.generate_regions) {
@@ -2184,7 +2191,7 @@ DesignUnit VerilogParser::parse_module(
     {
       std::unordered_set<std::string> generate_names;
       const auto remember = [&](const std::string& scope) {
-        if (!scope.empty() && !scope.starts_with('@')) {
+        if (!scope.empty()) {
           generate_names.insert(scope);
         }
       };

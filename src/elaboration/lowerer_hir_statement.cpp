@@ -4593,6 +4593,10 @@ bool Lowerer::lower_hir_statement_unsuspended(
             process_.operations.emplace_back(ProcessSelf { destination });
             return destination;
         }
+        // ITEM28-LEFT: the process queries are selected by the member's spelling
+        // (`.status`, `.completed`) of the generic member-select forms (a dotted name,
+        // a `.member` call, an `index.member` node); only the receiver is typed. A
+        // typed process-class member selection in the class resolver replaces them.
         if ((input.text != ".status"
                 && input.text != ".completed")
             || input.operands.size() != 1U) {
@@ -10471,8 +10475,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
             process_.operations.emplace_back(ClassMethodCall {
                 destination,
                 *receiver,
-                "@container-write:"
-                    + std::string { identity },
+                std::string { identity },
                 { *element_index, *lowered },
                 { "", "" },
                 {
@@ -10482,7 +10485,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         frontend::PortDirection::Input),
                 },
                 64U,
-                false,
+                false, { }, { }, ClassMethodHook::container_write,
             });
             if (skip_write) {
                 auto branch = operation_get<Branch>(
@@ -10644,14 +10647,13 @@ bool Lowerer::lower_hir_statement_unsuspended(
             process_.operations.emplace_back(ClassMethodCall {
                 destination,
                 *receiver,
-                "@container-resize:"
-                    + access.marker_argument,
+                access.marker_argument,
                 { *size },
                 { "" },
                 { static_cast<std::uint8_t>(
                     frontend::PortDirection::Input) },
                 64U,
-                false,
+                false, { }, { }, ClassMethodHook::container_resize,
             });
             return true;
         }
@@ -11582,8 +11584,9 @@ bool Lowerer::lower_hir_statement_unsuspended(
                                                 choice->vhdl->text,
                                                 "others");
                                     }
-                                    return association.choice_spelling
-                                            == "@array"
+                                    return association.choice_marker
+                                            == support::ExpressionMarker::
+                                                vhdl_array_choice
                                         && !association.choices.empty()
                                         && std::ranges::all_of(
                                             association.choices,
@@ -18006,8 +18009,9 @@ bool Lowerer::lower_hir_statement_unsuspended(
                                                           association.choices
                                                               .front())
                                                 : std::nullopt;
-                                            if (association.choice_spelling
-                                                    != "@array"
+                                            if (association.choice_marker
+                                                    != support::ExpressionMarker::
+                                                        vhdl_array_choice
                                                 || !segment || !range_choice_view
                                                 || range_choice_view->vhdl == nullptr
                                                 || range_choice_view->vhdl->kind
@@ -19131,7 +19135,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
             if (inside_matching && expression->systemverilog != nullptr
                 && expression->systemverilog->kind
                     == semantic::sv::ExpressionKind::call
-                && expression->systemverilog->text == "@inside-range") {
+                && expression->systemverilog->marker
+                    == support::ExpressionMarker::inside_range) {
                 const auto& range = *expression->systemverilog;
                 if (range.operands.size() != 2U) {
                     report(
@@ -23391,6 +23396,10 @@ bool Lowerer::lower_hir_statement_unsuspended(
                            *user_task, arguments, span)
                     .has_value();
             }
+            // ITEM28-LEFT: the DPI export service is a name protocol end to end: the
+            // parser generates the hidden imports and hooks as text, and the runtime
+            // reads the mask and linkage out of their C identity; it needs a typed DPI
+            // call identity (runtime operation fields, codec) before the names can go.
             if (input.task.spelling == "__fsim_dpi_export_foreign") {
                 // The foreign arm of a DPI export service (IEEE 1800-2023
                 // 35.5.3).
@@ -23600,7 +23609,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     const auto& compilation = time_owner->compilation;
                     process_.operations.emplace_back(Display {
                         "Time scale of ("
-                            + (time_owner->name.starts_with("fsim_unit_")
+                            + (time_owner->compilation_unit_package
                                         || time_owner->kind
                                             == semantic::sv::UnitKind::
                                                 compilation_unit
@@ -24606,14 +24615,13 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 process_.operations.emplace_back(ClassMethodCall {
                     destination,
                     *receiver,
-                    "@container-push-back:"
-                        + input.task_marker_argument,
+                    input.task_marker_argument,
                     { *pushed_value },
                     { "" },
                     { static_cast<std::uint8_t>(
                         frontend::PortDirection::Input) },
                     64U,
-                    false,
+                    false, { }, { }, ClassMethodHook::container_push_back,
                 });
                 return true;
             }
@@ -24770,9 +24778,11 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 }
                 const auto ignored = allocate_register(
                     1U, frontend::ValueDomain::Bit2);
-                process_.operations.emplace_back(ClassMethodCall {
-                    ignored, *receiver, "@object-srandom", { *seed },
-                    { std::string { } }, { 0U }, 1U, false });
+                ClassMethodCall call {
+                    ignored, *receiver, std::string { }, { *seed },
+                    { std::string { } }, { 0U }, 1U, false };
+                call.hook = ClassMethodHook::object_srandom;
+                process_.operations.emplace_back(std::move(call));
                 return true;
             }
             // `obj.set_randstate(state)` restores the object's random
@@ -24791,9 +24801,11 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 }
                 const auto ignored = allocate_register(
                     1U, frontend::ValueDomain::Bit2);
-                process_.operations.emplace_back(ClassMethodCall {
-                    ignored, *receiver, "@object-set-randstate", { *state },
-                    { std::string { } }, { 0U }, 1U, false, { 1U } });
+                ClassMethodCall call {
+                    ignored, *receiver, std::string { }, { *state },
+                    { std::string { } }, { 0U }, 1U, false, { 1U } };
+                call.hook = ClassMethodHook::object_set_randstate;
+                process_.operations.emplace_back(std::move(call));
                 return true;
             }
             return lower_hir_class_task_call(statement_id);
@@ -27104,14 +27116,13 @@ bool Lowerer::lower_hir_statement_unsuspended(
             process_.operations.emplace_back(ClassMethodCall {
                 destination,
                 *receiver,
-                "@container-push-back:"
-                    + container_call.marker_argument,
+                container_call.marker_argument,
                 { *pushed_value },
                 { "" },
                 { static_cast<std::uint8_t>(
                     frontend::PortDirection::Input) },
                 64U,
-                false,
+                false, { }, { }, ClassMethodHook::container_push_back,
             });
             return true;
         }
@@ -28248,6 +28259,7 @@ std::string Lowerer::hir_instance_path() const
     if (!receiver) {
         return hierarchy_;
     }
+    // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
     constexpr std::string_view instance_prefix { "@instance:" };
     return receiver->starts_with(instance_prefix)
         ? receiver->substr(instance_prefix.size())
@@ -28536,6 +28548,8 @@ std::optional<SignalId> Lowerer::hir_procedural_assign_owner(
     info.type_name = "int";
     info.systemverilog_builtin = support::SystemVerilogBuiltinType::int_type;
     info.source_domain = frontend::ValueDomain::Bit2;
+    info.origin = force ? support::GeneratedObjectOrigin::force_owner
+                        : support::GeneratedObjectOrigin::procedural_assign_owner;
     design_.signal_info_.push_back(std::move(info));
     design_.signals_.push_back(Signal {
         name,
@@ -28912,6 +28926,7 @@ std::optional<SignalId> Lowerer::hir_local_event_notifier(
         info.type_name = "bit";
         info.systemverilog_builtin = support::SystemVerilogBuiltinType::bit;
         info.source_domain = frontend::ValueDomain::Bit2;
+        info.origin = support::GeneratedObjectOrigin::string_change;
         design_.signal_info_.push_back(std::move(info));
         design_.signals_.push_back(Signal {
             name,
@@ -28941,6 +28956,7 @@ std::optional<SignalId> Lowerer::hir_local_event_notifier(
     info.type_name = "bit";
     info.systemverilog_builtin = support::SystemVerilogBuiltinType::bit;
     info.source_domain = frontend::ValueDomain::Bit2;
+    info.origin = support::GeneratedObjectOrigin::local_event;
     design_.signal_info_.push_back(std::move(info));
     design_.signals_.push_back(Signal {
         name,
@@ -29452,7 +29468,7 @@ std::optional<SignalId> Lowerer::hir_monitor_expression_signal(
     info.systemverilog_builtin = real_value ? support::SystemVerilogBuiltinType::real : support::SystemVerilogBuiltinType::logic;
     info.source_domain = domain;
     info.is_signed = hir_expression_signed(expression);
-    info.generated = true;
+    info.origin = support::GeneratedObjectOrigin::monitored_value;
     info.systemverilog_scalar = real_value
         ? scalar_kind
         : frontend::SystemVerilogScalarKind::None;
@@ -29525,6 +29541,7 @@ void Lowerer::materialize_hir_monitor_drivers()
             continue;
         }
         driver->id = static_cast<ProcessId>(process_index);
+        driver->origin = support::GeneratedObjectOrigin::monitor_driver;
         generated_processes_.push_back(std::move(*driver));
     }
     pending_monitor_drivers_.clear();

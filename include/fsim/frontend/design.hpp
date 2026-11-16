@@ -668,6 +668,11 @@ struct GenerateChoice {
 
 struct GenerateAlternative {
     std::string scope;
+    // The ordinal of the implicit block name (IEEE 1800-2023 27.6) this
+    // branch takes while the unit is parsed, 0 for a labeled branch or one
+    // that nests a direct conditional; the parser replaces it by a `genblkN`
+    // scope name when the unit is complete.
+    std::size_t implicit_scope_ordinal { };
     std::vector<GenerateChoice> choices;
     bool is_default { };
     GenerateBody body;
@@ -686,6 +691,10 @@ struct GenerateRegion {
     GenerateKind kind { GenerateKind::Conditional };
     std::string then_scope;
     std::string else_scope;
+    // The implicit block name ordinals of the two branches; see
+    // GenerateAlternative::implicit_scope_ordinal.
+    std::size_t then_implicit_scope_ordinal { };
+    std::size_t else_implicit_scope_ordinal { };
     std::string variable;
     Expression initial;
     Expression condition;
@@ -1136,6 +1145,9 @@ struct SystemVerilogAssertionDeclaration {
     // 37.73): the names the statement's procedure or task declares, which
     // its references read as objects of the design unit.
     std::vector<std::string> procedure_names;
+    // A property the frontend made for an inline assertion (IEEE 1800-2023
+    // 16.14): no declaration of the source, so no VPI object.
+    bool synthesized { };
     SourceSpan span;
 };
 
@@ -1840,6 +1852,9 @@ struct DesignUnit {
     // Extern module/interface/program declarations are prototypes and never
     // participate in top or instance target selection until matched to a body.
     bool systemverilog_extern { };
+    // The package that holds a design file's compilation-unit declarations
+    // (IEEE 1800-2023 3.12.1).
+    bool systemverilog_compilation_unit_package { };
     std::optional<SystemVerilogDesignSchedulingDeclaration>
         systemverilog_scheduling_declaration;
     std::optional<SystemVerilogConfigurationDeclaration>

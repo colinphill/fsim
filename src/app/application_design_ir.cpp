@@ -713,6 +713,7 @@ class DesignIrBuilder final {
         value);
     result_.mutable_objects()[object.value()].no_hierarchical_name
         = unnamed_scopes_.contains(input.hir_declaration);
+    result_.mutable_objects()[object.value()].origin = input.origin;
     signal_object_by_runtime_.try_emplace(input.id, object);
     object_by_path_.try_emplace(paths_.intern(input.name), object);
     if (input.is_port) {
@@ -893,6 +894,7 @@ class DesignIrBuilder final {
           value);
       result_.mutable_objects()[object.value()].no_hierarchical_name
           = unnamed_scopes_.contains(input.hir_declaration);
+      result_.mutable_objects()[object.value()].origin = input.origin;
       object_by_path_[paths_.intern(input.name)] = object;
       string_object_by_runtime_[input.id] = object;
       if (input.is_port) {
@@ -932,6 +934,7 @@ class DesignIrBuilder final {
           parent);
       result_.mutable_objects()[object.value()].no_hierarchical_name
           = unnamed_scopes_.contains(input.hir_declaration);
+      result_.mutable_objects()[object.value()].origin = input.origin;
       container_object_by_runtime_[input.id] = object;
       object_by_path_[paths_.intern(input.name)] = object;
       if (input.is_port) {
@@ -1361,6 +1364,11 @@ class DesignIrBuilder final {
       // the source (IEEE 1800-2023 6.8): no VPI process either (37.63).
       if (input.startup_phase()
           == runtime::simir::ProcessStartupPhase::declaration_initializer) {
+        output.synthesized = true;
+      }
+      // A process the elaborator made for its own lowering is no process of
+      // the source either.
+      if (input.origin() != support::GeneratedObjectOrigin::none) {
         output.synthesized = true;
       }
       output.name = input.name();

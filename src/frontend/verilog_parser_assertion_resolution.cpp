@@ -2123,13 +2123,21 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             : 0U;
         const auto gated_actions = [&](const std::span<const Statement> actions,
                                        const std::uint32_t bit) {
-            auto gate = parse_generated_statement(
-                synthetic_tokens("if (($__fsim_assertion_control("
-                        + std::to_string(semantic::sva::control_concurrent) + ", "
-                        + std::to_string(control_directive) + ", \"\") & "
-                        + std::to_string(bit) + ") != 0) begin end",
-                    directive.span),
+            auto gate_tokens = synthetic_tokens("if ((", directive.span);
+            const auto gate_control = marked_name_tokens(
+                support::ExpressionMarker::sva_assertion_control,
                 directive.span);
+            gate_tokens.insert(
+                gate_tokens.end(), gate_control.begin(), gate_control.end());
+            const auto gate_tail = synthetic_tokens("("
+                    + std::to_string(semantic::sva::control_concurrent) + ", "
+                    + std::to_string(control_directive) + ", \"\") & "
+                    + std::to_string(bit) + ") != 0) begin end",
+                directive.span);
+            gate_tokens.insert(
+                gate_tokens.end(), gate_tail.begin(), gate_tail.end());
+            auto gate = parse_generated_statement(
+                std::move(gate_tokens), directive.span);
             if (!gate) {
                 Statement block;
                 block.kind = StatementKind::Block;
@@ -2147,14 +2155,20 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
         // The process is a concurrent assertion of its directive type to
         // the assertion controls, which also stop its new attempts (the
         // attempt filter) whether or not it has actions.
+        auto registration_tokens = synthetic_tokens(
+            "begin int __fsim_ac; __fsim_ac = ", directive.span);
+        const auto registration_control = marked_name_tokens(
+            support::ExpressionMarker::sva_assertion_control, directive.span);
+        registration_tokens.insert(registration_tokens.end(),
+            registration_control.begin(), registration_control.end());
+        const auto registration_tail = synthetic_tokens("("
+                + std::to_string(semantic::sva::control_concurrent) + ", "
+                + std::to_string(control_directive) + ", \"\"); end",
+            directive.span);
+        registration_tokens.insert(registration_tokens.end(),
+            registration_tail.begin(), registration_tail.end());
         if (auto registration = parse_generated_statement(
-                synthetic_tokens("begin int __fsim_ac; __fsim_ac = "
-                                 "$__fsim_assertion_control("
-                        + std::to_string(semantic::sva::control_concurrent)
-                        + ", " + std::to_string(control_directive)
-                        + ", \"\"); end",
-                    directive.span),
-                directive.span)) {
+                std::move(registration_tokens), directive.span)) {
             process.statements.push_back(std::move(*registration));
         }
         const auto append_actions = [&](std::vector<Statement>& destination,
@@ -2188,7 +2202,8 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                                           const Expression& expression)
                 -> bool {
                 return (expression.kind == ExpressionKind::Call
-                           && expression.text == "$__fsim_assertion_control")
+                           && expression.marker
+                               == support::ExpressionMarker::sva_assertion_control)
                     || std::ranges::any_of(expression.operands,
                         [&](const Expression& operand) {
                             return self(self, operand);
@@ -2371,6 +2386,7 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             match.statements.push_back(std::move(stop));
             if (ranged) {
                 const auto counter_name
+                    // ITEM46-LEFT: name of a synthesized counter variable that must not clash with a user identifier; never matched back; a typed form needs a hidden-variable flag on the declaration
                     = "@assertion_eventually_counter_" + std::to_string(index);
                 const Expression counter {
                     ExpressionKind::Identifier,
@@ -2489,6 +2505,7 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             }
         } else if (ranged_always) {
             const auto counter_name
+                // ITEM46-LEFT: name of a synthesized counter variable that must not clash with a user identifier; never matched back; a typed form needs a hidden-variable flag on the declaration
                 = "@assertion_always_counter_" + std::to_string(index);
             const Expression counter {
                 ExpressionKind::Identifier,
@@ -2669,6 +2686,7 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             auto failure_statements = assertion.else_statements;
             if (sequence_maximum_cycle_count) {
                 const auto counter_name
+                    // ITEM46-LEFT: name of a synthesized counter variable that must not clash with a user identifier; never matched back; a typed form needs a hidden-variable flag on the declaration
                     = "@assertion_sequence_counter_" + std::to_string(index);
                 const Expression counter {
                     ExpressionKind::Identifier,

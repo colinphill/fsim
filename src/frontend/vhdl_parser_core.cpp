@@ -1054,6 +1054,7 @@ void VhdlParser::parse_vhdl_generics(DesignUnit& unit, const Token& start,
         const auto type = parse_vhdl_type(true);
         const auto packed_width = type.width();
         const bool supported_packed = type.packed_range && type.packed_members.empty() && packed_width && *packed_width != 0 && *packed_width <= std::numeric_limits<std::uint32_t>::max() && (type.domain == ValueDomain::Bit2 || type.domain == ValueDomain::Logic4 || type.domain == ValueDomain::Logic9);
+        // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
         if (type.named_type.empty() && type.nominal_type != "@builtin:time" && (type.packed_range ? !supported_packed && type.domain != ValueDomain::String : (type.domain != ValueDomain::Integer && type.domain != ValueDomain::Boolean && type.domain != ValueDomain::Bit2 && type.domain != ValueDomain::Logic4 && type.domain != ValueDomain::Logic9 && (type.domain != ValueDomain::String || type.spelling.substr(type.spelling.find_last_of('.') == std::string::npos ? 0 : type.spelling.find_last_of('.') + 1) == "line")))) {
             error(names.front(), "FSIM-VHDL-UNSUPPORTED-018",
                 "this generic type is outside the scalar integer, Boolean, bit, "
@@ -1615,6 +1616,7 @@ Type VhdlParser::parse_vhdl_type(const bool allow_integer,
         type.systemverilog_scalar = SystemVerilogScalarKind::Real;
         type.is_signed = true;
         type.packed_range = PackedRange { 63, 0, true };
+        // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
         type.nominal_type = "@builtin:real";
         type.vhdl_type_declaration = type.nominal_type;
     } else if (simple_name == "side") {
@@ -1646,6 +1648,7 @@ Type VhdlParser::parse_vhdl_type(const bool allow_integer,
         type.integer_range = IntegerRange {
             simple_name == "time" ? std::numeric_limits<std::int64_t>::min() : 0,
             std::numeric_limits<std::int64_t>::max(), false };
+        // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
         type.nominal_type = "@builtin:time";
         type.vhdl_type_declaration = type.nominal_type;
     } else if (simple_name == "integer" || simple_name == "natural" || simple_name == "positive") {

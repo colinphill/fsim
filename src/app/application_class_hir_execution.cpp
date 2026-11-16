@@ -141,6 +141,26 @@ constexpr std::size_t maximum_literal_width = 16U * 1024U * 1024U;
         : std::string_view { };
 }
 
+// The built-in method of a class object (IEEE 1800-2023 18.6, 18.8, 18.9,
+// 18.13.4) a call marker stands for; none for a method of the class.
+[[nodiscard]] runtime::simir::ClassMethodHook builtin_method_hook(
+    const support::ExpressionMarker marker) noexcept
+{
+    using Hook = runtime::simir::ClassMethodHook;
+    switch (marker) {
+    case support::ExpressionMarker::builtin_randomize:
+        return Hook::builtin_randomize;
+    case support::ExpressionMarker::builtin_rand_mode:
+        return Hook::builtin_rand_mode;
+    case support::ExpressionMarker::builtin_constraint_mode:
+        return Hook::builtin_constraint_mode;
+    case support::ExpressionMarker::builtin_get_randstate:
+        return Hook::builtin_get_randstate;
+    default:
+        return Hook::none;
+    }
+}
+
 // The method a container query marker stands for (IEEE 1800-2023 7.5.2,
 // 7.10.2, 7.12.3).
 [[nodiscard]] std::string_view container_marker_method_name(
@@ -3346,6 +3366,7 @@ SystemVerilogClassHirExecution::invoke_package_function(
     if (returns_string) {
         actuals.emplace_back(64U, runtime::Logic4::zero);
         string_actuals.emplace_back();
+        // ITEM46-LEFT: the trailing string actual of a call is marked by a reserved actual name that travels through every class hook, the VPI and VHPI call models and the class executor; a typed result flag on the call operations and the hook signatures is needed
         invocation_names.emplace_back("@result-string");
     }
     std::vector<std::size_t> bound_actual_formals;
@@ -6624,11 +6645,15 @@ SystemVerilogClassHirExecution::evaluate_packed(
         if (!receiver || receiver->low_word().bval != 0U) {
             return std::nullopt;
         }
-        const auto identity = marker_payload(*value,
-            virtual_dispatch ? method_marker : base_method_marker);
+        const auto builtin = builtin_method_hook(value->marker);
+        // A mode call names its target in the marker argument.
+        const auto identity = builtin != runtime::simir::ClassMethodHook::none
+            ? std::string_view { value->marker_argument }
+            : marker_payload(*value,
+                virtual_dispatch ? method_marker : base_method_marker);
         // An inline constraint block needs the compiled call; the method
         // body is not interpreted without it.
-        if (identity == "@builtin-randomize"
+        if (builtin == runtime::simir::ClassMethodHook::builtin_randomize
             && std::ranges::any_of(value->associations,
                 [](const semantic::sv::AssignmentPatternAssociation& item) {
                     return item.choice_marker
@@ -6637,7 +6662,8 @@ SystemVerilogClassHirExecution::evaluate_packed(
             return std::nullopt;
         }
         const auto receiver_handle = receiver->low_word().aval;
-        if (is_native_root_ && root_container_method_
+        if (builtin == runtime::simir::ClassMethodHook::none
+            && is_native_root_ && root_container_method_
             && is_native_root_(receiver_handle)) {
             const auto separator = identity.rfind("::");
             const auto method_name = separator == std::string_view::npos
@@ -6650,8 +6676,10 @@ SystemVerilogClassHirExecution::evaluate_packed(
                 }
             }
         }
-        const auto* selected_method = method(
-            receiver_handle, identity, virtual_dispatch);
+        const auto* selected_method = builtin
+                == runtime::simir::ClassMethodHook::none
+            ? method(receiver_handle, identity, virtual_dispatch)
+            : nullptr;
         const auto actual_count = value->operands.size() - 1U;
         std::vector<std::string> names(actual_count);
         if (value->argument_names.size() == value->operands.size()) {
@@ -6742,7 +6770,7 @@ SystemVerilogClassHirExecution::evaluate_packed(
         const bool randomize_no_properties = only_actual != nullptr
             && only_actual->marker
                 == support::ExpressionMarker::randomize_null;
-        auto result = invoke_function_(receiver_handle, identity,
+        auto result = invoke_function_(receiver_handle, identity, builtin,
             actuals, string_actuals, names, directions, virtual_dispatch,
             randomize_no_properties, ActualReferences { });
         if (typed_frame && !pending_call_frames_.back().consumed) {
@@ -8398,7 +8426,7 @@ SystemVerilogClassHirExecution::evaluate_pure_packed(
             if (item == nullptr)
                 return std::nullopt;
             if (item->kind == ExpressionKind::call
-                && item->text == "@inside-range") {
+                && item->marker == support::ExpressionMarker::inside_range) {
                 if (item->operands.size() != 2U)
                     return std::nullopt;
                 operands.push_back(item->operands[0U]);
@@ -8406,8 +8434,14 @@ SystemVerilogClassHirExecution::evaluate_pure_packed(
                 ranges.push_back(true);
                 continue;
             }
+            // A tolerance range is no value to compare.
             if (item->kind == ExpressionKind::call
-                && item->text.starts_with('@')) {
+                && (item->marker
+                        == support::ExpressionMarker::
+                            inside_absolute_tolerance
+                    || item->marker
+                        == support::ExpressionMarker::
+                            inside_relative_tolerance)) {
                 return std::nullopt;
             }
             operands.push_back(value.operands[index]);
@@ -9931,7 +9965,7 @@ SystemVerilogClassHirExecution::execute(
                         static_target.specialization);
                 } else {
                     (void)invoke_function_(receiver->low_word().aval,
-                        method_identity,
+                        method_identity, runtime::simir::ClassMethodHook::none,
                         actuals, string_actuals, names, directions,
                         virtual_dispatch, false, actual_references);
                 }
@@ -10974,6 +11008,7 @@ SystemVerilogClassHirExecution::evaluate_string_call(
         }
     }
     auto invocation_names = actual_names;
+    // ITEM46-LEFT: the trailing string actual of a call is marked by a reserved actual name that travels through every class hook, the VPI and VHPI call models and the class executor; a typed result flag on the call operations and the hook signatures is needed
     invocation_names.emplace_back("@result-string");
     actuals.emplace_back(64U, runtime::Logic4::zero);
     string_actuals.emplace_back();
@@ -10995,7 +11030,8 @@ SystemVerilogClassHirExecution::evaluate_string_call(
     } else {
         if (!invoke_function_)
             return std::nullopt;
-        (void)invoke_function_(receiver_handle, canonical_identity, actuals,
+        (void)invoke_function_(receiver_handle, canonical_identity,
+            runtime::simir::ClassMethodHook::none, actuals,
             string_actuals, invocation_names, {}, virtual_dispatch, false,
             actual_references);
     }
@@ -11266,6 +11302,7 @@ runtime::PackedLogic4 SystemVerilogClassHirExecution::invoke_function_body(
 {
     // A string result travels in a trailing hidden string actual, which the
     // caller copies back like an output string argument.
+    // ITEM46-LEFT: the trailing string actual of a call is marked by a reserved actual name that travels through every class hook, the VPI and VHPI call models and the class executor; a typed result flag on the call operations and the hook signatures is needed
     constexpr std::string_view result_name { "@result-string" };
     const bool string_result = !actual_names_view.empty()
         && actual_names_view.back() == result_name

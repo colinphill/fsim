@@ -71,6 +71,18 @@ std::vector<Token> VerilogParser::synthetic_tokens(
   return tokens;
 }
 
+std::vector<Token> VerilogParser::marked_name_tokens(
+    const support::ExpressionMarker marker, const SourceSpan& span) {
+  Token token;
+  token.kind = TokenKind::Identifier;
+  token.text = "$generated";
+  token.span = span;
+  token.marker = marker;
+  std::vector<Token> tokens;
+  tokens.push_back(std::move(token));
+  return tokens;
+}
+
 std::optional<Statement> VerilogParser::parse_generated_statement(
     std::vector<Token> tokens, const SourceSpan& span) {
   Token end;

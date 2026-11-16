@@ -167,7 +167,7 @@ std::optional<std::string> VerilogParser::import_interface_member(
   };
   // Each interface parameter becomes `<prefix>__<name>`.
   const auto make_context = [&](const DesignUnit& target_unit,
-                                std::string prefix,
+                                std::string prefix, std::string port_path,
                                 const std::vector<ParameterOverride>* actuals,
                                 const NameMap* outer, const bool bound) {
     Context context{&target_unit, std::move(prefix), {}};
@@ -197,6 +197,8 @@ std::optional<std::string> VerilogParser::import_interface_member(
       }
       auto declaration = parameter;
       declaration.name = hidden;
+      declaration.interface_port = port_path;
+      declaration.interface_member = parameter.name;
       declaration.span = anchor;
       if (actual != nullptr) {
         declaration.local = true;
@@ -217,16 +219,18 @@ std::optional<std::string> VerilogParser::import_interface_member(
     return context;
   };
 
-  auto context = make_context(*interface_unit, "__fsim_ifp_" + first,
+  auto context = make_context(*interface_unit, "__fsim_ifp_" + first, first,
       overrides, nullptr, port);
+  auto nested_port = first;
   for (std::size_t segment = 0; segment + 1U < path.size(); ++segment) {
     const auto nested = std::ranges::find(
         context.unit->instances, path[segment], &Instance::name);
     const auto* nested_unit = interface_path_unit(
         unit, first, path, segment + 1U, nullptr);
+    nested_port += "_" + path[segment];
     context = make_context(*nested_unit,
-        context.prefix + "_" + path[segment], &nested->parameter_overrides,
-        &context.names, false);
+        context.prefix + "_" + path[segment], nested_port,
+        &nested->parameter_overrides, &context.names, false);
   }
   if (kind == InterfaceMemberKind::parameter) {
     return context.names.at(member);
@@ -713,7 +717,7 @@ void VerilogParser::import_interface_member_references(DesignUnit& unit) {
   // copy.
   const auto parameter_count = unit.parameters.size();
   for (std::size_t index = 0; index < parameter_count; ++index) {
-    if (unit.parameters[index].name.starts_with("__fsim_ifp_")) continue;
+    if (!unit.parameters[index].interface_port.empty()) continue;
     if (unit.parameters[index].kind == ParameterKind::Value) {
       auto value = unit.parameters[index].default_value;
       rewrite(value);

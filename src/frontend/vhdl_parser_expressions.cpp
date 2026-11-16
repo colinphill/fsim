@@ -1614,8 +1614,9 @@ Expression VhdlParser::parse_primary()
                         // value (IEEE 1076-2008 6.7).
                         // An alias's attribute names the aliased object's
                         // specification.
-                        value.nominal_type = "@fsim-vhdl-user-attribute:"
-                            + (separator == std::string::npos
+                        value.vhdl_user_attribute_value = true;
+                        value.nominal_type
+                            = (separator == std::string::npos
                                     ? specified_entity
                                     : canonical.substr(0, separator + 1U)
                                         + specified_entity)
@@ -1966,9 +1967,11 @@ Expression VhdlParser::parse_primary()
                     }
                     saw_others = true;
                 }
-                std::string choice = "@array";
+                std::string choice;
+                auto choice_marker = support::ExpressionMarker::vhdl_array_choice;
                 if (choices.size() == 1 && choices.front().kind == ExpressionKind::Identifier) {
                     choice = choices.front().text;
+                    choice_marker = support::ExpressionMarker::none;
                 }
                 Expression value;
                 if (at(TokenKind::Comma) || at(TokenKind::RightParen) || at_end()) {
@@ -1978,7 +1981,7 @@ Expression VhdlParser::parse_primary()
                 } else {
                     value = parse_expression();
                 }
-                aggregate.aggregate_choices.push_back(std::move(choice));
+                push_aggregate_choice(aggregate, std::move(choice), choice_marker);
                 aggregate.aggregate_choice_expressions.push_back(std::move(choices));
                 aggregate.operands.push_back(std::move(value));
                 return;

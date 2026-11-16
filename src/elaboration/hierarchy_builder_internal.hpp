@@ -976,10 +976,11 @@ private:
         std::size_t specialization_id,
         std::size_t& concurrent_order,
         const VhdlDeclarationSignals* component_port_signals = nullptr,
-        // The name of the implicit signal of an expression actual, after
-        // the instance path: `$actual_<formal>`, or `$local_<port>` for a
-        // local port of the implied block of a bound component instance.
-        std::string_view implicit_signal_prefix = ".$actual_");
+        // The kind of the implicit signal of an expression actual:
+        // `actual_adapter`, or `local_signal` for a local port of the
+        // implied block of a bound component instance.
+        support::GeneratedObjectOrigin implicit_signal_origin
+        = support::GeneratedObjectOrigin::actual_adapter);
 
     // Returned declaration pointers borrow from compiled HIR.
     std::vector<const semantic::vhdl::Declaration*>

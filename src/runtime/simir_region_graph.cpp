@@ -781,13 +781,13 @@ bool visit_known_region_accesses(
             return true;
         } else if constexpr (std::is_same_v<T, ClassAllocate>) {
             // An object whose lowered constructor the process runs itself
-            // ("@no-constructor:"; the constructor's body follows as this
+            // (a lowered constructor; the constructor's body follows as this
             // process's operations) is allocated with its property defaults
             // (Simulation::Impl::construct_class): the class heap, and the
             // host's $sv_class_heap_change, which no process writes. A
             // constructor the class services run reaches package-scope
             // signals and stays opaque.
-            return value.specialization_identity.starts_with("@no-constructor:");
+            return value.construction == ClassConstruction::lowered_constructor;
         } else if constexpr (std::is_same_v<T, ClassPropertyWrite>
             || std::is_same_v<T, ClassStaticPropertyWrite>) {
             // The class heap or static store, and $sv_class_heap_change

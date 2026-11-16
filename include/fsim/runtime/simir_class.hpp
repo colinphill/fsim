@@ -1,6 +1,22 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+// How a class allocation runs the constructor.
+enum class ClassConstruction : std::uint8_t {
+  // The simulation runs the constructor chain.
+  run_constructor,
+  // The elaborated process runs the constructor itself; the object is
+  // allocated with its property defaults.
+  lowered_constructor,
+  // A UVM object allocated for the API: its constructor chain runs as
+  // generated code in the dispatch process.
+  api,
+  // The same for a host service a design process can call (clone, the
+  // factory): the calling process runs the chain, so the object waits.
+  service,
+  last = service,
+};
+
 struct ClassAllocate {
   RegisterId destination{};
   std::string specialization_identity;
@@ -8,6 +24,7 @@ struct ClassAllocate {
   std::vector<RegisterId> constructor_actuals;
   std::vector<std::uint8_t> constructor_actual_kinds;
   std::vector<std::string> constructor_actual_names;
+  ClassConstruction construction{ClassConstruction::run_constructor};
 };
 
 struct ClassPropertyRead {
@@ -44,9 +61,15 @@ struct ClassPropertyContainerWrite {
   bool when_watched{};
 };
 
-// A lowered randomize() step the simulation runs for a ClassMethodCall
-// (IEEE 1800-2023 18.6.1): the call's method identity is then empty, or the
-// callback's name for the callback steps.
+// A step the simulation runs for a ClassMethodCall instead of a class
+// method. A lowered randomize() step (IEEE 1800-2023 18.6.1) has an empty
+// method identity, or the callback's name for the callback steps. A built-in
+// method of a class object (18.6, 18.8, 18.9, 18.13) has an empty identity,
+// except for the mode calls, whose identity names the random variable or
+// constraint block. The other steps take their payload in the method
+// identity: the owner class of a checked cast, the property of a
+// handle-container or string-property access; the shallow copy of
+// `new obj` and the process kill markers (9.7) have none.
 enum class ClassMethodHook : std::uint8_t {
   none,
   randomize_begin,
@@ -55,8 +78,51 @@ enum class ClassMethodHook : std::uint8_t {
   randomize_callback_enter,
   randomize_callback_leave,
   randomize_callback,
-  last = randomize_callback,
+  builtin_randomize,
+  builtin_randomize_solve,
+  builtin_rand_mode,
+  builtin_constraint_mode,
+  builtin_get_randstate,
+  object_srandom,
+  object_set_randstate,
+  checked_cast,
+  container_read,
+  container_write,
+  container_resize,
+  container_push_back,
+  container_size,
+  container_pop_front,
+  container_pop_back,
+  string_property_read,
+  string_property_write,
+  shallow_copy,
+  process_kill_begin,
+  process_kill_end,
+  last = process_kill_end,
 };
+
+// A handle-container access of a class property.
+[[nodiscard]] constexpr bool class_container_hook(
+    const ClassMethodHook hook) noexcept
+{
+  return hook >= ClassMethodHook::container_read
+      && hook <= ClassMethodHook::container_pop_back;
+}
+
+// Whether `hook` is one of the lowered randomize() steps (not a built-in
+// method of an object).
+[[nodiscard]] constexpr bool randomize_step_hook(
+    const ClassMethodHook hook) noexcept
+{
+  return hook >= ClassMethodHook::randomize_begin
+      && hook <= ClassMethodHook::randomize_callback;
+}
+
+// The actual kind of a calling-scope value a randomize() with-clause reads
+// (IEEE 1800-2017 18.7): its register is an actual after every argument, and
+// the runtime binds its value into the call's inline constraints instead of
+// passing it to the method.
+inline constexpr std::uint8_t inline_value_actual_kind{8U};
 
 struct ClassMethodCall {
   RegisterId destination{};
@@ -99,6 +165,10 @@ struct ClassStaticMethodCall {
   /// static methods of its own (IEEE 1800-2023 8.25.1). Empty for a call
   /// that is not one of a class's static methods.
   std::string class_specialization{};
+  /// The access of a static string property (`string_property_read` or
+  /// `string_property_write`), whose method identity is the property;
+  /// `none` for a method or an imported function.
+  ClassMethodHook hook{ClassMethodHook::none};
 };
 
 /// A dynamic array or queue of strings as the one string actual of an
@@ -140,6 +210,7 @@ struct ClassStaticMethodCall {
 // single SimIR operation while reserving an identity namespace that cannot
 // collide with a SystemVerilog class method.
 inline constexpr std::string_view systemverilog_dpi_function_prefix {
+    // ITEM46-LEFT: the DPI import identity is a text descriptor parsed by the DPI service, the kernel plan and the VPI and VHPI loaders; a typed form needs a descriptor on the call operation
     "@dpi:" };
 
 /// The most formals and argument-buffer words (eight bytes each) a planned

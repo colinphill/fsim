@@ -7,6 +7,7 @@
 #include "fsim/runtime/simir_driver_inventory.hpp"
 #include "fsim/runtime/vpi_types.hpp"
 #include "fsim/semantic/hierarchy_path.hpp"
+#include "fsim/support/generated_object_origin.hpp"
 #include "fsim/systemc_abi.h"
 
 #include <algorithm>
@@ -624,10 +625,13 @@ struct SignalInfo {
         vpi_typespec { };
     // Set on each element of an array of named events.
     std::shared_ptr<const VpiEventArrayDeclaration> vpi_event_array { };
-    // The elaborator made this signal for its own lowering (a sampled or
-    // monitored expression's value): no declaration of the source, so no VPI
-    // object and no scope of one (IEEE 1800-2023 37.12, 37.17).
-    bool generated { };
+    // The elaboration step that made this signal for its own lowering (a
+    // sampled or monitored expression's value, an adapter, a delayed copy):
+    // no declaration of the source, so no VPI object and no trace scope of
+    // one (IEEE 1800-2023 37.12, 37.17, 21.7); `none` for a declared signal.
+    support::GeneratedObjectOrigin origin {
+        support::GeneratedObjectOrigin::none
+    };
     // The SystemVerilog HIR declaration whose storage this signal is (of
     // the specialization's unit), so later stages reach the declaration by
     // identity and never by the storage's name.
@@ -826,6 +830,11 @@ struct StringObjectInfo {
         frontend::PortDirection::Unknown
     };
     std::optional<semantic::DeclarationId> hir_declaration { };  // HIR declaration whose storage this is
+    // The elaboration step that made this string for no declaration of the
+    // source; `none` for a declared string.
+    support::GeneratedObjectOrigin origin {
+        support::GeneratedObjectOrigin::none
+    };
 };
 
 /// The name prefix of the container object that holds a class's static
@@ -856,6 +865,11 @@ struct ContainerObjectInfo {
     std::shared_ptr<const runtime::SystemVerilogVpiTypespec>
         vpi_typespec { };
     std::optional<semantic::DeclarationId> hir_declaration { };  // HIR declaration whose storage this is
+    // The elaboration step that made this container for no declaration of
+    // the source; `none` for a declared container.
+    support::GeneratedObjectOrigin origin {
+        support::GeneratedObjectOrigin::none
+    };
 };
 
 using VhdlProtectedObjectId = std::uint32_t;

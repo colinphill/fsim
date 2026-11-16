@@ -299,6 +299,7 @@ void finish_type(CType& type)
     Signature signature;
     signature.linkage = std::string { identity.substr(0U, hash) };
     signature.result = identity[colon + 1U];
+    // ITEM46-LEFT: the DPI import identity is a text descriptor parsed by the DPI service, the kernel plan and the VPI and VHPI loaders; a typed form needs a descriptor on the call operation
     signature.context = identity.substr(colon + 2U).starts_with("@c");
     auto arguments = identity.substr(hash + 1U, colon - hash - 1U);
     const auto malformed = [&] { malformed_identity(identity); };
@@ -1479,6 +1480,10 @@ public:
     }
 
 private:
+    // ITEM28-LEFT: the DPI export service is a name protocol end to end: the
+    // parser generates the hidden imports and hooks as text, and the runtime
+    // reads the mask and linkage out of their C identity; it needs a typed DPI
+    // call identity (runtime operation fields, codec) before the names can go.
     static constexpr std::string_view export_prefix { "__fsim_dpi_export_" };
 
     // A call site bound by `bind`: what a call needs of its identity, parsed
@@ -2429,6 +2434,7 @@ thread_local const Import* Service::noncontext_import { };
 
 bool DpiForeignService::context_import(const std::string_view identity)
 {
+    // ITEM46-LEFT: the DPI import identity is a text descriptor parsed by the DPI service, the kernel plan and the VPI and VHPI loaders; a typed form needs a descriptor on the call operation
     return identity.substr(0U, identity.find('|')).ends_with("@c");
 }
 

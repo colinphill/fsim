@@ -358,6 +358,7 @@ VitalWireSourcesResult apply_vital_wire_sources(ElaboratedDesignState& state,
             info.name = signal.name;
             info.is_port = false;
             info.direction = frontend::PortDirection::Unknown;
+            info.origin = support::GeneratedObjectOrigin::vital_source;
             state.signals.push_back(std::move(signal));
             state.signal_info.push_back(std::move(info));
             for (const auto writer : group) {

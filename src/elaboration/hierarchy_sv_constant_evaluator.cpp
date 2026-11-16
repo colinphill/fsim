@@ -5042,7 +5042,8 @@ private:
                 auto matched = Truth::false_value;
                 if (item && item->systemverilog != nullptr
                     && item->systemverilog->kind == ExpressionKind::call
-                    && item->systemverilog->text == "@inside-range"
+                    && item->systemverilog->marker
+                        == support::ExpressionMarker::inside_range
                     && item->systemverilog->operands.size() == 2U) {
                     const auto low = evaluate(
                         item->systemverilog->operands.front());
@@ -7443,7 +7444,7 @@ private:
         }
         const auto& choice = *view->systemverilog;
         if (choice.kind == ExpressionKind::call
-            && choice.text == "@inside-range") {
+            && choice.marker == support::ExpressionMarker::inside_range) {
             if (choice.operands.size() != 2U) {
                 return std::nullopt;
             }

@@ -641,7 +641,7 @@ ParseResult VerilogParser::run() {
         }
         // (A type may come from an imported package; STD's import is implicit.)
         if (std::ranges::all_of(compilation_unit_imports_, [](const SystemVerilogImport& item) {
-                return item.package == "std" || item.package.starts_with("fsim_unit_");
+                return item.package == "std" || item.compilation_unit_package;
             })) {
             for (const auto& alias : compilation_unit_package_->type_aliases) {
                 const auto& named = alias.type.named_type;
@@ -753,8 +753,10 @@ DesignUnit& VerilogParser::compilation_unit_package(const Token& start) {
                 = digits[(hash >> (4U * index)) & 0xfU];
         }
         unit.name = "fsim_unit_" + suffix;
+        unit.systemverilog_compilation_unit_package = true;
         unit.span = start.span;
-        compilation_unit_imports_.push_back({ unit.name, { }, start.span });
+        compilation_unit_imports_.push_back(
+            { unit.name, { }, start.span, 0U, true });
         active_package_imports_ = compilation_unit_imports_;
     }
     return *compilation_unit_package_;

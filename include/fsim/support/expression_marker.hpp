@@ -93,12 +93,56 @@ enum class ExpressionMarker : std::uint8_t {
     vhdl_physical,                // payload: unit name
     vhdl_qualified,               // payload: type mark
     vhdl_subtype,                 // payload: subtype spelling
+    // Generated concurrent-assertion monitor calls (IEEE 1800-2023 16.14,
+    // 20.11) and the placeholder actions of their generated processes.
+    sva_tick,
+    sva_outcome,
+    sva_request,
+    sva_local,
+    sva_answer,
+    sva_call,
+    sva_current,
+    sva_assertion_control,
+    sva_action_success,
+    sva_action_failure,
+    sva_action_vacuous,
+    sva_action_abort,
+    sva_action_success_off,
+    sva_action_failure_off,
+    sva_action_vacuous_off,
+    sva_action_callregion,
+    sva_action_sampled_on,
+    sva_action_sampled_off,
 
     // Constraints, randomization and constraint expressions.
     constraint_forms_begin_,
+    // Inside ranges: `[low : high]`, `[low +/- amount]`, `[low +%- percent]`
+    // (an operand of inside, of case inside, or the choice of a dist item).
+    inside_range,
+    inside_absolute_tolerance,
+    inside_relative_tolerance,
+    // Constraint items. A dist item carries its choice and its weight as
+    // operands; the marker says whether the weight is `:=` or `:/`.
+    constraint_dist_equal,
+    constraint_dist_divide,
+    constraint_disable_soft,
+    constraint_implies,
+    constraint_block,
+    constraint_unique,
+    constraint_solve_list,
+    constraint_solve_before,
+    constraint_if,
+    constraint_foreach,
+    // Built-in methods of a class object (IEEE 1800-2023 18.6, 18.8, 18.9,
+    // 18.13.4): the call's first operand is the object.
+    builtin_randomize,
+    builtin_rand_mode,            // payload: the random variable, or the whole object
+    builtin_constraint_mode,      // payload: the constraint block, or the whole object
+    builtin_get_randstate,
 
     // Class, callable, built-in method and container forms.
     class_forms_begin_,
+    vhdl_array_choice,            // an aggregate choice that is not a simple name
 
     // VHDL, configuration and design-unit forms.
     vhdl_unit_forms_begin_,
@@ -129,6 +173,22 @@ enum class ExpressionMarker : std::uint8_t {
     return sv_container_query(marker)
         || marker == ExpressionMarker::sv_container_method
         || marker == ExpressionMarker::sv_container_push_back;
+}
+
+// The generated assertion monitor calls: system functions of the
+// generated assertion processes.
+[[nodiscard]] constexpr bool sva_monitor_call(
+    const ExpressionMarker marker) noexcept
+{
+    return marker >= ExpressionMarker::sva_tick
+        && marker <= ExpressionMarker::sva_assertion_control;
+}
+
+// The placeholder actions of a generated assertion process.
+[[nodiscard]] constexpr bool sva_action(const ExpressionMarker marker) noexcept
+{
+    return marker >= ExpressionMarker::sva_action_success
+        && marker <= ExpressionMarker::sva_action_sampled_off;
 }
 
 [[nodiscard]] constexpr bool vhdl_case_range(

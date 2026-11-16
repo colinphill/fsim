@@ -22,7 +22,8 @@ namespace {
         && left.value_kind == right.value_kind
         && left.enumeration_literals == right.enumeration_literals
         && left.systemverilog_scalar == right.systemverilog_scalar
-        && left.storage == right.storage;
+        && left.storage == right.storage
+        && left.role == right.role;
 }
 
 [[nodiscard]] bool same_debug_string_local(
@@ -132,6 +133,7 @@ ProcessInstanceProgram::ProcessInstanceProgram(Process process)
     , postponed { process.postponed }
     , final { process.final }
     , startup_phase { process.startup_phase }
+    , origin { process.origin }
     , startup_order { process.startup_order }
     , startup_package_owner_id { process.startup_package_owner_id }
     , startup_writable_package_owner_ids {
@@ -168,6 +170,7 @@ ProcessInstanceProgram::ProcessInstanceProgram(
     , postponed { process.postponed() }
     , final { process.final() }
     , startup_phase { process.startup_phase() }
+    , origin { process.origin() }
     , startup_order { process.startup_order() }
     , startup_package_owner_id { process.startup_package_owner_id() }
     , startup_writable_package_owner_ids {
@@ -684,6 +687,12 @@ ProcessProgramView::startup_phase() const noexcept
                               : instance_->startup_phase;
 }
 
+const support::GeneratedObjectOrigin&
+ProcessProgramView::origin() const noexcept
+{
+    return facade_ != nullptr ? facade_->origin : instance_->origin;
+}
+
 const std::uint64_t& ProcessProgramView::startup_order() const noexcept
 {
     return facade_ != nullptr ? facade_->startup_order
@@ -787,6 +796,7 @@ Process ProcessProgramView::materialize_impl(
     process.expression_profiles = expression_profiles();
     process.scheduling_domain = scheduling_domain();
     process.startup_phase = startup_phase();
+    process.origin = origin();
     process.startup_order = startup_order();
     process.startup_package_owner_id = startup_package_owner_id();
     process.startup_writable_package_owner_ids

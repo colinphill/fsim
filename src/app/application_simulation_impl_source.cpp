@@ -9,6 +9,7 @@ namespace fsim::app {
 [[nodiscard]] runtime::PackedLogic4 Simulation::Impl::invoke_source_function(
     const runtime::SystemVerilogClassHandle handle,
     const std::string_view canonical_identity,
+    const runtime::simir::ClassMethodHook builtin,
     std::vector<runtime::PackedLogic4>& actuals,
     std::vector<std::string>& string_actuals,
     const std::span<const std::string> actual_names,
@@ -21,14 +22,16 @@ namespace fsim::app {
 {
     // The built-in randomization methods, called from a method body (IEEE
     // 1800-2017 18.6, 18.8).
-    if (canonical_identity == "@builtin-randomize") {
-        return invoke_source_randomize(handle, actual_names, actuals, { },
+    if (builtin == runtime::simir::ClassMethodHook::builtin_randomize) {
+        return invoke_source_randomize(handle, actual_names, { },
             randomize_no_properties, report_process);
     }
-    if (canonical_identity.starts_with("@builtin-rand-mode:")
-        || canonical_identity.starts_with("@builtin-constraint-mode:")) {
-        return invoke_source_randomization_mode(
-            handle, canonical_identity, actuals);
+    if (builtin == runtime::simir::ClassMethodHook::builtin_rand_mode
+        || builtin
+            == runtime::simir::ClassMethodHook::builtin_constraint_mode) {
+        return invoke_source_randomization_mode(handle,
+            builtin == runtime::simir::ClassMethodHook::builtin_rand_mode,
+            canonical_identity, actuals);
     }
     // A lowered constructor chain has reached the UVM library's constructor:
     // the simulation's UVM services make the base state it would, from its
@@ -111,6 +114,7 @@ namespace fsim::app {
     // 13.1.3); the library constructors that would set them do not run.
     if ((method_name == UvmRole::get_name
             || method_name == UvmRole::get_full_name)
+        // ITEM46-LEFT: the trailing string actual of a call is marked by a reserved actual name that travels through every class hook, the VPI and VHPI call models and the class executor; a typed result flag on the call operations and the hook signatures is needed
         && !actual_names.empty() && actual_names.back() == "@result-string"
         && !string_actuals.empty()
         && (uvm_components.contains(handle) || uvm_objects.contains(handle))) {
@@ -499,7 +503,8 @@ Simulation::Impl::invoke_source_static_function(
         }
         const auto& original = class_heap.object(source);
         const auto copy = construct_class(
-            "@service-construct:" + original.specialization_identity,
+            std::string { original.specialization_identity },
+            runtime::simir::ClassConstruction::service,
             original.declared_type,
             std::span<const runtime::PackedLogic4> { },
             std::span<const std::string> { },
@@ -561,6 +566,7 @@ Simulation::Impl::invoke_source_static_function(
         // process runs after this call.
         std::optional<std::string> lowered;
         if (!actual_names.empty()
+            // ITEM46-LEFT: a reserved actual name marks the list actual of a lowered registry create; needs a typed flag on ClassStaticMethodCall and the static hook, like the result-string marker
             && actual_names.back() == "@lowered-constructors"
             && string_actuals.size() == actual_names.size()) {
             lowered = string_actuals.back();

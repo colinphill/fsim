@@ -32,6 +32,7 @@ namespace {
             type.integer_range = frontend::IntegerRange {
                 0, std::numeric_limits<std::int64_t>::max(), false
             };
+            // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
             type.nominal_type = "@builtin:time";
             type.vhdl_type_declaration = type.nominal_type;
         }
@@ -46,7 +47,7 @@ namespace {
         frontend::Type type;
         type.spelling = std::string { name };
         type.domain = frontend::ValueDomain::Bit2;
-        type.nominal_type = "@fsim-vital:" + std::string { name };
+        type.nominal_type = std::string { name };
         type.vhdl_type_declaration = type.nominal_type;
         type.named_type_span = span;
         type.enumeration_literals = std::move(literals);
@@ -76,6 +77,7 @@ namespace {
     {
         auto type = frontend::vhdl_predefined_integer_type(
             standard, spelling);
+        // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
         type.nominal_type = "@builtin:integer";
         type.vhdl_type_declaration = type.nominal_type;
         type.named_type_span = span;
@@ -93,7 +95,7 @@ namespace {
         frontend::Type type;
         type.spelling = std::string { name };
         type.domain = element.domain;
-        type.nominal_type = "@fsim-vital:" + std::string { name };
+        type.nominal_type = std::string { name };
         type.vhdl_type_declaration = type.nominal_type;
         type.named_type_span = span;
         frontend::VhdlArrayDimension dimension;
@@ -149,7 +151,7 @@ namespace {
         frontend::Type type;
         type.spelling = std::string { name };
         type.domain = frontend::ValueDomain::Bit2;
-        type.nominal_type = "@fsim-vital:" + std::string { name };
+        type.nominal_type = std::string { name };
         type.vhdl_type_declaration = type.nominal_type;
         type.named_type_span = span;
         frontend::VhdlAccessInfo access;
@@ -170,7 +172,7 @@ namespace {
         frontend::Type type;
         type.spelling = std::string { name };
         type.domain = frontend::ValueDomain::Bit2;
-        type.nominal_type = "@fsim-vital:" + std::string { name };
+        type.nominal_type = std::string { name };
         type.vhdl_type_declaration = type.nominal_type;
         type.named_type_span = span;
         type.packed_aggregate = frontend::PackedAggregateKind::Struct;
@@ -296,6 +298,7 @@ namespace {
                 auto vector = vital_array_type(
                     name, "natural", count, logic, unit.span, natural_base);
                 vector.nominal_type.clear();
+                // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
                 vector.vhdl_type_declaration = "@builtin:std_logic_vector";
                 vector.packed_range = frontend::PackedRange {
                     static_cast<std::int64_t>(count - 1U), 0, true
@@ -485,7 +488,7 @@ namespace {
                 frontend::TypeDeclarationKind::VhdlAccess);
             auto violation_access = x01_access;
             violation_access.spelling = "vitalmemoryviolationtype";
-            violation_access.nominal_type = "@fsim-vital:vitalmemoryviolationtype";
+            violation_access.nominal_type = "vitalmemoryviolationtype";
             violation_access.vhdl_type_declaration = violation_access.nominal_type;
             add_vital_alias(
                 unit, "vitalmemoryviolationtype", std::move(violation_access),

@@ -306,6 +306,26 @@ struct Handle {
     LiveService* owner { };
 };
 
+// The kinds of child an object keeps beside its declared names.
+enum class TaggedChild : std::uint8_t {
+    generate,
+    signal_attribute,
+    statement,
+    uninstantiated_instance,
+    sequential,
+    configuration_specification,
+    formal_conversion,
+    actual_conversion,
+    in_port_view,
+    out_port_view,
+    declared_item,
+    subprogram_body,
+    disconnect_all,
+    disconnect_others,
+    disconnection,
+    block_configuration,
+};
+
 enum class ListKind : std::uint8_t {
     decls,
     selected_names,
@@ -546,7 +566,39 @@ struct Object final : Handle {
     // Lazily built one-to-many associations.
     std::map<ListKind, std::vector<Object*>> lists;
     std::map<std::string, Object*, std::less<>> children;
+    // Objects built once on demand: the range a slice name or a for loop
+    // stands for, and the process equivalent to a concurrent statement.
+    Object* slice_range { };
+    Object* loop_range_object { };
+    Object* equivalent_process_object { };
+    // Children cached by role rather than by name: the parameter of a for
+    // loop or for generate, the object an access value designates, the unit
+    // of a region, the definition of a unit declaration; the declarations
+    // a frame elaborates (keyed by the static declaration) and the objects
+    // of expressions (keyed by the expression id).
+    Object* parameter_child { };
+    Object* dereference_child { };
+    Object* unit_child { };
+    Object* definition_child { };
+    std::map<const Object*, Object*> frame_declaration_children;
+    std::map<std::uint64_t, Object*> expression_children;
+
+    // Children that are not found by a declared name: the kind of child and
+    // the identity that tells two of that kind apart.
+    std::map<std::pair<TaggedChild, std::string>, Object*> tagged_children;
 };
+
+// The full name of a member of a library unit, as the standard writes it for
+// objects of the predefined packages (IEEE 1076-2019 19.3.2).
+[[nodiscard]] inline std::string library_member_full_name(
+    const std::string_view library, const std::string_view package,
+    const std::string_view member)
+{
+    std::string result { "@" };
+    result.append(library).append(1U, ':').append(package).append(1U, ':');
+    result.append(member);
+    return result;
+}
 
 // A process or concurrent statement of a region, in textual order.
 struct StatementMember {
@@ -4165,10 +4217,8 @@ private:
     // holds (IEEE 1076-2019 14.6 b, 19.4.6).
     [[nodiscard]] Object* bound_declaration(Object& frame, Object& declaration)
     {
-        const auto key = "@frame:"
-            + std::to_string(reinterpret_cast<std::uintptr_t>(&declaration));
-        if (const auto found = frame.children.find(key);
-            found != frame.children.end()) {
+        if (const auto found = frame.frame_declaration_children.find(&declaration);
+            found != frame.frame_declaration_children.end()) {
             return found->second;
         }
         auto* const call = frame.frame_call;
@@ -4199,7 +4249,7 @@ private:
                 object->type = actual->type;
             }
         }
-        frame.children.emplace(key, object);
+        frame.frame_declaration_children.emplace(&declaration, object);
         return object;
     }
 
@@ -5178,9 +5228,9 @@ private:
             name += "(" + std::to_string(*index) + ")";
             path += "[" + std::to_string(*index) + "]";
         }
-        const auto key = "@generate:" + lower(name);
-        if (const auto found = region.children.find(key);
-            found != region.children.end()) {
+        const auto key = std::pair { TaggedChild::generate, lower(name) };
+        if (const auto found = region.tagged_children.find(key);
+            found != region.tagged_children.end()) {
             return found->second;
         }
         const auto kind = named.kind == vhdl::GenerateKind::block
@@ -5229,9 +5279,9 @@ private:
             parameter->constant = PackedLogic4::from_aval_bval(
                 width, static_cast<std::uint64_t>(*index), 0U);
             object->children.emplace(lower(generate.iterator), parameter);
-            object->children.emplace("@param", parameter);
+            object->parameter_child = parameter;
         }
-        region.children.emplace(key, object);
+        region.tagged_children.emplace(key, object);
         return object;
     }
 
@@ -5652,10 +5702,10 @@ private:
                 const bool parameterized = *designator == "delayed"
                     || ((*designator == "stable" || *designator == "quiet")
                         && ticks != "0");
-                const auto key = "@sigattr:" + info.name;
+                const auto key = std::pair { TaggedChild::signal_attribute, info.name };
                 auto* attribute = static_cast<Object*>(nullptr);
-                if (const auto existing = object.children.find(key);
-                    existing != object.children.end()) {
+                if (const auto existing = object.tagged_children.find(key);
+                    existing != object.tagged_children.end()) {
                     attribute = existing->second;
                 } else {
                     attribute = make_object(parameterized ? vhpiParamAttrNameK
@@ -5676,7 +5726,7 @@ private:
                         : standard_type(*designator == "transaction"
                                   ? "bit"
                                   : "boolean");
-                    object.children.emplace(key, attribute);
+                    object.tagged_children.emplace(key, attribute);
                 }
                 result.push_back(attribute);
             }
@@ -5893,10 +5943,10 @@ private:
         const void* const identity = member.process != nullptr
             ? static_cast<const void*>(member.process)
             : static_cast<const void*>(member.statement);
-        const auto key
-            = "@stmt:" + std::to_string(reinterpret_cast<std::uintptr_t>(identity));
-        if (const auto found = region.children.find(key);
-            found != region.children.end()) {
+        const auto key = std::pair { TaggedChild::statement,
+            std::to_string(reinterpret_cast<std::uintptr_t>(identity)) };
+        if (const auto found = region.tagged_children.find(key);
+            found != region.tagged_children.end()) {
             return found->second;
         }
         const auto kind = member.process != nullptr
@@ -5922,7 +5972,7 @@ private:
             std::size_t next_loop { };
             number_loops(member.process->statements, next_loop);
         }
-        region.children.emplace(key, object);
+        region.tagged_children.emplace(key, object);
         return object;
     }
 
@@ -6048,10 +6098,10 @@ private:
     [[nodiscard]] Object* uninstantiated_instance(
         Object& scope, const vhdl::Instance& instance)
     {
-        const auto key = "@sinstance:"
-            + std::to_string(reinterpret_cast<std::uintptr_t>(&instance));
-        if (const auto found = scope.children.find(key);
-            found != scope.children.end()) {
+        const auto key = std::pair { TaggedChild::uninstantiated_instance,
+            std::to_string(reinterpret_cast<std::uintptr_t>(&instance)) };
+        if (const auto found = scope.tagged_children.find(key);
+            found != scope.tagged_children.end()) {
             return found->second;
         }
         auto* const object
@@ -6061,7 +6111,7 @@ private:
         object->source = instance.source;
         object->full_name = scope.full_name + ":" + object->name;
         object->full_case_name = scope.full_case_name + ":" + object->case_name;
-        scope.children.emplace(key, object);
+        scope.tagged_children.emplace(key, object);
         // The formals of its maps: the generics and ports of the component
         // it instantiates, or of the entity it names (IEEE 1076-2019 11.7;
         // the formals of a map are objects of the instantiated unit, 19.6).
@@ -6265,8 +6315,10 @@ private:
         case 'a': {
             auto* const attribute
                 = make_object(vhpiAttrDeclK, entry.name, &package);
-            attribute->full_name = "@STD:STANDARD:" + attribute->name;
-            attribute->full_case_name = "@std:standard:" + attribute->case_name;
+            attribute->full_name = library_member_full_name(
+                "STD", "STANDARD", attribute->name);
+            attribute->full_case_name = library_member_full_name(
+                "std", "standard", attribute->case_name);
             attribute->type = standard_type(entry.result);
             return attribute;
         }
@@ -6276,8 +6328,10 @@ private:
                 = make_object(vhpiFuncDeclK, entry.name, &package);
             function->predefined_subprogram = true;
             function->predefined_impure = entry.kind == 'i';
-            function->full_name = "@STD:STANDARD:" + function->name;
-            function->full_case_name = "@std:standard:" + function->case_name;
+            function->full_name = library_member_full_name(
+                "STD", "STANDARD", function->name);
+            function->full_case_name = library_member_full_name(
+                "std", "standard", function->case_name);
             function->type = standard_type(entry.result);
             predefined_parameters(*function, entry.parameters);
             return function;
@@ -6364,10 +6418,10 @@ private:
     [[nodiscard]] Object* sequential_object(
         Object& owner, const vhdl::Statement& statement)
     {
-        const auto key = "@seq:"
-            + std::to_string(reinterpret_cast<std::uintptr_t>(&statement));
-        if (const auto found = owner.children.find(key);
-            found != owner.children.end()) {
+        const auto key = std::pair { TaggedChild::sequential,
+            std::to_string(reinterpret_cast<std::uintptr_t>(&statement)) };
+        if (const auto found = owner.tagged_children.find(key);
+            found != owner.tagged_children.end()) {
             return found->second;
         }
         const bool loop = statement.kind == vhdl::StatementKind::loop;
@@ -6418,11 +6472,11 @@ private:
                 && !object->region_declarations.empty()) {
                 if (auto* const parameter
                     = declared(*object, *object->region_declarations.front())) {
-                    object->children.emplace("@param", parameter);
+                    object->parameter_child = parameter;
                 }
             }
         }
-        owner.children.emplace(key, object);
+        owner.tagged_children.emplace(key, object);
         return object;
     }
 
@@ -7490,7 +7544,8 @@ private:
             return;
         }
         for (const auto& part : expression->associations) {
-            const bool index = part.choice_spelling == "@array";
+            const bool index = part.choice_marker
+                == support::ExpressionMarker::vhdl_array_choice;
             std::string text = prefix;
             if (index) {
                 text += "(";
@@ -7600,10 +7655,10 @@ private:
     [[nodiscard]] Object* config_spec_object(Object& architecture,
         const vhdl::ComponentConfiguration& specification)
     {
-        const auto key = "@configspec:"
-            + std::to_string(reinterpret_cast<std::uintptr_t>(&specification));
-        if (const auto found = architecture.children.find(key);
-            found != architecture.children.end()) {
+        const auto key = std::pair { TaggedChild::configuration_specification,
+            std::to_string(reinterpret_cast<std::uintptr_t>(&specification)) };
+        if (const auto found = architecture.tagged_children.find(key);
+            found != architecture.tagged_children.end()) {
             return found->second;
         }
         auto* const object
@@ -7617,7 +7672,7 @@ private:
                 }
             }
         }
-        architecture.children.emplace(key, object);
+        architecture.tagged_children.emplace(key, object);
         return object;
     }
 
@@ -7773,17 +7828,18 @@ private:
     // A conversion in a port association (IEEE 1076-2019 19.12.2.2): a type
     // conversion (class typeConv) or a conversion function call (convFunc).
     [[nodiscard]] Object* conversion_object(Object& scope,
-        const std::string_view name, const bool function, const std::string& key)
+        const std::string_view name, const bool function,
+        const std::pair<TaggedChild, std::string>& key)
     {
-        if (const auto found = scope.children.find(key);
-            found != scope.children.end()) {
+        if (const auto found = scope.tagged_children.find(key);
+            found != scope.tagged_children.end()) {
             return found->second;
         }
         auto* const object
             = make_object(function ? vhpiConvFuncK : vhpiTypeConvK, name, &scope);
         object->full_name = object->name;
         object->full_case_name = object->case_name;
-        scope.children.emplace(key, object);
+        scope.tagged_children.emplace(key, object);
         return object;
     }
 
@@ -7824,7 +7880,7 @@ private:
             const bool function = standard_type(std::string { name }) == nullptr
                 && (type == nullptr || !is_type(*type));
             conversion = conversion_object(region, name, function,
-                "@formal-conversion:" + lower(name));
+                std::pair { TaggedChild::formal_conversion, lower(name) });
         }
         return part;
     }
@@ -7861,7 +7917,8 @@ private:
                         ? std::string_view { expression->referenced_name->spelling }
                         : std::string_view { expression->text }),
                     is_function_call(*expression),
-                    "@conversion:" + std::to_string(id.value()));
+                    std::pair { TaggedChild::actual_conversion,
+                        std::to_string(id.value()) });
                 return;
             }
         }
@@ -7931,9 +7988,11 @@ private:
     // Figure 46): the same signal, as an object of the port class.
     [[nodiscard]] Object* port_view(Object& port, const vhpiClassKindT kind)
     {
-        const std::string key = kind == vhpiInPortK ? "@inport" : "@outport";
-        if (const auto found = port.children.find(key);
-            found != port.children.end()) {
+        const auto key = std::pair { kind == vhpiInPortK ? TaggedChild::in_port_view
+                                                  : TaggedChild::out_port_view,
+            std::string { } };
+        if (const auto found = port.tagged_children.find(key);
+            found != port.tagged_children.end()) {
             return found->second;
         }
         auto* const object = make_object(kind, port.name, port.parent);
@@ -7949,7 +8008,7 @@ private:
         object->suffix = port.suffix;
         object->position = port.position;
         object->source = port.source;
-        port.children.emplace(key, object);
+        port.tagged_children.emplace(key, object);
         return object;
     }
 
@@ -8602,15 +8661,15 @@ private:
                 ? call_object(scope, id, expression)
                 : nullptr;
         case vhdl::ExpressionKind::aggregate: {
-            const auto key = "@expr:" + std::to_string(id.value());
-            if (const auto found = scope.children.find(key);
-                found != scope.children.end()) {
+            const auto key = static_cast<std::uint64_t>(id.value());
+            if (const auto found = scope.expression_children.find(key);
+                found != scope.expression_children.end()) {
                 return found->second;
             }
             auto* const object = make_object(vhpiAggregateK, "", &scope);
             object->expression = &expression;
             object->source = expression.source;
-            scope.children.emplace(key, object);
+            scope.expression_children.emplace(key, object);
             return object;
         }
         default:
@@ -8623,9 +8682,9 @@ private:
     [[nodiscard]] Object* call_object(Object& scope,
         const semantic::ExpressionId id, const vhdl::Expression& expression)
     {
-        const auto key = "@expr:" + std::to_string(id.value());
-        if (const auto found = scope.children.find(key);
-            found != scope.children.end()) {
+        const auto key = static_cast<std::uint64_t>(id.value());
+        if (const auto found = scope.expression_children.find(key);
+            found != scope.expression_children.end()) {
             return found->second;
         }
         // One call is one object whichever part of its statement a program
@@ -8639,7 +8698,7 @@ private:
         const auto owner_key = std::pair { statement, expression.source.value() };
         if (const auto found = calls_by_statement_.find(owner_key);
             found != calls_by_statement_.end()) {
-            scope.children.emplace(key, found->second);
+            scope.expression_children.emplace(key, found->second);
             return found->second;
         }
         const bool symbol = expression.kind != vhdl::ExpressionKind::call;
@@ -8660,7 +8719,7 @@ private:
         object->source = expression.source;
         object->full_name = object->name;
         object->full_case_name = object->case_name;
-        scope.children.emplace(key, object);
+        scope.expression_children.emplace(key, object);
         calls_by_statement_.emplace(owner_key, object);
         return object;
     }
@@ -8672,9 +8731,9 @@ private:
         const semantic::ExpressionId id, const vhdl::Expression& expression,
         const vhpiClassKindT kind, const std::string_view name)
     {
-        const auto key = "@expr:" + std::to_string(id.value());
-        if (const auto found = scope.children.find(key);
-            found != scope.children.end()) {
+        const auto key = static_cast<std::uint64_t>(id.value());
+        if (const auto found = scope.expression_children.find(key);
+            found != scope.expression_children.end()) {
             return found->second;
         }
         auto* const object = make_object(kind, name, &scope);
@@ -8682,7 +8741,7 @@ private:
         object->source = expression.source;
         object->full_name = object->name;
         object->full_case_name = object->case_name;
-        scope.children.emplace(key, object);
+        scope.expression_children.emplace(key, object);
         return object;
     }
 
@@ -8714,9 +8773,9 @@ private:
     [[nodiscard]] Object* attribute_name(Object& scope,
         const semantic::ExpressionId id, const vhdl::Expression& expression)
     {
-        const auto key = "@expr:" + std::to_string(id.value());
-        if (const auto found = scope.children.find(key);
-            found != scope.children.end()) {
+        const auto key = static_cast<std::uint64_t>(id.value());
+        if (const auto found = scope.expression_children.find(key);
+            found != scope.expression_children.end()) {
             return found->second;
         }
         std::string prefix;
@@ -8734,7 +8793,7 @@ private:
         object->source = expression.source;
         object->full_name = object->name;
         object->full_case_name = object->case_name;
-        scope.children.emplace(key, object);
+        scope.expression_children.emplace(key, object);
         return object;
     }
 
@@ -8770,9 +8829,9 @@ private:
         const semantic::ExpressionId id, const vhdl::Expression& expression,
         Object& prefix)
     {
-        const auto key = "@expr:" + std::to_string(id.value());
-        if (const auto found = scope.children.find(key);
-            found != scope.children.end()) {
+        const auto key = static_cast<std::uint64_t>(id.value());
+        if (const auto found = scope.expression_children.find(key);
+            found != scope.expression_children.end()) {
             return found->second;
         }
         const bool slice = expression.kind == vhdl::ExpressionKind::slice;
@@ -8796,7 +8855,7 @@ private:
             const auto& data = *prefix.type->type_data;
             object->type = slice ? prefix.type : data.element;
         }
-        scope.children.emplace(key, object);
+        scope.expression_children.emplace(key, object);
         return object;
     }
 
@@ -8997,9 +9056,8 @@ private:
             || slice.expression == nullptr || slice.expression->operands.size() < 3U) {
             return nullptr;
         }
-        if (const auto found = slice.children.find("@constraint");
-            found != slice.children.end()) {
-            return found->second;
+        if (slice.slice_range != nullptr) {
+            return slice.slice_range;
         }
         Object* index_type = nullptr;
         if (slice.parent != nullptr && slice.parent->type != nullptr
@@ -9013,7 +9071,7 @@ private:
         range->dynamic_scope = slice.dynamic_scope;
         range->bound_left = slice.expression->operands[1];
         range->bound_right = slice.expression->operands[2];
-        slice.children.emplace("@constraint", range);
+        slice.slice_range = range;
         return range;
     }
 
@@ -9496,9 +9554,8 @@ private:
     // whose bounds are literals has an object.
     [[nodiscard]] Object* loop_range(Object& loop)
     {
-        if (const auto found = loop.children.find("@range");
-            found != loop.children.end()) {
-            return found->second;
+        if (loop.loop_range_object != nullptr) {
+            return loop.loop_range_object;
         }
         if (loop.statement == nullptr || !loop.statement->loop_initial
             || !loop.statement->loop_limit) {
@@ -9511,7 +9568,7 @@ private:
         }
         auto* const range = range_object(
             Range { *left, *right, loop.statement->loop_descending });
-        loop.children.emplace("@range", range);
+        loop.loop_range_object = range;
         return range;
     }
 
@@ -9609,9 +9666,8 @@ private:
             || !concurrent_kind(*statement.statement)) {
             return nullptr;
         }
-        if (const auto found = statement.children.find("@eq");
-            found != statement.children.end()) {
-            return found->second;
+        if (statement.equivalent_process_object != nullptr) {
+            return statement.equivalent_process_object;
         }
         auto* const object
             = make_object(vhpiProcessStmtK, statement.name, statement.parent);
@@ -9624,7 +9680,7 @@ private:
         object->equivalent = true;
         object->label_name = statement.label_name;
         object->source = statement.source;
-        statement.children.emplace("@eq", object);
+        statement.equivalent_process_object = object;
         return object;
     }
 
@@ -10090,10 +10146,10 @@ private:
     [[nodiscard]] Object* declared_item(Object& region,
         const vhdl::Declaration& declaration, const vhpiClassKindT kind)
     {
-        const auto key = "@item:"
-            + std::to_string(reinterpret_cast<std::uintptr_t>(&declaration));
-        if (const auto found = region.children.find(key);
-            found != region.children.end()) {
+        const auto key = std::pair { TaggedChild::declared_item,
+            std::to_string(reinterpret_cast<std::uintptr_t>(&declaration)) };
+        if (const auto found = region.tagged_children.find(key);
+            found != region.tagged_children.end()) {
             return found->second;
         }
         auto* const object = make_declared_object(kind, declaration, &region);
@@ -10115,7 +10171,7 @@ private:
                 }
             }
         }
-        region.children.emplace(key, object);
+        region.tagged_children.emplace(key, object);
         return object;
     }
 
@@ -10259,10 +10315,10 @@ private:
             return nullptr;
         }
         const auto& declaration = *resolved;
-        const auto key = "@body:"
-            + std::to_string(reinterpret_cast<std::uintptr_t>(&declaration));
-        if (const auto found = owner.children.find(key);
-            found != owner.children.end()) {
+        const auto key = std::pair { TaggedChild::subprogram_body,
+            std::to_string(reinterpret_cast<std::uintptr_t>(&declaration)) };
+        if (const auto found = owner.tagged_children.find(key);
+            found != owner.tagged_children.end()) {
             return found->second;
         }
         auto* const object = make_declared_object(vhpiSubpBodyK, declaration, &owner);
@@ -10286,7 +10342,7 @@ private:
         }
         std::size_t next_loop { };
         number_loops(declaration.statements, next_loop);
-        owner.children.emplace(key, object);
+        owner.tagged_children.emplace(key, object);
         return object;
     }
 
@@ -10970,10 +11026,9 @@ private:
         if (match != nullptr) {
             return declared(region, *match);
         }
-        if (const auto parameter = region.children.find("@param");
-            parameter != region.children.end()
-            && same_name(parameter->second->case_name, name)) {
-            return parameter->second;
+        if (region.parameter_child != nullptr
+            && same_name(region.parameter_child->case_name, name)) {
+            return region.parameter_child;
         }
         for (auto* const child : child_instances(region)) {
             if (same_name(child->case_name, name)) {
@@ -11625,9 +11680,8 @@ private:
                 || object->type == nullptr || !is_access_type(*object->type)) {
                 return nullptr;
             }
-            if (const auto found = object->children.find("@deref");
-                found != object->children.end()) {
-                return to_handle(found->second);
+            if (object->dereference_child != nullptr) {
+                return to_handle(object->dereference_child);
             }
             const auto* designated = object->type->type_data->designated;
             if (designated == nullptr && object->type->type_data->base != nullptr
@@ -11640,7 +11694,7 @@ private:
             auto* const dereference
                 = make_object(vhpiDerefObjK, "", object);
             dereference->type = subtype_object(*designated, nullptr);
-            object->children.emplace("@deref", dereference);
+            object->dereference_child = dereference;
             return to_handle(dereference);
         }
         case DEPRECATED_vhpiValSubtype:
@@ -12009,15 +12063,18 @@ private:
             if (object->disconnection->selection != wanted) {
                 return nullptr;
             }
-            const auto key = relation == vhpiAll ? "@all" : "@others";
-            if (const auto found = object->children.find(key);
-                found != object->children.end()) {
+            const auto key = std::pair { relation == vhpiAll
+                    ? TaggedChild::disconnect_all
+                    : TaggedChild::disconnect_others,
+                std::string { } };
+            if (const auto found = object->tagged_children.find(key);
+                found != object->tagged_children.end()) {
                 return to_handle(found->second);
             }
             auto* const designator = make_object(
                 relation == vhpiAll ? vhpiAllK : vhpiOthersK,
                 relation == vhpiAll ? "all" : "others", object);
-            object->children.emplace(key, designator);
+            object->tagged_children.emplace(key, designator);
             return to_handle(designator);
         }
         case vhpiLibraryDecl:
@@ -12113,9 +12170,9 @@ private:
             return nullptr;
         }
         case vhpiParamDecl: {
-            const auto found = object->children.find("@param");
-            return found == object->children.end() ? nullptr
-                                                   : to_handle(found->second);
+            return object->parameter_child == nullptr
+                ? nullptr
+                : to_handle(object->parameter_child);
         }
         case vhpiCondExpr:
         case vhpiLhsExpr:
@@ -12304,9 +12361,8 @@ private:
         if (!is_region(region) || region.unit == nullptr) {
             return nullptr;
         }
-        const auto found = region.children.find("@unit");
-        if (found != region.children.end()) {
-            return found->second;
+        if (region.unit_child != nullptr) {
+            return region.unit_child;
         }
         const auto kind = region.unit->kind == vhdl::UnitKind::package
             ? vhpiPackDeclK
@@ -12317,7 +12373,7 @@ private:
         unit->unit = region.unit;
         unit->entity = region.entity;
         unit->instance = &region;
-        region.children.emplace("@unit", unit);
+        region.unit_child = unit;
         return unit;
     }
 
@@ -12790,11 +12846,11 @@ private:
         }
         for (const auto* const specifications : sources) {
             for (const auto& specification : *specifications) {
-                const auto key = "@disconnect:"
-                    + std::to_string(
-                        reinterpret_cast<std::uintptr_t>(&specification));
-                if (const auto found = owner.children.find(key);
-                    found != owner.children.end()) {
+                const auto key = std::pair { TaggedChild::disconnection,
+                    std::to_string(
+                        reinterpret_cast<std::uintptr_t>(&specification)) };
+                if (const auto found = owner.tagged_children.find(key);
+                    found != owner.tagged_children.end()) {
                     result.push_back(found->second);
                     continue;
                 }
@@ -12802,7 +12858,7 @@ private:
                     = make_object(vhpiDisconnectSpecK, "", scope);
                 object->disconnection = &specification;
                 object->source = specification.source;
-                owner.children.emplace(key, object);
+                owner.tagged_children.emplace(key, object);
                 result.push_back(object);
             }
         }
@@ -12892,9 +12948,8 @@ private:
             || unit.type->type_data == nullptr || unit.position <= 1) {
             return nullptr;
         }
-        const auto found = unit.children.find("@definition");
-        if (found != unit.children.end()) {
-            return found->second;
+        if (unit.definition_child != nullptr) {
+            return unit.definition_child;
         }
         const auto& units = unit.type->type_data->units;
         if (units.empty()) {
@@ -12909,7 +12964,7 @@ private:
         object->position = 1;
         object->constant = PackedLogic4::from_aval_bval(
             64U, static_cast<std::uint64_t>(unit.position), 0U);
-        unit.children.emplace("@definition", object);
+        unit.definition_child = object;
         return object;
     }
 
@@ -12985,16 +13040,16 @@ private:
     [[nodiscard]] Object* block_configuration_object(
         Object& owner, const vhdl::BlockConfiguration& node)
     {
-        const auto key = "@blockconfig:"
-            + std::to_string(reinterpret_cast<std::uintptr_t>(&node));
-        if (const auto found = owner.children.find(key);
-            found != owner.children.end()) {
+        const auto key = std::pair { TaggedChild::block_configuration,
+            std::to_string(reinterpret_cast<std::uintptr_t>(&node)) };
+        if (const auto found = owner.tagged_children.find(key);
+            found != owner.tagged_children.end()) {
             return found->second;
         }
         auto* const object = make_object(vhpiBlockConfigK, "", &owner);
         object->block_configuration = &node;
         object->unit = owner.unit;
-        owner.children.emplace(key, object);
+        owner.tagged_children.emplace(key, object);
         return object;
     }
 
@@ -13408,9 +13463,8 @@ private:
         const auto generate_parameter = [&] {
             if (object != nullptr && object->kind == vhpiForGenerateK
                 && object->generate_index) {
-                if (const auto found = object->children.find("@param");
-                    found != object->children.end()) {
-                    result.push_back(found->second);
+                if (object->parameter_child != nullptr) {
+                    result.push_back(object->parameter_child);
                 }
             }
         };
@@ -14073,8 +14127,10 @@ private:
         auto* const function = make_object(vhpiFuncDeclK, "RESOLVED", nullptr);
         function->case_name = "resolved";
         function->intrinsic_resolved = true;
-        function->full_name = "@IEEE:STD_LOGIC_1164:RESOLVED";
-        function->full_case_name = "@ieee:std_logic_1164:resolved";
+        function->full_name
+            = library_member_full_name("IEEE", "STD_LOGIC_1164", "RESOLVED");
+        function->full_case_name
+            = library_member_full_name("ieee", "std_logic_1164", "resolved");
         function->type = standard_type("std_ulogic");
         auto* const parameter = make_object(vhpiConstParamDeclK, "S", function);
         parameter->case_name = "s";
@@ -15163,9 +15219,7 @@ private:
                 && object.parent->kind != vhpiForLoopK)) {
             return false;
         }
-        const auto found = object.parent->children.find("@param");
-        return found != object.parent->children.end()
-            && found->second == &object;
+        return object.parent->parameter_child == &object;
     }
 
     // The classes derived from objDecl (IEEE 1076-2019 19.4.3, Figure 13).
@@ -19441,6 +19495,7 @@ private:
             call->type = subtype_object(*callable->callable->return_type, nullptr);
         }
         const bool text_result = !names.empty()
+            // ITEM46-LEFT: the trailing string actual of a call is marked by a reserved actual name that travels through every class hook, the VPI and VHPI call models and the class executor; a typed result flag on the call operations and the hook signatures is needed
             && names.back() == "@result-string";
         const auto formals = names.size() - (text_result ? 1U : 0U);
         std::size_t expected_width { };

@@ -5174,6 +5174,10 @@ std::vector<Token> VerilogParser::sva_tick_call(const SvaPrepared& prepared,
         auto lexed = synthetic_tokens(text, span);
         call.insert(call.end(), lexed.begin(), lexed.end());
     };
+    const auto emit_name = [&](const support::ExpressionMarker marker) {
+        const auto name = marked_name_tokens(marker, span);
+        call.insert(call.end(), name.begin(), name.end());
+    };
     const auto emit_truth = [&](const std::span<const Token> condition) {
         emit("((|(");
         call.insert(call.end(), condition.begin(), condition.end());
@@ -5190,7 +5194,8 @@ std::vector<Token> VerilogParser::sva_tick_call(const SvaPrepared& prepared,
         emit_truth(condition);
         emit(")");
     };
-    emit("$__fsim_sva_tick(" + std::to_string(site) + ", \"" + prepared.plan
+    emit_name(support::ExpressionMarker::sva_tick);
+    emit("(" + std::to_string(site) + ", \"" + prepared.plan
         + "\", " + std::to_string(prepared.guards.size()) + ", ");
     if (prepared.guards.empty()) {
         emit("1'b0");
@@ -5270,16 +5275,27 @@ std::vector<Token> VerilogParser::sva_call_loop(const SvaPrepared& prepared,
     // The subroutine calls the tick queued, in the order the threads
     // reached their end points (16.11), each with that thread's locals; the
     // by-value arguments read sampled values, as the request loop does.
+    const auto emit_name = [&](const support::ExpressionMarker marker) {
+        const auto name = marked_name_tokens(marker, span);
+        result.insert(result.end(), name.begin(), name.end());
+    };
     const auto which = prefix + "_k";
     const auto site_text = std::to_string(site);
-    const auto next = which + " = $__fsim_sva_call(" + site_text + "); ";
+    const auto emit_next = [&] {
+        emit(which + " = ");
+        emit_name(support::ExpressionMarker::sva_call);
+        emit("(" + site_text + "); ");
+    };
     // The calls run in the Reactive region, like an action block (16.11);
     // the process keeps reading sampled values there.
-    emit(next + "if (" + which + " != 0) begin __fsim_act_callregion(); while ("
-        + which + " != 0) begin ");
+    emit_next();
+    emit("if (" + which + " != 0) begin ");
+    emit_name(support::ExpressionMarker::sva_action_callregion);
+    emit("(); while (" + which + " != 0) begin ");
     for (std::size_t local = 0; local < prepared.locals.size(); ++local) {
-        emit(prepared.locals[local].name + " = $__fsim_sva_local(" + site_text
-            + ", -1, " + std::to_string(local) + "); ");
+        emit(prepared.locals[local].name + " = ");
+        emit_name(support::ExpressionMarker::sva_local);
+        emit("(" + site_text + ", -1, " + std::to_string(local) + "); ");
     }
     for (std::size_t index = 0; index < prepared.calls.size(); ++index) {
         emit(std::string { index == 0U ? "" : "else " } + "if (" + which
@@ -5288,7 +5304,8 @@ std::vector<Token> VerilogParser::sva_call_loop(const SvaPrepared& prepared,
             prepared.calls[index].end());
         emit("; end ");
     }
-    emit(next + "end end ");
+    emit_next();
+    emit("end end ");
     return result;
 }
 
@@ -5314,20 +5331,29 @@ std::vector<Token> VerilogParser::sva_request_loop(const SvaPrepared& prepared,
     const auto which = prefix + "_e";
     const auto answer = prefix + "_a";
     const auto site_text = std::to_string(site);
+    const auto emit_name = [&](const support::ExpressionMarker marker) {
+        const auto name = marked_name_tokens(marker, span);
+        result.insert(result.end(), name.begin(), name.end());
+    };
     emit("while (" + count + " < 0) begin for (" + number + " = 0; " + number
         + " < -" + count + "; " + number + " = " + number + " + 1) begin ");
     for (std::size_t local = 0; local < prepared.locals.size(); ++local) {
-        emit(prepared.locals[local].name + " = $__fsim_sva_local(" + site_text
-            + ", " + number + ", " + std::to_string(local) + "); ");
+        emit(prepared.locals[local].name + " = ");
+        emit_name(support::ExpressionMarker::sva_local);
+        emit("(" + site_text + ", " + number + ", " + std::to_string(local)
+            + "); ");
     }
-    emit(which + " = $__fsim_sva_request(" + site_text + ", " + number + "); ");
+    emit(which + " = ");
+    emit_name(support::ExpressionMarker::sva_request);
+    emit("(" + site_text + ", " + number + "); ");
     for (std::size_t index = 0; index < prepared.expressions.size(); ++index) {
         const auto& expression = prepared.expressions[index];
         emit(std::string { index == 0U ? "" : "else " } + "if (" + which
             + " == " + std::to_string(index) + ") ");
         if (expression.target == 0U) {
-            emit(answer + " = $__fsim_sva_answer(" + site_text + ", " + number
-                + ", ((|(");
+            emit(answer + " = ");
+            emit_name(support::ExpressionMarker::sva_answer);
+            emit("(" + site_text + ", " + number + ", ((|(");
             result.insert(result.end(), expression.tokens.begin(),
                 expression.tokens.end());
             emit(")) === 1'b1)); ");
@@ -5335,9 +5361,10 @@ std::vector<Token> VerilogParser::sva_request_loop(const SvaPrepared& prepared,
             emit("begin ");
             result.insert(result.end(), expression.tokens.begin(),
                 expression.tokens.end());
-            emit("; " + answer + " = $__fsim_sva_answer(" + site_text + ", "
-                + number + ", " + prepared.locals[expression.target - 1U].name
-                + "); end ");
+            emit("; " + answer + " = ");
+            emit_name(support::ExpressionMarker::sva_answer);
+            emit("(" + site_text + ", " + number + ", "
+                + prepared.locals[expression.target - 1U].name + "); end ");
         }
     }
     emit("end " + count + " = ");
@@ -5411,6 +5438,10 @@ bool VerilogParser::resolve_expect_statements(const DesignUnit& scope,
         const auto emit = [&](const std::string_view text) {
             auto lexed = synthetic_tokens(text, directive.span);
             body.insert(body.end(), lexed.begin(), lexed.end());
+        };
+        const auto emit_name = [&](const support::ExpressionMarker marker) {
+            const auto name = marked_name_tokens(marker, directive.span);
+            body.insert(body.end(), name.begin(), name.end());
         };
         // The disable condition reads current values at any time of the
         // attempt (16.12), as a directive's does: a hidden net of the scope
@@ -5554,14 +5585,16 @@ bool VerilogParser::resolve_expect_statements(const DesignUnit& scope,
             // assertion process does: the statement's procedure reads them
             // so between the two markers, and its own variables (the
             // locals) with their current values.
-            emit("__fsim_act_sampledon(); ");
+            emit_name(support::ExpressionMarker::sva_action_sampled_on);
+            emit("(); ");
             const auto loop = sva_request_loop(
                 *prepared, site, call, prefix, directive.span);
             body.insert(body.end(), loop.begin(), loop.end());
             const auto calls
                 = sva_call_loop(*prepared, site, prefix, directive.span);
             body.insert(body.end(), calls.begin(), calls.end());
-            emit("__fsim_act_sampledoff(); ");
+            emit_name(support::ExpressionMarker::sva_action_sampled_off);
+            emit("(); ");
         }
         // The pass statement runs on a nonvacuous (1) or vacuous (3)
         // success and the fail statement on a failure (2) only while the
@@ -5576,17 +5609,20 @@ bool VerilogParser::resolve_expect_statements(const DesignUnit& scope,
         }
         const auto control = prefix + "_c";
         emit(prefix + "_s = 1'b0; if (" + prefix + "_n != 0) " + prefix
-            + "_o = $__fsim_sva_outcome(" + std::to_string(site) + "); end "
-            + control + " = $__fsim_assertion_control("
-            + std::to_string(semantic::sva::control_expect) + ", 0, \""
+            + "_o = ");
+        emit_name(support::ExpressionMarker::sva_outcome);
+        emit("(" + std::to_string(site) + "); end " + control + " = ");
+        emit_name(support::ExpressionMarker::sva_assertion_control);
+        emit("(" + std::to_string(semantic::sva::control_expect) + ", 0, \""
             + label + "\"); if ((" + prefix + "_o == 1 && (" + control + " & "
             + std::to_string(semantic::sva::control_pass) + ") != 0) || ("
             + prefix + "_o == 3 && (" + control + " & "
-            + std::to_string(semantic::sva::control_vacuous)
-            + ") != 0)) __fsim_act_success(); else if (" + prefix
-            + "_o == 2 && (" + control + " & "
-            + std::to_string(semantic::sva::control_fail)
-            + ") != 0) __fsim_act_failure(); end");
+            + std::to_string(semantic::sva::control_vacuous) + ") != 0)) ");
+        emit_name(support::ExpressionMarker::sva_action_success);
+        emit("(); else if (" + prefix + "_o == 2 && (" + control + " & "
+            + std::to_string(semantic::sva::control_fail) + ") != 0) ");
+        emit_name(support::ExpressionMarker::sva_action_failure);
+        emit("(); end");
         auto generated = parse_generated_statement(std::move(body), directive.span);
         if (!generated) {
             return;
@@ -5629,7 +5665,7 @@ bool VerilogParser::resolve_expect_statements(const DesignUnit& scope,
         }
         const auto substitute = [&](const auto& self, Statement& item) -> void {
             if (item.kind == StatementKind::TaskCall
-                && item.task_name.starts_with("__fsim_act_")) {
+                && support::sva_action(item.task_marker)) {
                 Statement replacement;
                 replacement.kind = StatementKind::Block;
                 replacement.span = directive.span;
@@ -5639,14 +5675,18 @@ bool VerilogParser::resolve_expect_statements(const DesignUnit& scope,
                         support::SvaDirective::assertion, 0U, prefix,
                         directive.span) };
                 };
-                if (item.task_name == "__fsim_act_callregion") {
+                if (item.task_marker
+                    == support::ExpressionMarker::sva_action_callregion) {
                     marker(support::SvaMarkerKind::call_region);
-                } else if (item.task_name == "__fsim_act_sampledon") {
+                } else if (item.task_marker
+                    == support::ExpressionMarker::sva_action_sampled_on) {
                     marker(support::SvaMarkerKind::sampled_reads_on);
-                } else if (item.task_name == "__fsim_act_sampledoff") {
+                } else if (item.task_marker
+                    == support::ExpressionMarker::sva_action_sampled_off) {
                     marker(support::SvaMarkerKind::sampled_reads_off);
                 } else {
-                    const bool pass = item.task_name == "__fsim_act_success";
+                    const bool pass = item.task_marker
+                        == support::ExpressionMarker::sva_action_success;
                     const auto& actions = pass ? pass_actions : failure_actions;
                     replacement.statements.assign(actions.begin(), actions.end());
                     if (pass ? !actions.empty() : source_else) {
@@ -5948,8 +5988,13 @@ bool VerilogParser::resolve_sva_monitor(DesignUnit& unit,
             = sva_local_declarations(*prepared, prefix, directive.span);
         body.insert(body.end(), declarations.begin(), declarations.end());
     }
-    emit(prefix + "_c = $__fsim_assertion_control("
-        + std::to_string(semantic::sva::control_concurrent) + ", "
+    emit(prefix + "_c = ");
+    {
+        const auto control_name = marked_name_tokens(
+            support::ExpressionMarker::sva_assertion_control, directive.span);
+        body.insert(body.end(), control_name.begin(), control_name.end());
+    }
+    emit("(" + std::to_string(semantic::sva::control_concurrent) + ", "
         + std::to_string(control_directive) + ", \"\"); @(");
     std::vector<Process> clock_processes;
     // A monitor whose clocks report their ticks through hidden bits (a
@@ -6005,15 +6050,33 @@ bool VerilogParser::resolve_sva_monitor(DesignUnit& unit,
     // An outcome whose action block the assertion controls switched off
     // comes as its code plus 8 (sva::layout::outcome_action_off): it still
     // counts, but its pass or fail statement does not run (20.11).
-    const auto outcomes = "repeat (" + prefix + "_n) begin " + outcome
-        + " = $__fsim_sva_outcome(0); if (" + outcome
-        + " == 1) __fsim_act_success(); else if (" + outcome
-        + " == 2) __fsim_act_failure(); else if (" + outcome
-        + " == 3) __fsim_act_vacuous(); else if (" + outcome
-        + " == 4) __fsim_act_abort(); else if (" + outcome
-        + " == 9) __fsim_act_success_off(); else if (" + outcome
-        + " == 10) __fsim_act_failure_off(); else if (" + outcome
-        + " == 11) __fsim_act_vacuous_off(); end";
+    const auto emit_outcomes = [&] {
+        const auto emit_name = [&](const support::ExpressionMarker marker) {
+            const auto name = marked_name_tokens(marker, directive.span);
+            body.insert(body.end(), name.begin(), name.end());
+        };
+        emit("repeat (" + prefix + "_n) begin " + outcome + " = ");
+        emit_name(support::ExpressionMarker::sva_outcome);
+        emit("(0); ");
+        constexpr std::array<std::pair<int, support::ExpressionMarker>, 7U>
+            outcome_actions { {
+                { 1, support::ExpressionMarker::sva_action_success },
+                { 2, support::ExpressionMarker::sva_action_failure },
+                { 3, support::ExpressionMarker::sva_action_vacuous },
+                { 4, support::ExpressionMarker::sva_action_abort },
+                { 9, support::ExpressionMarker::sva_action_success_off },
+                { 10, support::ExpressionMarker::sva_action_failure_off },
+                { 11, support::ExpressionMarker::sva_action_vacuous_off },
+            } };
+        for (std::size_t index = 0; index < outcome_actions.size(); ++index) {
+            emit(std::string { index == 0U ? "" : "else " } + "if (" + outcome
+                + " == " + std::to_string(outcome_actions[index].first)
+                + ") ");
+            emit_name(outcome_actions[index].second);
+            emit("(); ");
+        }
+        emit("end");
+    };
     // The disable condition reads current values (16.12). Its truth is the
     // directive's hidden net, which a continuous assignment keeps, and the
     // tick reads the net as its disabled operand: an attempt that starts
@@ -6054,7 +6117,11 @@ bool VerilogParser::resolve_sva_monitor(DesignUnit& unit,
     // The end points this time step's evaluation reads are known once
     // their monitors have ticked (16.13.6).
     for (const auto& bit : prepared->endpoint_waits) {
-        emit("wait ($__fsim_current(" + bit + " == 1'b0)); ");
+        emit("wait (");
+        const auto current = marked_name_tokens(
+            support::ExpressionMarker::sva_current, directive.span);
+        body.insert(body.end(), current.begin(), current.end());
+        emit("(" + bit + " == 1'b0)); ");
     }
     emit(prefix + "_n = ");
     {
@@ -6111,7 +6178,8 @@ bool VerilogParser::resolve_sva_monitor(DesignUnit& unit,
     for (const auto& bit : tick_bits) {
         emit(bit + " = 1'b0; ");
     }
-    emit(outcomes + " end end");
+    emit_outcomes();
+    emit(" end end");
     auto statement = parse_generated_statement(std::move(body), directive.span);
     if (!statement) {
         return reject("the generated process does not parse");
@@ -6143,31 +6211,33 @@ bool VerilogParser::resolve_sva_monitor(DesignUnit& unit,
     // Replace the action placeholders.
     const auto substitute = [&](const auto& self, Statement& item) -> void {
         if (item.kind == StatementKind::TaskCall
-            && item.task_name.starts_with("__fsim_act_")) {
-            const auto which = item.task_name.substr(11U);
+            && support::sva_action(item.task_marker)) {
+            using Action = support::ExpressionMarker;
+            const auto which = item.task_marker;
             Statement replacement;
             replacement.kind = StatementKind::Block;
             replacement.span = directive.span;
             if (endpoint != nullptr) {
-                if (which == "success" || which == "success_off") {
+                if (which == Action::sva_action_success
+                    || which == Action::sva_action_success_off) {
                     replacement.statements = endpoint_match;
                 }
-            } else if (which == "callregion") {
+            } else if (which == Action::sva_action_callregion) {
                 replacement.statements = { sva_marker_statement(
                     support::SvaMarkerKind::call_region,
                     support::SvaOutcome::pass, sva_kind, marker_slot,
                     process.name, directive.span) };
-            } else if (which == "success") {
+            } else if (which == Action::sva_action_success) {
                 replacement.statements = { success };
-            } else if (which == "failure") {
+            } else if (which == Action::sva_action_failure) {
                 replacement.statements = { failure };
-            } else if (which == "vacuous") {
+            } else if (which == Action::sva_action_vacuous) {
                 replacement.statements = vacuous;
-            } else if (which == "success_off") {
+            } else if (which == Action::sva_action_success_off) {
                 replacement.statements = { coverage_marker(support::SvaOutcome::pass) };
-            } else if (which == "failure_off") {
+            } else if (which == Action::sva_action_failure_off) {
                 replacement.statements = { coverage_marker(support::SvaOutcome::failure) };
-            } else if (which == "vacuous_off") {
+            } else if (which == Action::sva_action_vacuous_off) {
                 replacement.statements = { coverage_marker(support::SvaOutcome::vacuous) };
             } else {
                 replacement.statements = disabled;
@@ -6329,8 +6399,12 @@ std::optional<std::vector<Token>> VerilogParser::sva_endpoint_use(
         // Triggered in this time step: a match at the current time, read
         // once the monitor has ticked (16.13.6).
         wait_bit = name + "_ck";
-        return synthetic_tokens(
-            "$__fsim_current(" + name + "_t == $realtime + 1.0)", span);
+        auto current = marked_name_tokens(
+            support::ExpressionMarker::sva_current, span);
+        const auto operand
+            = synthetic_tokens("(" + name + "_t == $realtime + 1.0)", span);
+        current.insert(current.end(), operand.begin(), operand.end());
+        return current;
     }
     // Matched at a tick of the destination clock: a match of an earlier
     // time step at or after the previous tick of that clock (16.13.5,
@@ -6355,9 +6429,13 @@ std::optional<std::vector<Token>> VerilogParser::sva_endpoint_use(
     }
     const auto earlier = "((" + name + "_t < $realtime + 1.0) ? " + name
         + "_t : " + name + "_p)";
-    return synthetic_tokens("$__fsim_current(" + earlier + " >= 1.0 && "
+    auto current = marked_name_tokens(
+        support::ExpressionMarker::sva_current, span);
+    const auto operand = synthetic_tokens("(" + earlier + " >= 1.0 && "
             + earlier + " >= " + destination->name + "_prev)",
         span);
+    current.insert(current.end(), operand.begin(), operand.end());
+    return current;
 }
 
 void VerilogParser::materialize_sva_endpoints(DesignUnit& unit)

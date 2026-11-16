@@ -3200,6 +3200,7 @@ void HierarchyBuilder::validate_process_drivers()
             driver.id = static_cast<ProcessId>(design_.process_count());
             driver.name = port.instance + ".$port_default_driver_"
                 + std::to_string(driver.id);
+            driver.origin = support::GeneratedObjectOrigin::port_default_driver;
             if (found != driver_processes.end() && !found->second.empty()) {
                 driver.language_standard = design_.process_view(
                     found->second.front()).language_standard();
@@ -3263,7 +3264,7 @@ void HierarchyBuilder::validate_process_drivers()
             || systemverilog_unresolved_nettype_nets_.contains(signal)
             // A class method's static local is shared by every caller
             // (IEEE 1800-2017 6.21).
-            || info.name.starts_with("$class-static-local:")
+            || info.origin == support::GeneratedObjectOrigin::class_static_local
             || info.resolution != ResolutionKind::none
             || ((info.systemverilog_builtin
                         == support::SystemVerilogBuiltinType::reg
@@ -3274,10 +3275,9 @@ void HierarchyBuilder::validate_process_drivers()
                 // Verilog variable.
                 && std::ranges::none_of(process_drivers,
                     [](const auto& driver) { return driver.vhdl; }))
-            || info.name.ends_with(".$container_storage")
             // A change notifier of a string, container or automatic
             // variable is toggled by every process that changes it.
-            || info.name.find(".$local_event_") != std::string::npos) {
+            || info.origin == support::GeneratedObjectOrigin::local_event) {
             continue;
         }
         bool overlap = false;

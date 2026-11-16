@@ -329,8 +329,9 @@ endmodule
             && inside.case_alternatives[0].choices.size() == 2
             && inside.case_alternatives[0].choices[1].kind
                 == ExpressionKind::Call
-            && inside.case_alternatives[0].choices[1].text
-                == "@inside-range"
+            && inside.case_alternatives[0].choices[1].text.empty()
+            && inside.case_alternatives[0].choices[1].marker
+                == fsim::support::ExpressionMarker::inside_range
             && inside.case_alternatives[0].choices[1].operands.size() == 2
             && inside.case_alternatives[0].choices[1].operands[0].text
                 == "2'b01"

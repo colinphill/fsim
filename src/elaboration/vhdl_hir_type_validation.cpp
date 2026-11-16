@@ -2919,7 +2919,7 @@ private:
         const auto composite = [](const OperandType& type) {
             return (type.kind == OperandClass::array
                        || type.kind == OperandClass::record)
-                && !type.root.empty() && type.root != "@literal";
+                && !type.root.empty() && !type.literal;
         };
         const auto target = subtype_operand_type(subtype, 0U);
         if (!composite(target)) {
@@ -3356,11 +3356,7 @@ private:
             const auto type = subtype ? subtype_type(*subtype) : std::nullopt;
             return type ? array_root(*type) : std::nullopt;
         }
-        constexpr std::string_view user_attribute_marker {
-            "@fsim-vhdl-user-attribute:"
-        };
-        if (expression->vhdl->nominal_type.starts_with(
-                user_attribute_marker)) {
+        if (expression->vhdl->user_attribute_value) {
             const auto subtype = expression_subtype(id);
             const auto type = subtype ? subtype_type(*subtype) : std::nullopt;
             return type ? array_root(*type) : std::nullopt;
@@ -3821,10 +3817,7 @@ private:
             // Its result subtype is usable after matching the operand types.
             return operator_result_subtype(value);
         }
-        constexpr std::string_view user_attribute_marker {
-            "@fsim-vhdl-user-attribute:"
-        };
-        if (value.nominal_type.starts_with(user_attribute_marker)) {
+        if (value.user_attribute_value) {
             return resolve_vhdl_user_attribute_subtype(
                 specialization_, value.nominal_type, value.scope);
         }
@@ -4144,6 +4137,9 @@ private:
         // `#<id>` names a retained type definition, a plain name a
         // predefined type without one.
         std::string root;
+        // The type of a string literal, which only its context decides: it
+        // has no root, but conflicts with any other root.
+        bool literal { };
     };
 
     // Two roots denote different types. Predefined types are named, types
@@ -4156,6 +4152,10 @@ private:
     // Two operand types differ: different classes or conflicting roots.
     static bool types_conflict(const OperandType& left, const OperandType& right)
     {
+        if (left.literal != right.literal
+            && !(left.literal ? right.root : left.root).empty()) {
+            return true;
+        }
         return left.kind != right.kind || roots_conflict(left.root, right.root);
     }
 
@@ -4423,7 +4423,7 @@ private:
         case Kind::boolean_literal:
             return { OperandClass::enumeration, "boolean" };
         case Kind::string_literal:
-            return { OperandClass::array, "@literal" };
+            return { OperandClass::array, { }, true };
         case Kind::logic_literal:
             if (value.text.starts_with('\'')) {
                 return { OperandClass::enumeration, { } };
@@ -4495,7 +4495,8 @@ private:
                 if (types_conflict(left, right)) {
                     return { };
                 }
-                return { left.kind, left.root.empty() ? right.root : left.root };
+                return { left.kind, left.root.empty() ? right.root : left.root,
+                    left.literal || right.literal };
             };
             const auto& operation = value.text;
             if (operation == "+" || operation == "-" || operation == "mod"
@@ -7191,8 +7192,7 @@ private:
         if (value.kind == OperandClass::unknown) {
             return;
         }
-        const auto mismatch = value.kind != target.kind
-            || roots_conflict(target.root, value.root);
+        const auto mismatch = types_conflict(target, value);
         if (mismatch) {
             const auto expression = specialization_.find_expression(value_id);
             report("FSIM-ELAB-VHASSIGN-001",
@@ -8885,7 +8885,7 @@ private:
                     || (pre_2008 && operand.root == "bit_vector"));
         };
         const auto literal = [](const OperandType& operand) {
-            return operand.kind == OperandClass::array && operand.root == "@literal";
+            return operand.kind == OperandClass::array && operand.literal;
         };
         if (no_arithmetic(left) || no_arithmetic(right)
             || (literal(left) && literal(right))) {
@@ -8936,7 +8936,8 @@ private:
         const auto left_physical = left.kind == OperandClass::physical;
         const auto right_physical = right.kind == OperandClass::physical;
         if (!left_physical && !right_physical) {
-            const auto universal_mix = left.root.empty() && right.root.empty();
+            const auto universal_mix = left.root.empty() && right.root.empty()
+                && !left.literal && !right.literal;
             if (!same_type && !universal_mix) {
                 reject();
             }
@@ -10683,7 +10684,8 @@ private:
                     || choice_is_others(association)
                     || ((!association.choice_spelling.empty()
                         || association.choice_marker != support::ExpressionMarker::none)
-                        && association.choice_spelling != "@array")) {
+                        && association.choice_marker
+                            != support::ExpressionMarker::vhdl_array_choice)) {
                     return std::nullopt;
                 }
                 for (const auto choice : association.choices) {
@@ -14382,16 +14384,10 @@ private:
 std::optional<semantic::vhdl::SubtypeIndication>
 resolve_vhdl_user_attribute_subtype(
     const semantic::SpecializedHirUnit& specialization,
-    const std::string_view nominal_type,
+    const std::string_view specification,
     const semantic::ScopeId use_scope)
 {
-    constexpr std::string_view marker {
-        "@fsim-vhdl-user-attribute:"
-    };
-    if (!nominal_type.starts_with(marker)) {
-        return std::nullopt;
-    }
-    const auto spelling = nominal_type.substr(marker.size());
+    const auto spelling = specification;
     const auto separator = spelling.rfind(':');
     if (separator == std::string_view::npos
         || separator == 0U || separator + 1U == spelling.size()) {

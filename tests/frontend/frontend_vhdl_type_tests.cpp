@@ -390,7 +390,13 @@ end architecture;
   require(named.kind == ExpressionKind::Aggregate &&
               named.operands.size() == 2 &&
               named.aggregate_choices ==
-                  std::vector<std::string>({"@array", "@array"}) &&
+                  std::vector<std::string>({"", ""}) &&
+              named.aggregate_choice_markers.size() == 2U &&
+              std::ranges::all_of(named.aggregate_choice_markers,
+                  [](const auto marker) {
+                    return marker ==
+                        fsim::support::ExpressionMarker::vhdl_array_choice;
+                  }) &&
               named.aggregate_choice_expressions.size() == 2 &&
               named.aggregate_choice_expressions[0].size() == 2 &&
               named.aggregate_choice_expressions[1].size() == 2 &&

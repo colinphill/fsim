@@ -233,7 +233,7 @@ private:
         const auto& source = *expression->vhdl;
         if ((source.kind == vhdl::ExpressionKind::logic_literal
                 || source.kind == vhdl::ExpressionKind::string_literal)
-            && source.resolved_builtin_type == "@ambiguous-literal") {
+            && source.ambiguous_literal) {
             return source.source;
         }
         for (const auto operand : source.operands) {

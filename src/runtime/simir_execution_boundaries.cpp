@@ -384,6 +384,34 @@ struct VhdlCalendarFields {
 constexpr std::size_t vhdl_directory_item_limit = 4096U;
 constexpr std::size_t vhdl_directory_text_limit = 1024U * 1024U;
 
+// Fills each placeholder of a calling-scope value a with-clause reads (IEEE
+// 1800-2017 18.7) from `values`, numbered as the lowering numbered them.
+void bind_inline_constraint_values(
+    std::vector<SystemVerilogConstraintTemplate>& constraints,
+    const std::span<const PackedLogic4> values)
+{
+    const auto fill = [&](const auto& self,
+                          SystemVerilogConstraintTemplate& node) -> void {
+        if (node.kind == SystemVerilogConstraintTemplateKind::Constant
+            && node.role == SystemVerilogConstraintTemplateRole::inline_value) {
+            if (node.slot >= values.size()
+                || values[node.slot].width() != node.constant.width()) {
+                throw std::invalid_argument {
+                    "randomize inline value does not match its constraint"
+                };
+            }
+            node.constant = values[node.slot];
+            node.role = SystemVerilogConstraintTemplateRole::none;
+            return;
+        }
+        for (auto& operand : node.operands) {
+            self(self, operand);
+        }
+    };
+    for (auto& node : constraints) {
+        fill(fill, node);
+    }
+}
 
 
 
@@ -401,7 +429,9 @@ bind_inline_constraint_containers(
     const auto names_container = [&](const auto& self,
                                      const SystemVerilogConstraintTemplate&
                                          node) -> bool {
-        return node.text.starts_with(inline_container_prefix)
+        return node.role
+                == SystemVerilogConstraintTemplateRole::
+                    inline_container_register
             || std::ranges::any_of(node.operands,
                 [&](const auto& operand) { return self(self, operand); });
     };
@@ -414,7 +444,8 @@ bind_inline_constraint_containers(
         constraints.begin(), constraints.end() };
     const auto fill = [&](const auto& self,
                           SystemVerilogConstraintTemplate& node) -> void {
-        if (!node.text.starts_with(inline_container_prefix)) {
+        if (node.role
+            != SystemVerilogConstraintTemplateRole::inline_container_register) {
             for (auto& operand : node.operands) {
                 self(self, operand);
             }
@@ -422,8 +453,7 @@ bind_inline_constraint_containers(
         }
         // A sparse fixed array names every element (IEEE 1800-2023 7.4).
         const auto value = dense_container_image(
-            read(static_cast<ContainerRegisterId>(std::stoul(
-                node.text.substr(inline_container_prefix.size())))));
+            read(static_cast<ContainerRegisterId>(node.slot)));
         if (value.type.element_kind != ContainerElementKind::Packed) {
             throw std::invalid_argument {
                 "randomize with-clause array must hold packed elements"
@@ -439,7 +469,9 @@ bind_inline_constraint_containers(
                 + 1U;
         }
         node.kind = SystemVerilogConstraintTemplateKind::Name;
-        node.text = std::string { inline_elements_name };
+        node.role = SystemVerilogConstraintTemplateRole::inline_elements;
+        node.slot = 0U;
+        node.text.clear();
         node.constant = PackedLogic4::from_aval_bval(32U, size, 0U);
         node.operands.clear();
         for (const auto& element : value.elements) {
@@ -678,11 +710,10 @@ void Interpreter::Impl::run_scope_randomize(RandomizeStorage& storage,
     // Calling-scope values named by the with-clause are read now
     // (IEEE 1800-2017 18.7).
     std::vector<SystemVerilogConstraintTemplate> bound_constraints;
-    constexpr std::string_view register_prefix = "@inline-register:";
     const auto has_register = [&](const auto& self,
                                   const SystemVerilogConstraintTemplate& node)
         -> bool {
-        return node.text.starts_with(register_prefix)
+        return node.role == SystemVerilogConstraintTemplateRole::inline_register
             || std::ranges::any_of(node.operands,
                 [&](const auto& operand) { return self(self, operand); });
     };
@@ -693,9 +724,9 @@ void Interpreter::Impl::run_scope_randomize(RandomizeStorage& storage,
         const auto fill = [&](const auto& self,
                               SystemVerilogConstraintTemplate& node) -> void {
             if (node.kind == SystemVerilogConstraintTemplateKind::Constant
-                && node.text.starts_with(register_prefix)) {
-                const auto source = static_cast<RegisterId>(std::stoul(
-                    node.text.substr(register_prefix.size())));
+                && node.role
+                    == SystemVerilogConstraintTemplateRole::inline_register) {
+                const auto source = static_cast<RegisterId>(node.slot);
                 const auto width = node.constant.width();
                 auto value = storage.packed(source, width);
                 if (value.width() != width || value.is_logic9()) {
@@ -704,6 +735,7 @@ void Interpreter::Impl::run_scope_randomize(RandomizeStorage& storage,
                     };
                 }
                 node.constant = std::move(value);
+                node.role = SystemVerilogConstraintTemplateRole::none;
                 return;
             }
             for (auto& operand : node.operands) {
@@ -877,7 +909,8 @@ const char* Interpreter::Impl::run_class_operation(
         = (static_cast<std::uint64_t>(high) << 32U) | access.next_random();
     const auto handle = class_allocate_context_hook(process, design_process,
         scope, operation.specialization_identity, operation.declared_type,
-        actuals, string_actuals, operation.constructor_actual_names);
+        operation.construction, actuals, string_actuals,
+        operation.constructor_actual_names);
     access.write(operation.destination,
         PackedLogic4::from_aval_bval(64, handle, 0));
     return nullptr;
@@ -985,11 +1018,22 @@ const char* Interpreter::Impl::run_class_operation(
     };
     std::vector<PackedLogic4> actuals;
     std::vector<std::string> string_actuals;
+    std::vector<PackedLogic4> inline_values;
     actuals.reserve(operation.actuals.size());
     string_actuals.reserve(operation.actuals.size());
     for (std::size_t index = 0; index < operation.actuals.size(); ++index) {
         const auto string_actual = !operation.actual_kinds.empty()
             && operation.actual_kinds[index] == 1U;
+        // The values a with-clause reads follow the arguments; they bind into
+        // its constraints and are no actuals of the method.
+        if (!operation.actual_kinds.empty()
+            && operation.actual_kinds[index] == inline_value_actual_kind) {
+            inline_values.push_back(access.read(operation.actuals[index]));
+            continue;
+        }
+        if (!inline_values.empty()) {
+            return "class method call has an argument after an inline value";
+        }
         if (handle_queue(index)) {
             std::vector<std::string> handles;
             for (const auto& element
@@ -1008,13 +1052,26 @@ const char* Interpreter::Impl::run_class_operation(
                 : std::string { });
     }
     const auto handle = access.read(operation.receiver).low_word().aval;
-    const auto bound_constraints = bind_inline_constraint_containers(
+    auto bound_constraints = bind_inline_constraint_containers(
         operation.inline_constraints, [&](const ContainerRegisterId id) {
             return access.read_container(id);
         });
+    if (!inline_values.empty()) {
+        if (!bound_constraints) {
+            bound_constraints.emplace(operation.inline_constraints.begin(),
+                operation.inline_constraints.end());
+        }
+        bind_inline_constraint_values(*bound_constraints, inline_values);
+    }
+    const auto argument_count = std::min(actuals.size(),
+        std::min(operation.actual_names.size(),
+            operation.actual_directions.size()));
     auto result = class_method_call_context_hook(process, handle,
         operation.method_identity, operation.hook, actuals, string_actuals,
-        operation.actual_names, operation.actual_directions,
+        std::span<const std::string> { operation.actual_names }.first(
+            argument_count),
+        std::span<const std::uint8_t> { operation.actual_directions }.first(
+            argument_count),
         bound_constraints
             ? std::span<const SystemVerilogConstraintTemplate> {
                   *bound_constraints }
@@ -1126,8 +1183,8 @@ const char* Interpreter::Impl::run_class_operation(
     }
     auto result = dpi
         ? call_dpi_import(operation, identity, actuals, string_actuals, bound)
-        : class_static_method_call_context_hook(process, identity, actuals,
-              string_actuals, operation.actual_names,
+        : class_static_method_call_context_hook(process, identity,
+              operation.hook, actuals, string_actuals, operation.actual_names,
               operation.actual_directions, operation.class_specialization);
     access.write(operation.destination, std::move(result));
     for (std::size_t index = 0; index < actuals.size(); ++index) {
@@ -2941,6 +2998,7 @@ void Interpreter::Impl::handle_boundary(
                   process.program().name(),
                   class_allocate->specialization_identity,
                   class_allocate->declared_type,
+                  class_allocate->construction,
                   actuals,
                   string_actuals,
                   class_allocate->constructor_actual_names);
@@ -3028,12 +3086,24 @@ void Interpreter::Impl::handle_boundary(
         }
         std::vector<PackedLogic4> actuals;
         std::vector<std::string> string_actuals;
+        std::vector<PackedLogic4> inline_values;
         actuals.reserve(method->actuals.size());
         string_actuals.reserve(method->actuals.size());
         for (std::size_t index = 0; index < method->actuals.size(); ++index) {
             const auto actual = method->actuals[index];
             const auto string_actual = !method->actual_kinds.empty()
                 && method->actual_kinds[index] == 1U;
+            // The values a with-clause reads follow the arguments; they bind
+            // into its constraints and are no actuals of the method.
+            if (!method->actual_kinds.empty()
+                && method->actual_kinds[index] == inline_value_actual_kind) {
+                inline_values.push_back(read_boundary_value(actual));
+                continue;
+            }
+            if (!inline_values.empty()) {
+                fail(process,
+                    "class method call has an argument after an inline value");
+            }
             // A queue of class handles (kind 6 in, kind 7 in and out) is a
             // container register, passed as one encoded string.
             const auto handle_queue = !method->actual_kinds.empty()
@@ -3059,12 +3129,22 @@ void Interpreter::Impl::handle_boundary(
             method->receiver)
                                 .low_word()
                                 .aval;
-        const auto bound_constraints = bind_inline_constraint_containers(
+        auto bound_constraints = bind_inline_constraint_containers(
             method->inline_constraints, [&](const ContainerRegisterId id) {
                 return process.executor
                     ? process.executor->read_container_register(id)
                     : read_container_register(process, id);
             });
+        if (!inline_values.empty()) {
+            if (!bound_constraints) {
+                bound_constraints.emplace(method->inline_constraints.begin(),
+                    method->inline_constraints.end());
+            }
+            bind_inline_constraint_values(*bound_constraints, inline_values);
+        }
+        const auto argument_count = std::min(actuals.size(),
+            std::min(method->actual_names.size(),
+                method->actual_directions.size()));
         write_process_register(
             process,
             method->destination,
@@ -3076,8 +3156,10 @@ void Interpreter::Impl::handle_boundary(
                           method->hook,
                           actuals,
                           string_actuals,
-                          method->actual_names,
-                          method->actual_directions,
+                          std::span<const std::string> {
+                              method->actual_names }.first(argument_count),
+                          std::span<const std::uint8_t> {
+                              method->actual_directions }.first(argument_count),
                           bound_constraints
                               ? std::span<const SystemVerilogConstraintTemplate> {
                                     *bound_constraints }
@@ -3193,6 +3275,7 @@ void Interpreter::Impl::handle_boundary(
                     : class_static_method_call_context_hook(
                           process.id,
                           identity,
+                          method->hook,
                           actuals,
                           string_actuals,
                           method->actual_names,

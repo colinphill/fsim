@@ -140,6 +140,8 @@ std::string expression_identity(
     append_identity_value(output, "text", expression->text);
     append_identity_value(output, "nominal", expression->nominal_type);
     append_identity_value(
+        output, "user_attribute", expression->user_attribute_value);
+    append_identity_value(
         output, "marker", static_cast<int>(expression->marker));
     append_identity_value(output, "payload", expression->marker_argument);
     append_identity_value(output, "external_width", expression->external_width);

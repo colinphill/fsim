@@ -218,6 +218,10 @@ void copy_bits(std::uint64_t* target, const std::uint32_t offset,
     plan.directions = operation.actual_directions;
     plan.kinds = operation.actual_kinds;
     plan.result_width = operation.result_width;
+    // ITEM28-LEFT: the DPI export service is a name protocol end to end: the
+    // parser generates the hidden imports and hooks as text, and the runtime
+    // reads the mask and linkage out of their C identity; it needs a typed DPI
+    // call identity (runtime operation fields, codec) before the names can go.
     if (identity.starts_with('$') || identity.starts_with("!x")
         || identity.starts_with("!f")
         || identity.starts_with("__fsim_dpi_export_")) {
@@ -239,6 +243,7 @@ void copy_bits(std::uint64_t* target, const std::uint32_t offset,
     plan.c_name = std::string { identity.substr(0U, hash) };
     plan.signature = std::string { identity.substr(hash + 1U, end - hash - 1U) };
     plan.result = static_cast<std::uint8_t>(tail.front());
+    // ITEM46-LEFT: the DPI import identity is a text descriptor parsed by the DPI service, the kernel plan and the VPI and VHPI loaders; a typed form needs a descriptor on the call operation
     plan.context = tail.substr(1U).starts_with("@c");
     const bool string_result = tail.front() == 'z';
     const bool result_scalar = tail.front() == 'v' || tail.front() == 'T'

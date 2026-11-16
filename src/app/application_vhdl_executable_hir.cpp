@@ -166,6 +166,7 @@ class VhdlExecutableBuilder final {
       output.source = expression_source;
       output.origin = expression_origin;
       output.nominal_type = input.nominal_type;
+      output.user_attribute_value = input.vhdl_user_attribute_value;
       if (input.kind == frontend::ExpressionKind::Call
           && input.marker == support::ExpressionMarker::vhdl_external
           && input.operands.size() == 2U

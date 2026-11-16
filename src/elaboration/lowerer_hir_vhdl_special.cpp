@@ -2213,6 +2213,7 @@ ContainerType Lowerer::hir_vhdl_environment_directory_container_type() const
     ContainerType type;
     type.element_kind = ContainerElementKind::String;
     type.element_width = 0U;
+    // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
     type.element_nominal_type = "@builtin:std.textio.line";
     return type;
 }
@@ -2255,6 +2256,7 @@ Lowerer::hir_vhdl_environment_call_path_container_type() const
     string_member.element_width = 0U;
     string_member.fixed = true;
     string_member.dimensions = { { 0, 0 } };
+    // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
     string_member.element_nominal_type = "@builtin:std.textio.line";
 
     ContainerType line_member;
@@ -2264,11 +2266,13 @@ Lowerer::hir_vhdl_environment_call_path_container_type() const
     line_member.signed_elements = true;
     line_member.fixed = true;
     line_member.dimensions = { { 0, 0 } };
+    // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
     line_member.element_nominal_type = "@builtin:std.standard.positive";
 
     ContainerType type;
     type.element_kind = ContainerElementKind::Aggregate;
     type.element_width = 0U;
+    // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
     type.element_nominal_type = "@builtin:std.env.call_path_element";
     type.element_types = {
         string_member,

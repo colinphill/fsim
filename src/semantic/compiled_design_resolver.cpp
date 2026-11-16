@@ -87,7 +87,7 @@ const sv::Unit* source_package_for_compilation_unit(
     }
     const auto matches = [&](const sv::Unit& candidate) {
         return candidate.kind == sv::UnitKind::package
-            && candidate.name.starts_with("fsim_unit_")
+            && candidate.compilation_unit_package
             && normalized_library(candidate.library)
                 == normalized_library(compilation_unit.library)
             && candidate.compilation_unit_identity
@@ -2336,7 +2336,7 @@ CompiledDesignResolver::resolve_systemverilog_class(
                         == normalized_library(user.library)
                     && (unit.kind == sv::UnitKind::compilation_unit
                         || (unit.kind == sv::UnitKind::package
-                            && unit.name.starts_with("fsim_unit_")))) {
+                            && unit.compilation_unit_package))) {
                     units.push_back(unit.id);
                 }
             }
@@ -2866,7 +2866,7 @@ CompiledDesignResolver::resolve_systemverilog(
         std::string_view requested_package = package_name;
         if (package_name == "$unit") {
             for (const auto& import : owner->systemverilog->imports) {
-                if (import.package.spelling.starts_with("fsim_unit_")) {
+                if (import.compilation_unit_package) {
                     requested_package = import.package.spelling;
                     break;
                 }
@@ -3332,8 +3332,7 @@ std::optional<TypeId> CompiledDesignResolver::resolve_vhdl_named_type(
     auto qualifier = separator == std::string_view::npos
         ? std::string_view { }
         : spelling.substr(0U, separator);
-    if (spelling.starts_with("vhdl-hir-type:")
-        || spelling.starts_with("@fsim-vital:")) {
+    if (spelling.starts_with("vhdl-hir-type:")) {
         qualifier = { };
     }
 
@@ -6351,16 +6350,6 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
             name.spelling = result.type_mark.spelling;
             name.canonical = result.type_mark.spelling;
             name.source = result.type_mark.source;
-            constexpr auto synthetic_vital_prefix
-                = std::string_view { "@fsim-vital:" };
-            if (name.spelling.starts_with(synthetic_vital_prefix)) {
-                // Synthetic VITAL declarations retain their marker as the
-                // nominal identity.  Only remove it for lexical lookup so the
-                // canonical resolver can attach the visible declaration's
-                // TypeId without leaking a hierarchy-local resolver.
-                name.spelling.erase(0, synthetic_vital_prefix.size());
-                name.canonical = name.spelling;
-            }
             if (may_name_type(name.spelling)) {
                 declaration_id = resolver.resolve_vhdl(
                     name, scope, [](const CompiledDeclarationView& candidate) {
@@ -11987,6 +11976,9 @@ bool CompiledDesignResolver::vhdl_character_literal_fits_context(
     }
     if (expression.resolved_type) {
         return root_of(*expression.resolved_type) == root;
+    }
+    if (expression.ambiguous_literal) {
+        return false;
     }
     if (!expression.resolved_builtin_type.empty()) {
         return same_vhdl_identifier(

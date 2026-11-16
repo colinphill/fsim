@@ -268,6 +268,7 @@ void Lowerer::record_vpi_callee(const bool statement, const std::uint32_t id,
         return;
     }
     // The instance path as hir_callee_unit resolves the receiver.
+    // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
     constexpr std::string_view instance_prefix { "@instance:" };
     std::string instance;
     if (!receiver.empty()) {
@@ -1147,12 +1148,14 @@ std::string Lowerer::hir_callable_debug_local_name(
 {
     const auto& frame = hir_callable_frames_[callable];
     const auto base = frame.debug_name.empty()
+        // ITEM46-LEFT: uniquifying suffix of debug local names that users see; never parsed back; rewriting it changes the visible names, which is an owner decision
         ? "@hir-callable-" + std::to_string(frame.declaration.value()) + "::"
             + std::string { name }
         : frame.debug_name + "." + std::string { name };
     auto result = base;
     std::size_t occurrence { };
     while (!debug_local_names_.emplace(result).second) {
+        // ITEM46-LEFT: uniquifying suffix of debug local names that users see; never parsed back; rewriting it changes the visible names, which is an owner decision
         result = base + "@hir-callable-"
             + std::to_string(frame.invocation_identity) + "-declaration-"
             + std::to_string(declaration.value()) + "-"
@@ -1172,6 +1175,7 @@ std::string Lowerer::hir_callable_formal_debug_name(
     const auto& frame = hir_callable_frames_[callable];
     auto result = frame.debug_name + "." + std::string { name };
     if (!debug_local_names_.emplace(result).second) {
+        // ITEM46-LEFT: uniquifying suffix of debug local names that users see; never parsed back; rewriting it changes the visible names, which is an owner decision
         result += "@hir-callable-" + std::to_string(frame.invocation_identity);
         debug_local_names_.emplace(result);
     }
@@ -1197,6 +1201,7 @@ std::string Lowerer::hir_frame_local_name(
     }
     auto result = callee + "." + std::string { name };
     if (!frame_local_names_.emplace(result).second) {
+        // ITEM46-LEFT: uniquifying suffix of debug local names that users see; never parsed back; rewriting it changes the visible names, which is an owner decision
         result += "@hir-callable-" + std::to_string(frame.invocation_identity);
         frame_local_names_.emplace(result);
     }
@@ -1267,6 +1272,7 @@ void Lowerer::add_hir_process_loop_parameter(
         frontend::SystemVerilogScalarKind::None,
         runtime::simir::DebugLocalStorage::packed,
         builtin,
+        runtime::simir::DebugLocalRole::frame_local,
     });
     frame_local_simple_names_.emplace_back(name);
     const runtime::simir::FrameLocalBinding binding {
@@ -1327,6 +1333,7 @@ void Lowerer::add_hir_frame_local(const std::size_t callable,
         frontend::SystemVerilogScalarKind::None,
         runtime::simir::DebugLocalStorage::packed,
         builtin,
+        runtime::simir::DebugLocalRole::frame_local,
     });
     frame_local_simple_names_.emplace_back(name);
     bind_hir_frame_local(
@@ -2868,6 +2875,7 @@ bool Lowerer::initialize_hir_declarations(
                 frontend::SystemVerilogScalarKind::None,
                 runtime::simir::DebugLocalStorage::packed,
                 builtin_type,
+                runtime::simir::DebugLocalRole::variable,
             });
         }
     }
@@ -6519,7 +6527,8 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
                 -> std::optional<PartPlace> {
                 if ((!association.choice_spelling.empty()
                     || association.choice_marker != support::ExpressionMarker::none)
-                    && association.choice_spelling != "@array") {
+                    && association.choice_marker
+                        != support::ExpressionMarker::vhdl_array_choice) {
                     const auto member = std::ranges::find_if(
                         signal.packed_members,
                         [&](const PackedMemberMetadata& candidate) {

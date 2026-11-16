@@ -92,6 +92,10 @@ Resolver::Resolver(ParsedDesign& design, std::vector<Diagnostic>& diagnostics)
     const auto prefix = effective_library(unit.library) + "::" + unit.name;
     for (const auto& alias : unit.type_aliases) {
       class_aliases_[prefix + "::" + alias.name] = &alias.type;
+      if (unit.systemverilog_compilation_unit_package) {
+        compilation_unit_aliases_[{ effective_library(unit.library),
+            alias.name }].push_back(&alias.type);
+      }
     }
   }
   for (auto& declaration : design_.systemverilog_classes) {
@@ -122,7 +126,7 @@ void Resolver::run() {
     // A compilation-unit class sees the compilation unit's objects (IEEE
     // 1800-2017 3.12.1), as the file's modules do.
     for (const auto& import : declaration.compilation_unit_imports) {
-      if (!import.package.starts_with("fsim_unit_")) continue;
+      if (!import.compilation_unit_package) continue;
       for (const auto& candidate : design_.units) {
         if (candidate.kind == UnitKind::SystemVerilogPackage
             && candidate.name == import.package
@@ -168,7 +172,7 @@ void Resolver::run() {
       scope.imports.push_back(&import);
     }
     for (const auto& import : unit.systemverilog_imports) {
-      if (!import.package.starts_with("fsim_unit_")) continue;
+      if (!import.compilation_unit_package) continue;
       for (const auto& candidate : design_.units) {
         if (candidate.kind == UnitKind::SystemVerilogPackage
             && candidate.name == import.package
@@ -1065,16 +1069,12 @@ bool Resolver::class_assignable(
     if (separator == std::string::npos) {
       // A compilation-unit typedef is visible to every unit of its file
       // (IEEE 1800-2017 3.12.1); its key names the unit package.
-      const auto prefix = lexical_identity + "::fsim_unit_";
-      const auto suffix = "::" + type.named_type;
       const Type* unique = nullptr;
-      for (const auto& [key, candidate] : class_aliases_) {
-        if (!key.starts_with(prefix) || !key.ends_with(suffix)
-            || key.find("::", prefix.size()) != key.size() - suffix.size()) {
-          continue;
-        }
-        if (unique != nullptr) return type;
-        unique = candidate;
+      const auto candidates = compilation_unit_aliases_.find(
+          { lexical_identity, type.named_type });
+      if (candidates != compilation_unit_aliases_.end()) {
+        if (candidates->second.size() != 1U) return type;
+        unique = candidates->second.front();
       }
       // Only a class typedef is resolved here; other compilation-unit
       // types keep their name for the HIR's own lookup.

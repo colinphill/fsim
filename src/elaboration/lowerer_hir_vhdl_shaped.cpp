@@ -338,6 +338,7 @@ Lowerer::hir_vhdl_shaped_profile(
             // CHARACTER'LEFT is NUL (16.3).
             profile.element_default = PackedLogic4(8U, Logic4::zero);
             profile.type.element_nominal_type
+                // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
                 = "@builtin:std.standard.character";
         } else {
             profile.element_width = integer

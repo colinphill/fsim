@@ -1128,7 +1128,8 @@ namespace {
             for (const auto& association : aggregate->vhdl->associations) {
                 if ((association.choice_spelling.empty()
                     && association.choice_marker == support::ExpressionMarker::none)
-                    || association.choice_spelling == "@array") {
+                    || association.choice_marker
+                        == support::ExpressionMarker::vhdl_array_choice) {
                     continue;
                 }
                 const auto formal_element = record_element_subtype(
@@ -12160,7 +12161,6 @@ namespace {
                     const auto referenced = compiled.find_declaration(
                         *value.referenced_name->selected);
                     if (referenced && referenced->systemverilog != nullptr
-                        && !referenced->systemverilog->name.starts_with("$")
                         // An unpacked array parameter is held as a constant
                         // variable (IEEE 1800-2017 6.20.1).
                         && !referenced->systemverilog->array_parameter
@@ -16286,6 +16286,7 @@ void HierarchyBuilder::materialize_systemverilog_clocking_blocks(
                 std::numeric_limits<std::uint32_t>::max())),
             true,
         });
+        process.origin = support::GeneratedObjectOrigin::clocking_event;
         clocking_processes.push_back(std::move(process));
     };
     const auto add_clocking_flag = [&](const std::string& full_name)
@@ -16302,6 +16303,7 @@ void HierarchyBuilder::materialize_systemverilog_clocking_blocks(
         info.type_name = "bit";
         info.systemverilog_builtin = support::SystemVerilogBuiltinType::bit;
         info.source_domain = frontend::ValueDomain::Bit2;
+        info.origin = support::GeneratedObjectOrigin::clocking_event;
         design_.signal_info_.push_back(std::move(info));
         design_.signals_.emplace_back(full_name,
             PackedLogic4(1U, Logic4::zero),
@@ -16405,6 +16407,7 @@ void HierarchyBuilder::materialize_systemverilog_clocking_blocks(
                 true,
             });
         }
+        process.origin = support::GeneratedObjectOrigin::clocking_event;
         clocking_processes.push_back(std::move(process));
     };
     if (!blocks.empty()) {
@@ -16632,6 +16635,7 @@ void HierarchyBuilder::materialize_systemverilog_clocking_blocks(
             process.operations.emplace_back(WriteBlocking { *flag, 0U });
             process.operations.emplace_back(Jump { 0U });
             process.driver_regions.push_back({ *flag, 0U, 1U, true });
+            process.origin = support::GeneratedObjectOrigin::clocking_event;
             clocking_processes.push_back(std::move(process));
         }
     }
@@ -19336,10 +19340,8 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_instance_worklist(
         }
         // A type named through an interface port depends on the connected
         // interface's parameters; the frontend retains them as hidden
-        // parameters `__fsim_ifp_<port>__<name>` bound here.
-        constexpr std::string_view interface_parameter_prefix {
-            "__fsim_ifp_"
-        };
+        // parameters that name the port and the interface's parameter, bound
+        // here.
         std::optional<semantic::SpecializedHirAssociationResult>
             interface_port_bindings;
         for (const auto declaration_id :
@@ -19351,23 +19353,17 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_instance_worklist(
                         != semantic::sv::DeclarationForm::parameter
                     && declaration->systemverilog->form
                         != semantic::sv::DeclarationForm::type_parameter)
-                || !declaration->systemverilog->name.starts_with(
-                    interface_parameter_prefix)
+                || declaration->systemverilog->interface_port.empty()
                 || std::ranges::any_of(child_actuals,
                     [&](const semantic::SpecializedHirActualIdentity& actual) {
                         return actual.declaration == declaration_id;
                     })) {
                 continue;
             }
-            const auto rest = std::string_view {
-                declaration->systemverilog->name }
-                                  .substr(interface_parameter_prefix.size());
-            const auto separator = rest.rfind("__");
-            if (separator == std::string_view::npos) {
-                continue;
-            }
-            const auto port_name = rest.substr(0U, separator);
-            const auto parameter_name = rest.substr(separator + 2U);
+            const std::string_view port_name {
+                declaration->systemverilog->interface_port };
+            const std::string_view parameter_name {
+                declaration->systemverilog->interface_member };
             if (!interface_port_bindings) {
                 interface_port_bindings
                     = semantic::resolve_specialized_hir_associations(
@@ -19844,6 +19840,7 @@ bool HierarchyBuilder::append_compiled_systemverilog_parameter_metadata(
             published_parameter_names.insert(
                 declaration->systemverilog->name);
             specialization.parameter_identity_values.emplace_back(
+                // ITEM46-LEFT: name inside parameter_identity_values, a vector of string pairs saved in the artifact; a typed form needs a struct entry with a kind and every reader
                 "@aggregate:" + declaration->systemverilog->name,
                 image->canonical());
         }
@@ -21110,7 +21107,7 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
     const std::size_t specialization_id,
     std::size_t& concurrent_order,
     const VhdlDeclarationSignals* const component_port_signals,
-    const std::string_view implicit_signal_prefix)
+    const support::GeneratedObjectOrigin implicit_signal_origin)
 {
     const bool accepts_input = direction == frontend::PortDirection::Input
         || direction == frontend::PortDirection::Inout;
@@ -22096,11 +22093,15 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
             const auto id = static_cast<SignalId>(
                 design_.signals_.size());
             const auto constant_name = child_path
-                + std::string { implicit_signal_prefix }
+                + (implicit_signal_origin
+                        == support::GeneratedObjectOrigin::local_signal
+                    ? ".$local_"
+                    : ".$actual_")
                 + formal_declaration.name;
             SignalInfo info;
             info.id = id;
             info.name = constant_name;
+            info.origin = implicit_signal_origin;
             info.width = *width;
             info.type_name = formal_declaration.subtype
                                  ->type_mark.spelling;
@@ -22593,7 +22594,8 @@ HierarchyBuilder::compiled_vhdl_view_subelement_routes(
             if (!value || value->vhdl == nullptr
                 || (association.choice_spelling.empty()
                     && association.choice_marker == support::ExpressionMarker::none)
-                || association.choice_spelling == "@array") {
+                || association.choice_marker
+                    == support::ExpressionMarker::vhdl_array_choice) {
                 valid = false;
                 return;
             }
@@ -24577,7 +24579,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_package_initializers()
         const auto& stored = design_.container_objects_[object];
         return info.id == object && !info.is_port && !info.slice_alias
                 && !stored.slice_alias && info.name == stored.name
-                && stored.name.starts_with(class_static_container_prefix)
+                && info.origin == support::GeneratedObjectOrigin::class_static
             ? stored.package_owner_id
             : 0U;
     };
@@ -39084,6 +39086,7 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_vhdl_child(
                     info.is_signed = constant->signed_value;
                     info.declaration_span = compiled_source_span(
                         *compiled_, binding.source);
+                    info.origin = support::GeneratedObjectOrigin::actual_adapter;
                     design_.signal_info_.push_back(std::move(info));
                     design_.signals_.push_back(Signal {
                         adapter_name,
@@ -39156,6 +39159,7 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_vhdl_child(
                 };
                 info.declaration_span = compiled_source_span(
                     *compiled_, binding.source);
+                info.origin = support::GeneratedObjectOrigin::actual_adapter;
                 design_.signal_info_.push_back(std::move(info));
                 design_.signals_.push_back(Signal {
                     adapter_name,

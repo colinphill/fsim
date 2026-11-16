@@ -1786,6 +1786,7 @@ void VerilogParser::parse_event_declaration(
           Process initializer_process;
           initializer_process.kind = ProcessKind::Initial;
           initializer_process.name = "$event_initializer_" + name.text;
+          initializer_process.synthesized = true;
           initializer_process.statements.push_back(std::move(alias));
           initializer_process.span = initializer_process.statements.front().span;
           unit.processes.push_back(std::move(initializer_process));

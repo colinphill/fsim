@@ -732,6 +732,7 @@ void append_assignment_pattern(std::string& text, const ContainerValue& value)
         const auto& payload = value.elements.front();
         if (value.type.element_width == 8U
             && value.type.element_nominal_type
+                // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
                 == "@builtin:std.standard.character") {
             for (auto offset = payload.width(); offset >= 8U; offset -= 8U) {
                 const auto code = payload.extract_bits(offset - 8U, 8U)

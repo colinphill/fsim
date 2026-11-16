@@ -855,6 +855,7 @@ bool normalize_delays(
         expression.marker = support::ExpressionMarker::none;
         expression.marker_argument.clear();
         expression.operands.clear();
+        // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
         expression.nominal_type = "@builtin:time";
         return true;
       }
@@ -907,6 +908,7 @@ bool normalize_delays(
       expression.marker = support::ExpressionMarker::none;
       expression.marker_argument.clear();
       expression.operands.clear();
+      // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
       expression.nominal_type = "@builtin:time";
       return true;
     };
@@ -1808,6 +1810,7 @@ private:
                     expression.origin = retained_origin;
                     expression.dependencies = retained_dependencies;
                     expression.folded = retained_folded;
+                    // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
                     expression.nominal_type = "@builtin:time";
                 }
             }
@@ -1843,6 +1846,7 @@ private:
                     expression.text = std::to_string(
                         *factor / *tick_femtoseconds_);
                     expression.referenced_name = std::move(unit_name);
+                    // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
                     expression.nominal_type = "@builtin:time";
                     expression.folded = true;
                 }
@@ -1904,6 +1908,7 @@ private:
             replacement.text = std::to_string(*ticks);
             replacement.source = retained_source;
             replacement.origin = retained_origin;
+            // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
             replacement.nominal_type = "@builtin:time";
             replacement.folded = true;
             expression = std::move(replacement);
@@ -1960,11 +1965,13 @@ private:
         replacement.text = std::to_string(scaled * literal_factor);
         replacement.source = retained_source;
         replacement.origin = retained_origin;
+        // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
         replacement.nominal_type = "@builtin:time";
         replacement.folded = true;
         // The magnitude is no longer an operand of a stored expression; it
         // stays the abstract literal of a TIME value (IEEE 1076-2008
         // 5.2.4.1), which portable INTEGER range checks do not apply to.
+        // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
         expressions[operand.value()]->nominal_type = "@builtin:time";
         expression = std::move(replacement);
     }

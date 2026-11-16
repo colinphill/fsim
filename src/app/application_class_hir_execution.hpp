@@ -45,12 +45,14 @@ public:
     };
     using ActualReferences = std::span<
         const std::optional<VariableReference>>;
-    // Receiver, method identity, actuals, string actuals, actual names,
-    // directions, virtual dispatch, `randomize(null)` (IEEE 1800-2023
+    // Receiver, method identity, the built-in method of an object the call
+    // is (none for a method of the class), actuals, string actuals, actual
+    // names, directions, virtual dispatch, `randomize(null)` (IEEE 1800-2023
     // 18.11.1), and the actuals' variable references.
     using FunctionInvoker = std::function<runtime::PackedLogic4(
         runtime::SystemVerilogClassHandle,
         std::string_view,
+        runtime::simir::ClassMethodHook,
         std::vector<runtime::PackedLogic4>&,
         std::vector<std::string>&,
         std::span<const std::string>,

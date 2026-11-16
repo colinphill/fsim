@@ -1429,6 +1429,7 @@ const semantic::SpecializedHirUnit* Lowerer::hir_callee_unit(
     if (systemverilog_instance_units_ == nullptr || receiver.empty()) {
         return nullptr;
     }
+    // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
     constexpr std::string_view instance_prefix { "@instance:" };
     const auto path = receiver.starts_with(instance_prefix)
         ? std::string { receiver.substr(instance_prefix.size()) }
@@ -1453,6 +1454,7 @@ void Lowerer::mark_callee_instance_read(
         return;
     }
     // The instance path as hir_callee_unit resolves it.
+    // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
     constexpr std::string_view instance_prefix { "@instance:" };
     const auto& receiver = *frame.interface_receiver;
     const auto instance = receiver.starts_with(instance_prefix)
@@ -8447,6 +8449,7 @@ bool Lowerer::hir_walk_hierarchical_name(const std::string_view name,
             const auto& receiver
                 = hir_callable_frames_[*active_hir_callable_]
                       .interface_receiver;
+            // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
             constexpr std::string_view instance_prefix { "@instance:" };
             if (receiver && receiver->starts_with(instance_prefix)) {
                 for (std::string_view callee
@@ -8729,6 +8732,7 @@ Lowerer::hir_systemverilog_event_array_selection(
         // in that lexical map rather than requiring its materialization path
         // to equal the path of the process that references it.
         const auto stable_name
+            // ITEM46-LEFT: stable signal name registered in the string-keyed design signal maps; needs a typed key in those maps
             = "@event-array-declaration:"
             + std::to_string(declaration_id->value())
             + "[" + spelling + "]";
@@ -9248,6 +9252,7 @@ std::optional<Lowerer::HirStaticStorage> Lowerer::hir_static_storage(
             return found->second;
         }
     }
+    // ITEM46-LEFT: name of the static-storage design object of a callable, found through string-keyed design maps and hidden from $showvars by its leading character; a typed form needs a storage kind on design signals
     const auto key = "@static:" + std::to_string(declaration.value());
     HirStaticStorage result;
     const auto lookup = [](const auto& objects, const std::string& name,
@@ -9258,7 +9263,9 @@ std::optional<Lowerer::HirStaticStorage> Lowerer::hir_static_storage(
     };
     if (frame != nullptr && frame->interface_receiver) {
         const auto& receiver = *frame->interface_receiver;
+        // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
         const auto path = receiver.starts_with("@instance:")
+            // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
             ? receiver.substr(std::string_view { "@instance:" }.size())
             : hierarchy_ + "." + receiver;
         const auto name = path + "." + key;
@@ -10021,9 +10028,11 @@ Lowerer::hir_runtime_binding(
                 const auto& frame
                     = hir_callable_frames_[*active_hir_callable_];
                 if (frame.interface_receiver
+                    // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
                     && frame.interface_receiver->starts_with("@instance:")) {
                     // A module-instance task's variable is that instance's.
                     const auto path = frame.interface_receiver->substr(
+                        // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
                         std::string_view { "@instance:" }.size())
                         + "." + result.name;
                     if (const auto global = design_.signal_by_name_.find(path);
@@ -10497,8 +10506,10 @@ Lowerer::hir_container_object_binding_for_declaration(
         if (frame.interface_receiver) {
             const auto& receiver = *frame.interface_receiver;
             std::optional<ContainerObjectId> found;
+            // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
             if (receiver.starts_with("@instance:")) {
                 const auto path = receiver.substr(
+                    // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
                     std::string_view { "@instance:" }.size()) + "." + name;
                 if (const auto global = design_.container_by_name_.find(path);
                     global != design_.container_by_name_.end()) {
@@ -13825,7 +13836,8 @@ bool Lowerer::can_lower_hir_string_expression(
     if (const auto record = specialized_hir_unit_->find_expression(expression);
         record && record->systemverilog != nullptr
         && record->systemverilog->kind == semantic::sv::ExpressionKind::call
-        && record->systemverilog->text == "$__fsim_sva_local") {
+        && record->systemverilog->marker
+            == support::ExpressionMarker::sva_local) {
         return true;
     }
     // An allocator or null as a STD.TEXTIO.LINE value (16.4).
@@ -15377,8 +15389,11 @@ Lowerer::hir_vhdl_attribute_profile(
                 == semantic::vhdl::BuiltinTypeIdentity::std_standard_string;
             semantic::vhdl::SubtypeIndication subtype;
             subtype.type_mark.spelling = string_array
+                // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
                 ? "@builtin:positive"
+                // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
                 : fixed_or_float_array ? "@builtin:integer"
+                // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
                 : "@builtin:natural";
             subtype.domain = semantic::vhdl::ValueDomain::integer;
             const auto integer_width
@@ -16494,6 +16509,7 @@ Lowerer::hir_vhdl_attribute_profile(
                 = value_expression && value_expression->vhdl != nullptr
                 && value_expression->vhdl->kind
                     == semantic::vhdl::ExpressionKind::integer_literal
+                // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
                 && value_expression->vhdl->nominal_type == "@builtin:time";
             return builtin_time_prefix
                 && (builtin_time_unit || normalized_time_literal
@@ -18679,7 +18695,8 @@ frontend::SystemVerilogScalarKind Lowerer::hir_systemverilog_scalar_kind(
     // A local variable read of a concurrent-property monitor has its
     // local's kind (IEEE 1800-2023 16.10; lower_hir_sva_call).
     if (source.kind == semantic::sv::ExpressionKind::call
-        && source.text == "$__fsim_sva_local" && source.operands.size() == 3U) {
+        && source.marker == support::ExpressionMarker::sva_local
+        && source.operands.size() == 3U) {
         const auto site = hir_constant_integer(source.operands[0]);
         const auto index = hir_constant_integer(source.operands[2]);
         const auto found = site && *site >= 0
@@ -20826,6 +20843,7 @@ std::optional<std::uint64_t> Lowerer::hir_vhdl_character_literal_code(
     // could (IEEE 1076-2008 9.3.2, 12.5).
     if (expression->vhdl->kind == semantic::vhdl::ExpressionKind::logic_literal
         && (expression->vhdl->resolved_type
+            || expression->vhdl->ambiguous_literal
             || !expression->vhdl->resolved_builtin_type.empty())) {
         if (expression->vhdl->resolved_builtin_type != "character"
             || (expected_width != 0U && expected_width != 8U)) {
@@ -21060,6 +21078,10 @@ std::optional<bool> Lowerer::hir_process_status_query(
     const auto query = specialized_hir_unit_ != nullptr
         ? specialized_hir_unit_->find_expression(expression_id)
         : std::nullopt;
+    // ITEM28-LEFT: the process queries are selected by the member's spelling
+    // (`.status`, `.completed`) of the generic member-select forms (a dotted name,
+    // a `.member` call, an `index.member` node); only the receiver is typed. A
+    // typed process-class member selection in the class resolver replaces them.
     if (query && query->systemverilog != nullptr
         && query->systemverilog->kind == semantic::sv::ExpressionKind::index
         && (query->systemverilog->text == "index.status"
@@ -22769,6 +22791,7 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
         if (source.kind == semantic::vhdl::ExpressionKind::integer_literal) {
             // Standard TIME values share the simulator's 64-bit tick layout;
             // ordinary VHDL integer literals retain their 32-bit layout.
+            // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
             return source.nominal_type == "@builtin:time" ? 64U : 32U;
         }
         if (source.kind == semantic::vhdl::ExpressionKind::aggregate
@@ -25577,7 +25600,7 @@ Lowerer::compute_hir_vhdl_expression_subtype(
     }
     if (const auto expression = specialized_hir_unit_->find_expression(expression_id);
         expression && expression->vhdl != nullptr
-        && expression->vhdl->nominal_type.starts_with("@fsim-vhdl-user-attribute:")) {
+        && expression->vhdl->user_attribute_value) {
         const auto& source = *expression->vhdl;
         const auto declared = resolve_vhdl_user_attribute_subtype(
             *specialized_hir_unit_, source.nominal_type, source.scope);
@@ -27906,8 +27929,6 @@ Lowerer::compute_hir_vhdl_array_selection(
         // containing packed root, with the member offset carried below.
         return std::nullopt;
     }
-    constexpr auto user_attribute_marker
-        = std::string_view { "@fsim-vhdl-user-attribute:" };
     const auto root_prefix = indexed && !parent
         ? std::optional { source.operands.front() }
         : std::nullopt;
@@ -27950,8 +27971,7 @@ Lowerer::compute_hir_vhdl_array_selection(
         && root_prefix_expression->vhdl->operands.size() == 1U;
     const bool user_attribute_root
         = root_prefix_record && root_prefix_record->vhdl != nullptr
-        && root_prefix_record->vhdl->nominal_type.starts_with(
-            user_attribute_marker);
+        && root_prefix_record->vhdl->user_attribute_value;
     const bool function_result_root
         = root_prefix_record && root_prefix_record->vhdl != nullptr
         && root_prefix_record->vhdl->kind
@@ -30265,37 +30285,39 @@ bool Lowerer::can_lower_hir_expression(
             return supported;
         }
         if (source.kind == semantic::sv::ExpressionKind::call
-            && source.text == "$__fsim_current") {
+            && source.marker == support::ExpressionMarker::sva_current) {
             supported = source.operands.size() == 1U
                 && expression_supported(source.operands.front());
             erase();
             return supported;
         }
         if (source.kind == semantic::sv::ExpressionKind::call
-            && source.text == "$__fsim_assertion_control") {
+            && source.marker
+                == support::ExpressionMarker::sva_assertion_control) {
             // Constant operands: two integers and a string literal.
             erase();
             return true;
         }
         if (source.kind == semantic::sv::ExpressionKind::call
-            && (source.text == "$__fsim_sva_tick"
-                || source.text == "$__fsim_sva_outcome"
-                || source.text == "$__fsim_sva_request"
-                || source.text == "$__fsim_sva_local"
-                || source.text == "$__fsim_sva_answer"
-                || source.text == "$__fsim_sva_call")) {
+            && support::sva_monitor_call(source.marker)
+            && source.marker != support::ExpressionMarker::sva_current
+            && source.marker
+                != support::ExpressionMarker::sva_assertion_control) {
             // The plan operand is a string literal; the others are packed,
             // but for a string local's witness and value (16.10).
             supported = true;
             for (std::size_t index = 0; index < source.operands.size();
                 ++index) {
                 const auto operand = source.operands[index];
-                if (index != 1U || source.text != "$__fsim_sva_tick") {
+                if (index != 1U
+                    || source.marker != support::ExpressionMarker::sva_tick) {
                     supported = supported
                         && (expression_supported(operand)
                             || (index >= 2U
-                                && (source.text == "$__fsim_sva_tick"
-                                    || source.text == "$__fsim_sva_answer")
+                                && (source.marker
+                                        == support::ExpressionMarker::sva_tick
+                                    || source.marker
+                                        == support::ExpressionMarker::sva_answer)
                                 && hir_expression_is_string(
                                     operand, process_scope)
                                 && can_lower_hir_string_expression(
@@ -30605,13 +30627,16 @@ bool Lowerer::can_lower_hir_expression(
                 }
                 const auto& candidate = *record->systemverilog;
                 if (candidate.kind == semantic::sv::ExpressionKind::call
-                    && (candidate.text == "@inside-range"
-                        || candidate.text
-                            == "@inside-absolute-tolerance"
-                        || candidate.text
-                            == "@inside-relative-tolerance")) {
-                    const auto tolerance
-                        = candidate.text != "@inside-range";
+                    && (candidate.marker
+                            == support::ExpressionMarker::inside_range
+                        || candidate.marker
+                            == support::ExpressionMarker::
+                                inside_absolute_tolerance
+                        || candidate.marker
+                            == support::ExpressionMarker::
+                                inside_relative_tolerance)) {
+                    const auto tolerance = candidate.marker
+                        != support::ExpressionMarker::inside_range;
                     return (!tolerance
                                || systemverilog_standard_
                                    == frontend::StandardRevision::SystemVerilog2023)
@@ -31667,7 +31692,8 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_enumeration_string(
     // The context-typed pass gave the literal a predefined array type
     // (STD_ULOGIC_VECTOR, BIT_VECTOR, STRING): its elements are not
     // positions of a retained enumeration whose literals share a spelling.
-    if (!expression->vhdl->resolved_builtin_type.empty()) {
+    if (!expression->vhdl->resolved_builtin_type.empty()
+        || expression->vhdl->ambiguous_literal) {
         return std::nullopt;
     }
     const auto& decoded = *expression->vhdl->decoded_string;

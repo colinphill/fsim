@@ -883,7 +883,7 @@ void CompiledDesign::refresh_lookup_indexes()
         }
     }
     {
-        // The `fsim_unit_` packages by library and compilation unit; a key
+        // The compilation-unit packages by library and compilation unit; a key
         // with more than one package selects none.
         std::unordered_map<std::string, std::pair<const sv::Unit*, std::size_t>>
             packages;
@@ -896,7 +896,7 @@ void CompiledDesign::refresh_lookup_indexes()
         };
         for (const auto& unit : systemverilog_hir.units()) {
             if (unit.kind == sv::UnitKind::package
-                && unit.name.starts_with("fsim_unit_")) {
+                && unit.compilation_unit_package) {
                 auto& entry = packages[key(unit)];
                 entry.first = &unit;
                 ++entry.second;

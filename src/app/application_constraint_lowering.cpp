@@ -1246,7 +1246,9 @@ class Lowerer final {
       }
       return true;
     }
-    if (expression.kind == Kind::call && expression.text == "@disable-soft"
+    if (expression.kind == Kind::call
+        && expression.marker
+            == support::ExpressionMarker::constraint_disable_soft
         && expression.operands.size() == 1U) {
       // `disable soft v` under guards applies where the guards hold (IEEE
       // 1800-2017 18.5.14.2).
@@ -1480,7 +1482,8 @@ class Lowerer final {
       if (!weight || *weight < 0) return std::nullopt;
       runtime::SystemVerilogConstraintDistributionEntry entry;
       entry.weight = static_cast<std::uint64_t>(*weight);
-      entry.weight_kind = item.text == "@dist-:/"
+      entry.weight_kind = item.marker
+              == support::ExpressionMarker::constraint_dist_divide
           ? runtime::SystemVerilogConstraintDistributionWeight::AcrossRange
           : runtime::SystemVerilogConstraintDistributionWeight::PerValue;
       const auto& choice = item.operands[0];
@@ -2715,7 +2718,8 @@ lower_systemverilog_constraint_distribution(
     }
     runtime::SystemVerilogConstraintDistributionEntry retained;
     retained.weight = *sampled_weight;
-    retained.weight_kind = item.text == "@dist-:/"
+    retained.weight_kind = item.marker
+            == support::ExpressionMarker::constraint_dist_divide
         ? runtime::SystemVerilogConstraintDistributionWeight::AcrossRange
         : runtime::SystemVerilogConstraintDistributionWeight::PerValue;
     if (item.operands[0].kind
@@ -2974,7 +2978,9 @@ void configure_class_constraints(
       // `disable soft v` discards the lower-priority (earlier) soft
       // constraints on v (IEEE 1800-2017 18.5.14.2).
       if (expression.kind == semantic::sv::ConstraintExpressionKind::call
-          && expression.text == "@disable-soft" && expression.operands.size() == 1U) {
+          && expression.marker
+              == support::ExpressionMarker::constraint_disable_soft
+          && expression.operands.size() == 1U) {
         if (!lower_systemverilog_constraint_expression(
                 expression.operands.front(), specialization.specialization_identity,
                 variables, dependencies, error)) {

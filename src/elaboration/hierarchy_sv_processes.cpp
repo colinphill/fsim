@@ -1141,6 +1141,10 @@ bool HierarchyBuilder::systemverilog_defers_process_lowering()
         // unit's or a generate block's DPI exports, and the `extern
         // forkjoin task` prototypes of interfaces, whose calls run the body
         // of every module that exports the task (IEEE 1800-2023 25.7.4).
+        // ITEM28-LEFT: the DPI export service is a name protocol end to end: the
+        // parser generates the hidden imports and hooks as text, and the runtime
+        // reads the mask and linkage out of their C identity; it needs a typed DPI
+        // call identity (runtime operation fields, codec) before the names can go.
         systemverilog_defers_lowering_ = compiled_ != nullptr
             && std::ranges::any_of(
                 compiled_->systemverilog_hir.declarations(),

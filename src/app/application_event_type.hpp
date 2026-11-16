@@ -15,7 +15,7 @@ namespace fsim::app::application_detail {
 {
     const auto* current = &type;
     for (std::size_t depth = 0U; depth <= hir.types().size(); ++depth) {
-        if (current->target.spelling == "event") {
+        if (current->builtin == support::SystemVerilogBuiltinType::event) {
             return true;
         }
         if (!current->target.target.valid()) {

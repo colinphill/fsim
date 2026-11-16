@@ -22,7 +22,7 @@ struct VhdlHirTypeValidationIssue {
 [[nodiscard]] std::optional<semantic::vhdl::SubtypeIndication>
 resolve_vhdl_user_attribute_subtype(
     const semantic::SpecializedHirUnit& specialization,
-    std::string_view nominal_type,
+    std::string_view specification,
     semantic::ScopeId use_scope);
 
 /// Whether a VHDL expression is locally static (IEEE 1076-2019 9.4.2). The

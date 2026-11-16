@@ -46,12 +46,14 @@ void mark_task(Statement& statement, const support::ExpressionMarker marker,
 
 // A synthesized SystemVerilog expression the class resolution has already
 // bound: every marker of the expression family from a member selection to a
-// coverage query.
+// coverage query, and the built-in methods of a class object.
 [[nodiscard]] bool synthesized_expression(
     const support::ExpressionMarker marker) noexcept
 {
-  return marker >= support::ExpressionMarker::sv_select
-      && marker <= support::ExpressionMarker::sv_coverage_query_type;
+  return (marker >= support::ExpressionMarker::sv_select
+          && marker <= support::ExpressionMarker::sv_coverage_query_type)
+      || (marker >= support::ExpressionMarker::builtin_randomize
+          && marker <= support::ExpressionMarker::builtin_get_randstate);
 }
 
 } // namespace
@@ -667,11 +669,11 @@ void Resolver::retain_task_profile(
     // of the object.
     const auto mode_call = [&](Expression receiver, const std::string& target) {
       expression.operands.front() = std::move(receiver);
-      mark_expression(expression, support::ExpressionMarker::sv_method,
-          "@builtin-"
-              + std::string{expression.text == ".rand_mode"
-                    ? "rand-mode:" : "constraint-mode:"}
-              + target);
+      mark_expression(expression,
+          expression.text == ".rand_mode"
+              ? support::ExpressionMarker::builtin_rand_mode
+              : support::ExpressionMarker::builtin_constraint_mode,
+          target);
       expression.call_argument_names.resize(expression.operands.size());
       expression.call_argument_directions.assign(
           expression.operands.size(), PortDirection::Input);
@@ -736,6 +738,7 @@ void Resolver::retain_task_profile(
       const auto receiver_type = resolve_expression(receiver, scope);
       if (receiver_type && class_identity(*receiver_type)
           && !receiver_type->systemverilog_container) {
+        // ITEM46-LEFT: payload of the @builtin-rand-mode: and @builtin-constraint-mode: identities; converts with that family
         return mode_call(std::move(receiver), "@object");
       }
     }
@@ -775,6 +778,7 @@ void Resolver::retain_task_profile(
       if (whole_type && class_identity(*whole_type)
           && !whole_type->systemverilog_container
           && expression.operands.size() == 2U) {
+        // ITEM46-LEFT: payload of the @builtin-rand-mode: and @builtin-constraint-mode: identities; converts with that family
         return mode_call(std::move(whole), "@object");
       }
       std::optional<Expression> receiver;
@@ -972,8 +976,8 @@ void Resolver::retain_task_profile(
     const auto name = expression.text.substr(1U);
     if (name == "randomize") {
       const auto receiver_identity = *class_identity(*receiver_type);
-      mark_expression(expression, support::ExpressionMarker::sv_method,
-          "@builtin-randomize");
+      mark_expression(expression,
+          support::ExpressionMarker::builtin_randomize);
       expression.call_argument_names.resize(expression.operands.size());
       expression.call_argument_directions.assign(
           expression.operands.size(), PortDirection::Input);
@@ -1256,8 +1260,8 @@ void Resolver::retain_task_profile(
     // `obj.get_randstate()` returns the object's random number generator
     // state (IEEE 1800-2017 18.13.4).
     if (name == "get_randstate" && expression.operands.size() == 1U) {
-      mark_expression(expression, support::ExpressionMarker::sv_method,
-          "@builtin-get-randstate");
+      mark_expression(expression,
+          support::ExpressionMarker::builtin_get_randstate);
       expression.call_argument_names.resize(expression.operands.size());
       expression.call_argument_directions.assign(
           expression.operands.size(), PortDirection::Input);
@@ -2960,7 +2964,7 @@ void Resolver::resolve_class(SystemVerilogClassDeclaration& declaration, Scope s
       std::size_t matches{};
       for (const auto& unit : design_.units) {
         if (unit.kind != UnitKind::SystemVerilogPackage
-            || !unit.name.starts_with("fsim_unit_")) {
+            || !unit.systemverilog_compilation_unit_package) {
           continue;
         }
         for (const auto& alias : unit.type_aliases) {

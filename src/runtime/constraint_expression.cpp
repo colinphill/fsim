@@ -1220,6 +1220,7 @@ namespace {
 
     using Template = SystemVerilogConstraintTemplate;
     using TemplateKind = SystemVerilogConstraintTemplateKind;
+    using TemplateRole = SystemVerilogConstraintTemplateRole;
 
     [[nodiscard]] std::optional<Operator> template_unary_operator(
         const std::string_view spelling) noexcept
@@ -1595,9 +1596,7 @@ namespace {
             // array is a solver variable of its own, which the class
             // randomizer names `a[i].m` or, for an object, by the member's
             // canonical identity `a[i].<class>::m` (IEEE 1800-2017 18.4).
-            constexpr std::string_view member_prefix { "@member:" };
-            if (expression.kind == TemplateKind::Method
-                && expression.text.starts_with(member_prefix)
+            if (expression.kind == TemplateKind::Member
                 && expression.operands.size() == 1U
                 && expression.operands[0].kind == TemplateKind::Index
                 && expression.operands[0].operands.size() >= 2U) {
@@ -1612,8 +1611,7 @@ namespace {
                         "or loop index"
                     };
                 }
-                const auto member = std::string_view { expression.text }
-                    .substr(member_prefix.size());
+                const auto member = std::string_view { expression.text };
                 const auto element
                     = *base + "[" + std::to_string(*position) + "]";
                 std::optional<SystemVerilogConstraintVariableId> found;
@@ -2275,11 +2273,11 @@ namespace {
         {
             if (node.kind != TemplateKind::Name)
                 return nullptr;
-            if (node.text == inline_elements_name)
+            if (node.role == TemplateRole::inline_elements)
                 return &node;
             if (node.operands.size() == 1U
                 && node.operands.front().kind == TemplateKind::Name
-                && node.operands.front().text == inline_elements_name
+                && node.operands.front().role == TemplateRole::inline_elements
                 && container(node.text) == nullptr && !deferred_
                 && !find_optional_template_variable(variables_, node.text))
                 return &node.operands.front();
@@ -2765,9 +2763,7 @@ namespace {
                 };
             }
             entry.weight = template_unsigned_word(weight, "distribution weight");
-            entry.weight_kind = item.text == "@dist-:/"
-                ? SystemVerilogConstraintDistributionWeight::AcrossRange
-                : SystemVerilogConstraintDistributionWeight::PerValue;
+            entry.weight_kind = item.weight_kind;
             result.entries.push_back(std::move(entry));
         }
         return result;

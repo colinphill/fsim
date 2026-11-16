@@ -114,6 +114,7 @@ std::optional<std::int64_t> VhdlHirBuilder::static_integer(
     output.source = span;
     output.origin = expression_origin;
     output.nominal_type = value.nominal_type;
+    output.user_attribute_value = value.vhdl_user_attribute_value;
     if (value.kind == frontend::ExpressionKind::Call
         && value.marker == support::ExpressionMarker::vhdl_external
         && value.operands.size() == 2U

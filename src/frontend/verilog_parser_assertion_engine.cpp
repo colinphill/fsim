@@ -1538,6 +1538,17 @@ public:
         std::string slot_index;
     };
 
+    // What a generated placeholder name stands for in the evaluation text:
+    // the disable condition, a guard by its ordinal, or an outcome action.
+    enum class Placeholder {
+        disable,
+        guard,
+        action_success,
+        action_failure,
+        action_vacuous,
+        action_abort,
+    };
+
     EvaluationBuilder(const GeneralPropertyActions& actions, TextParser parse)
         : actions_(actions)
         , parse_(std::move(parse))
@@ -1601,17 +1612,22 @@ public:
               "__fsim_po = 64'd1 << __fsim_ps; __fsim_rs = 0; "
               "__fsim_rf = 0; __fsim_rv = 0; ";
         if (actions_.disable) {
-            text += "if (__fsim_disable) begin ";
+            text += "if (" + placeholder_name(Placeholder::disable, 0U)
+                + ") begin ";
             for (const auto& name : cleared_) {
                 text += name + " = 0; ";
             }
-            text += "__fsim_act_abort(); end else begin " + steps + "end ";
+            text += placeholder_name(Placeholder::action_abort, 0U)
+                + "(); end else begin " + steps + "end ";
         } else {
             text += steps;
         }
-        text += "repeat (__fsim_rv) __fsim_act_vacuous(); "
-                "repeat (__fsim_rs) __fsim_act_success(); "
-                "repeat (__fsim_rf) __fsim_act_failure(); end";
+        text += "repeat (__fsim_rv) "
+            + placeholder_name(Placeholder::action_vacuous, 0U)
+            + "(); repeat (__fsim_rs) "
+            + placeholder_name(Placeholder::action_success, 0U)
+            + "(); repeat (__fsim_rf) "
+            + placeholder_name(Placeholder::action_failure, 0U) + "(); end";
         // Each directive's process gets its own state names.
         for (const std::string_view stem : { "__fsim_p", "__fsim_r" }) {
             const auto replacement = actions_.name_prefix + "_"
@@ -1710,9 +1726,39 @@ private:
     std::string guard(const Expression& expression,
         std::string slot_index = { })
     {
-        const auto name = "__fsim_g" + std::to_string(guards_.size());
+        const auto ordinal = guards_.size();
         guards_.push_back(
             { expression, scope_generated_name(std::move(slot_index)) });
+        return placeholder_name(Placeholder::guard, ordinal);
+    }
+
+    // The generated identifier of a placeholder, registered so that the
+    // substitution after parsing finds what it stands for by this table.
+    [[nodiscard]] std::string placeholder_name(
+        const Placeholder kind, const std::size_t ordinal)
+    {
+        std::string name;
+        switch (kind) {
+        case Placeholder::disable:
+            name = "__fsim_disable";
+            break;
+        case Placeholder::guard:
+            name = "__fsim_g" + std::to_string(ordinal);
+            break;
+        case Placeholder::action_success:
+            name = "__fsim_act_success";
+            break;
+        case Placeholder::action_failure:
+            name = "__fsim_act_failure";
+            break;
+        case Placeholder::action_vacuous:
+            name = "__fsim_act_vacuous";
+            break;
+        case Placeholder::action_abort:
+            name = "__fsim_act_abort";
+            break;
+        }
+        placeholders_.insert_or_assign(name, PlaceholderEntry { kind, ordinal });
         return name;
     }
 
@@ -2538,14 +2584,15 @@ private:
     bool substitute(Expression& expression)
     {
         if (expression.kind == ExpressionKind::Identifier) {
-            if (expression.text == "__fsim_disable") {
+            const auto found = placeholders_.find(expression.text);
+            if (found != placeholders_.end()
+                && found->second.kind == Placeholder::disable) {
                 expression = *actions_.disable;
                 return true;
             }
-            constexpr std::string_view guard_prefix { "__fsim_g" };
-            if (expression.text.starts_with(guard_prefix)) {
-                const auto ordinal = std::stoul(
-                    expression.text.substr(guard_prefix.size()));
+            if (found != placeholders_.end()
+                && found->second.kind == Placeholder::guard) {
+                const auto ordinal = found->second.ordinal;
                 if (ordinal >= guards_.size()) {
                     return false;
                 }
@@ -2567,13 +2614,18 @@ private:
 
     bool substitute(Statement& statement)
     {
-        if (statement.kind == StatementKind::TaskCall
-            && statement.task_name.starts_with("__fsim_act_")) {
-            const auto which = statement.task_name.substr(11U);
-            const auto& actions = which == "success" ? actions_.success
-                : which == "failure"                 ? actions_.failure
-                : which == "vacuous"                 ? actions_.vacuous
-                                                     : actions_.abort;
+        const auto action = statement.kind == StatementKind::TaskCall
+            ? placeholders_.find(statement.task_name)
+            : placeholders_.end();
+        if (action != placeholders_.end()
+            && action->second.kind != Placeholder::disable
+            && action->second.kind != Placeholder::guard) {
+            const auto which = action->second.kind;
+            const auto& actions = which == Placeholder::action_success
+                ? actions_.success
+                : which == Placeholder::action_failure ? actions_.failure
+                : which == Placeholder::action_vacuous ? actions_.vacuous
+                                                       : actions_.abort;
             Statement replacement;
             replacement.kind = StatementKind::Block;
             replacement.span = actions_.span;
@@ -2607,8 +2659,14 @@ private:
         return true;
     }
 
+    struct PlaceholderEntry {
+        Placeholder kind { Placeholder::disable };
+        std::size_t ordinal { };
+    };
+
     const GeneralPropertyActions& actions_;
     TextParser parse_;
+    std::map<std::string, PlaceholderEntry, std::less<>> placeholders_;
     std::size_t next_name_ { };
     std::vector<Guard> guards_;
     std::map<std::string, std::string, std::less<>> local_storage_;

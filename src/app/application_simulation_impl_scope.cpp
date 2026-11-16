@@ -415,6 +415,7 @@ void Simulation::Impl::run_scope_task(
                 + "' is not in the design");
         }
         for (auto& child : children_of(current.value->handle)) {
+            // ITEM46-LEFT: name of the static-storage design object of a callable, found through string-keyed design maps and hidden from $showvars by its leading character; a typed form needs a storage kind on design signals
             // "@static:N" is the storage of a callable's static locals,
             // not a variable the user declared in this scope.
             if (child.name.starts_with('@')) {

@@ -41,6 +41,13 @@ namespace {
 
     constexpr FileHandle file_descriptor_flag = UINT32_C(0x80000000);
 
+    // A file access the project root forbids: there is no root, or the name
+    // leaves it.
+    class FileRootViolation final : public std::runtime_error {
+    public:
+        using std::runtime_error::runtime_error;
+    };
+
     [[nodiscard]] bool below_root(
         const std::filesystem::path& root,
         const std::filesystem::path& candidate)
@@ -156,13 +163,9 @@ FileHandle Interpreter::Impl::open_file(
     // which would otherwise read every file as missing.
     try {
         return open_file_unchecked(process, path_text, mode_text, vhdl);
-    } catch (const std::runtime_error& error) {
-        const std::string_view message { error.what() };
-        if (message.find("manifest root") != std::string_view::npos
-            || message.find("project root") != std::string_view::npos
-            || message.find("escapes") != std::string_view::npos) {
-            throw;
-        }
+    } catch (const FileRootViolation&) {
+        throw;
+    } catch (const std::runtime_error&) {
         return 0;
     } catch (const std::length_error&) {
         return 0;
@@ -192,7 +195,7 @@ FileHandle Interpreter::Impl::open_file_unchecked(
         };
     }
     if (file_root.empty()) {
-        throw std::runtime_error {
+        throw FileRootViolation {
             "SimIR file access has no configured project root"
         };
     }
@@ -221,7 +224,7 @@ FileHandle Interpreter::Impl::open_file_unchecked(
     }
     for (const auto& component : relative) {
         if (component == "..") {
-            throw std::runtime_error {
+            throw FileRootViolation {
                 "SimIR filename escapes the manifest root"
             };
         }
@@ -248,7 +251,7 @@ FileHandle Interpreter::Impl::open_file_unchecked(
         checked /= joined.filename();
     }
     if (!below_root(file_root, checked)) {
-        throw std::runtime_error {
+        throw FileRootViolation {
             "SimIR filename resolves outside the manifest root"
         };
     }

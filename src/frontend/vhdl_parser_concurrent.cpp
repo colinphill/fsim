@@ -1315,12 +1315,16 @@ void VhdlParser::parse_vhdl_port_associations(
       for (std::size_t step { }; step + 1U < path.size(); ++step) {
         const auto& outer = path[step];
         const auto name = outer.element ? vhdl_name(outer.token.text)
-                                        : std::string { "@array" };
+                                        : std::string { };
+        const auto name_marker = outer.element
+            ? support::ExpressionMarker::none
+            : support::ExpressionMarker::vhdl_array_choice;
         std::optional<std::size_t> existing;
         for (std::size_t index { }; index < nested->operands.size();
              ++index) {
           if (index < nested->aggregate_choices.size()
               && nested->aggregate_choices[index] == name
+              && aggregate_choice_marker(*nested, index) == name_marker
               && nested->operands[index].kind == ExpressionKind::Aggregate
               && nested->operands[index].marker
                   == support::ExpressionMarker::vhdl_formal_subelements
@@ -1335,7 +1339,7 @@ void VhdlParser::parse_vhdl_port_associations(
           Expression inner { ExpressionKind::Aggregate, { }, { },
               outer.choice.span };
           inner.marker = support::ExpressionMarker::vhdl_formal_subelements;
-          nested->aggregate_choices.push_back(name);
+          push_aggregate_choice(*nested, name, name_marker);
           nested->aggregate_choice_expressions.push_back({ outer.choice });
           nested->operands.push_back(std::move(inner));
           existing = nested->operands.size() - 1U;
@@ -1346,8 +1350,10 @@ void VhdlParser::parse_vhdl_port_associations(
       auto& aggregate = *nested;
       auto choice = std::move(path.back().choice);
       const bool element_choice = path.back().element;
-      aggregate.aggregate_choices.push_back(
-          element_choice ? choice.text : std::string { "@array" });
+      push_aggregate_choice(aggregate,
+          element_choice ? choice.text : std::string { },
+          element_choice ? support::ExpressionMarker::none
+                         : support::ExpressionMarker::vhdl_array_choice);
       aggregate.aggregate_choice_expressions.push_back({ std::move(choice) });
       aggregate.operands.push_back(std::move(actual));
       aggregate.span = cover(aggregate.span, previous().span);

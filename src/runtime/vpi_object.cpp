@@ -973,6 +973,7 @@ SystemVerilogVpiObjectResult SystemVerilogVpiObjectRegistry::create(
         record.name_prefix = std::move(descriptor.name_prefix);
         record.anonymous = anonymous;
         record.state_key = std::move(state_key);
+        record.compilation_unit = descriptor.compilation_unit;
     } else {
         if (records_.size() >= slot_mask) {
             return { { }, SystemVerilogVpiObjectError::ResourceLimit };
@@ -999,6 +1000,7 @@ SystemVerilogVpiObjectResult SystemVerilogVpiObjectRegistry::create(
             anonymous,
             std::move(state_key),
             false,
+            descriptor.compilation_unit,
         });
     }
 
@@ -1080,6 +1082,7 @@ SystemVerilogVpiObjectRegistry::lookup_locked(
                  record.full_name,
                  record.source,
                  std::move(type),
+                 record.compilation_unit,
              },
         { } };
 }

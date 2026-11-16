@@ -745,9 +745,12 @@ Expression VhdlParser::build_vhdl_individual_aggregate(
       if (choice.kind == ExpressionKind::Identifier) {
         choice.text = vhdl_name(choice.text);
       }
-      aggregate.aggregate_choices.push_back(
+      push_aggregate_choice(aggregate,
           choice.kind == ExpressionKind::Identifier ? choice.text
-                                                    : "@array");
+                                                    : std::string { },
+          choice.kind == ExpressionKind::Identifier
+              ? support::ExpressionMarker::none
+              : support::ExpressionMarker::vhdl_array_choice);
       aggregate.aggregate_choice_expressions.push_back(
           std::vector<Expression> { std::move(choice) });
       aggregate.operands.push_back(std::move(value));
@@ -1052,6 +1055,7 @@ Expression VhdlParser::parse_vhdl_aggregate_target(
     do {
       std::vector<Expression> choices;
       std::string choice_spelling;
+      auto choice_marker = support::ExpressionMarker::none;
       if (named_association_ahead()) {
         saw_named_association = true;
         do {
@@ -1074,7 +1078,7 @@ Expression VhdlParser::parse_vhdl_aggregate_target(
             && choices.front().kind == ExpressionKind::Identifier) {
           choice_spelling = vhdl_name(choices.front().text);
         } else {
-          choice_spelling = "@array";
+          choice_marker = support::ExpressionMarker::vhdl_array_choice;
         }
       } else if (saw_named_association) {
         error(current(), "FSIM-VHDL-SEM-038",
@@ -1091,8 +1095,7 @@ Expression VhdlParser::parse_vhdl_aggregate_target(
       if (!nested_after) {
         leaves.push_back(element_target);
       }
-      result.aggregate_choices.push_back(
-          std::move(choice_spelling));
+      push_aggregate_choice(result, std::move(choice_spelling), choice_marker);
       result.aggregate_choice_expressions.push_back(
           std::move(choices));
       result.operands.push_back(std::move(element_target));
@@ -1378,7 +1381,8 @@ std::optional<Statement> VhdlParser::split_vhdl_aggregate_assignment(
     if (source->kind == ExpressionKind::Aggregate
         && source->operands.size() == count
         && std::ranges::all_of(source->aggregate_choices,
-            [](const std::string& choice) { return choice.empty(); })) {
+            [](const std::string& choice) { return choice.empty(); })
+        && source->aggregate_choice_markers.empty()) {
       return source->operands[k];
     }
     if (source->kind == ExpressionKind::StringLiteral

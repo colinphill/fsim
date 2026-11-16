@@ -1372,6 +1372,7 @@ private:
                 // An anonymous structure or union type (`struct {int a;}
                 // s;`) is identified by its HIR type record.
                 if (target_identity.empty()) {
+                    // ITEM46-LEFT: identity of an anonymous type used as a specialization key string; needs a typed key
                     target_identity = "@anonymous-type:"
                         + std::to_string(type.target.target.value());
                 }
@@ -1388,7 +1389,9 @@ private:
             && type.interface_type.empty()
             && !type.container_form) {
             target_identity = type.four_state
+                // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
                 ? "@builtin:four-state-integral"
+                // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
                 : "@builtin:two-state-integral";
         }
         identity << "type:" << encoded(target_identity) << ':';

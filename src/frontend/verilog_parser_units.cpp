@@ -23,15 +23,6 @@ namespace fsim::frontend {
 
 namespace {
 
-constexpr std::string_view implicit_generate_prefix{
-    "@fsim-implicit-genblk:"};
-
-[[nodiscard]] std::string implicit_generate_scope(
-    const std::size_t ordinal) {
-  return std::string{implicit_generate_prefix}
-      + std::to_string(ordinal);
-}
-
 } // namespace
 
 DesignUnit VerilogParser::parse_package(const Token& start) {
@@ -701,12 +692,12 @@ GenerateRegion VerilogParser::parse_static_generate_block() {
   GenerateRegion result;
   result.kind = GenerateKind::StaticBlock;
   const auto start = current();
-  const auto implicit_scope = implicit_generate_scope(
-      next_implicit_generate_scope_++);
+  const auto implicit_ordinal = next_implicit_generate_scope_++;
   parse_generate_branch(
       result.then_scope,
+      result.then_implicit_scope_ordinal,
       result.then_body,
-      implicit_scope,
+      implicit_ordinal,
       false);
   result.span = span_from(start, previous());
   return result;
@@ -714,11 +705,11 @@ GenerateRegion VerilogParser::parse_static_generate_block() {
 
 GenerateRegion VerilogParser::parse_conditional_generate(
   const Token& start,
-  std::optional<std::string> direct_scope) {
+  std::optional<std::size_t> direct_ordinal) {
   GenerateRegion result;
-  const auto implicit_scope = direct_scope
-      ? std::move(*direct_scope)
-      : implicit_generate_scope(next_implicit_generate_scope_++);
+  const auto implicit_ordinal = direct_ordinal
+      ? *direct_ordinal
+      : next_implicit_generate_scope_++;
   expect(
       TokenKind::LeftParen,
       "'(' after generate if",
@@ -730,14 +721,16 @@ GenerateRegion VerilogParser::parse_conditional_generate(
       "FSIM-SV-PARSE-060");
   parse_generate_branch(
       result.then_scope,
+      result.then_implicit_scope_ordinal,
       result.then_body,
-      implicit_scope,
+      implicit_ordinal,
       true);
   if (match_keyword("else")) {
     parse_generate_branch(
         result.else_scope,
+        result.else_implicit_scope_ordinal,
         result.else_body,
-        implicit_scope,
+        implicit_ordinal,
         true);
   }
   result.span = span_from(start, previous());
@@ -747,8 +740,7 @@ GenerateRegion VerilogParser::parse_conditional_generate(
 GenerateRegion VerilogParser::parse_iterative_generate(const Token& start) {
   GenerateRegion result;
   result.kind = GenerateKind::Iterative;
-  const auto implicit_scope = implicit_generate_scope(
-      next_implicit_generate_scope_++);
+  const auto implicit_ordinal = next_implicit_generate_scope_++;
   expect(
       TokenKind::LeftParen,
       "'(' after generate for",
@@ -864,8 +856,9 @@ GenerateRegion VerilogParser::parse_iterative_generate(const Token& start) {
       "FSIM-SV-PARSE-072");
   parse_generate_branch(
       result.then_scope,
+      result.then_implicit_scope_ordinal,
       result.then_body,
-      implicit_scope,
+      implicit_ordinal,
       false);
   const auto generate_name =
       current_generate_names_.find(result.variable);
@@ -879,12 +872,12 @@ GenerateRegion VerilogParser::parse_iterative_generate(const Token& start) {
 
 GenerateRegion VerilogParser::parse_selection_generate(
     const Token& start,
-    std::optional<std::string> direct_scope) {
+    std::optional<std::size_t> direct_ordinal) {
   GenerateRegion result;
   result.kind = GenerateKind::Selection;
-  const auto implicit_scope = direct_scope
-      ? std::move(*direct_scope)
-      : implicit_generate_scope(next_implicit_generate_scope_++);
+  const auto implicit_ordinal = direct_ordinal
+      ? *direct_ordinal
+      : next_implicit_generate_scope_++;
   expect(
       TokenKind::LeftParen,
       "'(' after generate case",
@@ -924,8 +917,9 @@ GenerateRegion VerilogParser::parse_selection_generate(
         "FSIM-SV-PARSE-075");
     parse_generate_branch(
         alternative.scope,
+        alternative.implicit_scope_ordinal,
         alternative.body,
-        implicit_scope,
+        implicit_ordinal,
         true);
     alternative.span =
         span_from(alternative_start, previous());
@@ -938,27 +932,28 @@ GenerateRegion VerilogParser::parse_selection_generate(
 
 void VerilogParser::parse_generate_branch(
   std::string& scope,
+  std::size_t& implicit_scope_ordinal,
   GenerateBody& body,
-  const std::string_view implicit_scope,
+  const std::size_t implicit_ordinal,
   const bool allow_direct_conditional_nesting) {
   const bool block = match_keyword("begin");
   if (block && match(TokenKind::Colon)) {
     scope = expect_identifier("generate block label").text;
+    implicit_scope_ordinal = 0;
   } else {
-    scope = std::string{implicit_scope};
+    scope.clear();
+    implicit_scope_ordinal = implicit_ordinal;
   }
   if (!block && allow_direct_conditional_nesting
       && (keyword("if") || keyword("case"))) {
-    scope.clear();
+    implicit_scope_ordinal = 0;
     if (match_keyword("if")) {
       body.generate_regions.push_back(
-          parse_conditional_generate(
-              previous(), std::string{implicit_scope}));
+          parse_conditional_generate(previous(), implicit_ordinal));
     } else {
       (void)match_keyword("case");
       body.generate_regions.push_back(
-          parse_selection_generate(
-              previous(), std::string{implicit_scope}));
+          parse_selection_generate(previous(), implicit_ordinal));
     }
     return;
   }

@@ -46,13 +46,23 @@ using vhdl::ExpressionKind;
 // A type: the root of a resolved subtype chain, or a predefined type by name.
 // The pseudo types stand for the types of literals and aggregates, which only
 // a context decides (IEEE 1076-2008 9.3.2, 9.3.3).
+enum class PseudoType : std::uint8_t {
+    none,
+    string_literal,
+    aggregate,
+    null_literal,
+    // A character literal that fits more than one overload (12.5).
+    ambiguous_literal,
+};
+
 struct TypeKey {
     TypeId id;
     std::string builtin;
+    PseudoType pseudo { PseudoType::none };
 
     [[nodiscard]] bool known() const noexcept
     {
-        return id.valid() || !builtin.empty();
+        return id.valid() || !builtin.empty() || pseudo != PseudoType::none;
     }
 
     bool operator==(const TypeKey&) const = default;
@@ -60,11 +70,6 @@ struct TypeKey {
 
 constexpr std::string_view universal_integer { "universal_integer" };
 constexpr std::string_view universal_real { "universal_real" };
-constexpr std::string_view string_literal_type { "@string-literal" };
-constexpr std::string_view aggregate_type { "@aggregate" };
-constexpr std::string_view null_type { "@null" };
-// A character literal that fits more than one overload (12.5).
-constexpr std::string_view ambiguous_literal { "@ambiguous-literal" };
 
 // The predefined types named by STD.STANDARD and IEEE.STD_LOGIC_1164. A
 // subtype names its base type (5.2.6, 16.3, 16.7).
@@ -201,6 +206,7 @@ public:
             expressions[index].resolved_declaration.reset();
             expressions[index].resolved_type.reset();
             expressions[index].resolved_builtin_type.clear();
+            expressions[index].ambiguous_literal = false;
             expressions[index].qualified_type_mark.reset();
             expression_index_.emplace(expressions[index].id.value(), index);
         }
@@ -690,6 +696,8 @@ private:
         auto& target = (*expressions_)[found->second];
         if (key.id.valid()) {
             target.resolved_type = key.id;
+        } else if (key.pseudo == PseudoType::ambiguous_literal) {
+            target.ambiguous_literal = true;
         } else {
             target.resolved_builtin_type = key.builtin;
         }
@@ -706,6 +714,11 @@ private:
     [[nodiscard]] TypeKey builtin(const std::string_view name) const
     {
         return TypeKey { { }, predefined_base(name) };
+    }
+
+    [[nodiscard]] static TypeKey pseudo_type(const PseudoType pseudo)
+    {
+        return TypeKey { { }, { }, pseudo };
     }
 
     [[nodiscard]] TypeKey type_key(const TypeId id)
@@ -978,13 +991,13 @@ private:
             if (pseudo.builtin == universal_real) {
                 return floating_class(other);
             }
-            if (pseudo.builtin == string_literal_type) {
+            if (pseudo.pseudo == PseudoType::string_literal) {
                 return array_class(other);
             }
-            if (pseudo.builtin == aggregate_type) {
+            if (pseudo.pseudo == PseudoType::aggregate) {
                 return array_class(other) || record_class(other);
             }
-            if (pseudo.builtin == null_type) {
+            if (pseudo.pseudo == PseudoType::null_literal) {
                 return access_class(other);
             }
             return false;
@@ -1506,9 +1519,9 @@ private:
         case ExpressionKind::boolean_literal:
             return { builtin("boolean") };
         case ExpressionKind::string_literal:
-            return { builtin(string_literal_type) };
+            return { pseudo_type(PseudoType::string_literal) };
         case ExpressionKind::aggregate:
-            return { builtin(aggregate_type) };
+            return { pseudo_type(PseudoType::aggregate) };
         case ExpressionKind::logic_literal: {
             if (record->referenced_name) {
                 result = declaration_types(*record->referenced_name);
@@ -1529,7 +1542,7 @@ private:
         }
         case ExpressionKind::name: {
             if (record->marker == support::ExpressionMarker::vhdl_null) {
-                return { builtin(null_type) };
+                return { pseudo_type(PseudoType::null_literal) };
             }
             if (!record->referenced_name) {
                 return result;
@@ -1783,7 +1796,7 @@ private:
                 }
             }
             if (formal_types.size() > 1U) {
-                annotate_type(operand, builtin(ambiguous_literal));
+                annotate_type(operand, pseudo_type(PseudoType::ambiguous_literal));
                 resolve(operand, std::nullopt);
             } else if (formal_types.size() == 1U) {
                 resolve(operand, formal_types.front());
@@ -2042,7 +2055,7 @@ private:
             formals.erase('a');
             if (is_string(operand) && formals.contains('v')
                 && formals.contains('w')) {
-                annotate_type(operand, builtin(ambiguous_literal));
+                annotate_type(operand, pseudo_type(PseudoType::ambiguous_literal));
                 resolve(operand, std::nullopt);
                 continue;
             }
@@ -2055,7 +2068,7 @@ private:
                 continue;
             }
             // Fits more than one overload: ambiguous (12.5).
-            annotate_type(operand, builtin(ambiguous_literal));
+            annotate_type(operand, pseudo_type(PseudoType::ambiguous_literal));
             resolve(operand, std::nullopt);
         }
         return true;
@@ -2078,7 +2091,7 @@ private:
         const bool is_logic = logic
             && std::ranges::find(types, builtin("std_ulogic")) != types.end();
         if (is_bit && is_logic) {
-            annotate_type(id, builtin(ambiguous_literal));
+            annotate_type(id, pseudo_type(PseudoType::ambiguous_literal));
         } else if (is_logic) {
             annotate_type(id, builtin("std_ulogic"));
         } else if (is_bit) {

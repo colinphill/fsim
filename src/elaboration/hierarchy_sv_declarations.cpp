@@ -1154,6 +1154,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_static_storage(
                 }
             }
         }
+        // ITEM46-LEFT: name of the static-storage design object of a callable, found through string-keyed design maps and hidden from $showvars by its leading character; a typed form needs a storage kind on design signals
         const auto key = "@static:" + std::to_string(id.value());
         if (materialization.signals.contains(key)
             || materialization.string_objects.contains(key)
@@ -1457,6 +1458,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                     packed_fallback_resolver)) {
                 return false;
             }
+            // ITEM46-LEFT: name of the static-storage design object of a callable, found through string-keyed design maps and hidden from $showvars by its leading character; a typed form needs a storage kind on design signals
             const auto key = "@static:" + std::to_string(declaration_id.value());
             const auto signal = register_static_storage_alias(materialization.signals,
                 design_.signal_by_name_, result.name, materialization.path, key,
@@ -2045,6 +2047,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
             const auto source_name
                 = declaration.name + "[" + index_text + "]";
             const auto stable_name
+                // ITEM46-LEFT: stable signal name registered in the string-keyed design signal maps; needs a typed key in those maps
                 = "@event-array-declaration:"
                 + std::to_string(declaration_id.value())
                 + "[" + index_text + "]";

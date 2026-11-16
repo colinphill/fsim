@@ -152,7 +152,10 @@ end architecture;
   const auto &array_aggregate = outer_aggregate.operands[1].operands.front();
   require(array_aggregate.kind == ExpressionKind::Aggregate &&
               array_aggregate.aggregate_choices ==
-                  std::vector<std::string>{"@array", "others"} &&
+                  std::vector<std::string>{"", "others"} &&
+              array_aggregate.aggregate_choice_markers.size() >= 1U &&
+              array_aggregate.aggregate_choice_markers[0] ==
+                  fsim::support::ExpressionMarker::vhdl_array_choice &&
               array_aggregate.aggregate_choice_expressions[0].size() == 1 &&
               array_aggregate.aggregate_choice_expressions[0][0].kind ==
                   ExpressionKind::IntegerLiteral,

@@ -1457,6 +1457,10 @@ std::string systemverilog_dpi_header(const semantic::sv::Hir& hir)
     for (const auto* const entry : declarations) {
         const auto& declaration = *entry;
         // The hidden imports of a unit's export service are not C code.
+        // ITEM28-LEFT: the DPI export service is a name protocol end to end: the
+        // parser generates the hidden imports and hooks as text, and the runtime
+        // reads the mask and linkage out of their C identity; it needs a typed DPI
+        // call identity (runtime operation fields, codec) before the names can go.
         if (!declaration.validated || declaration.linkage_name.empty()
             || declaration.linkage_name.starts_with("__fsim_dpi_export_")
             || !declared.insert(declaration.linkage_name).second) {

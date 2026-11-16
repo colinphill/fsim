@@ -187,6 +187,7 @@ Type vhdl_environment_dayofweek_type() {
   Type type;
   type.domain = ValueDomain::Bit2;
   type.spelling = "std.env.dayofweek";
+  // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
   type.nominal_type = "@builtin:std.env.dayofweek";
   type.vhdl_type_declaration = type.nominal_type;
   type.packed_range = PackedRange{2, 0, true};
@@ -205,6 +206,7 @@ Type vhdl_environment_time_record_type() {
   Type type;
   type.domain = ValueDomain::Bit2;
   type.spelling = "std.env.time_record";
+  // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
   type.nominal_type = "@builtin:std.env.time_record";
   type.vhdl_type_declaration = type.nominal_type;
   type.packed_aggregate = PackedAggregateKind::Struct;
@@ -231,6 +233,7 @@ Type vhdl_environment_time_record_type() {
 }
 
 bool is_vhdl_environment_time_record(const Type& type) noexcept {
+  // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
   return type.nominal_type == "@builtin:std.env.time_record";
 }
 
@@ -239,6 +242,7 @@ std::optional<Type> vhdl_reflection_type(const std::string_view simple_name) {
     Type type;
     type.domain = ValueDomain::Bit2;
     type.spelling = "std.reflection." + std::string { simple_name };
+    // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
     type.nominal_type = "@builtin:std.reflection.type_class";
     type.vhdl_type_declaration = type.nominal_type;
     type.packed_range = PackedRange { 3, 0, true };
@@ -276,6 +280,7 @@ std::optional<Type> vhdl_reflection_type(const std::string_view simple_name) {
   Type type;
   type.domain = ValueDomain::Bit2;
   type.spelling = "std.reflection." + std::string { simple_name };
+  // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
   type.nominal_type = "@builtin:" + type.spelling;
   type.vhdl_type_declaration = type.nominal_type;
   type.packed_range = PackedRange { 31, 0, true };
@@ -290,6 +295,7 @@ Type vhdl_environment_string_container_type(
   Type element;
   element.domain = ValueDomain::String;
   element.spelling = "line";
+  // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
   element.nominal_type = "@builtin:std.textio.line";
   element.vhdl_type_declaration = element.nominal_type;
 
@@ -308,11 +314,13 @@ Type vhdl_environment_string_container_type(
 
 Type vhdl_environment_directory_type() {
   return vhdl_environment_string_container_type(
+      // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
       "std.env.directory", "@builtin:std.env.directory");
 }
 
 Type vhdl_environment_directory_items_type() {
   return vhdl_environment_string_container_type(
+      // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
       "std.env.directory_items", "@builtin:std.env.directory_items");
 }
 
@@ -346,6 +354,7 @@ Type vhdl_environment_directory_status_type(const VhdlSimulatorApi kind) {
     type.spelling = "std.env.invalid_status";
     break;
   }
+  // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
   type.nominal_type = "@builtin:" + type.spelling;
   type.vhdl_type_declaration = type.nominal_type;
   type.enumeration_range = EnumerationRange{
@@ -355,6 +364,7 @@ Type vhdl_environment_directory_status_type(const VhdlSimulatorApi kind) {
 }
 
 bool is_vhdl_environment_directory(const Type& type) noexcept {
+  // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
   return type.nominal_type == "@builtin:std.env.directory";
 }
 
@@ -362,6 +372,7 @@ Type vhdl_environment_call_path_element_type() {
   Type line;
   line.domain = ValueDomain::String;
   line.spelling = "std.textio.line";
+  // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
   line.nominal_type = "@builtin:std.textio.line";
   line.vhdl_type_declaration = line.nominal_type;
   auto positive = vhdl_predefined_integer_type(
@@ -372,6 +383,7 @@ Type vhdl_environment_call_path_element_type() {
   Type type;
   type.domain = ValueDomain::Unknown;
   type.spelling = "std.env.call_path_element";
+  // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
   type.nominal_type = "@builtin:std.env.call_path_element";
   type.vhdl_type_declaration = type.nominal_type;
   type.packed_aggregate = PackedAggregateKind::UnpackedStruct;
@@ -412,18 +424,23 @@ Type vhdl_environment_call_path_container_type(
 
 Type vhdl_environment_call_path_vector_type() {
   return vhdl_environment_call_path_container_type(
+      // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
       "std.env.call_path_vector", "@builtin:std.env.call_path_vector");
 }
 
 Type vhdl_environment_call_path_vector_ptr_type() {
   return vhdl_environment_call_path_container_type(
       "std.env.call_path_vector_ptr",
+      // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
       "@builtin:std.env.call_path_vector_ptr");
 }
 
 bool is_vhdl_environment_call_path_type(const Type& type) noexcept {
+  // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
   return type.nominal_type == "@builtin:std.env.call_path_element"
+      // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
       || type.nominal_type == "@builtin:std.env.call_path_vector"
+      // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
       || type.nominal_type == "@builtin:std.env.call_path_vector_ptr";
 }
 

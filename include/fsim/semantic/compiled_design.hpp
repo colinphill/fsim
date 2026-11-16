@@ -338,7 +338,7 @@ public:
     [[nodiscard]] std::optional<
         std::span<const CompiledSystemVerilogScopeGenvar>>
     systemverilog_scope_genvars(ScopeId scope) const noexcept;
-    /// The `fsim_unit_` package holding the compilation-unit declarations
+    /// The package holding the compilation-unit declarations
     /// visible to `unit` (IEEE 1800-2017 3.12.1), or null when there is
     /// none or more than one; disengaged when the lookup indexes are stale.
     [[nodiscard]] std::optional<const sv::Unit*>

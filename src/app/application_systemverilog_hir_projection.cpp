@@ -337,6 +337,7 @@ void SystemVerilogHirBuilder::apply_named_type_dimensions(
         const auto type_source = output.target.source;
         const auto type_origin = origin(
             type_source, parent, "anonymous SystemVerilog aggregate type");
+        // ITEM46-LEFT: name of an implicit type registered by name in the scope; needs a name-free implicit type registration
         const auto name = "@anonymous-aggregate:"
             + std::to_string(type_source.value()) + ":"
             + std::to_string(parent.value());
@@ -673,6 +674,8 @@ template <typename Input>
         parent);
     auto& output = declaration(id);
     output.local_type_parameter = type_parameter && input.local;
+    output.interface_port = input.interface_port;
+    output.interface_member = input.interface_member;
     // Enumeration literals stay anonymous-typed values; only objects of an
     // anonymous enumeration refer to its hidden typedef.
     suppress_hidden_anonymous_enum_typedef_ = true;
@@ -1958,6 +1961,7 @@ template <typename Input>
     output.name = input.name;
     output.checker_instance = input.checker_instance;
     output.checker_name = input.checker_name;
+    output.synthesized = input.synthesized;
     output.name_source = source(input.name_span);
     output.header_tokens = source_tokens(input.header_tokens);
     output.header_source = source(input.header_span);

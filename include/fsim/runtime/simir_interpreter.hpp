@@ -114,7 +114,7 @@ public:
     // retain it even though their ProcessProgram id is dynamic.
     using ClassAllocateContextHook = std::function<std::uint64_t(
         ProcessId, ProcessId, std::string_view, std::string_view,
-        std::string_view,
+        std::string_view, ClassConstruction,
         std::span<const PackedLogic4>,
         std::span<const std::string>,
         std::span<const std::string>)>;
@@ -153,6 +153,7 @@ public:
     using ClassStaticMethodCallContextHook = std::function<PackedLogic4(
         ProcessId,
         std::string_view,
+        ClassMethodHook,
         std::vector<PackedLogic4>&,
         std::vector<std::string>&,
         std::span<const std::string>,

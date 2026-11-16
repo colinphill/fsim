@@ -452,6 +452,9 @@ class Resolver final {
   std::map<std::string, SystemVerilogClassDeclaration*, std::less<>> classes_;
   std::map<std::string, const DesignUnit*, std::less<>> class_units_;
   std::map<std::string, const Type*, std::less<>> class_aliases_;
+  // The typedefs of the compilation-unit packages by library and name.
+  std::map<std::pair<std::string, std::string>, std::vector<const Type*>>
+      compilation_unit_aliases_;
   // The array typedef `named_type` names from `lexical`, walking outward,
   // then the unique compilation-unit typedef of that name.
   [[nodiscard]] static std::optional<std::string>

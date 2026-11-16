@@ -1568,6 +1568,7 @@ fsim_vpi_handle_v1 VpiStatementModel::cover_sequence_spec(const sv::Unit& unit,
         sv::AssertionDeclaration declaration;
         declaration.kind = sv::AssertionDeclarationKind::property;
         declaration.name = "$inline_property$cover";
+        declaration.synthesized = true;
         if (!assertion.inline_clock_events.empty()) {
             declaration.clock = sv::AssertionClock { };
             declaration.clock->events = assertion.inline_clock_events;
@@ -1879,10 +1880,10 @@ std::optional<std::vector<fsim_vpi_handle_v1>> VpiStatementModel::iterate_scope(
     if (type == vpiProcess) {
         for (const auto id : container->processes) {
             const auto* const record = process(id.value());
-            // Declaration initializers run as frontend-made processes
-            // named with a '$'; they are not processes of the design.
+            // Declaration initializers run as frontend-made processes;
+            // they are not processes of the design.
             if (record != nullptr && !record->concurrent_assertion
-                && !record->synthesized && !record->name.starts_with('$')) {
+                && !record->synthesized && !record->declaration_initializer) {
                 found.push_back(node(Kind::process, id.value(), 0U,
                     scope.handle, scope.handle));
             }
@@ -1976,7 +1977,7 @@ std::vector<fsim_vpi_handle_v1> VpiStatementModel::assertion_declarations(
         // and those a checker instance specializes into the scope (17.3),
         // are not declarations written in it.
         if (declaration.kind == sv::AssertionDeclarationKind::checker
-            || declaration.name.starts_with('$')
+            || declaration.synthesized
             || !declaration.checker_instance.empty()) {
             continue;
         }
@@ -2003,7 +2004,7 @@ fsim_vpi_handle_v1 VpiStatementModel::assertion_declaration_named(
     for (const auto& declaration : *container->assertion_declarations) {
         if (declaration.kind != sv::AssertionDeclarationKind::checker
             && declaration.checker_instance.empty()
-            && declaration.name == name && !name.starts_with('$')) {
+            && declaration.name == name && !declaration.synthesized) {
             return assertion_decl_handle(declaration, *unit, scope.handle);
         }
     }
@@ -2026,7 +2027,7 @@ fsim_vpi_handle_v1 VpiStatementModel::assertion_property(const sv::Unit& unit,
                 unit),
             root, scope, parent);
     }
-    if (instance == nullptr && declaration.name.starts_with("$inline_property$")) {
+    if (instance == nullptr && declaration.synthesized) {
         return node(Kind::assertion_spec,
             assertion_entry(declaration,
                 declaration.tree ? &*declaration.tree : nullptr, unit),
@@ -3189,7 +3190,7 @@ std::vector<fsim_vpi_handle_v1> VpiStatementModel::connections(
         const auto* const record = process(id.value());
         // The statements of an assertion's monitor or of a process the
         // frontend generated for one are not the design's (37.21).
-        if (record == nullptr || record->name.starts_with('$')
+        if (record == nullptr || record->declaration_initializer
             || record->concurrent_assertion || record->synthesized) {
             continue;
         }
@@ -3295,7 +3296,8 @@ std::vector<VpiStatementModel::ForceSite> VpiStatementModel::force_sites(
         };
     for (const auto id : container->processes) {
         const auto* const record = process(id.value());
-        if (record == nullptr || record->name.starts_with('$')) {
+        if (record == nullptr || record->declaration_initializer
+            || record->synthesized) {
             continue;
         }
         owner = id.value();

@@ -258,6 +258,32 @@ enum class SystemVerilogConstraintTemplateKind : std::uint8_t {
     /// reductions (whose optional trailing operands are an iterator name and
     /// a with-expression), casts (cast_target) and bit counts.
     Method,
+    /// `a[i].m`: the text is the member's name or canonical identity; the
+    /// one operand is Index(a, i).
+    Member,
+};
+
+/// What a Name or Constant template node stands for when it is a placeholder
+/// the lowering or the runtime fills in before the solve (IEEE 1800-2017
+/// 18.7, 18.12), instead of a name or constant written in the source.
+enum class SystemVerilogConstraintTemplateRole : std::uint8_t {
+    none,
+    /// A Constant that takes the calling-scope value number `slot`.
+    inline_value,
+    /// A Name for the array number `slot` of the calling scope.
+    inline_container,
+    /// A Constant that takes the value held in register `slot`.
+    inline_register,
+    /// A Name for the array held in container register `slot`; the runtime
+    /// turns it into inline_elements.
+    inline_container_register,
+    /// That array at the call: one constant operand per element and the
+    /// array's size as the node's constant.
+    inline_elements,
+    /// A Name for a std::randomize argument or with-clause array; its text
+    /// is the solver variable it names.
+    std_randomize_variable,
+    last = std_randomize_variable,
 };
 
 struct SystemVerilogConstraintTemplate {
@@ -277,6 +303,14 @@ struct SystemVerilogConstraintTemplate {
         support::SystemVerilogBuiltinType::none
     };
     std::size_t cast_width { };
+    // A DistributionItem: whether its weight is `:=` or `:/`.
+    SystemVerilogConstraintDistributionWeight weight_kind {
+        SystemVerilogConstraintDistributionWeight::PerValue
+    };
+    SystemVerilogConstraintTemplateRole role {
+        SystemVerilogConstraintTemplateRole::none
+    };
+    std::size_t slot { };
 };
 
 struct SystemVerilogConstraintExpressionNode {
@@ -485,16 +519,6 @@ class SystemVerilogConstraintSolver final {
   std::map<std::string, SystemVerilogConstraintContainerShape, std::less<>>
       container_shapes_;
 };
-
-/// An object's randomize with-clause names an array of the calling scope by
-/// this prefix and the container register holding a copy of it (IEEE
-/// 1800-2017 18.7).
-inline constexpr std::string_view inline_container_prefix {
-    "@inline-container-register:" };
-
-/// That array at the call: a Name node with this text, one constant operand
-/// per element and the array's size as its constant.
-inline constexpr std::string_view inline_elements_name { "@inline-elements" };
 
 /// Bind and register one source-ordered inline constraint block. The identity
 /// prefix is diagnostic/cache provenance, not a language-width limit.

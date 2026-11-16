@@ -2,6 +2,7 @@
 #pragma once
 
 #include "fsim/frontend/diagnostic.hpp"
+#include "fsim/support/expression_marker.hpp"
 #include "fsim/support/systemverilog_builtin_type.hpp"
 
 #include <cstdint>
@@ -250,6 +251,11 @@ struct Token {
       support::SystemVerilogBuiltinType::none };
   support::SystemVerilogTypeWord systemverilog_type_word {
       support::SystemVerilogTypeWord::none };
+  // The kind of node a generated name token stands for (a monitor call, a
+  // placeholder action) and its payload; `none` on every other token. The
+  // token's text is then only a display name.
+  support::ExpressionMarker marker { support::ExpressionMarker::none };
+  std::string marker_argument { };
 
   friend bool operator==(const Token&, const Token&) = default;
 };

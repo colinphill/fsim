@@ -3,6 +3,7 @@
 
 #include "fsim/semantic/model.hpp"
 #include "fsim/semantic/hierarchy_path.hpp"
+#include "fsim/support/generated_object_origin.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -142,6 +143,11 @@ struct Object {
     // design's object is also found: a lookup name, not a hierarchical name
     // (IEEE 1800-2023 21.7.2.3), so traces leave it out.
     bool root_relative_alias{};
+    // The elaboration step that made the object for no declaration of the
+    // source (a sampled value, an adapter, a delayed copy); `none` for a
+    // declared object. VPI and traces list declared objects only (IEEE
+    // 1800-2023 37.12, 21.7).
+    support::GeneratedObjectOrigin origin{support::GeneratedObjectOrigin::none};
 };
 
 struct Port {

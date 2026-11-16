@@ -570,6 +570,7 @@ include/fsim/support/ctype_whitespace.hpp
 include/fsim/support/design_library.hpp
 include/fsim/support/environment.hpp
 include/fsim/support/expression_marker.hpp
+include/fsim/support/generated_object_origin.hpp
 include/fsim/support/glob_match.hpp
 include/fsim/support/identity128.hpp
 include/fsim/support/index_distance.hpp

@@ -416,7 +416,9 @@ endmodule
             && membership.operands[0].text == "selector"
             && membership.operands[1].text == "8'h01"
             && membership.operands[2].kind == ExpressionKind::Call
-            && membership.operands[2].text == "@inside-range"
+            && membership.operands[2].text.empty()
+            && membership.operands[2].marker
+                == fsim::support::ExpressionMarker::inside_range
             && membership.operands[2].operands.size() == 2
             && membership.operands[2].operands[0].text == "8'h10"
             && membership.operands[2].operands[1].text == "8'h1f"

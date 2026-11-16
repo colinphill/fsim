@@ -1753,6 +1753,8 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
             = direction == frontend::PortDirection::Inout
             && context.array_position && context.array_position->second > 1U;
         std::optional<SignalId> inout_array_actual;
+        // The adapter net this formal gets when its actual is an expression.
+        std::optional<SignalId> formal_adapter_net;
         if (actual_signal && direct_name_actual && !interface_port
             && formal_declaration.type
             && (direction == frontend::PortDirection::Input
@@ -1866,6 +1868,8 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                         static_cast<std::uint64_t>(*initial),
                         0U);
                 }
+                info.origin = support::GeneratedObjectOrigin::actual_adapter;
+                formal_adapter_net = id;
                 design_.signal_info_.push_back(std::move(info));
                 design_.signals_.push_back(
                     runtime::simir::Signal {
@@ -2002,6 +2006,8 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                         process.id = process_id;
                         process.name = adapter_name + ".$inout_"
                             + std::to_string(ordinal++);
+                        process.origin
+                            = support::GeneratedObjectOrigin::inout_adapter;
                         process.scheduling_domain
                             = ProcessSchedulingDomain::systemverilog;
                         process.switch_source = piece.signal;
@@ -2055,6 +2061,8 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                     }
                     element_output.name
                         = adapter_name + ".$array_element_output";
+                    element_output.origin = support::GeneratedObjectOrigin::
+                        array_element_output_adapter;
                     element_output.language_standard = unit.standard;
                     element_output.compatibility_profile
                         = unit.compatibility_profile;
@@ -2220,9 +2228,7 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                 = merged_info.systemverilog_net_type.empty()
                 && (merged_info.name
                         == child_path + "." + formal_declaration.name
-                    || merged_info.name
-                        == child_path + ".$actual_"
-                            + formal_declaration.name);
+                    || formal_adapter_net == *actual_signal);
             if ((formal_net == NetKind::tri0 || formal_net == NetKind::tri1)
                 && !merged.implicit_driver
                 && (merged_info.systemverilog_net_kind == NetKind::wire

@@ -699,6 +699,26 @@ namespace {
         }
     }
 
+    // The built-in method of a class object (IEEE 1800-2023 18.6, 18.8,
+    // 18.9, 18.13.4) a call marker stands for; none for any other call.
+    [[nodiscard]] runtime::simir::ClassMethodHook builtin_method_hook(
+        const support::ExpressionMarker marker) noexcept
+    {
+        using Hook = runtime::simir::ClassMethodHook;
+        switch (marker) {
+        case support::ExpressionMarker::builtin_randomize:
+            return Hook::builtin_randomize;
+        case support::ExpressionMarker::builtin_rand_mode:
+            return Hook::builtin_rand_mode;
+        case support::ExpressionMarker::builtin_constraint_mode:
+            return Hook::builtin_constraint_mode;
+        case support::ExpressionMarker::builtin_get_randstate:
+            return Hook::builtin_get_randstate;
+        default:
+            return Hook::none;
+        }
+    }
+
 } // namespace
 
 std::optional<ContainerType> Lowerer::hir_typed_pattern_container_type(
@@ -3697,9 +3717,8 @@ template <typename Call>
 void prepare_string_property_call(Call& call, const StringRegisterId value,
     const bool write)
 {
-    call.method_identity = (write ? "@string-property-write:"
-                                  : "@string-property-read:")
-        + call.method_identity;
+    call.hook = write ? ClassMethodHook::string_property_write
+                      : ClassMethodHook::string_property_read;
     call.actuals = { value };
     call.actual_names = { "value" };
     call.actual_directions = { static_cast<std::uint8_t>(write
@@ -3923,6 +3942,7 @@ Lowerer::hir_inline_constraints(
 
     using Template = runtime::SystemVerilogConstraintTemplate;
     using TemplateKind = runtime::SystemVerilogConstraintTemplateKind;
+    using TemplateRole = runtime::SystemVerilogConstraintTemplateRole;
     using DomainKind = runtime::SystemVerilogConstraintDomainKind;
     const auto constant = [&](const semantic::ExpressionId id,
                               const std::string_view nominal)
@@ -4064,7 +4084,7 @@ Lowerer::hir_inline_constraints(
         ? std::optional { expression->systemverilog->operands.front() }
         : std::nullopt;
     // A placeholder for the value an expression has in the calling scope,
-    // filled from the matching `@inline-value:` actual at the call.
+    // filled from the matching inline-value actual at the call.
     const auto caller_value = [&](const semantic::ExpressionId id)
         -> std::optional<Template> {
         if (runtime_values == nullptr) {
@@ -4080,7 +4100,8 @@ Lowerer::hir_inline_constraints(
         }
         Template value;
         value.kind = TemplateKind::Constant;
-        value.text = "@inline-value:" + std::to_string(runtime_values->size());
+        value.role = TemplateRole::inline_value;
+        value.slot = runtime_values->size();
         value.constant = PackedLogic4::from_aval_bval(*width, 0U, 0U);
         value.profile = {
             *domain == frontend::ValueDomain::Integer
@@ -4138,6 +4159,7 @@ Lowerer::hir_inline_constraints(
             hir_scope_randomize_arguments_) {
             if (same_lvalue(same_lvalue, id, argument, 0U)) {
                 output.kind = TemplateKind::Name;
+                output.role = TemplateRole::std_randomize_variable;
                 output.text = identity;
                 return output;
             }
@@ -4195,11 +4217,15 @@ Lowerer::hir_inline_constraints(
                     runtime_containers->push_back(id);
                     slot = std::prev(runtime_containers->end());
                 }
-                const auto position = std::to_string(
+                const auto position = static_cast<std::size_t>(
                     std::distance(runtime_containers->begin(), slot));
                 output.kind = TemplateKind::Name;
                 if (!randomized_object) {
-                    output.text = "@std-randomize-container:" + position;
+                    // The solver variable of a with-clause array of a
+                    // std::randomize call follows the call's arguments.
+                    output.role = TemplateRole::std_randomize_variable;
+                    output.text = std::to_string(
+                        hir_scope_randomize_arguments_.size() + position);
                     return output;
                 }
                 // An object's randomize reads the array's elements at the
@@ -4207,7 +4233,8 @@ Lowerer::hir_inline_constraints(
                 // the randomized object takes precedence (18.7).
                 Template elements;
                 elements.kind = TemplateKind::Name;
-                elements.text = "@inline-container:" + position;
+                elements.role = TemplateRole::inline_container;
+                elements.slot = position;
                 if (source.kind != semantic::sv::ExpressionKind::name
                     || (member_names && !member_names->contains(source.text))) {
                     return elements;
@@ -4357,10 +4384,9 @@ Lowerer::hir_inline_constraints(
             selection.text = "index";
             selection.operands.push_back(std::move(*array));
             selection.operands.push_back(std::move(*position));
-            output.kind = TemplateKind::Method;
+            output.kind = TemplateKind::Member;
             const std::string_view member { source.marker_argument };
-            output.text = "@member:"
-                + std::string { member.substr(0, member.find(':')) };
+            output.text = std::string { member.substr(0, member.find(':')) };
             output.operands.push_back(std::move(selection));
             return output;
         }
@@ -4398,9 +4424,8 @@ Lowerer::hir_inline_constraints(
             selection.text = "index";
             selection.operands.push_back(std::move(*array));
             selection.operands.push_back(std::move(*position));
-            output.kind = TemplateKind::Method;
-            output.text = "@member:"
-                + source.text.substr(element_path_prefix.size());
+            output.kind = TemplateKind::Member;
+            output.text = source.text.substr(element_path_prefix.size());
             output.operands.push_back(std::move(selection));
             return output;
         }
@@ -4418,11 +4443,10 @@ Lowerer::hir_inline_constraints(
                 selection->operands.resize(2U);
             }
             const auto separator = source.marker_argument.rfind("::");
-            output.kind = TemplateKind::Method;
-            output.text = "@member:"
-                + (separator == std::string::npos
-                        ? source.marker_argument
-                        : source.marker_argument.substr(separator + 2U));
+            output.kind = TemplateKind::Member;
+            output.text = separator == std::string::npos
+                ? source.marker_argument
+                : source.marker_argument.substr(separator + 2U);
             output.operands.push_back(std::move(*selection));
             return output;
         }
@@ -4531,8 +4555,8 @@ Lowerer::hir_inline_constraints(
                     || hir_class_property_profile(id))) {
                 Template value;
                 value.kind = TemplateKind::Constant;
-                value.text = "@inline-value:"
-                    + std::to_string(runtime_values->size());
+                value.role = TemplateRole::inline_value;
+                value.slot = runtime_values->size();
                 value.constant = PackedLogic4::from_aval_bval(
                     *width, 0U, 0U);
                 value.profile = {
@@ -4586,7 +4610,8 @@ Lowerer::hir_inline_constraints(
                 return TemplateKind::Method;
             }
             if (source.kind == semantic::sv::ExpressionKind::call
-                && source.text == "@constraint-foreach") {
+                && source.marker
+                    == support::ExpressionMarker::constraint_foreach) {
                 return TemplateKind::Foreach;
             }
             if (source.kind == semantic::sv::ExpressionKind::binary) {
@@ -4595,42 +4620,38 @@ Lowerer::hir_inline_constraints(
             if (source.kind != semantic::sv::ExpressionKind::call) {
                 return std::nullopt;
             }
+            switch (source.marker) {
+            case support::ExpressionMarker::inside_range:
+                return TemplateKind::InsideRange;
+            case support::ExpressionMarker::constraint_dist_equal:
+            case support::ExpressionMarker::constraint_dist_divide:
+                return TemplateKind::DistributionItem;
+            case support::ExpressionMarker::constraint_block:
+                return TemplateKind::Block;
+            case support::ExpressionMarker::constraint_implies:
+                return TemplateKind::Implication;
+            case support::ExpressionMarker::constraint_if:
+                return TemplateKind::ConditionalConstraint;
+            case support::ExpressionMarker::constraint_solve_before:
+                return TemplateKind::SolveBefore;
+            case support::ExpressionMarker::constraint_solve_list:
+                return TemplateKind::SolveList;
+            case support::ExpressionMarker::constraint_unique:
+                return TemplateKind::Unique;
+            default:
+                break;
+            }
             if (source.text == "?:") {
                 return TemplateKind::Conditional;
             }
             if (source.text == "inside") {
                 return TemplateKind::InsideSet;
             }
-            if (source.text == "@inside-range") {
-                return TemplateKind::InsideRange;
-            }
             if (source.text == "dist") {
                 return TemplateKind::Distribution;
             }
-            if (source.text == "@dist-:="
-                || source.text == "@dist-:/") {
-                return TemplateKind::DistributionItem;
-            }
             if (source.text == "soft") {
                 return TemplateKind::Soft;
-            }
-            if (source.text == "@constraint-block") {
-                return TemplateKind::Block;
-            }
-            if (source.text == "@constraint-implies") {
-                return TemplateKind::Implication;
-            }
-            if (source.text == "@constraint-if") {
-                return TemplateKind::ConditionalConstraint;
-            }
-            if (source.text == "@solve-before") {
-                return TemplateKind::SolveBefore;
-            }
-            if (source.text == "@solve-list") {
-                return TemplateKind::SolveList;
-            }
-            if (source.text == "@constraint-unique") {
-                return TemplateKind::Unique;
             }
             return std::nullopt;
         }();
@@ -4666,8 +4687,12 @@ Lowerer::hir_inline_constraints(
                 return value.kind
                         == semantic::sv::ExpressionKind::class_method_call
                     && !value.operands.empty()
-                    // A built-in method's identity has a component that
-                    // starts with '@'; a `$unit@<hash>` class does not.
+                    // A built-in method of an object is no call of the
+                    // calling scope; a library method's identity has a
+                    // component that starts with '@', a `$unit@<hash>`
+                    // class does not.
+                    && builtin_method_hook(value.marker)
+                        == runtime::simir::ClassMethodHook::none
                     && !value.class_member_identity.starts_with('@')
                     && value.class_member_identity.find("::@")
                         == std::string::npos
@@ -4687,6 +4712,12 @@ Lowerer::hir_inline_constraints(
             return caller_function ? caller_value(id) : std::nullopt;
         }
         output.kind = *special_kind;
+        if (source.marker
+            == support::ExpressionMarker::constraint_dist_divide) {
+            output.weight_kind
+                = runtime::SystemVerilogConstraintDistributionWeight::
+                    AcrossRange;
+        }
         // A cast carries its target kind, built-in type and width; a cast to
         // a named type carries its resolved width and signedness (IEEE
         // 1800-2017 6.24.1).
@@ -4777,8 +4808,8 @@ Lowerer::hir_inline_constraints(
         // name.
         // A std::randomize array is itself in the solve.
         const auto solved_array = [&] {
-            return output.operands.front().text.starts_with(
-                "@std-randomize-");
+            return output.operands.front().role
+                == TemplateRole::std_randomize_variable;
         };
         // `a[i][j]` passes the value of the element as well; the array is
         // its root name.
@@ -4827,8 +4858,8 @@ Lowerer::hir_inline_constraints(
             if (caller_array || caller_member) {
                 Template value;
                 value.kind = TemplateKind::Constant;
-                value.text = "@inline-value:"
-                    + std::to_string(runtime_values->size());
+                value.role = TemplateRole::inline_value;
+                value.slot = runtime_values->size();
                 value.constant = PackedLogic4::from_aval_bval(32U, 0U, 0U);
                 value.profile = { DomainKind::Integer, 32U, true, { },
                     false, support::SystemVerilogBuiltinType::int_type };
@@ -5506,24 +5537,20 @@ Lowerer::hir_class_method_profile(
         || call.kind == semantic::sv::ExpressionKind::class_method_call;
     const auto static_call = scoped.has_value()
         || call.kind == semantic::sv::ExpressionKind::class_static_method_call;
+    const auto builtin = builtin_method_hook(call.marker);
     if ((!instance_call && !static_call)
         || (call.class_member_identity.empty() && !scoped
-            && !parameter_typed)) {
+            && !parameter_typed
+            && builtin == runtime::simir::ClassMethodHook::none)) {
         return std::nullopt;
     }
 
-    constexpr auto randomize_identity
-        = std::string_view { "@builtin-randomize" };
-    constexpr auto random_mode_prefix
-        = std::string_view { "@builtin-rand-mode:" };
-    constexpr auto constraint_mode_prefix
-        = std::string_view { "@builtin-constraint-mode:" };
-    if (call.class_member_identity == "@builtin-get-randstate") {
+    if (builtin == runtime::simir::ClassMethodHook::builtin_get_randstate) {
         if (!instance_call || call.operands.size() != 1U) {
             return std::nullopt;
         }
         HirClassMethodProfile result;
-        result.identity = call.class_member_identity;
+        result.builtin = builtin;
         result.receiver = call.operands.front();
         result.result_width = 1U;
         result.result_domain = frontend::ValueDomain::Bit2;
@@ -5576,12 +5603,11 @@ Lowerer::hir_class_method_profile(
         }
         return result;
     }
-    const auto builtin_randomize
-        = call.class_member_identity == randomize_identity;
     const auto builtin_mode
-        = call.class_member_identity.starts_with(random_mode_prefix)
-        || call.class_member_identity.starts_with(constraint_mode_prefix);
-    if (builtin_randomize || builtin_mode) {
+        = builtin == runtime::simir::ClassMethodHook::builtin_rand_mode
+        || builtin == runtime::simir::ClassMethodHook::builtin_constraint_mode;
+    if (builtin == runtime::simir::ClassMethodHook::builtin_randomize
+        || builtin_mode) {
         if (!instance_call || call.operands.empty()
             || (builtin_mode && call.operands.size() > 2U)
             || (!call.argument_names.empty()
@@ -5595,7 +5621,9 @@ Lowerer::hir_class_method_profile(
         }
 
         HirClassMethodProfile result;
-        result.identity = call.class_member_identity;
+        result.builtin = builtin;
+        // A mode call names its target in the marker argument.
+        result.identity = call.marker_argument;
         result.receiver = call.operands.front();
         result.result_width = 32U;
         result.result_domain = frontend::ValueDomain::Integer;
@@ -6088,16 +6116,20 @@ Lowerer::hir_class_task_profile(
     // `ifc.t()` inside a task of a module instance called by its path
     // (`u.t2()`, 23.8) names that instance's interface port or instance.
     if (!class_call && interface_receiver
+        // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
         && !interface_receiver->starts_with("@instance:")
         && systemverilog_interface_types_ != nullptr && active_hir_callable_
         && *active_hir_callable_ < hir_callable_frames_.size()) {
         const auto& caller = hir_callable_frames_[*active_hir_callable_];
         if (caller.interface_receiver
+            // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
             && caller.interface_receiver->starts_with("@instance:")) {
             auto path = caller.interface_receiver->substr(
+                            // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
                             std::string_view { "@instance:" }.size())
                 + "." + *interface_receiver;
             if (systemverilog_interface_types_->contains(path)) {
+                // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
                 interface_receiver = "@instance:" + std::move(path);
             }
         }
@@ -7239,6 +7271,7 @@ std::optional<RegisterId> Lowerer::lower_hir_uvm_lowered_create(
         LoadStringConstant { list, std::move(lowered_classes) });
     actuals.push_back(list);
     actual_kinds.push_back(1U);
+    // ITEM46-LEFT: a reserved actual name marks the list actual of a lowered registry create; needs a typed flag on ClassStaticMethodCall and the static hook, like the result-string marker
     actual_names.emplace_back("@lowered-constructors");
     actual_directions.push_back(
         static_cast<std::uint8_t>(frontend::PortDirection::Input));
@@ -7481,8 +7514,8 @@ bool Lowerer::lower_uvm_override_arms(
         const auto selected = allocate_register(
             1U, frontend::ValueDomain::Logic4);
         process_.operations.emplace_back(ClassMethodCall {
-            selected, receiver, "@checked-cast:" + item.owner_identity,
-            { }, { }, { }, 1U, false });
+            selected, receiver, item.owner_identity,
+            { }, { }, { }, 1U, false, { }, { }, ClassMethodHook::checked_cast });
         const auto branch = static_cast<InstructionIndex>(
             process_.operations.size());
         process_.operations.emplace_back(Branch {
@@ -9018,6 +9051,8 @@ Lowerer::hir_class_static_container_binding(
     design_.container_object_info_.push_back(ContainerObjectInfo {
         object, name, *container_type, hir_source_span(property->source),
         false, frontend::PortDirection::Unknown, std::nullopt });
+    design_.container_object_info_.back().origin
+        = support::GeneratedObjectOrigin::class_static;
     design_.container_objects_.push_back(
         ContainerObject { name, std::move(initial), std::nullopt, owner });
     design_.container_by_name_.emplace(name, object);
@@ -9098,6 +9133,7 @@ Lowerer::lower_hir_class_function_call(
             });
     if ((!lower_class_functions_ && !retry_input_container_actuals)
         || profile.static_method != !receiver
+        || profile.builtin != runtime::simir::ClassMethodHook::none
         || profile.identity.empty() || profile.identity.starts_with('@')
         || (hir_uvm_library_identity(profile.identity)
             && !profile.static_method)) {
@@ -9469,8 +9505,8 @@ Lowerer::lower_hir_class_function_call(
         const auto selected = allocate_register(
             1U, frontend::ValueDomain::Logic4);
         process_.operations.emplace_back(ClassMethodCall {
-            selected, *receiver, "@checked-cast:" + item.owner_identity,
-            { }, { }, { }, 1U, false,
+            selected, *receiver, item.owner_identity,
+            { }, { }, { }, 1U, false, { }, { }, ClassMethodHook::checked_cast,
         });
         const auto branch = static_cast<InstructionIndex>(
             process_.operations.size());
@@ -9607,6 +9643,7 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
     // A class function runs as a lowered subroutine when it can; otherwise
     // the runtime interprets it.
     if (receiver.has_value() != profile->static_method
+        && profile->builtin == ClassMethodHook::none
         && !profile->identity.starts_with("@uvm-")
         && inline_constraints->empty()) {
         const auto mark = process_.operations.size();
@@ -9764,8 +9801,8 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
             return std::nullopt;
         }
         actuals.push_back(*lowered);
-        actual_kinds.push_back(0U);
-        actual_names.push_back("@inline-value:" + std::to_string(index));
+        actual_kinds.push_back(inline_value_actual_kind);
+        actual_names.emplace_back();
         actual_directions.push_back(
             static_cast<std::uint8_t>(frontend::PortDirection::Input));
     }
@@ -9782,18 +9819,20 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
         held_containers.push_back(std::move(*held));
     }
     if (!held_containers.empty()) {
-        constexpr std::string_view container_prefix = "@inline-container:";
         const auto bind_containers = [&](const auto& self,
                                          runtime::SystemVerilogConstraintTemplate&
                                              node) -> void {
             if (node.kind == runtime::SystemVerilogConstraintTemplateKind::Name
-                && node.text.starts_with(container_prefix)) {
-                const auto slot = std::stoull(
-                    node.text.substr(container_prefix.size()));
+                && node.role
+                    == runtime::SystemVerilogConstraintTemplateRole::
+                        inline_container) {
+                const auto slot = node.slot;
                 if (slot < held_containers.size()) {
                     const auto& type = held_containers[slot].type;
-                    node.text = std::string { runtime::inline_container_prefix }
-                        + std::to_string(held_containers[slot].value);
+                    node.role = runtime::SystemVerilogConstraintTemplateRole::
+                        inline_container_register;
+                    node.slot = static_cast<std::size_t>(
+                        held_containers[slot].value);
                     // An element of a user type keeps its HIR identity; any
                     // other element is an anonymous packed vector of its width.
                     node.profile = {
@@ -9826,6 +9865,7 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
         process_.operations.emplace_back(LoadStringConstant { text, { } });
         actuals.push_back(text);
         actual_kinds.push_back(1U);
+        // ITEM46-LEFT: the trailing string actual of a call is marked by a reserved actual name that travels through every class hook, the VPI and VHPI call models and the class executor; a typed result flag on the call operations and the hook signatures is needed
         actual_names.emplace_back("@result-string");
         actual_directions.push_back(
             static_cast<std::uint8_t>(frontend::PortDirection::Output));
@@ -9835,7 +9875,8 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
         profile->result_width, profile->result_domain);
     // `randomize(null)`: the one operand after the object is the marked null.
     const bool randomize_without_properties = [&] {
-        if (profile->identity != "@builtin-randomize") {
+        if (profile->builtin
+            != runtime::simir::ClassMethodHook::builtin_randomize) {
             return false;
         }
         const auto record = specialized_hir_unit_->find_expression(expression);
@@ -9852,12 +9893,12 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
     // The method sees, and may change, this object's container properties.
     flush_hir_class_container_caches();
     if (receiver && !profile->static_method
-        && profile->identity == "@builtin-randomize"
+        && profile->builtin == ClassMethodHook::builtin_randomize
         && lower_hir_randomize_with_callbacks(expression, *receiver,
             ClassMethodCall {
                 destination,
                 *receiver,
-                "@builtin-randomize-solve",
+                std::string { },
                 actuals,
                 actual_names,
                 actual_directions,
@@ -9865,7 +9906,7 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
                 profile->virtual_dispatch,
                 actual_kinds,
                 *inline_constraints,
-                ClassMethodHook::none,
+                ClassMethodHook::builtin_randomize_solve,
                 randomize_without_properties,
             })) {
         reload_hir_class_container_caches();
@@ -9894,6 +9935,7 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
     // call the simulation's services answer (`@...`) activates none.
     if (const auto call = specialized_hir_unit_->find_expression(expression);
         call && call->systemverilog != nullptr
+        && profile->builtin == ClassMethodHook::none
         && !profile->identity.starts_with('@')) {
         emit_debug_point(
             DebugPointKind::call, hir_source_span(call->systemverilog->source));
@@ -9927,6 +9969,7 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
             actual_kinds,
         };
         operation.inline_constraints = std::move(*inline_constraints);
+        operation.hook = profile->builtin;
         operation.randomize_no_properties = randomize_without_properties;
         process_.operations.emplace_back(std::move(operation));
     }
@@ -10117,8 +10160,8 @@ bool Lowerer::lower_hir_randomize_callback(const semantic::SourceSpanId source,
         const auto selected = allocate_register(
             1U, frontend::ValueDomain::Logic4);
         process_.operations.emplace_back(ClassMethodCall {
-            selected, object, "@checked-cast:" + item.owner_identity,
-            { }, { }, { }, 1U, false,
+            selected, object, item.owner_identity,
+            { }, { }, { }, 1U, false, { }, { }, ClassMethodHook::checked_cast,
         });
         const auto branch = static_cast<InstructionIndex>(
             process_.operations.size());
@@ -10183,20 +10226,20 @@ void Lowerer::lower_hir_process_kill(const RegisterId receiver)
     const auto none = allocate_register(64U, frontend::ValueDomain::Bit2);
     process_.operations.emplace_back(
         LoadConstant { none, unsigned_value(0U, 64U) });
-    const auto marker = [&](std::string method) {
+    const auto marker = [&](const ClassMethodHook hook) {
         const auto discarded = allocate_register(
             1U, frontend::ValueDomain::Bit2);
         process_.operations.emplace_back(ClassMethodCall {
-            discarded, none, std::move(method), { }, { }, { }, 1U, false,
+            discarded, none, { }, { }, { }, { }, 1U, false, { }, { }, hook,
         });
     };
-    marker("@process-kill-begin");
+    marker(ClassMethodHook::process_kill_begin);
     process_.operations.emplace_back(ProcessKill { receiver });
-    marker("@process-kill-end");
+    marker(ClassMethodHook::process_kill_end);
 }
 
 // The callback of each object that joins the solve with its callbacks, in
-// the order `@randomize-begin` collected them (18.6.1).
+// the order the begin step collected them (18.6.1).
 bool Lowerer::lower_hir_randomize_member_callbacks(
     const semantic::SourceSpanId source, const RegisterId receiver,
     const RegisterId count, const std::vector<HirClassOverride>& classes,
@@ -10455,7 +10498,8 @@ bool Lowerer::ensure_hir_class_static_local(
             design_.string_objects_.size());
         design_.string_object_info_.push_back(StringObjectInfo {
             object, storage_name, declaration_span, false,
-            frontend::PortDirection::Unknown });
+            frontend::PortDirection::Unknown, std::nullopt,
+            support::GeneratedObjectOrigin::class_static_local });
         design_.string_objects_.push_back(
             StringObject { storage_name, std::move(initial) });
         design_.string_by_name_.emplace(storage_name, object);
@@ -10492,6 +10536,8 @@ bool Lowerer::ensure_hir_class_static_local(
         design_.container_object_info_.push_back(ContainerObjectInfo {
             object, storage_name, *container, declaration_span, false,
             frontend::PortDirection::Unknown, std::nullopt });
+        design_.container_object_info_.back().origin
+            = support::GeneratedObjectOrigin::class_static_local;
         design_.container_objects_.push_back(
             ContainerObject { storage_name, std::move(initial), std::nullopt });
         design_.container_by_name_.emplace(storage_name, object);
@@ -10536,6 +10582,7 @@ bool Lowerer::ensure_hir_class_static_local(
     info.systemverilog_scalar = scalar_kind;
     info.is_signed = source.type->signed_value || declared.signed_value;
     info.declaration_span = declaration_span;
+    info.origin = support::GeneratedObjectOrigin::class_static_local;
     design_.signal_info_.push_back(std::move(info));
     Signal signal { storage_name, std::move(initial), ResolutionKind::none,
         ValueKind::logic4 };
@@ -10813,6 +10860,7 @@ Lowerer::hir_virtual_interface_instances(const std::string_view receiver,
     // The instances a virtual interface variable named `receiver` can
     // designate: every instance of its interface type, by handle.
     if (specialized_hir_unit_ == nullptr || receiver.empty()
+        // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
         || receiver.starts_with("@instance:")
         || systemverilog_interface_handles_ == nullptr
         || systemverilog_interface_types_ == nullptr) {
@@ -11193,8 +11241,8 @@ bool Lowerer::lower_hir_class_task_call(
             const auto selected = allocate_register(
                 1U, frontend::ValueDomain::Logic4);
             process_.operations.emplace_back(ClassMethodCall {
-                selected, target, "@checked-cast:" + writer.owner_identity,
-                { }, { }, { }, 1U, false });
+                selected, target, writer.owner_identity,
+                { }, { }, { }, 1U, false, { }, { }, ClassMethodHook::checked_cast });
             const auto branch = static_cast<InstructionIndex>(
                 process_.operations.size());
             process_.operations.emplace_back(Branch {
@@ -11266,12 +11314,12 @@ bool Lowerer::lower_hir_class_task_call(
             process_.operations.emplace_back(ClassMethodCall {
                 selected,
                 *receiver,
-                "@checked-cast:" + item.owner_identity,
+                item.owner_identity,
                 { },
                 { },
                 { },
                 1U,
-                false,
+                false, { }, { }, ClassMethodHook::checked_cast,
             });
             const auto branch = static_cast<InstructionIndex>(
                 process_.operations.size());
@@ -11506,8 +11554,8 @@ bool Lowerer::lower_hir_class_task_call(
                         1U, frontend::ValueDomain::Logic4);
                     process_.operations.emplace_back(ClassMethodCall {
                         selected, *receiver,
-                        "@checked-cast:" + item.owner_identity,
-                        { }, { }, { }, 1U, false });
+                        item.owner_identity,
+                        { }, { }, { }, 1U, false, { }, { }, ClassMethodHook::checked_cast });
                     const auto branch = static_cast<InstructionIndex>(
                         process_.operations.size());
                     process_.operations.emplace_back(Branch {
@@ -11562,12 +11610,12 @@ bool Lowerer::lower_hir_class_task_call(
             process_.operations.emplace_back(ClassMethodCall {
                 selected,
                 *receiver,
-                "@checked-cast:" + item.owner_identity,
+                item.owner_identity,
                 { },
                 { },
                 { },
                 1U,
-                false,
+                false, { }, { }, ClassMethodHook::checked_cast,
             });
             const auto branch = static_cast<InstructionIndex>(
                 process_.operations.size());
@@ -11603,6 +11651,7 @@ bool Lowerer::lower_hir_class_task_call(
     // IEEE 1800-2017 25.9) runs on that instance: test the handle against
     // each instance of the interface type.
     if (profile->interface_receiver
+        // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
         && !profile->interface_receiver->starts_with("@instance:")
         && systemverilog_interface_handles_ != nullptr
         && systemverilog_interface_types_ != nullptr) {
@@ -11625,6 +11674,7 @@ bool Lowerer::lower_hir_class_task_call(
                     instances, [&](const std::string& path) {
                         auto instance_profile = *profile;
                         instance_profile.interface_receiver
+                            // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
                             = "@instance:" + path;
                         return lower_hir_class_task_invocation(
                             statement_id, instance_profile, receiver);
@@ -12148,6 +12198,7 @@ bool Lowerer::lower_hir_class_task_invocation(
                 result, { } });
             actuals.push_back(result);
             actual_kinds.push_back(1U);
+            // ITEM46-LEFT: the trailing string actual of a call is marked by a reserved actual name that travels through every class hook, the VPI and VHPI call models and the class executor; a typed result flag on the call operations and the hook signatures is needed
             actual_names.emplace_back("@result-string");
             actual_directions.push_back(
                 static_cast<std::uint8_t>(frontend::PortDirection::Output));
@@ -14027,6 +14078,7 @@ Lowerer::hir_interface_instance_through_modport(
 std::string_view Lowerer::hir_forkjoin_module_path(
     const std::string_view receiver) noexcept
 {
+    // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
     constexpr std::string_view instance_prefix { "@instance:" };
     return receiver.starts_with(instance_prefix)
         ? receiver.substr(instance_prefix.size())
@@ -14326,6 +14378,7 @@ Lowerer::hir_instance_callable(const std::string_view receiver,
                 target_path += ".";
                 target_path.append(receiver.data(), receiver.size());
                 return std::pair { *parent_member.first,
+                    // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
                     "@instance:" + target_path };
             }
         }
@@ -14492,6 +14545,7 @@ Lowerer::hir_instance_callable(const std::string_view receiver,
         hierarchical_reference_missed_ = true;
         return std::nullopt;
     }
+    // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
     return std::pair { *selected, "@instance:" + target_path };
 }
 
@@ -17328,6 +17382,7 @@ Lowerer::hir_vhdl_function_result_proof(
                           || expression.builtin_operator
                               != semantic::vhdl::BuiltinOperatorIdentity::none
                           || (!expression.nominal_type.empty()
+                              // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
                               && expression.nominal_type != "@builtin:integer")
                           || !expression.referenced_name
                           || expression.referenced_name->spelling
@@ -17347,6 +17402,7 @@ Lowerer::hir_vhdl_function_result_proof(
                           && operand->vhdl->operands.empty()
                           && (operand->vhdl->nominal_type.empty()
                               || operand->vhdl->nominal_type
+                                  // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
                                   == "@builtin:integer");
                   };
             const auto is_runtime_standard_integer_expression
@@ -17365,6 +17421,7 @@ Lowerer::hir_vhdl_function_result_proof(
                     return source.operands.empty()
                         && (source.nominal_type.empty()
                             || source.nominal_type
+                                // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
                                 == "@builtin:integer");
                 }
                 if (source.kind
@@ -17374,6 +17431,7 @@ Lowerer::hir_vhdl_function_result_proof(
                     && source.builtin_operator
                         == semantic::vhdl::BuiltinOperatorIdentity::none
                     && (source.nominal_type.empty()
+                        // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
                         || source.nominal_type == "@builtin:integer")
                     && source.referenced_name
                     && source.referenced_name->spelling == source.text
@@ -17388,6 +17446,7 @@ Lowerer::hir_vhdl_function_result_proof(
                         == semantic::vhdl::ExpressionKind::name
                     && source.operands.empty()
                     && (source.nominal_type.empty()
+                        // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
                         || source.nominal_type == "@builtin:integer")
                     && source.referenced_name
                     && source.referenced_name->selected
@@ -17424,6 +17483,7 @@ Lowerer::hir_vhdl_function_result_proof(
                     && source.builtin_operator
                         == semantic::vhdl::BuiltinOperatorIdentity::none
                     && (source.nominal_type.empty()
+                        // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
                         || source.nominal_type == "@builtin:integer")
                     && source.referenced_name
                     && source.referenced_name->spelling == source.text
@@ -17450,6 +17510,7 @@ Lowerer::hir_vhdl_function_result_proof(
                                 == semantic::vhdl::ExpressionKind::integer_literal
                             && (element->vhdl->nominal_type.empty()
                                 || element->vhdl->nominal_type
+                                    // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
                                     == "@builtin:integer")) {
                             // Untyped integer literals are universal integers;
                             // this exact compiler marker is the only typed
@@ -18227,7 +18288,12 @@ Lowerer::hir_interface_function_profile(
     const auto& call = *expression->systemverilog;
     // The step function of another instance's exports runs in that
     // instance (IEEE 1800-2023 35.5.3).
+    // ITEM28-LEFT: the DPI export service is a name protocol end to end: the
+    // parser generates the hidden imports and hooks as text, and the runtime
+    // reads the mask and linkage out of their C identity; it needs a typed DPI
+    // call identity (runtime operation fields, codec) before the names can go.
     if (hir_interface_receiver_override_
+        // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
         && hir_interface_receiver_override_->starts_with("@instance:")
         && call.kind == semantic::sv::ExpressionKind::call
         && call.text.starts_with("__fsim_dpi_export_step")) {
@@ -18246,6 +18312,7 @@ Lowerer::hir_interface_function_profile(
         && *active_hir_callable_ < hir_callable_frames_.size()) {
         const auto& caller = hir_callable_frames_[*active_hir_callable_];
         const auto callee = caller.interface_receiver
+                // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
                 && caller.interface_receiver->starts_with("@instance:")
             ? hir_referenced_declaration(expression_id)
             : std::nullopt;
@@ -19004,6 +19071,7 @@ bool Lowerer::hir_vhdl_actual_matches_formal(
     // 1076-2019 16.12): a RECORD_VALUE_MIRROR is not a VALUE_MIRROR.
     if (formal_subtype && !formal_subtype->type_mark.target.valid()) {
         constexpr std::string_view reflection_prefix {
+            // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
             "@builtin:std.reflection."
         };
         const auto reflection_mark = [&](const std::string_view spelling) {
@@ -20464,6 +20532,10 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
         const bool open = open_dimension || type->open_packed;
         // An array of strings passes one `const char*` per element (IEEE
         // 1800-2023 35.5.6, H.7.4); an export has none.
+        // ITEM28-LEFT: the DPI export service is a name protocol end to end: the
+        // parser generates the hidden imports and hooks as text, and the runtime
+        // reads the mask and linkage out of their C identity; it needs a typed DPI
+        // call identity (runtime operation fields, codec) before the names can go.
         if (type->string && array
             && declaration.linkage_name.starts_with("__fsim_dpi_export_")) {
             return std::nullopt;
@@ -20471,6 +20543,10 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
         // An export's result passes as the first formal of its service
         // import; it is a small value like an import's (IEEE 1800-2023
         // 35.5.5).
+        // ITEM28-LEFT: the DPI export service is a name protocol end to end: the
+        // parser generates the hidden imports and hooks as text, and the runtime
+        // reads the mask and linkage out of their C identity; it needs a typed DPI
+        // call identity (runtime operation fields, codec) before the names can go.
         if (index == 0U
             && declaration.linkage_name.starts_with(
                 "__fsim_dpi_export_return_r__")
@@ -20714,6 +20790,7 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
     }
     result.signature = arguments + ':' + result_code
         + (declaration.qualifier == semantic::sv::DpiQualifier::context
+                // ITEM46-LEFT: the DPI import identity is a text descriptor parsed by the DPI service, the kernel plan and the VPI and VHPI loaders; a typed form needs a descriptor on the call operation
                 ? "@c"
                 : "");
     return result;
@@ -22307,6 +22384,7 @@ Lowerer::lower_hir_function_call_value(
             }
             const bool dispatched = lower_hir_virtual_interface_dispatch(
                 *handle, dispatch->second, [&](const std::string& path) {
+                    // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
                     hir_interface_receiver_override_ = "@instance:" + path;
                     discarding_call_result_ = discarded;
                     const auto value = lower_hir_function_call_value(
@@ -24357,6 +24435,7 @@ std::optional<RegisterId> Lowerer::emit_hir_dpi_call(
         + profile.linkage_name + '#' + profile.signature;
     // A context import sees the instance of its declaration and its call
     // site (IEEE 1800-2023 35.5.3, H.9).
+    // ITEM46-LEFT: the DPI import identity is a text descriptor parsed by the DPI service, the kernel plan and the VPI and VHPI loaders; a typed form needs a descriptor on the call operation
     if (profile.signature.ends_with("@c")) {
         identity += '|' + hir_instance_path() + '|'
             + span.source_name.str() + '|' + std::to_string(span.begin.line);
@@ -24374,6 +24453,11 @@ std::optional<RegisterId> Lowerer::emit_hir_dpi_call(
     // A context import of a unit with DPI exports starts its C call, serves
     // the export calls the C code makes from the calling process (IEEE
     // 1800-2023 35.5.3), and then finishes the call.
+    // ITEM46-LEFT: the DPI import identity is a text descriptor parsed by the DPI service, the kernel plan and the VPI and VHPI loaders; a typed form needs a descriptor on the call operation
+    // ITEM28-LEFT: the DPI export service is a name protocol end to end: the
+    // parser generates the hidden imports and hooks as text, and the runtime
+    // reads the mask and linkage out of their C identity; it needs a typed DPI
+    // call identity (runtime operation fields, codec) before the names can go.
     const auto* const export_hook = profile.signature.ends_with("@c")
             && !profile.linkage_name.starts_with("__fsim_dpi_export_")
             && !lowering_dpi_export_hook_
@@ -24544,6 +24628,10 @@ const semantic::sv::Declaration* Lowerer::hir_dpi_export_step_hook(
     if (specialized_hir_unit_ == nullptr) {
         return nullptr;
     }
+    // ITEM28-LEFT: the DPI export service is a name protocol end to end: the
+    // parser generates the hidden imports and hooks as text, and the runtime
+    // reads the mask and linkage out of their C identity; it needs a typed DPI
+    // call identity (runtime operation fields, codec) before the names can go.
     return find_dpi_hidden_declaration(specialized_hir_unit_->design(), unit,
         "__fsim_dpi_export_step_hook");
 }
@@ -24563,6 +24651,10 @@ const semantic::sv::Declaration* Lowerer::hir_dpi_export_hook(
     // An instance without exports of its own serves the exports of the
     // scope its import's C code sets, so it has a hook only if some unit of
     // the design declares exports.
+    // ITEM28-LEFT: the DPI export service is a name protocol end to end: the
+    // parser generates the hidden imports and hooks as text, and the runtime
+    // reads the mask and linkage out of their C identity; it needs a typed DPI
+    // call identity (runtime operation fields, codec) before the names can go.
     const auto find_hook = [&](const semantic::UnitId id)
         -> const semantic::sv::Declaration* {
         if (const auto* const hook = find_dpi_hidden_declaration(
@@ -24597,6 +24689,10 @@ namespace {
 
 // The hidden hook of a generate block that declares DPI exports (IEEE
 // 1800-2023 35.7); the parser names it so.
+// ITEM28-LEFT: the DPI export service is a name protocol end to end: the
+// parser generates the hidden imports and hooks as text, and the runtime
+// reads the mask and linkage out of their C identity; it needs a typed DPI
+// call identity (runtime operation fields, codec) before the names can go.
 constexpr std::string_view dpi_block_hook_prefix {
     "__fsim_dpi_export_block_hook" };
 
@@ -24664,6 +24760,7 @@ bool Lowerer::lower_hir_dpi_export_foreign()
             auto& receiver = step->callable && step->callable->function
                 ? hir_interface_receiver_override_
                 : hir_task_receiver_override_;
+            // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
             receiver = "@instance:" + path;
             const bool lowered = lower_hir_statements(step->statements);
             receiver.reset();
@@ -24742,6 +24839,7 @@ bool Lowerer::lower_hir_dpi_block_exports_foreign()
                 auto& receiver = hook.callable->function
                     ? hir_interface_receiver_override_
                     : hir_task_receiver_override_;
+                // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
                 receiver = "@instance:" + path;
                 const bool lowered = lower_hir_statements(hook.statements);
                 receiver.reset();
@@ -25385,6 +25483,7 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_function_call(
             process_.operations.emplace_back(LoadStringConstant { result, { } });
             const bool dispatched = lower_hir_virtual_interface_dispatch(
                 *handle, dispatch->second, [&](const std::string& path) {
+                    // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
                     hir_interface_receiver_override_ = "@instance:" + path;
                     const auto value
                         = lower_hir_string_function_call(expression_id);
@@ -28408,6 +28507,7 @@ bool Lowerer::lower_hir_vhdl_foreign_body(
         process_.operations.emplace_back(LoadStringConstant { *text, { } });
         actuals.push_back(*text);
         kinds.push_back(1U);
+        // ITEM46-LEFT: the trailing string actual of a call is marked by a reserved actual name that travels through every class hook, the VPI and VHPI call models and the class executor; a typed result flag on the call operations and the hook signatures is needed
         names.emplace_back("@result-string");
         directions.push_back(
             static_cast<std::uint8_t>(frontend::PortDirection::Output));
@@ -28608,6 +28708,7 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
             function_record.type
                 ? function_record.type->builtin
                 : support::SystemVerilogBuiltinType::none,
+            runtime::simir::DebugLocalRole::variable,
         });
     }
     if (initial_frame->function && declaration->systemverilog != nullptr
@@ -28635,6 +28736,7 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
             function_record.type
                 ? function_record.type->builtin
                 : support::SystemVerilogBuiltinType::logic,
+            runtime::simir::DebugLocalRole::variable,
         });
     }
 
@@ -28841,6 +28943,7 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
             frontend::SystemVerilogScalarKind::None,
             DebugLocalStorage::packed,
             support::SystemVerilogBuiltinType::none,
+            runtime::simir::DebugLocalRole::variable,
         });
     }
     if (initial_frame->type.container
@@ -28857,6 +28960,7 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
             ? source.name
             : initial_frame->debug_name + "." + source.name;
         if (!debug_local_names_.emplace(debug_name).second) {
+            // ITEM46-LEFT: uniquifying suffix of debug local names that users see; never parsed back; rewriting it changes the visible names, which is an owner decision
             debug_name += "@hir-callable-"
                 + std::to_string(initial_frame->invocation_identity);
             debug_local_names_.emplace(debug_name);
@@ -28903,6 +29007,7 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
                 const auto span = hir_source_span(source);
                 auto debug_name = initial_frame->debug_name + "." + name;
                 if (!debug_local_names_.emplace(debug_name).second) {
+                    // ITEM46-LEFT: uniquifying suffix of debug local names that users see; never parsed back; rewriting it changes the visible names, which is an owner decision
                     debug_name += "@hir-callable-"
                         + std::to_string(
                             initial_frame->invocation_identity);
@@ -28940,6 +29045,7 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
                 const auto span = hir_source_span(source);
                 auto debug_name = initial_frame->debug_name + "." + name;
                 if (!debug_local_names_.emplace(debug_name).second) {
+                    // ITEM46-LEFT: uniquifying suffix of debug local names that users see; never parsed back; rewriting it changes the visible names, which is an owner decision
                     debug_name += "@hir-callable-"
                         + std::to_string(
                             initial_frame->invocation_identity);
@@ -29004,6 +29110,7 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
                 record->systemverilog != nullptr && record->systemverilog->type
                     ? record->systemverilog->type->builtin
                     : support::SystemVerilogBuiltinType::none,
+                runtime::simir::DebugLocalRole::variable,
             });
         } else if (record->vhdl != nullptr && initial_frame->function) {
             // A VHDL function cannot suspend, so its formals are no debug
@@ -29164,6 +29271,7 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
                         source.type
                             ? source.type->builtin
                             : support::SystemVerilogBuiltinType::none,
+                        runtime::simir::DebugLocalRole::variable,
                     });
                 }
             }
@@ -29286,6 +29394,7 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
     const auto* const frame_declaration = declaration->systemverilog;
     const auto frame_point_name = frame_declaration == nullptr
         ? std::string { }
+        // ITEM46-LEFT: uniquifying suffix of debug local names that users see; never parsed back; rewriting it changes the visible names, which is an owner decision
         : frame_declaration->name + "@hir-callable-"
             + std::to_string(initial_frame->invocation_identity);
     if (frame_declaration != nullptr && declarations_ready) {
@@ -29500,8 +29609,10 @@ void Lowerer::bind_hir_instance_parameters(HirCallableFrame& frame) const
     }
     auto receiver = std::string_view { *frame.interface_receiver };
     const bool generated_scope_receiver
+        // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
         = receiver.starts_with("@instance:");
     if (generated_scope_receiver) {
+        // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
         receiver.remove_prefix(std::string_view { "@instance:" }.size());
     }
     const SpecializationInfo* target = design_.find_specialization(receiver);
@@ -29795,7 +29906,8 @@ Lowerer::hir_vhdl_signal_part_binding(const semantic::DeclarationId formal,
         for (const auto& association : associations.associations) {
             const auto field = (!association.choice_spelling.empty()
                 || association.choice_marker != support::ExpressionMarker::none)
-                    && association.choice_spelling != "@array"
+                    && association.choice_marker
+                        != support::ExpressionMarker::vhdl_array_choice
                 ? hir_vhdl_record_field(owner, association.choice_spelling)
                 : std::nullopt;
             const auto value = field

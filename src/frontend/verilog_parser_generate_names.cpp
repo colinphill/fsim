@@ -14,28 +14,6 @@ namespace fsim::frontend {
 
 namespace {
 
-constexpr std::string_view implicit_generate_prefix{
-    "@fsim-implicit-genblk:"};
-
-[[nodiscard]] std::optional<std::size_t> implicit_ordinal(
-    const std::string_view name) {
-  if (!name.starts_with(implicit_generate_prefix)) {
-    return std::nullopt;
-  }
-  const auto digits = name.substr(implicit_generate_prefix.size());
-  if (digits.empty()) {
-    return std::nullopt;
-  }
-  std::size_t value = 0;
-  for (const auto digit : digits) {
-    if (digit < '0' || digit > '9') {
-      return std::nullopt;
-    }
-    value = value * 10U + static_cast<std::size_t>(digit - '0');
-  }
-  return value;
-}
-
 template <typename Range>
 void remember_names(
     std::unordered_set<std::string>& names,
@@ -105,7 +83,7 @@ void remember_unit_declarations(
 
 struct GenerateNameState {
   std::unordered_set<std::string> occupied;
-  std::unordered_map<std::string, std::string> implicit_names;
+  std::unordered_map<std::size_t, std::string> implicit_names;
 };
 
 } // namespace
@@ -119,12 +97,14 @@ void VerilogParser::normalize_systemverilog_generate_names(
       collect_scheme_names;
   const auto collect_branch_names =
       [&](const std::string& scope,
+          const std::size_t implicit_ordinal,
           const GenerateBody& body,
           const SourceSpan& span,
           std::vector<ExplicitName>& names) {
-        if (!scope.empty() && !implicit_ordinal(scope)) {
+        if (!scope.empty()) {
           names.emplace_back(scope, span);
-        } else if (scope.empty() && body.generate_regions.size() == 1U) {
+        } else if (implicit_ordinal == 0U
+                   && body.generate_regions.size() == 1U) {
           collect_scheme_names(body.generate_regions.front(), names);
         }
       };
@@ -132,12 +112,15 @@ void VerilogParser::normalize_systemverilog_generate_names(
       [&](const GenerateRegion& region,
           std::vector<ExplicitName>& names) {
         collect_branch_names(
-            region.then_scope, region.then_body, region.span, names);
+            region.then_scope, region.then_implicit_scope_ordinal,
+            region.then_body, region.span, names);
         collect_branch_names(
-            region.else_scope, region.else_body, region.span, names);
+            region.else_scope, region.else_implicit_scope_ordinal,
+            region.else_body, region.span, names);
         for (const auto& alternative : region.alternatives) {
           collect_branch_names(
               alternative.scope,
+              alternative.implicit_scope_ordinal,
               alternative.body,
               alternative.span,
               names);
@@ -155,17 +138,17 @@ void VerilogParser::normalize_systemverilog_generate_names(
 
   // Returns whether the scope is named by the implicit-name rule.
   const auto resolve_scope =
-      [](std::string& scope, GenerateNameState& state) {
-        const auto ordinal = implicit_ordinal(scope);
-        if (!ordinal) {
+      [](std::string& scope, const std::size_t ordinal,
+         GenerateNameState& state) {
+        if (ordinal == 0U) {
           return false;
         }
-        if (const auto found = state.implicit_names.find(scope);
+        if (const auto found = state.implicit_names.find(ordinal);
             found != state.implicit_names.end()) {
           scope = found->second;
           return true;
         }
-        const auto digits = std::to_string(*ordinal);
+        const auto digits = std::to_string(ordinal);
         std::size_t leading_zeros = 0;
         std::string candidate;
         do {
@@ -173,7 +156,7 @@ void VerilogParser::normalize_systemverilog_generate_names(
           ++leading_zeros;
         } while (state.occupied.contains(candidate));
         state.occupied.insert(candidate);
-        state.implicit_names.emplace(scope, candidate);
+        state.implicit_names.emplace(ordinal, candidate);
         scope = std::move(candidate);
         return true;
       };
@@ -186,15 +169,17 @@ void VerilogParser::normalize_systemverilog_generate_names(
 
   const auto normalize_branch =
       [&](std::string& scope,
+          std::size_t& implicit_ordinal,
           GenerateBody& body,
           GenerateNameState& state) {
-        if (scope.empty()) {
+        if (scope.empty() && implicit_ordinal == 0U) {
           if (body.generate_regions.size() == 1U) {
             normalize_region(body.generate_regions.front(), state);
           }
           return;
         }
-        const bool implicit = resolve_scope(scope, state);
+        const bool implicit = resolve_scope(scope, implicit_ordinal, state);
+        implicit_ordinal = 0U;
         block_path.push_back(scope);
         if (implicit) {
           std::string path;
@@ -209,10 +194,16 @@ void VerilogParser::normalize_systemverilog_generate_names(
 
   normalize_region =
       [&](GenerateRegion& region, GenerateNameState& state) {
-        normalize_branch(region.then_scope, region.then_body, state);
-        normalize_branch(region.else_scope, region.else_body, state);
+        normalize_branch(
+            region.then_scope, region.then_implicit_scope_ordinal,
+            region.then_body, state);
+        normalize_branch(
+            region.else_scope, region.else_implicit_scope_ordinal,
+            region.else_body, state);
         for (auto& alternative : region.alternatives) {
-          normalize_branch(alternative.scope, alternative.body, state);
+          normalize_branch(
+              alternative.scope, alternative.implicit_scope_ordinal,
+              alternative.body, state);
         }
       };
 

@@ -594,7 +594,7 @@ class VerilogParser final : private detail::ParserBase {
       const SystemVerilogConcurrentAssertion& directive, std::string& reason,
       std::string_view tick_prefix = { },
       const std::set<std::string>* expect_names = nullptr);
-  // `$__fsim_sva_tick(site, plan, ...)` with the given start operand. With
+  // The tick call (site, plan, ...) with the given start operand. With
   // `disable_signal` the disabled operand is that 1-bit signal, the disable
   // condition's truth the directive's hidden net holds (16.12), read as it
   // is; without it the disabled operand is the condition itself. `wake`,
@@ -962,18 +962,19 @@ class VerilogParser final : private detail::ParserBase {
 
   GenerateRegion parse_conditional_generate(
       const Token& start,
-      std::optional<std::string> direct_scope = std::nullopt);
+      std::optional<std::size_t> direct_ordinal = std::nullopt);
 
   GenerateRegion parse_iterative_generate(const Token& start);
 
   GenerateRegion parse_selection_generate(
       const Token& start,
-      std::optional<std::string> direct_scope = std::nullopt);
+      std::optional<std::size_t> direct_ordinal = std::nullopt);
 
   void parse_generate_branch(
       std::string& scope,
+      std::size_t& implicit_scope_ordinal,
       GenerateBody& body,
-      std::string_view implicit_scope,
+      std::size_t implicit_ordinal,
       bool allow_direct_conditional_nesting);
 
   void normalize_systemverilog_generate_names(DesignUnit& unit);
@@ -1265,6 +1266,11 @@ class VerilogParser final : private detail::ParserBase {
   std::optional<Statement> parse_randsequence(const Token& start);
   [[nodiscard]] std::vector<Token> synthetic_tokens(
       std::string_view text, const SourceSpan& span) const;
+  // One generated name token that stands for the node kind `marker`: its
+  // text is only a display name, and the expression or task call parsed from
+  // it carries the marker.
+  [[nodiscard]] static std::vector<Token> marked_name_tokens(
+      support::ExpressionMarker marker, const SourceSpan& span);
   std::optional<Statement> parse_generated_statement(
       std::vector<Token> tokens, const SourceSpan& span);
   // Parses module items (variable declarations and procedures) from

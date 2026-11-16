@@ -337,6 +337,8 @@ struct Import {
     bool wildcard { };
     SourceSpanId source;
     std::uint64_t source_order { };
+    // The import of the compilation-unit package of the design file.
+    bool compilation_unit_package { };
 };
 
 struct AssignmentPatternAssociation {
@@ -1313,6 +1315,11 @@ struct Declaration {
     // A `localparam type`: not a formal of a parameter association list
     // (IEEE 1800-2017 23.10.1).
     bool local_type_parameter { };
+    // A hidden parameter that carries a parameter of the interface connected
+    // to an interface port: the port and the parameter's name in the
+    // interface; empty on every other declaration.
+    std::string interface_port;
+    std::string interface_member;
     // The role in the governed UVM library of a declaration of its package
     // (none outside it).
     support::UvmRole uvm_role { };
@@ -2627,6 +2634,9 @@ struct AssertionDeclaration {
     // written in its scope.
     std::string checker_instance;
     std::string checker_name;
+    // A property the frontend made for an inline assertion (IEEE 1800-2023
+    // 16.14): no declaration of the source, so no VPI object.
+    bool synthesized { };
     SourceSpanId source;
     OriginId origin;
 };
@@ -2668,6 +2678,9 @@ struct Unit {
     // unit-selection metadata and must remain available after syntax storage
     // has been destroyed.
     bool external { };
+    // The package that holds a design file's compilation-unit declarations
+    // (IEEE 1800-2023 3.12.1); its kind is `package`.
+    bool compilation_unit_package { };
     std::string library;
     std::string name;
     SourceSpanId source;

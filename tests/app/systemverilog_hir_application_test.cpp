@@ -2792,7 +2792,9 @@ endmodule
     assert(weighted_choice.expressions[1].operands.size() == 3);
     assert(weighted_choice.expressions[1].operands[2].kind
         == fsim::semantic::sv::ConstraintExpressionKind::distribution_item);
-    assert(weighted_choice.expressions[1].operands[2].text == "@dist-:/");
+    assert(weighted_choice.expressions[1].operands[2].text.empty());
+    assert(weighted_choice.expressions[1].operands[2].marker
+        == fsim::support::ExpressionMarker::constraint_dist_divide);
     const auto structured_choice_position = std::ranges::find(
         hir_object->constraints,
         std::string { "structured_choice" },

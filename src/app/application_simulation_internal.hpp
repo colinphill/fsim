@@ -341,13 +341,10 @@ struct Simulation::Impl {
     [[nodiscard]] runtime::SystemVerilogUvmRootHandle component_root(
         const std::string_view allocation_scope);
 
-    // `names` selects the randomized properties; `@inline-value:N` entries
-    // instead carry calling-scope values for the inline constraints.
-    // `no_properties` is the `randomize(null)` checker call (18.11.1).
+    // `names` selects the randomized properties. `no_properties` is the `randomize(null)` checker call (18.11.1).
     [[nodiscard]] runtime::PackedLogic4 invoke_source_randomize(
         const runtime::SystemVerilogClassHandle handle,
         const std::span<const std::string> names,
-        const std::span<const runtime::PackedLogic4> actuals,
         const std::span<const runtime::SystemVerilogConstraintTemplate>
             inline_constraints,
         bool no_properties,
@@ -356,11 +353,11 @@ struct Simulation::Impl {
         bool callbacks_lowered = false);
 
     // A randomize() call whose pre_randomize and post_randomize callbacks
-    // run as generated code (IEEE 1800-2023 18.6.1): `@randomize-begin`
+    // run as generated code (IEEE 1800-2023 18.6.1): the begin step
     // collects the objects that join the solve once the object's own
-    // pre_randomize has run, `@randomize-member` names the I-th of them
-    // whose callbacks run (or null), `@builtin-randomize-solve` solves
-    // without running callbacks and `@randomize-end` ends the call. Calls
+    // pre_randomize has run, the member step names the I-th of them
+    // whose callbacks run (or null), the solve step solves without
+    // running callbacks and the end step ends the call. Calls
     // nest when a callback randomizes another object.
     struct LoweredRandomizeCall {
         runtime::SystemVerilogClassHandle handle { };
@@ -400,8 +397,8 @@ struct Simulation::Impl {
     void run_randomize_callback(runtime::SystemVerilogClassHandle target,
         std::string_view name,
         std::optional<runtime::simir::ProcessId> calling_process);
-    // A lowered randomize() step `hook` (`callback` names the callback of
-    // a callback step), or, with no hook, the process-kill step `callback`.
+    // A lowered randomize() step or process-kill step `hook` (`callback`
+    // names the callback of a callback step).
     [[nodiscard]] runtime::PackedLogic4 invoke_lowered_randomize_step(
         runtime::simir::ProcessId process,
         runtime::SystemVerilogClassHandle handle,
@@ -410,7 +407,8 @@ struct Simulation::Impl {
 
     [[nodiscard]] runtime::PackedLogic4 invoke_source_randomization_mode(
         const runtime::SystemVerilogClassHandle handle,
-        const std::string_view method,
+        const bool random_mode,
+        const std::string_view target,
         const std::span<const runtime::PackedLogic4> actuals);
 
     [[nodiscard]] static runtime::PackedLogic4 resize_packed(
@@ -430,12 +428,13 @@ struct Simulation::Impl {
 
     [[nodiscard]] runtime::PackedLogic4 invoke_class_container(
         const runtime::SystemVerilogClassHandle receiver,
-        const std::string_view operation,
+        const std::string_view property,
+        const runtime::simir::ClassMethodHook hook,
         const std::span<const runtime::PackedLogic4> actuals);
 
     [[nodiscard]] runtime::PackedLogic4 invoke_checked_class_cast(
         const runtime::SystemVerilogClassHandle handle,
-        const std::string_view operation) const;
+        const std::string_view owner_identity) const;
 
     [[nodiscard]] static std::pair<std::string_view, std::string_view>
     static_property_parts(const std::string_view identity);
@@ -462,6 +461,7 @@ struct Simulation::Impl {
     [[nodiscard]] runtime::PackedLogic4 invoke_source_function(
         const runtime::SystemVerilogClassHandle handle,
         const std::string_view canonical_identity,
+        const runtime::simir::ClassMethodHook builtin,
         std::vector<runtime::PackedLogic4>& actuals,
         std::vector<std::string>& string_actuals,
         const std::span<const std::string> actual_names,
@@ -501,14 +501,14 @@ struct Simulation::Impl {
         const std::string_view declared_type,
         const std::string_view allocation_scope = "$api");
 
-    // The identity a host service (clone, the factory) passes to
-    // construct_class for the class `specialization`: a user UVM class is
-    // constructed by generated code (`@service-construct:`), a library class
-    // by the simulation.
-    [[nodiscard]] std::string service_construct_identity(
+    // How a host service (clone, the factory) has construct_class build the
+    // class `specialization`: a user UVM class is constructed by generated
+    // code (service), a library class by the simulation.
+    [[nodiscard]] runtime::simir::ClassConstruction service_construction(
         std::string_view specialization);
     [[nodiscard]] runtime::SystemVerilogClassHandle construct_class(
         const std::string_view specialization_identity,
+        const runtime::simir::ClassConstruction construction,
         const std::string_view declared_type,
         const std::span<const runtime::PackedLogic4> actuals,
         const std::span<const std::string> string_actuals,

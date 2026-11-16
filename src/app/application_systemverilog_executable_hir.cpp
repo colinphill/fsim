@@ -393,6 +393,10 @@ namespace {
                 return sv::ExpressionKind::class_static_property;
             case support::ExpressionMarker::sv_method:
             case support::ExpressionMarker::sv_base_method:
+            case support::ExpressionMarker::builtin_randomize:
+            case support::ExpressionMarker::builtin_rand_mode:
+            case support::ExpressionMarker::builtin_constraint_mode:
+            case support::ExpressionMarker::builtin_get_randstate:
                 return sv::ExpressionKind::class_method_call;
             case support::ExpressionMarker::sv_static_method:
                 return sv::ExpressionKind::class_static_method_call;
@@ -1620,6 +1624,7 @@ namespace {
                 const auto type_origin = origin(
                     type_source, parent,
                     "anonymous SystemVerilog aggregate type");
+                // ITEM46-LEFT: name of an implicit type registered by name in the scope; needs a name-free implicit type registration
                 const auto name = "@anonymous-aggregate:"
                     + std::to_string(type_source.value()) + ":"
                     + std::to_string(parent.value());
@@ -1865,6 +1870,8 @@ namespace {
                         };
                         converted.source_order
                             = input_import.systemverilog_source_order;
+                        converted.compilation_unit_package
+                            = input_import.compilation_unit_package;
                         imports.push_back(converted);
                         output.imports.push_back(std::move(converted));
                     }

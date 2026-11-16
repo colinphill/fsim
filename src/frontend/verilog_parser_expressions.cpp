@@ -522,7 +522,8 @@ Expression VerilogParser::parse_expression(int minimum_precedence)
                     if (match(TokenKind::LeftBracket)) {
                         const auto range_start = previous();
                         auto low = parse_expression();
-                        std::string range_kind { "@inside-range" };
+                        auto range_kind
+                            = support::ExpressionMarker::inside_range;
                         if (at(TokenKind::AbsoluteTolerance)
                             || at(TokenKind::RelativeTolerance)) {
                             const auto tolerance = advance();
@@ -533,8 +534,10 @@ Expression VerilogParser::parse_expression(int minimum_precedence)
                                 "FSIM-SV-PARSE-347");
                             range_kind = tolerance.kind
                                     == TokenKind::AbsoluteTolerance
-                                ? "@inside-absolute-tolerance"
-                                : "@inside-relative-tolerance";
+                                ? support::ExpressionMarker::
+                                    inside_absolute_tolerance
+                                : support::ExpressionMarker::
+                                    inside_relative_tolerance;
                         } else {
                             expect(
                                 TokenKind::Colon,
@@ -546,11 +549,10 @@ Expression VerilogParser::parse_expression(int minimum_precedence)
                             TokenKind::RightBracket,
                             "']' after inside range",
                             "FSIM-SV-PARSE-179");
-                        operands.push_back(Expression {
-                            ExpressionKind::Call,
-                            std::move(range_kind),
+                        operands.push_back(marked_expression(
+                            range_kind, { },
                             { std::move(low), std::move(high) },
-                            cover(range_start.span, previous().span) });
+                            cover(range_start.span, previous().span)));
                     } else {
                         operands.push_back(parse_expression());
                     }
@@ -1455,6 +1457,12 @@ Expression VerilogParser::parse_primary_impl()
                 std::move(arguments),
                 cover(name.span, previous().span) };
             expression.call_argument_names = std::move(argument_names);
+            if (name.marker != support::ExpressionMarker::none) {
+                // A generated name token: the node's kind is the token's.
+                expression.text.clear();
+                expression.marker = name.marker;
+                expression.marker_argument = name.marker_argument;
+            }
             if (process_member == "self") {
                 expression.marker = support::ExpressionMarker::sv_process_self;
             }
@@ -1671,7 +1679,7 @@ Expression VerilogParser::parse_primary_impl()
                 expression.call_result_width = 32;
                 expression.call_result_domain = ValueDomain::Integer;
                 expression.call_result_signed = true;
-            } else if (canonical == "$__fsim_current") {
+            } else if (name.marker == support::ExpressionMarker::sva_current) {
                 // The current value of a boolean in a generated assertion
                 // process, whose other reads are sampled: a sequence's
                 // triggered and matched states (IEEE 1800-2023 16.13.6:
@@ -1679,12 +1687,13 @@ Expression VerilogParser::parse_primary_impl()
                 expression.call_result_width = 1;
                 expression.call_result_domain = ValueDomain::Bit2;
                 expression.call_result_signed = false;
-            } else if (canonical == "$__fsim_sva_tick"
-                || canonical == "$__fsim_sva_outcome"
-                || canonical == "$__fsim_sva_request"
-                || canonical == "$__fsim_sva_answer"
-                || canonical == "$__fsim_sva_call"
-                || canonical == "$__fsim_assertion_control") {
+            } else if (name.marker == support::ExpressionMarker::sva_tick
+                || name.marker == support::ExpressionMarker::sva_outcome
+                || name.marker == support::ExpressionMarker::sva_request
+                || name.marker == support::ExpressionMarker::sva_answer
+                || name.marker == support::ExpressionMarker::sva_call
+                || name.marker
+                    == support::ExpressionMarker::sva_assertion_control) {
                 // The concurrent-property monitor of a generated assertion
                 // process, and the assertion control word of a generated
                 // concurrent assertion or expect statement (IEEE 1800-2023
@@ -1863,6 +1872,7 @@ Expression VerilogParser::parse_primary_impl()
                     auto cast_type = expression.systemverilog_type_operand;
                     if (!cast_type && expression.operands.size() == 1U) {
                         Type type_of;
+                        // ITEM46-LEFT: placeholder type spelling of a type(expr) operator; the typed carrier systemverilog_type_of exists but an empty spelling reads as an implicit type in frontend resolution, which needs an audit of every empty-spelling test
                         set_systemverilog_type_name(type_of, "@type-of");
                         type_of.named_type_span = expression.span;
                         type_of.systemverilog_type_of

@@ -627,12 +627,10 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     // S'QUIET; IEEE 1076-2019 16.2.4): a SystemVerilog-domain process that
     // is not initialized and runs whenever its prefix changes.
     const auto implicit_signal_driver = [](const ProcessProgramView& view) {
-        constexpr std::string_view suffix { ".$implicit_driver" };
-        const std::string_view name { view.name() };
         return view.scheduling_domain() == ProcessSchedulingDomain::systemverilog
             && !view.initialize() && !view.postponed() && !view.observed()
             && !view.reactive() && !view.final()
-            && name.size() > suffix.size() && name.ends_with(suffix);
+            && view.origin() == support::GeneratedObjectOrigin::implicit_driver;
     };
     // The driver of S'DELAYED(T) (IEEE 1076-2019 16.2.4) copies its prefix
     // into the implicit signal as `S'DELAYED(T) <= transport S after T`: it

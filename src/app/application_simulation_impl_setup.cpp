@@ -348,8 +348,7 @@ class_static_container_objects(const elaboration::ElaboratedDesign& design)
     std::map<std::string, runtime::simir::ContainerObjectId, std::less<>>
         result;
     for (const auto& container : design.container_objects()) {
-        if (container.name.starts_with(
-                elaboration::class_static_container_prefix)) {
+        if (container.origin == support::GeneratedObjectOrigin::class_static) {
             result.emplace(container.name.substr(
                                elaboration::class_static_container_prefix
                                    .size()),
@@ -809,7 +808,8 @@ Simulation::Impl::Impl(
               const std::string_view declared,
               const std::string_view) {
               return construct_class(
-                  service_construct_identity(specialization),
+                  specialization,
+                  service_construction(specialization),
                   declared,
                   std::span<const runtime::PackedLogic4> { },
                   std::span<const std::string> { },
@@ -837,7 +837,8 @@ Simulation::Impl::Impl(
           [this](const std::string_view specialization,
               const std::string_view name) {
               const auto handle = construct_class(
-                  service_construct_identity(specialization),
+                  specialization,
+                  service_construction(specialization),
                   class_specialization(specialization).declaration_identity,
                   std::span<const runtime::PackedLogic4> { },
                   std::span<const std::string> { },
@@ -858,7 +859,8 @@ Simulation::Impl::Impl(
                   std::string { name }, std::string { }
               };
               return construct_class(
-                  service_construct_identity(specialization),
+                  specialization,
+                  service_construction(specialization),
                   class_specialization(specialization).declaration_identity,
                   actuals,
                   string_actuals,
@@ -925,6 +927,7 @@ Simulation::Impl::Impl(
             // declaration; the object's declared type is the class.
             const auto& selected = class_specialization(class_identity);
             return construct_class(class_identity,
+                runtime::simir::ClassConstruction::run_constructor,
                 selected.declaration_identity, actuals, string_actuals,
                 actual_names, "$class", 0U, std::nullopt, owner_handle);
         });
@@ -1169,12 +1172,14 @@ Simulation::Impl::Impl(
     };
     class_hir_execution.set_runtime_services(
         [this, invoke_source_with_notifications](
-            const auto handle, const auto identity, auto& actuals,
-            auto& string_actuals, const auto names, const auto directions,
-            const bool virtual_dispatch, const bool randomize_no_properties,
+            const auto handle, const auto identity, const auto builtin,
+            auto& actuals, auto& string_actuals, const auto names,
+            const auto directions, const bool virtual_dispatch,
+            const bool randomize_no_properties,
             const auto actual_references) {
             return invoke_source_with_notifications([&] {
-                return invoke_source_function(handle, identity, actuals,
+                return invoke_source_function(handle, identity, builtin,
+                    actuals,
                     string_actuals, names, directions, virtual_dispatch,
                     randomize_no_properties, actual_references);
             });
@@ -1617,25 +1622,24 @@ Simulation::Impl::Impl(
             const std::string_view scope,
             const std::string_view specialization,
             const std::string_view declared_type,
+            const runtime::simir::ClassConstruction construction,
             const std::span<const runtime::PackedLogic4> actuals,
             const std::span<const std::string> string_actuals,
             const std::span<const std::string> actual_names) {
             class_heap.set_next_object_seed(
                 interpreter->take_class_allocation_seed());
             return construct_class(
-                specialization, declared_type, actuals, string_actuals,
+                specialization, construction, declared_type, actuals, string_actuals,
                 actual_names, scope, 0U, owner_design_process, 0U,
                 report_process);
         });
     // A string class property read or written from a process travels as
-    // the single string actual of a reserved method identity,
-    // `@string-property-read:<property>` or `@string-property-write:...`.
-    static constexpr std::string_view string_property_prefix {
-        "@string-property-"
-    };
+    // the single string actual of a call with the hook
+    // `string_property_read` or `string_property_write`; its method
+    // identity is the property.
     const auto access_string_property
         = [](runtime::SystemVerilogClassPropertyValue& property,
-              const std::string_view method,
+              const runtime::simir::ClassMethodHook hook,
               std::vector<std::string>& string_actuals) {
               if (property.kind
                       != runtime::SystemVerilogClassPropertyKind::String
@@ -1645,7 +1649,8 @@ Simulation::Impl::Impl(
                       "property or actual"
                   };
               }
-              if (method.starts_with("@string-property-write:")) {
+              if (hook
+                  == runtime::simir::ClassMethodHook::string_property_write) {
                   property.string = string_actuals.front();
               } else {
                   string_actuals.front() = property.string;
@@ -1729,13 +1734,15 @@ Simulation::Impl::Impl(
                     run_randomize_callback(handle, method, report_process);
                     return runtime::PackedLogic4::from_aval_bval(1U, 0U, 0U);
                 }
-                if (hook != runtime::simir::ClassMethodHook::none) {
+                if (runtime::simir::randomize_step_hook(hook)
+                    || hook == runtime::simir::ClassMethodHook::process_kill_begin
+                    || hook == runtime::simir::ClassMethodHook::process_kill_end) {
                     return invoke_lowered_randomize_step(
                         report_process, handle, hook, method, actuals);
                 }
                 // `new handle` copies the object's properties into a new object
                 // of the same class (IEEE 1800-2017 8.12).
-                if (method == "@shallow-copy") {
+                if (hook == runtime::simir::ClassMethodHook::shallow_copy) {
                     if (handle == 0U) {
                         throw std::invalid_argument {
                             "shallow copy of a null class handle"
@@ -1771,7 +1778,7 @@ Simulation::Impl::Impl(
                     return runtime::PackedLogic4::from_aval_bval(64U, copy, 0U);
                 }
                 // `obj.srandom(seed)` (IEEE 1800-2017 18.13.3).
-                if (method == "@object-srandom") {
+                if (hook == runtime::simir::ClassMethodHook::object_srandom) {
                     if (handle == 0U) {
                         throw std::invalid_argument {
                             "srandom of a null class handle"
@@ -1785,8 +1792,9 @@ Simulation::Impl::Impl(
                 }
                 // The object's random number generator state (IEEE
                 // 1800-2017 18.13.4, 18.13.5).
-                if (method == "@builtin-get-randstate"
-                    || method == "@object-set-randstate") {
+                if (hook == runtime::simir::ClassMethodHook::builtin_get_randstate
+                    || hook
+                        == runtime::simir::ClassMethodHook::object_set_randstate) {
                     if (handle == 0U || string_actuals.empty()) {
                         throw std::invalid_argument {
                             "random state access requires an object and a "
@@ -1794,7 +1802,8 @@ Simulation::Impl::Impl(
                         };
                     }
                     auto& object = class_heap.object(handle);
-                    if (method == "@builtin-get-randstate") {
+                    if (hook
+                        == runtime::simir::ClassMethodHook::builtin_get_randstate) {
                         auto state = "fsim-randstate:"
                             + std::to_string(object.random_object_seed) + ";";
                         for (const auto& [call, ordinal] :
@@ -1808,36 +1817,41 @@ Simulation::Impl::Impl(
                     }
                     return runtime::PackedLogic4(1U, runtime::Logic4::zero);
                 }
-                if (method.starts_with(string_property_prefix)) {
+                if (hook
+                        == runtime::simir::ClassMethodHook::string_property_read
+                    || hook
+                        == runtime::simir::ClassMethodHook::
+                            string_property_write) {
                     auto result = access_string_property(
-                        class_heap.property(handle,
-                            method.substr(method.find(':') + 1U)),
-                        method, string_actuals);
+                        class_heap.property(handle, method),
+                        hook, string_actuals);
                     return result;
                 }
-                auto result = method.starts_with("@container-")
-                    ? invoke_class_container(handle, method, actuals)
-                    : method.starts_with("@checked-cast:")
+                auto result = runtime::simir::class_container_hook(hook)
+                    ? invoke_class_container(handle, method, hook, actuals)
+                    : hook == runtime::simir::ClassMethodHook::checked_cast
                     ? invoke_checked_class_cast(handle, method)
-                    : method == "@builtin-randomize"
-                    ? invoke_source_randomize(handle, names, actuals,
+                    : hook == runtime::simir::ClassMethodHook::builtin_randomize
+                    ? invoke_source_randomize(handle, names,
                           inline_constraints, randomize_no_properties,
                           report_process)
-                    : method == "@builtin-randomize-solve"
-                    ? invoke_source_randomize(handle, names, actuals,
+                    : hook
+                        == runtime::simir::ClassMethodHook::builtin_randomize_solve
+                    ? invoke_source_randomize(handle, names,
                           inline_constraints, randomize_no_properties,
                           report_process, true)
-                    : method == "@process-kill-begin"
-                        || method == "@process-kill-end"
-                    ? invoke_lowered_randomize_step(report_process, handle,
-                          runtime::simir::ClassMethodHook::none, method,
-                          actuals)
-                    : method.starts_with("@builtin-rand-mode:")
-                        || method.starts_with("@builtin-constraint-mode:")
-                    ? invoke_source_randomization_mode(
-                          handle, method, actuals)
+                    : hook == runtime::simir::ClassMethodHook::builtin_rand_mode
+                        || hook
+                            == runtime::simir::ClassMethodHook::
+                                builtin_constraint_mode
+                    ? invoke_source_randomization_mode(handle,
+                          hook
+                              == runtime::simir::ClassMethodHook::
+                                  builtin_rand_mode,
+                          method, actuals)
                     : invoke_source_function(
-                          handle, method, actuals, string_actuals,
+                          handle, method, runtime::simir::ClassMethodHook::none,
+                          actuals, string_actuals,
                           names, directions, virtual_dispatch,
                           randomize_no_properties, {}, report_process);
                 return result;
@@ -1863,18 +1877,22 @@ Simulation::Impl::Impl(
         [this, access_string_property, invoke_source_with_notifications](
             const runtime::simir::ProcessId report_process,
             const std::string_view method,
+            const runtime::simir::ClassMethodHook hook,
             std::vector<runtime::PackedLogic4>& actuals,
             std::vector<std::string>& string_actuals,
             const std::span<const std::string> names,
             const std::span<const std::uint8_t> directions,
             const std::string_view static_specialization) {
             return invoke_source_with_notifications([&] {
-                if (method.starts_with(string_property_prefix)) {
-                    const auto [owner, name] = static_property_parts(
-                        method.substr(method.find(':') + 1U));
+                if (hook
+                        == runtime::simir::ClassMethodHook::string_property_read
+                    || hook
+                        == runtime::simir::ClassMethodHook::
+                            string_property_write) {
+                    const auto [owner, name] = static_property_parts(method);
                     auto result = access_string_property(
                         class_static_store.property(owner, name),
-                        method, string_actuals);
+                        hook, string_actuals);
                     return result;
                 }
                 return invoke_source_static_function(method,

@@ -364,6 +364,7 @@ void HierarchyBuilder::append_toggle_coverage_monitors()
                 specialization.instance + "." + candidate.name
                     + ".$toggle_coverage",
                 language, *signal, 2U, design_.signals_[*signal].value_kind);
+            monitor.origin = support::GeneratedObjectOrigin::toggle_coverage;
             monitor.operations.emplace_back(ReadSignal { 0U, *signal });
             monitor.operations.emplace_back(WaitSensitivity { });
             monitor.operations.emplace_back(ReadSignal { 1U, *signal });
@@ -449,6 +450,7 @@ void HierarchyBuilder::append_fsm_coverage_monitors()
                 specialization.instance + ".$fsm_coverage."
                     + std::to_string(machine.signal),
                 language, machine.signal, 5U, value_kind);
+            monitor.origin = support::GeneratedObjectOrigin::fsm_coverage;
             // The comparison and the flag are single bits of four values.
             monitor.register_value_kinds[3] = runtime::simir::ValueKind::logic4;
             monitor.register_value_kinds[4] = runtime::simir::ValueKind::logic4;

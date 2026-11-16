@@ -16,10 +16,6 @@ std::optional<char> vital_state_symbol(
     auto text = expression.decoded_string
         ? std::string_view { *expression.decoded_string }
         : std::string_view { expression.text };
-    constexpr std::string_view enum_prefix { "@fsim-enum:" };
-    if (text.starts_with(enum_prefix)) {
-        text.remove_prefix(enum_prefix.size());
-    }
     if (text.size() >= 3U && text.front() == '\'' && text.back() == '\'') {
         text.remove_prefix(1U);
         text.remove_suffix(1U);

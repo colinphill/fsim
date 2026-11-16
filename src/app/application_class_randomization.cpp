@@ -26,20 +26,18 @@ void configure_systemverilog_randomize_selection(
 runtime::PackedLogic4 invoke_systemverilog_randomization_mode(
     runtime::SystemVerilogClassHeap& heap,
     const runtime::SystemVerilogClassHandle handle,
-    const std::string_view method,
+    const bool random_mode,
+    const std::string_view target,
     const std::span<const runtime::PackedLogic4> actuals) {
-  constexpr std::string_view random_prefix{"@builtin-rand-mode:"};
-  constexpr std::string_view constraint_prefix{
-      "@builtin-constraint-mode:"};
   if (actuals.size() > 1U) {
     throw std::invalid_argument{
         "randomization mode method accepts zero or one argument"};
   }
-  const auto random = method.starts_with(random_prefix);
-  const auto identity = method.substr(
-      random ? random_prefix.size() : constraint_prefix.size());
+  const auto random = random_mode;
+  const auto identity = target;
   // An object-level call sets every random variable or constraint and has
   // no value (IEEE 1800-2017 18.8, 18.9).
+  // ITEM46-LEFT: payload of the @builtin-rand-mode: and @builtin-constraint-mode: identities; converts with that family
   if (identity == "@object") {
     const auto value = actuals.empty()
         ? runtime::Logic4Word{}

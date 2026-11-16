@@ -32,6 +32,7 @@ namespace fsim::elaboration::hierarchy_sv_type_layout_detail {
 
 // The name of the hidden tag member that leads the members of such a union.
 inline constexpr std::string_view systemverilog_tagged_union_tag_member {
+    // ITEM46-LEFT: name of the hidden tag member in the member name list of a tagged-union container type; needs a typed member kind on ContainerType
     "@tag"
 };
 
