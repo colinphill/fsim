@@ -3,6 +3,7 @@
 // Native units of the engine v4 static kernel: generated-code entry,
 // runtime helpers, template binding and partitions.
 #include "simir_static_kernel_compiled_internal.hpp"
+#include "simir_static_kernel_dynamic.hpp"
 #include "fsim/runtime/simir_interpreter.hpp"
 #include "fsim/support/parallel_for.hpp"
 
@@ -1018,6 +1019,23 @@ std::uint32_t Interpreter::Impl::StaticKernel::native_str_reserve(
 {
     try {
         target->reserve(static_cast<std::size_t>(needed));
+        return 0U;
+    } catch (const std::exception&) {
+        native_fail(frame, at, static_kernel_detail::dyn_fail_first
+                + static_cast<std::uint32_t>(
+                    static_kernel_detail::DynFailure::out_of_memory));
+        return 1U;
+    }
+}
+
+std::uint32_t Interpreter::Impl::StaticKernel::native_dyn_text_reserve(
+    StaticKernelNativeFrame* frame, const std::uint32_t at, std::uint64_t* slot,
+    const std::uint64_t needed)
+{
+    try {
+        const auto grown = static_kernel_detail::reserve_text({ slot[0], slot[1] }, needed);
+        slot[0] = grown.a;
+        slot[1] = grown.b;
         return 0U;
     } catch (const std::exception&) {
         native_fail(frame, at, static_kernel_detail::dyn_fail_first

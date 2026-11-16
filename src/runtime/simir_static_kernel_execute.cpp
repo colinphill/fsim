@@ -578,10 +578,15 @@ void Interpreter::Impl::StaticKernel::execute_body(
             break;
         case KOp::dyn: {
             auto& header = dynamic_headers_[containers_[inst.aux].dynamic_header];
-            const auto* other = inst.z == no_container ? nullptr
+            const bool string_file = static_kernel_detail::dyn_uses_string_file(
+                static_cast<static_kernel_detail::DynOp>(inst.sub));
+            const auto* other = inst.z == no_container || string_file ? nullptr
                 : &dynamic_headers_[containers_[inst.z].dynamic_header];
+            auto* strings = string_file
+                ? members_[containers_[inst.z].string_member].strings.data()
+                : nullptr;
             const auto failure = static_kernel_detail::execute_dyn(inst, header,
-                other, registers);
+                other, registers, strings);
             if (failure != static_kernel_detail::DynFailure::none) {
                 fail_at(at, static_kernel_detail::dyn_fail_message(failure));
             }
@@ -2914,6 +2919,7 @@ void Interpreter::Impl::StaticKernel::set_instruction_helpers(
         return StaticKernel::native_str_reserve(frame, at, static_cast<std::string*>(target),
             needed);
     };
+    helpers.dyn_text_reserve = &StaticKernel::native_dyn_text_reserve;
     helpers.sva_post = &StaticKernel::native_sva_post;
     helpers.sva_filter = &StaticKernel::native_sva_filter;
     helpers.sva_check = &StaticKernel::native_sva_check;

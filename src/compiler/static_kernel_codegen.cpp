@@ -8062,6 +8062,58 @@ private:
         };
         const auto fill = [&]() { return dyn_pair(header, dyn_fill); };
         switch (op) {
+        case DynOp::text_read: {
+            // A missing key reads the `default:` text (the fill slot, empty
+            // until one is set).
+            auto* key = order_key();
+            auto* position = dyn_lower_key(header, key);
+            auto* present = dyn_key_present(header, position, key);
+            auto* slot = builder_.CreateSelect(present, dyn_element_address(header, position),
+                dyn_address(header, dyn_fill));
+            auto* target = str_object(dyn_header(inst.z), inst.offset);
+            auto* size = builder_.CreateAnd(
+                builder_.CreateLoad(i64_, builder_.CreateConstInBoundsGEP1_64(i64_, slot, 1U)),
+                constant(text_size_mask));
+            str_reserve(target, size, at);
+            str_copy_bytes(str_data(target), builder_.CreateLoad(ptr_, slot), size);
+            str_set_size(target, size);
+            break;
+        }
+        case DynOp::text_write: {
+            auto* key = order_key();
+            auto* position = dyn_lower_key(header, key);
+            auto* present = dyn_key_present(header, position, key);
+            auto* insert = dyn_when(builder_.CreateNot(present));
+            auto* size = dyn_load(header, dyn_size);
+            dyn_check(builder_.CreateICmpULT(size, dyn_load(header, dyn_limit)), at,
+                DynFailure::text_assoc_budget);
+            dyn_reserve(header, builder_.CreateAdd(size, constant(1U)), at);
+            // The spare slot at the end (its block kept) takes the new key's
+            // place.
+            const auto spare = dyn_load_element(header, size);
+            dyn_loop(position, size, true, [&](llvm::Value* ordinal) {
+                auto* above = builder_.CreateAdd(ordinal, constant(1U));
+                builder_.CreateStore(builder_.CreateLoad(i64_, dyn_key_address(header, ordinal)),
+                    dyn_key_address(header, above));
+                dyn_store_element(header, above, dyn_load_element(header, ordinal));
+            });
+            builder_.CreateStore(key, dyn_key_address(header, position));
+            dyn_store_element(header, position, spare);
+            dyn_store(header, dyn_size, builder_.CreateAdd(size, constant(1U)));
+            dyn_end(insert);
+            text_from_register(dyn_element_address(header, position), dyn_header(inst.z),
+                inst.offset, at);
+            break;
+        }
+        case DynOp::text_default: {
+            text_from_register(dyn_address(header, dyn_fill), dyn_header(inst.z), inst.offset,
+                at);
+            auto* flags = dyn_address(header, dyn_flags);
+            builder_.CreateStore(builder_.CreateOr(builder_.CreateLoad(i32_, flags),
+                                     llvm::ConstantInt::get(i32_, dyn_default_flag)),
+                flags);
+            break;
+        }
         case DynOp::assoc_read:
         case DynOp::exists: {
             auto* key = order_key();
@@ -8107,12 +8159,16 @@ private:
             auto* present = dyn_key_present(header, position, key);
             auto* removing = dyn_when(present);
             auto* last = builder_.CreateSub(dyn_load(header, dyn_size), constant(1U));
+            // The removed element slot moves to the end (a text slot keeps
+            // its block).
+            const auto removed = dyn_load_element(header, position);
             dyn_loop(position, last, false, [&](llvm::Value* ordinal) {
                 auto* above = builder_.CreateAdd(ordinal, constant(1U));
                 builder_.CreateStore(builder_.CreateLoad(i64_, dyn_key_address(header, above)),
                     dyn_key_address(header, ordinal));
                 dyn_store_element(header, ordinal, dyn_load_element(header, above));
             });
+            dyn_store_element(header, last, removed);
             dyn_store(header, dyn_size, last);
             dyn_end(removing);
             break;
@@ -8380,6 +8436,14 @@ private:
             ? sign_extend(index.a, inst.width) : value;
         auto* requested = builder_.CreateAnd(known,
             builder_.CreateICmpSGE(position, constant(0U)));
+        const bool text = (inst.imm_a & detail::dyn_layout_text) != 0U;
+        if (op == DynOp::text_read || op == DynOp::text_write || op == DynOp::append_clear
+            || op == DynOp::append_value || op == DynOp::append_text
+            || op == DynOp::append_container
+            || (text && (op == DynOp::resize || op == DynOp::copy))) {
+            emit_dyn_text(inst, at, header, requested, position, source);
+            return;
+        }
         switch (op) {
         case DynOp::read: {
             dyn_check(known, at, DynFailure::index_unknown);
@@ -8434,10 +8498,14 @@ private:
             auto* valid = dyn_when(builder_.CreateAnd(requested,
                 builder_.CreateICmpULT(position, size)));
             auto* last = builder_.CreateSub(size, constant(1U));
+            // The removed slot moves to the end (a text slot keeps its
+            // block).
+            const auto removed = dyn_load_element(header, position);
             dyn_loop(position, last, false, [&](llvm::Value* ordinal) {
                 dyn_store_element(header, ordinal,
                     dyn_load_element(header, builder_.CreateAdd(ordinal, constant(1U))));
             });
+            dyn_store_element(header, last, removed);
             dyn_store(header, dyn_size, last);
             dyn_store(header, dyn_head, builder_.CreateSelect(
                 builder_.CreateICmpEQ(last, constant(0U)), constant(0U),
@@ -8594,6 +8662,244 @@ private:
         case DynOp::next:
         case DynOp::prev:
             throw std::logic_error("static kernel associative operation on another container");
+        case DynOp::text_read:
+        case DynOp::text_write:
+        case DynOp::text_default:
+        case DynOp::append_clear:
+        case DynOp::append_value:
+        case DynOp::append_text:
+        case DynOp::append_container:
+            throw std::logic_error("static kernel string container operation misplaced");
+        }
+    }
+
+    static constexpr std::uint64_t text_size_mask = 0xFFFF'FFFFU;
+
+    /// Room for `needed` bytes in the text slot at `slot` (DynTextSlot):
+    /// fsim_sk_dyn_text_reserve when its capacity is short.
+    void text_reserve(llvm::Value* slot, llvm::Value* needed, const std::uint32_t at)
+    {
+        auto* word = builder_.CreateLoad(i64_, builder_.CreateConstInBoundsGEP1_64(i64_, slot, 1U));
+        auto* grow = dyn_when(builder_.CreateICmpUGT(needed,
+            builder_.CreateLShr(word, constant(32U))));
+        auto* type = llvm::FunctionType::get(i32_, { ptr_, i32_, ptr_, i64_ }, false);
+        builder_.CreateCall(type, helper_symbol("fsim_sk_dyn_text_reserve", type),
+            { frame_, llvm::ConstantInt::get(i32_, at), slot, needed });
+        check_status();
+        dyn_end(grow);
+    }
+
+    /// The text slot at `slot` holds the `size` bytes at `bytes` (not its
+    /// own).
+    void text_assign(llvm::Value* slot, llvm::Value* bytes, llvm::Value* size,
+        const std::uint32_t at)
+    {
+        text_reserve(slot, size, at);
+        str_copy_bytes(builder_.CreateLoad(ptr_, slot), bytes, size);
+        auto* word_address = builder_.CreateConstInBoundsGEP1_64(i64_, slot, 1U);
+        auto* word = builder_.CreateLoad(i64_, word_address);
+        builder_.CreateStore(builder_.CreateOr(
+                                 builder_.CreateAnd(word, constant(~text_size_mask)), size),
+            word_address);
+    }
+
+    /// The text slot at `slot` holds the text slot at `from`.
+    void text_copy(llvm::Value* slot, llvm::Value* from, const std::uint32_t at)
+    {
+        auto* size = builder_.CreateAnd(
+            builder_.CreateLoad(i64_, builder_.CreateConstInBoundsGEP1_64(i64_, from, 1U)),
+            constant(text_size_mask));
+        text_assign(slot, builder_.CreateLoad(ptr_, from), size, at);
+    }
+
+    /// The text slot at `slot` holds string register `id` of `file`.
+    void text_from_register(llvm::Value* slot, llvm::Value* file, const std::uint64_t id,
+        const std::uint32_t at)
+    {
+        auto* object = str_object(file, id);
+        text_assign(slot, str_data(object), str_size(object), at);
+    }
+
+    void text_clear(llvm::Value* slot)
+    {
+        auto* word_address = builder_.CreateConstInBoundsGEP1_64(i64_, slot, 1U);
+        builder_.CreateStore(builder_.CreateAnd(builder_.CreateLoad(i64_, word_address),
+                                 constant(~text_size_mask)),
+            word_address);
+    }
+
+    /// KOp::dyn on a queue or dynamic array of strings (dyn_layout_text),
+    /// and the appends of any queue or dynamic array.
+    void emit_dyn_text(const KInst& inst, const std::uint32_t at, llvm::Value* header,
+        llvm::Value* requested, llvm::Value* position, const Pair source)
+    {
+        using detail::DynFailure;
+        using detail::DynOp;
+        const auto op = static_cast<DynOp>(inst.sub);
+        const bool text = (inst.imm_a & detail::dyn_layout_text) != 0U;
+        switch (op) {
+        case DynOp::text_read: {
+            // An invalid or out-of-range index reads the empty string
+            // (7.4.6).
+            auto* file = dyn_header(inst.z);
+            auto* target = str_object(file, inst.offset);
+            auto* valid = builder_.CreateAnd(requested,
+                builder_.CreateICmpULT(position, dyn_load(header, dyn_size)));
+            auto* reading = dyn_when(valid);
+            auto* slot = dyn_element_address(header, position);
+            auto* size = builder_.CreateAnd(
+                builder_.CreateLoad(i64_, builder_.CreateConstInBoundsGEP1_64(i64_, slot, 1U)),
+                constant(text_size_mask));
+            str_reserve(target, size, at);
+            str_copy_bytes(str_data(target), builder_.CreateLoad(ptr_, slot), size);
+            str_set_size(target, size);
+            dyn_end(reading);
+            auto* empty = dyn_when(builder_.CreateNot(valid));
+            str_set_size(target, constant(0U));
+            dyn_end(empty);
+            break;
+        }
+        case DynOp::text_write: {
+            auto* file = dyn_header(inst.z);
+            auto* size = dyn_load(header, dyn_size);
+            auto* queue = builder_.CreateICmpNE(
+                builder_.CreateAnd(
+                    builder_.CreateZExt(builder_.CreateLoad(i32_, dyn_address(header, dyn_flags)),
+                        i64_),
+                    constant(2U)),
+                constant(0U));
+            auto* overwrite = builder_.CreateAnd(requested, builder_.CreateICmpULT(position, size));
+            auto* append = builder_.CreateAnd(
+                builder_.CreateAnd(requested, builder_.CreateICmpEQ(position, size)),
+                builder_.CreateAnd(queue,
+                    builder_.CreateICmpULT(size, dyn_load(header, dyn_maximum))));
+            auto* in_place = dyn_when(overwrite);
+            text_from_register(dyn_element_address(header, position), file, inst.offset, at);
+            dyn_end(in_place);
+            auto* appended = dyn_when(append);
+            dyn_check(builder_.CreateICmpULT(size, dyn_load(header, dyn_limit)), at,
+                DynFailure::queue_budget);
+            auto* grown = builder_.CreateAdd(size, constant(1U));
+            dyn_reserve(header, grown, at);
+            dyn_store(header, dyn_size, grown);
+            text_from_register(dyn_element_address(header, size), file, inst.offset, at);
+            dyn_end(appended);
+            break;
+        }
+        case DynOp::append_clear:
+        case DynOp::append_value:
+        case DynOp::append_text:
+        case DynOp::append_container: {
+            if ((inst.imm_b & 1U) != 0U) {
+                dyn_store(header, dyn_size, constant(0U));
+                dyn_store(header, dyn_head, constant(0U));
+            }
+            auto* size = dyn_load(header, dyn_size);
+            llvm::Value* total = size;
+            if (op == DynOp::append_value) {
+                total = builder_.CreateAdd(size, constant(1U));
+                dyn_reserve(header, total, at);
+                dyn_store_element(header, size, source);
+            } else if (op == DynOp::append_text) {
+                total = builder_.CreateAdd(size, constant(1U));
+                dyn_reserve(header, total, at);
+                text_from_register(dyn_element_address(header, size), dyn_header(inst.z),
+                    inst.offset, at);
+            } else if (op == DynOp::append_container) {
+                // The source's count before the append (it may be the
+                // target).
+                auto* other = dyn_header(inst.z);
+                auto* count = dyn_load(other, dyn_size);
+                total = builder_.CreateAdd(size, count);
+                dyn_reserve(header, total, at);
+                dyn_loop(constant(0U), count, false, [&](llvm::Value* ordinal) {
+                    auto* into = builder_.CreateAdd(size, ordinal);
+                    if (text) {
+                        text_copy(dyn_element_address(header, into),
+                            dyn_element_address(other, ordinal), at);
+                    } else {
+                        dyn_store_element(header, into, dyn_load_element(other, ordinal));
+                    }
+                });
+            }
+            // A bounded queue keeps its first elements (7.10.5).
+            auto* maximum = dyn_load(header, dyn_maximum);
+            dyn_store(header, dyn_size,
+                builder_.CreateSelect(builder_.CreateICmpULT(total, maximum), total, maximum));
+            break;
+        }
+        case DynOp::resize: {
+            dyn_check(builder_.CreateICmpEQ(source.b, constant(0U)), at,
+                DynFailure::size_unknown);
+            auto* count = source.a;
+            dyn_check(builder_.CreateICmpULE(count, dyn_load(header, dyn_limit)), at,
+                DynFailure::array_budget);
+            llvm::Value* kept = constant(0U);
+            llvm::Value* other = nullptr;
+            llvm::Value* alias = llvm::ConstantInt::getFalse(context_);
+            if (inst.z != std::numeric_limits<std::uint32_t>::max()) {
+                other = dyn_header(inst.z);
+                alias = builder_.CreateICmpEQ(other, header);
+                auto* other_size = dyn_load(other, dyn_size);
+                kept = builder_.CreateSelect(builder_.CreateICmpULT(count, other_size), count,
+                    other_size);
+            }
+            // new[n](self) keeps its first elements in place; another
+            // initializer's are copied; the rest are empty (7.5.1).
+            auto* fresh = dyn_when(builder_.CreateNot(alias));
+            dyn_store(header, dyn_size, constant(0U));
+            dyn_store(header, dyn_head, constant(0U));
+            dyn_end(fresh);
+            dyn_reserve(header, count, at);
+            if (other != nullptr) {
+                auto* copying = dyn_when(builder_.CreateNot(alias));
+                dyn_loop(constant(0U), kept, false, [&](llvm::Value* ordinal) {
+                    text_copy(dyn_element_address(header, ordinal),
+                        dyn_element_address(other, ordinal), at);
+                });
+                dyn_end(copying);
+            }
+            dyn_loop(kept, count, false, [&](llvm::Value* ordinal) {
+                text_clear(dyn_element_address(header, ordinal));
+            });
+            dyn_store(header, dyn_size, count);
+            break;
+        }
+        case DynOp::copy: {
+            auto* other = dyn_header(inst.z);
+            auto* distinct = dyn_when(builder_.CreateICmpNE(other, header));
+            auto* count = dyn_load(other, dyn_size);
+            dyn_store(header, dyn_size, constant(0U));
+            dyn_store(header, dyn_head, constant(0U));
+            dyn_reserve(header, count, at);
+            const bool associative = (inst.imm_a & detail::dyn_layout_associative) != 0U;
+            dyn_loop(constant(0U), count, false, [&](llvm::Value* ordinal) {
+                text_copy(dyn_element_address(header, ordinal),
+                    dyn_element_address(other, ordinal), at);
+                if (associative) {
+                    builder_.CreateStore(
+                        builder_.CreateLoad(i64_, dyn_key_address(other, ordinal)),
+                        dyn_key_address(header, ordinal));
+                }
+            });
+            if (associative) {
+                // The keys and the `default:` text go with the elements.
+                text_copy(dyn_address(header, dyn_fill), dyn_address(other, dyn_fill), at);
+                auto* flags = dyn_address(header, dyn_flags);
+                auto* other_flags = builder_.CreateLoad(i32_, dyn_address(other, dyn_flags));
+                auto* default_bit = llvm::ConstantInt::get(i32_, dyn_default_flag);
+                builder_.CreateStore(
+                    builder_.CreateOr(builder_.CreateAnd(builder_.CreateLoad(i32_, flags),
+                                          builder_.CreateNot(default_bit)),
+                        builder_.CreateAnd(other_flags, default_bit)),
+                    flags);
+            }
+            dyn_store(header, dyn_size, count);
+            dyn_end(distinct);
+            break;
+        }
+        default:
+            throw std::logic_error("static kernel string container operation is invalid");
         }
     }
 
@@ -18903,6 +19209,7 @@ private:
         add("fsim_sk_dyn_grow", helpers.dyn_grow);
         add("fsim_sk_dyn_reshape", helpers.dyn_reshape);
         add("fsim_sk_str_reserve", helpers.str_reserve);
+        add("fsim_sk_dyn_text_reserve", helpers.dyn_text_reserve);
         // llvm.memcpy of a run-time length (KOp::str).
         add("memcpy", static_cast<void* (*)(void*, const void*, std::size_t)>(&std::memcpy));
 #if defined(__MINGW32__)

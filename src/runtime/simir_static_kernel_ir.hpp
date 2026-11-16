@@ -442,6 +442,29 @@ enum class DynOp : std::uint8_t {
     last,
     next,
     prev,
+    /// The operations of a container of strings (dyn_layout_text): its
+    /// elements are text slots (dyn_text_slot), z is the member's string
+    /// file and offset a string register.
+    /// ContainerStringRead: string offset = element y, the empty string
+    /// when y is invalid or out of range (7.4.6).
+    text_read,
+    /// ContainerStringWrite: element y = string offset (the write rules
+    /// of `write`). An associative array's key y (integral) selects the
+    /// element, a missing key reading the `default:` text (fill) and a
+    /// write inserting it.
+    text_write,
+    /// ContainerStringWrite of an associative array's `default:` text
+    /// (7.9.11): the fill text slot = string offset.
+    text_default,
+    /// AppendContainer (10.10): imm_b bit 0 empties the target first;
+    /// append_clear appends nothing, append_value register x,
+    /// append_text string offset (z the string file), append_container
+    /// the elements of container z. A bounded queue keeps its first
+    /// elements (7.10.5).
+    append_clear,
+    append_value,
+    append_text,
+    append_container,
 };
 
 /// The failure codes of KOp::dyn (native fail reasons from
@@ -468,6 +491,7 @@ enum class DynFailure : std::uint32_t {
     concat_limit,
     byte_unknown,
     string_limit,
+    text_assoc_budget,
 };
 
 /// The native fail reason of the first DynFailure (native_fail_message).
@@ -479,6 +503,20 @@ inline constexpr std::uint64_t dyn_layout_signed_keys = 2U;
 inline constexpr std::uint64_t dyn_layout_sparse = 4U;
 /// A sparse array's index is a linear ordinal (a multidimensional array).
 inline constexpr std::uint64_t dyn_layout_linear = 8U;
+/// String elements: each element slot is a text slot (dyn_text_slot).
+inline constexpr std::uint64_t dyn_layout_text = 16U;
+
+/// A string element of a kernel container: one element slot (two words)
+/// holding the element's bytes, which the slot owns (malloc'd, no
+/// terminator), and its length and capacity. Slots move by copying their
+/// words; a slot keeps its block while the element count shrinks, so
+/// generated code allocates only to grow a block (fsim_sk_dyn_text_reserve).
+struct DynTextSlot {
+    char* data { };
+    std::uint32_t size { };
+    std::uint32_t capacity { };
+};
+static_assert(sizeof(DynTextSlot) == 16U);
 
 /// The registers a KOp::dyn operation reads (y the index, x the source)
 /// and writes (d).
@@ -487,14 +525,21 @@ inline constexpr std::uint64_t dyn_layout_linear = 8U;
     return op == DynOp::read || op == DynOp::write || op == DynOp::delete_at
         || op == DynOp::insert || op == DynOp::assoc_read || op == DynOp::assoc_write
         || op == DynOp::assoc_delete || op == DynOp::exists || op == DynOp::next
-        || op == DynOp::prev;
+        || op == DynOp::prev || op == DynOp::text_read || op == DynOp::text_write;
 }
 
 [[nodiscard]] inline bool dyn_reads_source(const DynOp op) noexcept
 {
     return op == DynOp::write || op == DynOp::resize || op == DynOp::push_back
         || op == DynOp::push_front || op == DynOp::insert || op == DynOp::assoc_write
-        || op == DynOp::assoc_default;
+        || op == DynOp::assoc_default || op == DynOp::append_value;
+}
+
+/// Container z is the member's string file (not a second container).
+[[nodiscard]] inline bool dyn_uses_string_file(const DynOp op) noexcept
+{
+    return op == DynOp::text_read || op == DynOp::text_write || op == DynOp::text_default
+        || op == DynOp::append_text;
 }
 
 [[nodiscard]] inline bool dyn_writes_destination(const DynOp op) noexcept

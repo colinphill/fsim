@@ -1839,6 +1839,10 @@ private:
     /// string register (KOp::str), its bytes kept.
     static std::uint32_t native_str_reserve(StaticKernelNativeFrame* frame,
         std::uint32_t at, std::string* target, std::uint64_t needed);
+    /// fsim_sk_dyn_text_reserve: room for `needed` bytes in a text slot
+    /// (a string element of a kernel container), its bytes kept.
+    static std::uint32_t native_dyn_text_reserve(StaticKernelNativeFrame* frame,
+        std::uint32_t at, std::uint64_t* slot, std::uint64_t needed);
     static void native_sva_grow(StaticKernelNativeFrame* frame,
         std::uint32_t at, std::uint32_t region, std::uint64_t needed);
     static void native_sva_post(StaticKernelNativeFrame* frame, std::uint32_t at);

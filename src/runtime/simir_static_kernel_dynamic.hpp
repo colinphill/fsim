@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <deque>
 #include <string>
+#include <string_view>
 
 namespace fsim::runtime::simir::static_kernel_detail {
 
@@ -29,6 +30,22 @@ inline constexpr std::uint32_t dynamic_sparse_flag = 32U;
 inline constexpr std::uint32_t dynamic_dense_flag = 64U;
 /// Scalar (real) elements, which start at zero.
 inline constexpr std::uint32_t dynamic_scalar_flag = 128U;
+/// String elements: each element slot is a DynTextSlot.
+inline constexpr std::uint32_t dynamic_text_flag = 256U;
+
+/// A text slot's bytes (DynTextSlot, as the slot's two words).
+[[nodiscard]] inline std::string_view text_of(const kernel_word::Word slot) noexcept
+{
+    return { reinterpret_cast<const char*>(static_cast<std::uintptr_t>(slot.a)),
+        static_cast<std::size_t>(slot.b & 0xFFFF'FFFFU) };
+}
+
+/// Text slot `slot` with room for `needed` bytes, its bytes kept: a larger
+/// block when the slot's capacity is short. Throws std::bad_alloc.
+[[nodiscard]] kernel_word::Word reserve_text(kernel_word::Word slot, std::uint64_t needed);
+
+/// Text slot `slot` holding `text` (which is not the slot's own bytes).
+[[nodiscard]] kernel_word::Word assign_text(kernel_word::Word slot, std::string_view text);
 
 /// Whether the kernel holds a container register of this type in a
 /// StaticKernelDynamicContainer: a queue or dynamic array of packed or
@@ -114,10 +131,13 @@ private:
 [[nodiscard]] const char* dyn_fail_message(DynFailure failure) noexcept;
 
 /// Executes KOp::dyn `inst` on the bytecode tier: `container` is the
-/// instruction's container, `other` its second (container z) or null.
+/// instruction's container, `other` its second (container z) or null, and
+/// `strings` the member's string registers when z is its string file
+/// (dyn_uses_string_file).
 /// Returns DynFailure::none, or the reference's error to report.
 [[nodiscard]] DynFailure execute_dyn(const KInst& inst,
     StaticKernelDynamicContainer& container,
-    const StaticKernelDynamicContainer* other, kernel_word::Word* registers);
+    const StaticKernelDynamicContainer* other, kernel_word::Word* registers,
+    std::string* strings);
 
 } // namespace fsim::runtime::simir::static_kernel_detail

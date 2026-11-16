@@ -114,6 +114,9 @@ bool Interpreter::Impl::StaticKernel::native_dynamic_containers(
         const bool native = visit_operation([](const auto& op) {
             using T = std::decay_t<decltype(op)>;
             return std::is_same_v<T, ContainerRead> || std::is_same_v<T, ContainerWrite>
+                || std::is_same_v<T, ContainerStringRead>
+                || std::is_same_v<T, ContainerStringWrite>
+                || std::is_same_v<T, AppendContainer>
                 || std::is_same_v<T, ContainerSize> || std::is_same_v<T, ResizeContainer>
                 || std::is_same_v<T, DeleteContainer> || std::is_same_v<T, PushContainer>
                 || std::is_same_v<T, PopContainer>
@@ -1992,6 +1995,8 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             ? container_of_register[id]
             : no_container;
     };
+    const auto string_count = member.string_scratch != no_slot
+        ? member.string_scratch : static_cast<std::uint32_t>(member.strings.size());
     const auto emit_dyn = [&](KInst& inst, const auto& op) -> bool {
         using T = std::decay_t<decltype(op)>;
         const auto set = [&](const DynOp sub, const std::uint32_t container) {
@@ -2006,7 +2011,9 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             inst.imm_a = (type.associative ? static_kernel_detail::dyn_layout_associative : 0U)
                 | (type.associative && type.signed_indices
                         ? static_kernel_detail::dyn_layout_signed_keys : 0U)
-                | (type.sparse ? static_kernel_detail::dyn_layout_sparse : 0U);
+                | (type.sparse ? static_kernel_detail::dyn_layout_sparse : 0U)
+                | (type.element_kind == ContainerElementKind::String
+                        ? static_kernel_detail::dyn_layout_text : 0U);
         };
         const auto sparse = [&](const std::uint32_t container) {
             return containers_[container].type.sparse;
@@ -2027,6 +2034,16 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
         const auto element_width = [&](const std::uint32_t container) {
             return static_cast<std::uint32_t>(containers_[container].type.element_width);
         };
+        const auto text = [&](const std::uint32_t container) {
+            return containers_[container].type.element_kind == ContainerElementKind::String;
+        };
+        // A string register of the member's string file (hold_string_file).
+        const auto string_register = [&](const StringRegisterId id) {
+            if (member.string_file == no_slot || id >= string_count) {
+                throw reject("dyn_string");
+            }
+            return id;
+        };
         const auto queue = [&](const std::uint32_t container) {
             return containers_[container].type.queue;
         };
@@ -2044,7 +2061,103 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             inst.y = narrow(index);
             inst.width = w(index);
         };
-        if constexpr (std::is_same_v<T, ContainerRead>) {
+        if constexpr (std::is_same_v<T, ContainerStringRead>) {
+            const auto container = dyn_container(op.source);
+            if (container == no_container) {
+                return false;
+            }
+            if (!text(container) || !op.members.empty()) {
+                throw reject("dyn_text_read");
+            }
+            if (associative(container)) {
+                set(DynOp::text_read, container);
+                inst.offset = string_register(op.destination);
+                inst.z = member.string_file;
+                key(container, op.index, op.string_index || op.linear_index, "dyn_text_read");
+                return true;
+            }
+            if (op.string_index || op.linear_index || w(op.index) == 0U || w(op.index) > 64U) {
+                throw reject("dyn_text_read");
+            }
+            set(DynOp::text_read, container);
+            inst.offset = string_register(op.destination);
+            inst.z = member.string_file;
+            inst.y = narrow(op.index);
+            inst.width = w(op.index);
+            inst.flags = op.signed_index ? flag_signed : 0U;
+            return true;
+        } else if constexpr (std::is_same_v<T, ContainerStringWrite>) {
+            const auto container = dyn_container(op.target);
+            if (container == no_container) {
+                return false;
+            }
+            if (!text(container) || !op.members.empty()) {
+                throw reject("dyn_text_write");
+            }
+            if (associative(container)) {
+                if (op.associative_default) {
+                    set(DynOp::text_default, container);
+                    inst.offset = string_register(op.source);
+                    inst.z = member.string_file;
+                    return true;
+                }
+                set(DynOp::text_write, container);
+                inst.offset = string_register(op.source);
+                inst.z = member.string_file;
+                key(container, op.index, op.string_index || op.linear_index, "dyn_text_write");
+                return true;
+            }
+            if (op.string_index || op.linear_index || op.associative_default
+                || w(op.index) == 0U || w(op.index) > 64U) {
+                throw reject("dyn_text_write");
+            }
+            set(DynOp::text_write, container);
+            inst.offset = string_register(op.source);
+            inst.z = member.string_file;
+            inst.y = narrow(op.index);
+            inst.width = w(op.index);
+            inst.flags = op.signed_index ? flag_signed : 0U;
+            return true;
+        } else if constexpr (std::is_same_v<T, AppendContainer>) {
+            const auto container = dyn_container(op.target);
+            if (container == no_container) {
+                return false;
+            }
+            const auto& type = containers_[container].type;
+            const auto parts = (op.container ? 1 : 0) + (op.value ? 1 : 0) + (op.text ? 1 : 0);
+            if (type.associative || type.sparse || parts > 1) {
+                throw reject("dyn_append");
+            }
+            if (op.container) {
+                const auto source = dyn_container(*op.container);
+                const auto& source_type = source == no_container
+                    ? type : containers_[source].type;
+                if (source == no_container || source_type.associative || source_type.sparse
+                    || source_type.element_kind != type.element_kind
+                    || source_type.element_width != type.element_width) {
+                    throw reject("dyn_append");
+                }
+                set(DynOp::append_container, container);
+                inst.z = source;
+            } else if (op.value) {
+                if (text(container) || w(*op.value) != element_width(container)) {
+                    throw reject("dyn_append");
+                }
+                set(DynOp::append_value, container);
+                inst.x = narrow(*op.value);
+            } else if (op.text) {
+                if (!text(container)) {
+                    throw reject("dyn_append");
+                }
+                set(DynOp::append_text, container);
+                inst.offset = string_register(*op.text);
+                inst.z = member.string_file;
+            } else {
+                set(DynOp::append_clear, container);
+            }
+            inst.imm_b = op.clear ? 1U : 0U;
+            return true;
+        } else if constexpr (std::is_same_v<T, ContainerRead>) {
             const auto container = dyn_container(op.source);
             if (container == no_container) {
                 return false;
@@ -2248,8 +2361,6 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
     // (its string file, hold_string_file); false when the operation keeps
     // the generic bridge (a register of another width than the reference's
     // result, which that path converts).
-    const auto string_count = member.string_scratch != no_slot
-        ? member.string_scratch : static_cast<std::uint32_t>(member.strings.size());
     const auto emit_str = [&](KInst& inst, const auto& op) -> bool {
         using T = std::decay_t<decltype(op)>;
         if (member.string_file == no_slot) {
@@ -3407,6 +3518,15 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             bool translated = true;
             visit_operation([&](const auto& op) {
                 using T = std::decay_t<decltype(op)>;
+                if constexpr (std::is_same_v<T, ContainerStringRead>
+                    || std::is_same_v<T, ContainerStringWrite>
+                    || std::is_same_v<T, AppendContainer>) {
+                    // A kernel container of strings, or an append to a kernel
+                    // queue or dynamic array; otherwise the generic bridge.
+                    if (emit_dyn(inst, op)) {
+                        return;
+                    }
+                }
                 if constexpr (std::is_same_v<T, LoadStringConstant>
                     || std::is_same_v<T, CopyStringRegister>
                     || std::is_same_v<T, ConcatenateStrings>

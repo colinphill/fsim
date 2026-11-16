@@ -2037,6 +2037,7 @@ tests/fixtures/compliance/sv_interface_packed_type_actuals_20261013.sv
 tests/fixtures/compliance/sv_interface_ports_and_waits.sv
 tests/fixtures/compliance/sv_kernel_associative_sparse.sv
 tests/fixtures/compliance/sv_kernel_queue_dynamic_array.sv
+tests/fixtures/compliance/sv_kernel_string_containers.sv
 tests/fixtures/compliance/sv_kernel_string_ops.sv
 tests/fixtures/compliance/sv_language_details_batch43.sv
 tests/fixtures/compliance/sv_language_details_batch44.sv

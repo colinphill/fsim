@@ -378,6 +378,11 @@ struct StaticKernelNativeHelpers {
     /// the memory is not available (the failure is reported).
     std::uint32_t (*str_reserve)(StaticKernelNativeFrame*, std::uint32_t at, void* target,
         std::uint64_t needed) { };
+    /// `fsim_sk_dyn_text_reserve`: room for `needed` bytes in the text slot
+    /// at `slot` (a string element of a kernel container), its bytes kept;
+    /// nonzero when the memory is not available (the failure is reported).
+    std::uint32_t (*dyn_text_reserve)(StaticKernelNativeFrame*, std::uint32_t at,
+        std::uint64_t* slot, std::uint64_t needed) { };
     /// Wide-register instructions by kind (`fsim_sk_wide_<op>`): instruction
     /// `at` with the caller's register file, where wide values live, and the
     /// narrow operand words x, y and z; `out` receives a narrow result and
