@@ -275,6 +275,12 @@ struct StaticKernelNativeFrame {
     /// `fsim_sk_flush_writes`, so each statement's write is its own value
     /// change. Null while nothing is watched.
     const std::uint8_t* watch_writes { };
+    /// Per member, the random stream KOp::random draws from
+    /// (StaticKernel::random_state_table): its process's, or the running
+    /// fork child's own (IEEE 1800-2023 18.14).
+    std::uint64_t* const* random_states { };
+    /// The system seed $random draws from (Impl::system_random_seed).
+    std::int32_t* system_random_seed { };
 };
 inline constexpr std::uint32_t static_kernel_no_fast_notify = static_kernel_no_fast_notify_value;
 

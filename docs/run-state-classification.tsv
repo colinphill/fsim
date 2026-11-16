@@ -924,6 +924,9 @@ kernel.impl	debug_write_pending_	S	scratch: all clear whenever debug_writes_ is 
 kernel.impl	debug_write_flag_	S	scratch: nonzero only while debug_writes_ holds a slot, so clear at every save point
 kernel.impl	next_child_process_	P	kernel dynamic state (S5)
 kernel.impl	running_thread_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	random_states_	D	per member, a pointer to its process's random state (ProcessColdState, never moved), built on first use; a running fork child's entry is restored when the child stops running
+kernel.impl	random_live_	W	a running fork child's random state, copied in when it starts running and back when it stops (ThreadRandom in run_thread); dead while random_live_thread_ is empty
+kernel.impl	random_live_thread_	S	no_slot for every member at every save point (no thread runs): the save audit refuses with FSIM-SAVE-0011 when it is not
 kernel.impl	touched_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
 kernel.impl	round_before_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
 kernel.impl	write_storage_	W	backing store of a write queue, kept for its capacity; the queue's count (writes_, parked_writes_) is the state at rest and is checked

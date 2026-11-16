@@ -602,6 +602,11 @@ void Interpreter::Impl::StaticKernel::build_parallel_plan()
                 touch_container(inst.aux, true);
                 ok = false;
                 break;
+            case KOp::random:
+                // The process's random stream (or the system seed) is the
+                // leader's.
+                ok = false;
+                break;
             case KOp::generic:
                 touch_operation(current, inst.x);
                 // A sequential member's output and severity messages wait

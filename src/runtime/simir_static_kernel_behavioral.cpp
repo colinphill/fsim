@@ -965,13 +965,30 @@ std::vector<std::uint32_t> Interpreter::Impl::StaticKernel::live_children(
 std::uint32_t Interpreter::Impl::StaticKernel::next_member_random(
     const std::uint32_t member)
 {
-    const auto thread = running_thread_;
-    if (thread != no_slot && threads_[thread].member == member
-        && threads_[thread].parent != no_slot) {
-        return Impl::next_random(threads_[thread].random_state);
+    return Impl::next_random(*random_state_table()[member]);
+}
+
+std::uint64_t* const* Interpreter::Impl::StaticKernel::random_state_table()
+{
+    if (random_states_.size() != members_.size()) {
+        random_states_.resize(members_.size());
+        random_live_.assign(members_.size(), 0U);
+        random_live_thread_.assign(members_.size(), no_slot);
+        for (std::size_t member = 0U; member < members_.size(); ++member) {
+            random_states_[member]
+                = &impl_.get_process(members_[member].process).cold().random_state;
+        }
     }
-    return Impl::next_random(
-        impl_.get_process(members_[member].process).cold().random_state);
+    return random_states_.data();
+}
+
+std::uint64_t& Interpreter::Impl::StaticKernel::thread_random_state(const std::uint32_t thread)
+{
+    static_cast<void>(random_state_table());
+    const auto member = threads_[thread].member;
+    return member < random_live_thread_.size() && random_live_thread_[member] == thread
+        ? random_live_[member]
+        : threads_[thread].random_state;
 }
 
 std::uint64_t Interpreter::Impl::StaticKernel::take_handle(
@@ -1047,7 +1064,7 @@ std::uint64_t& Interpreter::Impl::StaticKernel::record_random_state(
     // A root thread draws from its process's stream (next_member_random).
     return thread.parent == no_slot
         ? impl_.get_process(id).cold().random_state
-        : threads_[record.thread].random_state;
+        : thread_random_state(record.thread);
 }
 
 void Interpreter::Impl::StaticKernel::end_record(const std::uint32_t index,
@@ -4250,14 +4267,8 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             const auto minimum = op.minimum
                 ? std::optional<PackedLogic4> { packed_register(*op.minimum) }
                 : std::nullopt;
-            const auto thread = running_thread_;
-            packed_register(op.destination)
-                = thread != no_slot && threads_[thread].member == member_index
-                    && threads_[thread].parent != no_slot
-                ? impl_.random_value(threads_[thread].random_state, op.kind,
-                      maximum, minimum)
-                : impl_.random_value(members_[member_index].process, op.kind,
-                      maximum, minimum);
+            packed_register(op.destination) = impl_.random_value(
+                *random_state_table()[member_index], op.kind, maximum, minimum);
         } else if constexpr (std::is_same_v<T, CallableFramePush>) {
             if (member.private_frame(op.identity)) {
                 save_private_arrays(member, op);
@@ -5654,6 +5665,51 @@ void Interpreter::Impl::StaticKernel::run_thread(const std::uint32_t index)
         RunningThread(const RunningThread&) = delete;
         RunningThread& operator=(const RunningThread&) = delete;
     } running { running_thread_, index };
+    // A fork child draws from its own stream (18.14): while it runs, the
+    // state lives in random_live_ for generated code (KOp::random).
+    struct ThreadRandom {
+        StaticKernel& kernel;
+        std::uint32_t thread;
+        std::uint32_t member;
+        std::uint32_t generation;
+        bool child;
+        std::uint64_t* saved_state { };
+        std::uint64_t saved_live { };
+        std::uint32_t saved_thread { };
+        ThreadRandom(StaticKernel& owner, const std::uint32_t index)
+            : kernel(owner)
+            , thread(index)
+            , member(owner.threads_[index].member)
+            , generation(owner.threads_[index].generation)
+            , child(owner.threads_[index].parent != no_slot)
+        {
+            if (!child) {
+                return;
+            }
+            static_cast<void>(kernel.random_state_table());
+            saved_state = kernel.random_states_[member];
+            saved_live = kernel.random_live_[member];
+            saved_thread = kernel.random_live_thread_[member];
+            kernel.random_live_[member] = kernel.threads_[thread].random_state;
+            kernel.random_live_thread_[member] = thread;
+            kernel.random_states_[member] = &kernel.random_live_[member];
+        }
+        ~ThreadRandom()
+        {
+            if (!child) {
+                return;
+            }
+            // The slot may have been reused once the thread ended.
+            if (kernel.threads_[thread].generation == generation) {
+                kernel.threads_[thread].random_state = kernel.random_live_[member];
+            }
+            kernel.random_live_[member] = saved_live;
+            kernel.random_live_thread_[member] = saved_thread;
+            kernel.random_states_[member] = saved_state;
+        }
+        ThreadRandom(const ThreadRandom&) = delete;
+        ThreadRandom& operator=(const ThreadRandom&) = delete;
+    } thread_random { *this, index };
     // KOp::sva_report rows name the running thread's process.
     struct ThreadProcess {
         std::int64_t& word;
@@ -5879,6 +5935,8 @@ std::optional<std::uint32_t> Interpreter::Impl::StaticKernel::run_behavioral_com
         verify_before->registers = body.registers;
         verify_before->containers = native_container_values(member);
         verify_before->strings = member.strings;
+        verify_before->random = *random_state_table()[member_index];
+        verify_before->system_seed = impl_.system_random_seed;
         if (body.call_stack_base != 0U) {
             const auto depth = body.registers[body.call_stack_base].a;
             verify_before->stack.assign(body.call_entries.entries,
@@ -6448,6 +6506,12 @@ void Interpreter::Impl::StaticKernel::verify_thread_activation(
     const ReferenceContainerScope reference_containers { member, before.containers };
     // The replay's string registers: the activation's at the start.
     const ReferenceStringScope reference_strings { member, before.strings };
+    // The replay draws the compiled run's random numbers again.
+    auto* const random_stream = random_state_table()[member_index];
+    const auto compiled_random = *random_stream;
+    const auto compiled_seed = impl_.system_random_seed;
+    *random_stream = before.random;
+    impl_.system_random_seed = before.system_seed;
     shadow.reference = true;
     std::string mismatch;
     std::uint32_t pc = start;
@@ -6609,6 +6673,12 @@ void Interpreter::Impl::StaticKernel::verify_thread_activation(
     if (mismatch.empty() && shadow.sva_consumed != shadow.sva.size()) {
         mismatch = "assertion ticks: compiled ran " + std::to_string(shadow.sva.size())
             + " reference reached " + std::to_string(shadow.sva_consumed);
+    }
+    if (mismatch.empty()
+        && (*random_stream != compiled_random || impl_.system_random_seed != compiled_seed)) {
+        mismatch = "random state: compiled " + std::to_string(compiled_random) + "/"
+            + std::to_string(compiled_seed) + " reference " + std::to_string(*random_stream)
+            + "/" + std::to_string(impl_.system_random_seed);
     }
     if (mismatch.empty() && shadow.consumed != shadow.generic.size()) {
         mismatch = "generic operations: compiled ran "

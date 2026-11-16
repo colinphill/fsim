@@ -613,6 +613,26 @@ void Interpreter::Impl::StaticKernel::execute_body(
             }
             break;
         }
+        case KOp::random: {
+            // The reference's draw (Impl::random_value) from the stream
+            // generated code draws from.
+            std::optional<PackedLogic4> maximum;
+            std::optional<PackedLogic4> minimum;
+            if ((inst.imm_a & 1U) != 0U) {
+                maximum = PackedLogic4::from_aval_bval(
+                    static_cast<std::size_t>(inst.imm_b & 0xFFFF'FFFFU), registers[inst.x].a,
+                    registers[inst.x].b);
+            }
+            if ((inst.imm_a & 2U) != 0U) {
+                minimum = PackedLogic4::from_aval_bval(static_cast<std::size_t>(inst.imm_b >> 32U),
+                    registers[inst.y].a, registers[inst.y].b);
+            }
+            const auto value = impl_.random_value(*random_state_table()[member_index],
+                static_cast<RandomKind>(inst.sub), maximum, minimum);
+            const auto low = value.low_word();
+            registers[inst.d] = Word { low.aval, low.bval };
+            break;
+        }
         case KOp::str: {
             auto& strings = members_[containers_[inst.aux].string_member].strings;
             const auto failure = static_kernel_detail::execute_str(inst, body, strings.data(),

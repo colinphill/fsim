@@ -2418,6 +2418,8 @@ private:
         frame.variable_hooks
             = variable_hooks_active_ ? variable_hook_members_.data() : nullptr;
         frame.watch_writes = watch_writes_ ? &debug_write_flag_ : nullptr;
+        frame.random_states = random_state_table();
+        frame.system_random_seed = &impl_.system_random_seed;
         if (sva_table_used_) {
             refresh_sva_table();
             frame.sva = &sva_table_;
@@ -3256,6 +3258,10 @@ private:
         NativeContainerValues containers;
         std::vector<std::string> strings;
         decltype(CompiledBody::wide_registers) wide;
+        /// The random stream the thread draws from (KOp::random) and the
+        /// system seed ($random): the replay draws again from these.
+        std::uint64_t random { };
+        std::int32_t system_seed { };
         /// The call stack's return targets at the start.
         std::vector<std::uint64_t> stack;
         /// The frame stack's words (two per pair) and its pairs.
@@ -3574,6 +3580,19 @@ private:
     /// The next draw of the stream RandomValue draws from: a running fork
     /// child's own, else the member process's (IEEE 1800-2023 18.14).
     [[nodiscard]] std::uint32_t next_member_random(std::uint32_t member);
+    /// Per member, the stream it draws from (random_states_), built on
+    /// first use: its process's state (which never moves) until a fork
+    /// child of it runs.
+    [[nodiscard]] std::uint64_t* const* random_state_table();
+    /// A thread's random state: while it runs as a fork child, the live
+    /// copy generated code draws from (random_live_).
+    [[nodiscard]] std::uint64_t& thread_random_state(std::uint32_t thread);
+    /// While a fork child runs, its state lives in random_live_[member]
+    /// (threads_ may grow under it) and random_states_[member] points there;
+    /// random_live_thread_[member] names the thread.
+    std::vector<std::uint64_t*> random_states_;
+    std::vector<std::uint64_t> random_live_;
+    std::vector<std::uint32_t> random_live_thread_;
     /// Whether every live child is detached (none counts).
     [[nodiscard]] bool only_detached_children(std::uint32_t thread) const;
     /// The fork children with records, live or ended (Thread::child_records),

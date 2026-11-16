@@ -163,6 +163,7 @@ using runtime::simir::ContainerPredicateValueKind;
 using runtime::simir::ContainerReductionOperator;
 using runtime::simir::ContainerOrderingOperator;
 using runtime::simir::ContainerLocatorOperator;
+using runtime::simir::RandomKind;
 using runtime::simir::SignalReadKind;
 using runtime::simir::ProcessSchedulingDomain;
 namespace detail = runtime::simir::static_kernel_detail;
@@ -270,6 +271,8 @@ static_assert(offsetof(StaticKernelNativeFrame, call_stack) == 128U);
 static_assert(offsetof(StaticKernelNativeFrame, frame_stack) == 136U);
 static_assert(offsetof(StaticKernelNativeFrame, variable_hooks) == 144U);
 static_assert(offsetof(StaticKernelNativeFrame, watch_writes) == 152U);
+static_assert(offsetof(StaticKernelNativeFrame, random_states) == 160U);
+static_assert(offsetof(StaticKernelNativeFrame, system_random_seed) == 168U);
 static_assert(offsetof(detail::NativeCallStack, entries) == 0U);
 static_assert(offsetof(detail::NativeCallStack, capacity) == 8U);
 static_assert(offsetof(runtime::simir::StaticKernelSvaTable, blocks) == 0U);
@@ -5465,6 +5468,15 @@ private:
                 writes = detail::dyn_writes_destination(op);
                 return true;
             }
+            case KOp::random:
+                if ((inst.imm_a & 1U) != 0U) {
+                    reads.push_back(inst.x);
+                }
+                if ((inst.imm_a & 2U) != 0U) {
+                    reads.push_back(inst.y);
+                }
+                writes = true;
+                return true;
             case KOp::str: {
                 // String register fields name no register.
                 const auto op = static_cast<detail::StrOp>(inst.sub);
@@ -7682,6 +7694,133 @@ private:
     }
 
     /// KOp::str: the member's string registers through its string file aux.
+    /// The next 32-bit draw of the stream at `state` (Impl::next_random,
+    /// a splitmix64 step).
+    [[nodiscard]] llvm::Value* random_draw(llvm::Value* state)
+    {
+        auto* value = builder_.CreateAdd(builder_.CreateLoad(i64_, state),
+            constant(0x9e37'79b9'7f4a'7c15U));
+        builder_.CreateStore(value, state);
+        value = builder_.CreateMul(builder_.CreateXor(value, builder_.CreateLShr(value, 30U)),
+            constant(0xbf58'476d'1ce4'e5b9U));
+        value = builder_.CreateMul(builder_.CreateXor(value, builder_.CreateLShr(value, 27U)),
+            constant(0x94d0'49bb'1331'11ebU));
+        value = builder_.CreateXor(value, builder_.CreateLShr(value, 31U));
+        return builder_.CreateLShr(value, 32U);
+    }
+
+    /// The stream the running member draws from (frame random_states).
+    [[nodiscard]] llvm::Value* random_state_pointer()
+    {
+        auto* table = builder_.CreateLoad(ptr_, frame_field(160U));
+        auto* member = builder_.CreateZExt(builder_.CreateLoad(i32_, frame_field(32U)), i64_);
+        return builder_.CreateLoad(ptr_, builder_.CreateInBoundsGEP(ptr_, table, member));
+    }
+
+    /// $random (20.15.1): the uniform distribution over the int range of
+    /// the system seed (IEEE 1800-2023 Annex N, as
+    /// evaluate_random_distribution computes it).
+    [[nodiscard]] llvm::Value* random_system()
+    {
+        auto* f64 = llvm::Type::getDoubleTy(context_);
+        auto* f32 = llvm::Type::getFloatTy(context_);
+        auto* seed_address = builder_.CreateLoad(ptr_, frame_field(168U));
+        llvm::Value* seed = builder_.CreateLoad(i32_, seed_address);
+        seed = builder_.CreateSelect(builder_.CreateICmpEQ(seed, llvm::ConstantInt::get(i32_, 0U)),
+            llvm::ConstantInt::get(i32_, 259341593U), seed);
+        seed = builder_.CreateAdd(builder_.CreateMul(seed, llvm::ConstantInt::get(i32_, 69069U)),
+            llvm::ConstantInt::get(i32_, 1U));
+        builder_.CreateStore(seed, seed_address);
+        const auto real = [&](const double value) { return llvm::ConstantFP::get(f64, value); };
+        // next_uniform(INT_MIN, INT_MAX).
+        auto* bits = builder_.CreateOr(builder_.CreateLShr(seed, 9U),
+            llvm::ConstantInt::get(i32_, 0x3f80'0000U));
+        auto* fraction = builder_.CreateFPExt(builder_.CreateBitCast(bits, f32), f64);
+        fraction = builder_.CreateFAdd(fraction,
+            builder_.CreateFMul(fraction, real(0.00000011920928955078125)));
+        const double low = -2147483648.0;
+        const double high = 2147483647.0;
+        auto* uniform = builder_.CreateFAdd(
+            builder_.CreateFMul(real(high - low), builder_.CreateFSub(fraction, real(1.0))),
+            real(low));
+        // uniform_integer's full-range case.
+        auto* sampled = builder_.CreateFDiv(builder_.CreateFAdd(uniform, real(2147483648.0)),
+            real(4294967295.0));
+        sampled = builder_.CreateFSub(builder_.CreateFMul(sampled, real(4294967296.0)),
+            real(2147483648.0));
+        auto* truncated = builder_.CreateSelect(builder_.CreateFCmpOGE(sampled, real(0.0)),
+            builder_.CreateFPToSI(sampled, i32_),
+            builder_.CreateFPToSI(builder_.CreateFSub(sampled, real(1.0)), i32_));
+        auto* result = builder_.CreateSelect(builder_.CreateFCmpOGE(sampled, real(high)),
+            llvm::ConstantInt::get(i32_, 0x7FFF'FFFFU),
+            builder_.CreateSelect(builder_.CreateFCmpOLE(sampled, real(low)),
+                llvm::ConstantInt::get(i32_, 0x8000'0000U), truncated));
+        return builder_.CreateZExt(result, i64_);
+    }
+
+    /// KOp::random (IEEE 1800-2023 18.13, 20.15).
+    void emit_random(const KInst& inst)
+    {
+        switch (static_cast<RandomKind>(inst.sub)) {
+        case RandomKind::random:
+            store_register(inst.d, { random_system(), constant(0U) });
+            return;
+        case RandomKind::urandom:
+            store_register(inst.d, { random_draw(random_state_pointer()), constant(0U) });
+            return;
+        case RandomKind::urandom_range:
+            break;
+        }
+        // The bounds' low 32 bits, unknown bits giving X (known_random_bound).
+        const auto bound = [&](const std::uint32_t reg, const std::uint64_t width) {
+            const auto value = load_register(reg);
+            auto* m = constant(mask_of(static_cast<std::uint32_t>(std::min<std::uint64_t>(width, 32U))));
+            return std::pair { builder_.CreateAnd(value.a, m),
+                builder_.CreateICmpNE(builder_.CreateAnd(value.b, m), constant(0U)) };
+        };
+        const auto [maximum, maximum_unknown] = bound(inst.x, inst.imm_b & 0xFFFF'FFFFU);
+        llvm::Value* minimum = constant(0U);
+        llvm::Value* unknown = maximum_unknown;
+        if ((inst.imm_a & 2U) != 0U) {
+            const auto [value, value_unknown] = bound(inst.y, inst.imm_b >> 32U);
+            minimum = value;
+            unknown = builder_.CreateOr(unknown, value_unknown);
+        }
+        auto* result_a = str_slot(i64_, constant(0xFFFF'FFFFU));
+        auto* result_b = str_slot(i64_, constant(0xFFFF'FFFFU));
+        auto* known = dyn_when(builder_.CreateNot(unknown));
+        auto* swap = builder_.CreateICmpULT(maximum, minimum);
+        auto* low = builder_.CreateSelect(swap, maximum, minimum);
+        auto* high = builder_.CreateSelect(swap, minimum, maximum);
+        auto* span = builder_.CreateAdd(builder_.CreateSub(high, low), constant(1U));
+        auto* state = random_state_pointer();
+        auto* full = builder_.CreateICmpEQ(span, constant(std::uint64_t { 1 } << 32U));
+        auto* whole = dyn_when(full);
+        builder_.CreateStore(random_draw(state), result_a);
+        dyn_end(whole);
+        auto* part = dyn_when(builder_.CreateNot(full));
+        auto* range = constant(std::uint64_t { 1 } << 32U);
+        auto* accepted = builder_.CreateSub(range, builder_.CreateURem(range, span));
+        auto* sample = str_slot(i64_, constant(0U));
+        // Rejection sampling: the first draw below `accepted`.
+        dyn_while(
+            [&] {
+                builder_.CreateStore(random_draw(state), sample);
+                return builder_.CreateICmpUGE(builder_.CreateLoad(i64_, sample), accepted);
+            },
+            [] { });
+        builder_.CreateStore(builder_.CreateAnd(builder_.CreateAdd(low,
+                                                    builder_.CreateURem(
+                                                        builder_.CreateLoad(i64_, sample), span)),
+                                 constant(0xFFFF'FFFFU)),
+            result_a);
+        dyn_end(part);
+        builder_.CreateStore(constant(0U), result_b);
+        dyn_end(known);
+        store_register(inst.d,
+            { builder_.CreateLoad(i64_, result_a), builder_.CreateLoad(i64_, result_b) });
+    }
+
     void emit_str(const KInst& inst, const std::uint32_t at)
     {
         using detail::DynFailure;
@@ -9048,6 +9187,29 @@ private:
         const auto width = static_cast<std::uint32_t>(inst.offset);
         const bool is_signed = (inst.imm_a & detail::dyn_layout_signed_elements) != 0U;
         auto* size = dyn_load(header, dyn_size);
+        if (operation == ContainerOrderingOperator::shuffle) {
+            // The reference's Fisher-Yates walk: element remaining - 1
+            // swaps with a uniform draw below `remaining` (uniform_below).
+            auto* state = random_state_pointer();
+            dyn_loop(constant(1U), size, true, [&](llvm::Value* last) {
+                auto* remaining = builder_.CreateAdd(last, constant(1U));
+                auto* range = constant(std::uint64_t { 1 } << 32U);
+                auto* accepted = builder_.CreateSub(range, builder_.CreateURem(range, remaining));
+                auto* sample = str_slot(i64_, constant(0U));
+                dyn_while(
+                    [&] {
+                        builder_.CreateStore(random_draw(state), sample);
+                        return builder_.CreateICmpUGE(builder_.CreateLoad(i64_, sample), accepted);
+                    },
+                    [] { });
+                auto* other = builder_.CreateURem(builder_.CreateLoad(i64_, sample), remaining);
+                const auto high = dyn_load_element(header, last);
+                const auto low = dyn_load_element(header, other);
+                dyn_store_element(header, last, low);
+                dyn_store_element(header, other, high);
+            });
+            return;
+        }
         if (operation == ContainerOrderingOperator::reverse) {
             // Slots swap (a string's block moves with it).
             dyn_loop(constant(0U), builder_.CreateLShr(size, constant(1U)), false,
@@ -18193,6 +18355,9 @@ private:
             break;
         case KOp::str:
             emit_str(inst, at);
+            break;
+        case KOp::random:
+            emit_random(inst);
             break;
         case KOp::wide_move:
             // compile_body fuses only moves to an unresolved slot with a

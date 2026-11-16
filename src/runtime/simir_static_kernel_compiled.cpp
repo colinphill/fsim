@@ -2480,11 +2480,11 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                 return false;
             }
             const auto& type = containers_[container].type;
-            // shuffle draws the process's random numbers: with the kernel's
-            // native random source.
+            // Strings are reordered by reverse and shuffle (their slots
+            // move); the sorts compare packed elements.
             if (type.sparse || type.associative
-                || op.operation == ContainerOrderingOperator::shuffle
-                || (text(container) && op.operation != ContainerOrderingOperator::reverse)) {
+                || (text(container) && op.operation != ContainerOrderingOperator::reverse
+                    && op.operation != ContainerOrderingOperator::shuffle)) {
                 throw reject("dyn_order");
             }
             set(DynOp::order, container);
@@ -3803,6 +3803,34 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                     || std::is_same_v<T, StringReplaceByte>
                     || std::is_same_v<T, StringMethod>) {
                     if (emit_str(inst, op)) {
+                        return;
+                    }
+                }
+                if constexpr (std::is_same_v<T, RandomValue>) {
+                    // $urandom, $urandom_range and $random (18.13, 20.15):
+                    // KOp::random. A bound wider than 64 bits stays with the
+                    // generic bridge.
+                    const auto narrow_bound = [&](const std::optional<RegisterId>& bound) {
+                        return !bound
+                            || (*bound < register_count && width[*bound] != 0U
+                                && width[*bound] <= 64U && width[*bound] != polymorphic);
+                    };
+                    if (op.destination < register_count && width[op.destination] == 32U
+                        && narrow_bound(op.maximum) && narrow_bound(op.minimum)) {
+                        inst.op = KOp::random;
+                        inst.sub = static_cast<std::uint8_t>(op.kind);
+                        inst.width = 32U;
+                        inst.d = narrow(op.destination);
+                        inst.imm_a = (op.maximum ? 1U : 0U) | (op.minimum ? 2U : 0U);
+                        inst.imm_b = 0U;
+                        if (op.maximum) {
+                            inst.x = narrow(*op.maximum);
+                            inst.imm_b |= width[*op.maximum];
+                        }
+                        if (op.minimum) {
+                            inst.y = narrow(*op.minimum);
+                            inst.imm_b |= std::uint64_t { width[*op.minimum] } << 32U;
+                        }
                         return;
                     }
                 }

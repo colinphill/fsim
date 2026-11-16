@@ -657,6 +657,16 @@ inline void kinst_flow(const KInst& inst, const std::uint32_t at,
         fall();
         break;
     }
+    case KOp::random:
+        if ((inst.imm_a & 1U) != 0U) {
+            use.push_back(inst.x);
+        }
+        if ((inst.imm_a & 2U) != 0U) {
+            use.push_back(inst.y);
+        }
+        def = inst.d;
+        fall();
+        break;
     case KOp::str: {
         // String register fields name no kernel register.
         const auto op = static_cast<StrOp>(inst.sub);

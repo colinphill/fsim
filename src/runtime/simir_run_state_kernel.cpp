@@ -213,6 +213,10 @@ void Kernel::audit_run_state(std::vector<std::string>& messages) const
     busy(debug_stopped_, "debugger stop");
     FSIM_RS_IDLE("kernel.impl", running_thread_);
     busy(running_thread_ != static_kernel_detail::no_slot, "running thread");
+    FSIM_RS_IDLE("kernel.impl", random_live_thread_);
+    busy(std::ranges::any_of(random_live_thread_,
+             [](const std::uint32_t thread) { return thread != static_kernel_detail::no_slot; }),
+        "running fork child's random stream");
     FSIM_RS_IDLE("kernel.impl", touched_);
     FSIM_RS_IDLE("kernel.impl", round_before_);
     busy(!touched_.empty() || !round_before_.empty(), "round commit lists");

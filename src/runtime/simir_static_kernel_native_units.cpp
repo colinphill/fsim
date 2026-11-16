@@ -2792,6 +2792,15 @@ void Interpreter::Impl::StaticKernel::concatenate_members(CompiledBody& program,
                 }
                 break;
             }
+            case KOp::random:
+                reg(inst.d);
+                if ((inst.imm_a & 1U) != 0U) {
+                    reg(inst.x);
+                }
+                if ((inst.imm_a & 2U) != 0U) {
+                    reg(inst.y);
+                }
+                break;
             case KOp::str: {
                 const auto op = static_cast<StrOp>(inst.sub);
                 if (str_reads_index(op)) {

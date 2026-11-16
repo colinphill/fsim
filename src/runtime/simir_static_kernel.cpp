@@ -8573,7 +8573,13 @@ void Interpreter::Impl::StaticKernel::verify_run(const std::uint32_t member_inde
     // The replay runs the reference's operations on the kernel's queues and
     // dynamic arrays as they were before the compiled run.
     const auto native_containers = native_container_values(member);
+    // The replay draws the compiled run's random numbers again (KOp::random).
+    auto* const random_stream = random_state_table()[member_index];
+    const auto random_before = *random_stream;
+    const auto seed_before = impl_.system_random_seed;
     run_compiled(member_index);
+    const auto compiled_random = *random_stream;
+    const auto compiled_seed = impl_.system_random_seed;
     verify_activation_mirrors(verify_shadow.compiled_host);
     const auto compiled_writes = verify_writes(nba_size);
     const auto compiled_nets = verify_net_image();
@@ -8582,6 +8588,8 @@ void Interpreter::Impl::StaticKernel::verify_run(const std::uint32_t member_inde
         return;
     }
     // Replay from the same state on the reference evaluator.
+    *random_stream = random_before;
+    impl_.system_random_seed = seed_before;
     writes_.count = static_cast<std::uint32_t>(nba_size);
     pending_generic_.resize(generic_size);
     nba_.resize(element_count);
@@ -8671,6 +8679,12 @@ void Interpreter::Impl::StaticKernel::verify_run(const std::uint32_t member_inde
     const auto reference_writes = verify_writes(nba_size);
     std::string mismatch = !replay_mismatch.empty() ? replay_mismatch
         : verify_effect_mismatch(compiled_writes, reference_writes, marks);
+    if (mismatch.empty()
+        && (*random_stream != compiled_random || impl_.system_random_seed != compiled_seed)) {
+        mismatch = "random state: compiled " + std::to_string(compiled_random) + "/"
+            + std::to_string(compiled_seed) + " reference " + std::to_string(*random_stream)
+            + "/" + std::to_string(impl_.system_random_seed);
+    }
     if (mismatch.empty() && !member.vhdl
         && verify_shadow.consumed != verify_shadow.generic.size()) {
         mismatch = "generic operations: compiled ran "

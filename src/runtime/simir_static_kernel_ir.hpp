@@ -320,11 +320,17 @@ enum class KOp : std::uint8_t {
     /// others are kernel registers (see StrOp). Only capacity growth calls
     /// the runtime (fsim_sk_str_reserve).
     str,
+    /// RandomValue (IEEE 1800-2023 18.13, 20.15): d = the next draw of
+    /// RandomKind `sub` from the running process's stream (a fork child's
+    /// own, 18.14) or, for $random, the system seed. $urandom_range reads
+    /// its maximum from x (imm_a bit 0) and its minimum from y (imm_a bit
+    /// 1); imm_b holds their widths (x's low, y's high).
+    random,
 };
 
-/// Number of kernel instruction kinds (KOp values 0 .. str).
+/// Number of kernel instruction kinds (KOp values 0 .. random).
 inline constexpr std::size_t kernel_op_count
-    = static_cast<std::size_t>(KOp::str) + 1U;
+    = static_cast<std::size_t>(KOp::random) + 1U;
 
 /// KOp::str operations (KInst::sub). Kernel registers as elsewhere: d the
 /// one written (a numeric result), y an index (width bits, flag_signed:
