@@ -587,6 +587,15 @@ void Interpreter::Impl::StaticKernel::build_parallel_plan()
                 touch_container(inst.d, true);
                 ok = false;
                 break;
+            case KOp::dyn:
+                // A member's own queue or dynamic array; its growth and its
+                // errors run on the leader.
+                touch_container(inst.aux, true);
+                if (inst.z != no_container) {
+                    touch_container(inst.z, false);
+                }
+                ok = false;
+                break;
             case KOp::generic:
                 touch_operation(current, inst.x);
                 // A sequential member's output and severity messages wait

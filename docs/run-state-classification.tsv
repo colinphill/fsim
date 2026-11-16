@@ -960,6 +960,7 @@ kernel.impl	input_of_signal_	D	derived from the artifact or rebuilt after restor
 kernel.impl	mirror_of_signal_	D	derived from the artifact or rebuilt after restore
 kernel.impl	containers_	P	kernel dynamic state (S5)
 kernel.impl	container_info_	D	derived from the artifact or rebuilt after restore
+kernel.impl	dynamic_headers_	P	kernel dynamic state: the elements of the members' queues and dynamic arrays (KOp::dyn), saved as reference values
 kernel.impl	sva_blocks_	D	block bases the monitors publish; rebound lazily after a restore (reset_sva_blocks)
 kernel.impl	sva_member_base_	D	derived from the artifact or rebuilt after restore
 kernel.impl	sva_control_base_	D	derived from the artifact or rebuilt after restore (plan_sva_table)
@@ -1290,6 +1291,7 @@ kernel.container	element_words	D	container map from the artifact
 kernel.container	element_offset	D	container map from the artifact
 kernel.container	element_slots	D	container map from the artifact
 kernel.container	packed_slot	D	container map from the artifact
+kernel.container	dynamic_header	D	container map from the artifact: the header index of a queue or dynamic array the kernel holds (the elements are kernel.impl dynamic_headers_)
 kernel.thread	member	P	kernel thread state
 kernel.thread	pc	P	kernel thread state
 kernel.thread	call_stack	P	kernel thread state

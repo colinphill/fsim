@@ -3782,7 +3782,7 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
    and resource owners, a build-local retained-log path and an exact validation
    boundary. Its normalized SHA-256 is
    `dfed45f0542bf969b43ce6459af4b84b344fb4f4d9d8b5967752cffea128a157`.
-3. `cmake/CheckV2QualificationInventory.cmake` proves the exact 19-row/20-change
+3. The qualification-inventory script (since deleted) proved the exact 19-row/20-change
    allocation, checked-in ownership paths, unique identities, build-local log
    paths, plan boundaries and CTest registration. The direct validator passes;
    after a Debug-only regeneration with no compilation, the registered ledger,

@@ -7,6 +7,7 @@
 #include "fsim/support/parallel_for.hpp"
 
 #include <algorithm>
+#include <new>
 #include <cctype>
 #include <iostream>
 #include <limits>
@@ -939,6 +940,11 @@ namespace {
 /// run reports the same text whichever tier executes the instruction.
 [[nodiscard]] const char* native_fail_message(const std::uint32_t reason)
 {
+    if (reason >= static_kernel_detail::dyn_fail_first) {
+        return static_kernel_detail::dyn_fail_message(
+            static_cast<static_kernel_detail::DynFailure>(
+                reason - static_kernel_detail::dyn_fail_first));
+    }
     switch (reason) {
     case 3U:
         return "dynamic packed index contains an unknown or high-impedance "
@@ -972,6 +978,21 @@ namespace {
 }
 
 } // namespace
+
+std::uint32_t Interpreter::Impl::StaticKernel::native_dyn_grow(
+    StaticKernelNativeFrame* frame, const std::uint32_t at,
+    StaticKernelDynamicContainer* container, const std::uint64_t needed)
+{
+    try {
+        static_kernel_detail::grow_dynamic(*container, needed);
+        return 0U;
+    } catch (const std::bad_alloc&) {
+        native_fail(frame, at, static_kernel_detail::dyn_fail_first
+                + static_cast<std::uint32_t>(
+                    static_kernel_detail::DynFailure::out_of_memory));
+        return 1U;
+    }
+}
 
 void Interpreter::Impl::StaticKernel::native_fail(
     StaticKernelNativeFrame* frame, const std::uint32_t at,
@@ -1673,6 +1694,12 @@ void Interpreter::Impl::StaticKernel::canonicalize_unit(const CompiledBody& inst
         case KOp::mem_copy:
             inst.d = bind(3U, inst.d, inst.d, 0U);
             inst.x = bind(3U, inst.x, inst.x, 0U);
+            break;
+        case KOp::dyn:
+            inst.aux = bind(3U, inst.aux, inst.aux, 0U);
+            if (inst.z != no_container) {
+                inst.z = bind(3U, inst.z, inst.z, 0U);
+            }
             break;
         case KOp::mark:
             inst.x = bind(4U, inst.x, inst.x, 0U);
@@ -2639,6 +2666,19 @@ void Interpreter::Impl::StaticKernel::concatenate_members(CompiledBody& program,
                 break;
             case KOp::mem_copy:
                 break;
+            case KOp::dyn: {
+                const auto op = static_cast<DynOp>(inst.sub);
+                if (dyn_writes_destination(op)) {
+                    reg(inst.d);
+                }
+                if (dyn_reads_source(op)) {
+                    reg(inst.x);
+                }
+                if (dyn_reads_index(op)) {
+                    reg(inst.y);
+                }
+                break;
+            }
             case KOp::wide_load:
                 reg(inst.d);
                 if (inst.sub == 5U) {
@@ -3056,6 +3096,12 @@ void Interpreter::Impl::StaticKernel::build_partitions(
                 case KOp::mem_copy:
                     inst.d = bind((std::uint64_t { 4 } << 40U) | inst.d);
                     inst.x = bind((std::uint64_t { 4 } << 40U) | inst.x);
+                    break;
+                case KOp::dyn:
+                    inst.aux = bind((std::uint64_t { 4 } << 40U) | inst.aux);
+                    if (inst.z != no_container) {
+                        inst.z = bind((std::uint64_t { 4 } << 40U) | inst.z);
+                    }
                     break;
                 case KOp::mark:
                     inst.x = 0U;

@@ -300,11 +300,88 @@ enum class KOp : std::uint8_t {
     /// before any later output (Impl::drain_host_request_rows). Only a full
     /// buffer calls the helper (fsim_sk_sva_report_grow).
     sva_report,
+    /// A queue or dynamic array of packed elements of at most 64 bits held
+    /// in a kernel container record of storage `dynamic` (IEEE 1800-2023
+    /// 7.5, 7.10): the operation `sub` (DynOp) on container aux (a kernel
+    /// container index, bound per instance like the mem_* containers). d is
+    /// the destination register, x the source register, y the index
+    /// register (width bits; flag_signed: a signed index), z a second
+    /// container (the copy source or the new[] initializer; no_container
+    /// when none) and offset the element width. The elements live in the
+    /// container's StaticKernelDynamicContainer; only capacity growth calls
+    /// the runtime (fsim_sk_dyn_grow).
+    dyn,
 };
 
-/// Number of kernel instruction kinds (KOp values 0 .. sva_report).
+/// Number of kernel instruction kinds (KOp values 0 .. dyn).
 inline constexpr std::size_t kernel_op_count
-    = static_cast<std::size_t>(KOp::sva_report) + 1U;
+    = static_cast<std::size_t>(KOp::dyn) + 1U;
+
+/// KOp::dyn operations (KInst::sub), the SimIR container operations they
+/// carry out on a kernel queue or dynamic array.
+enum class DynOp : std::uint8_t {
+    /// ContainerRead: d = element y.
+    read,
+    /// ContainerWrite: element y = x (an invalid index writes nothing; the
+    /// index one past a queue's last element appends, 7.10.1).
+    write,
+    /// ContainerSize: d (32 bits) = the element count.
+    size,
+    /// ResizeContainer: new[x], keeping the elements of container z when
+    /// it is not no_container (7.5.1).
+    resize,
+    /// DeleteContainer without an index.
+    delete_all,
+    /// DeleteContainer of queue element y (7.10.2.3).
+    delete_at,
+    /// PushContainer: push_back(x), push_front(x), insert(y, x).
+    push_back,
+    push_front,
+    insert,
+    /// PopContainer: d = pop_front(), pop_back().
+    pop_front,
+    pop_back,
+    /// CopyContainerRegister: container aux = container z.
+    copy,
+};
+
+/// The failure codes of KOp::dyn (native fail reasons from
+/// dyn_fail_first on): the reference operations' messages.
+enum class DynFailure : std::uint32_t {
+    none = 0U,
+    index_unknown,
+    index_negative,
+    index_range,
+    size_unknown,
+    array_budget,
+    queue_budget,
+    write_mismatch,
+    queue_write_mismatch,
+    out_of_memory,
+};
+
+/// The native fail reason of the first DynFailure (native_fail_message).
+inline constexpr std::uint32_t dyn_fail_first = 32U;
+
+/// The registers a KOp::dyn operation reads (y the index, x the source)
+/// and writes (d).
+[[nodiscard]] inline bool dyn_reads_index(const DynOp op) noexcept
+{
+    return op == DynOp::read || op == DynOp::write || op == DynOp::delete_at
+        || op == DynOp::insert;
+}
+
+[[nodiscard]] inline bool dyn_reads_source(const DynOp op) noexcept
+{
+    return op == DynOp::write || op == DynOp::resize || op == DynOp::push_back
+        || op == DynOp::push_front || op == DynOp::insert;
+}
+
+[[nodiscard]] inline bool dyn_writes_destination(const DynOp op) noexcept
+{
+    return op == DynOp::read || op == DynOp::size || op == DynOp::pop_front
+        || op == DynOp::pop_back;
+}
 
 /// KOp::wide_alu operation families (KInst::offset).
 enum class WideFamily : std::uint32_t {

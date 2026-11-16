@@ -2220,6 +2220,88 @@ set_tests_properties(
     LABELS "v3;release;version;product;package;archive;hosted;clang;llvm;linux;windows;positive;negative;fast"
 )
 add_test(
+  NAME fsim.fst-release-audit
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+    "-DFSIM_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckFstReleaseAudit.cmake"
+)
+set_tests_properties(
+  fsim.fst-release-audit
+  PROPERTIES
+    LABELS "fst;trace;release;audit;inventory;documentation;positive;negative;fast"
+    TIMEOUT 900
+)
+add_test(
+  NAME fsim.sdf-application-release-audit
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+    "-DFSIM_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckSdfApplicationReleaseAudit.cmake"
+)
+set_tests_properties(
+  fsim.sdf-application-release-audit
+  PROPERTIES
+    LABELS "sdf;timing;release;audit;inventory;documentation;positive;negative;fast"
+    TIMEOUT 900
+)
+add_test(
+  NAME fsim.sdf-vital-release-audit
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+    "-DFSIM_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckSdfVitalReleaseAudit.cmake"
+)
+set_tests_properties(
+  fsim.sdf-vital-release-audit
+  PROPERTIES
+    LABELS "sdf;vital;timing;release;audit;inventory;documentation;positive;negative;fast"
+    TIMEOUT 900
+)
+add_test(
+  NAME fsim.resource-portability-contract
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckResourcePortabilityContract.cmake"
+)
+set_tests_properties(
+  fsim.resource-portability-contract
+  PROPERTIES
+    LABELS "resource;portability;abi;coverage;fst;systemc;artifact;inventory;positive;negative;fast"
+    TIMEOUT 900
+)
+add_test(
+  NAME fsim.schema-freeze-composition
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckSchemaFreezeComposition.cmake"
+)
+set_tests_properties(
+  fsim.schema-freeze-composition
+  PROPERTIES
+    LABELS "v3;release;abi;object;design;checkpoint;cache;schema;inventory;positive;negative;fast"
+)
+add_test(
+  NAME fsim.v2-input-rejection-ledger
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV3V2InputRejection.cmake"
+)
+set_tests_properties(
+  fsim.v2-input-rejection-ledger
+  PROPERTIES
+    LABELS "v3;release;manifest;abi;object;design;checkpoint;cache;plugin;schema;inventory;positive;negative;fast"
+)
+add_test(
   NAME fsim.sdf-inventory
   COMMAND
     "${CMAKE_COMMAND}"

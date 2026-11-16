@@ -2041,6 +2041,9 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
         }
         recorded_bodies_ = std::move(spec.record_compiled_bodies);
         compile_members();
+        // Members now hold their queues and dynamic arrays as kernel
+        // containers (storage dynamic).
+        build_container_info();
         // Only compile_members reads these; the images are payload-sized.
         restored_specializations_.reset();
         restored_bodies_.reset();
@@ -2144,12 +2147,34 @@ Interpreter::Impl::StaticKernel::dpi_binding(const std::uint32_t site)
 void Interpreter::Impl::StaticKernel::build_container_info()
 {
     // Native memory access (SystemVerilog): element slots or one packed
-    // slot, one-word Logic4 elements.
+    // slot, one-word Logic4 elements. compile_members runs it again once
+    // members hold their queues and dynamic arrays as kernel containers.
+    container_info_.clear();
+    container_elements_.clear();
     container_info_.reserve(containers_.size());
     std::vector<std::size_t> element_begin;
     for (const auto& container : containers_) {
         const auto& type = container.type;
         StaticKernelContainerInfo info;
+        if (container.storage == StaticKernelContainerStorage::dynamic) {
+            // A restored kernel image recreates the headers in order: each
+            // queue or dynamic array starts empty (IEEE 1800-2023 7.5, 7.10).
+            if (container.dynamic_header == dynamic_headers_.size()) {
+                static_cast<void>(dynamic_headers_.add(
+                    static_kernel_detail::make_dynamic_header(type)));
+            }
+            if (container.dynamic_header >= dynamic_headers_.size()) {
+                throw std::logic_error {
+                    "static kernel dynamic container has no header" };
+            }
+            info.storage = 4U;
+            info.elements = reinterpret_cast<const std::uint32_t*>(
+                &dynamic_headers_[container.dynamic_header]);
+            info.element_width = static_cast<std::uint32_t>(type.element_width);
+            element_begin.push_back(container_elements_.size());
+            container_info_.push_back(info);
+            continue;
+        }
         const bool shape = (!vhdl_ || mixed_) && type.fixed && !type.associative
             && container.element_words == 1U
             && (type.element_kind == ContainerElementKind::Packed
@@ -6548,6 +6573,9 @@ Interpreter::Impl::StaticKernel::container_element_word(
         const auto m = kernel_word::mask(width);
         return { value_a & m, value_b & m };
     }
+    case StaticKernelContainerStorage::dynamic:
+        return static_kernel_detail::dynamic_element(
+            dynamic_headers_[container.dynamic_header], ordinal);
     case StaticKernelContainerStorage::elements:
         break;
     }
@@ -6570,6 +6598,11 @@ PackedLogic4 Interpreter::Impl::StaticKernel::container_element(
         }
         return extract_value(slot_value(container.packed_slot),
             slots_[container.packed_slot].width - (ordinal + 1U) * width, width);
+    case StaticKernelContainerStorage::dynamic: {
+        const auto value = static_kernel_detail::dynamic_element(
+            dynamic_headers_[container.dynamic_header], ordinal);
+        return PackedLogic4::from_aval_bval(width, value.a, value.b);
+    }
     case StaticKernelContainerStorage::elements:
         break;
     }
@@ -6677,6 +6710,14 @@ void Interpreter::Impl::StaticKernel::write_container_element(
                 slots_[container.packed_slot].width - (ordinal + 1U) * width),
             member, instruction);
         return;
+    case StaticKernelContainerStorage::dynamic: {
+        const auto a = value.aval_words();
+        const auto b = value.bval_words();
+        static_kernel_detail::set_dynamic_element(
+            dynamic_headers_[container.dynamic_header], ordinal,
+            Word { a.empty() ? 0U : a.front(), b.empty() ? 0U : b.front() });
+        return;
+    }
     case StaticKernelContainerStorage::elements:
         break;
     }
@@ -6739,6 +6780,10 @@ void Interpreter::Impl::StaticKernel::write_container_element_word(
             static_cast<std::uint32_t>(
                 slots_[container.packed_slot].width - (ordinal + 1U) * width),
             width, member);
+        return;
+    case StaticKernelContainerStorage::dynamic:
+        static_kernel_detail::set_dynamic_element(
+            dynamic_headers_[container.dynamic_header], ordinal, value);
         return;
     case StaticKernelContainerStorage::elements:
         break;
@@ -8380,6 +8425,77 @@ Interpreter::Impl::StaticKernel::verify_operation_liveness(
     return *entry;
 }
 
+Interpreter::Impl::StaticKernel::NativeContainerValues
+Interpreter::Impl::StaticKernel::native_container_values(const Member& member) const
+{
+    NativeContainerValues out;
+    for (std::size_t id = 0U; id < member.container_registers.size(); ++id) {
+        const auto index = member.container_registers[id];
+        if (index < containers_.size()
+            && containers_[index].storage == StaticKernelContainerStorage::dynamic) {
+            out.emplace_back(static_cast<ContainerRegisterId>(id),
+                static_kernel_detail::dynamic_value(
+                    dynamic_headers_[containers_[index].dynamic_header],
+                    containers_[index].type));
+        }
+    }
+    return out;
+}
+
+Interpreter::Impl::StaticKernel::ReferenceContainerScope::ReferenceContainerScope(
+    Member& owner, const NativeContainerValues& values)
+    : member { owner }
+    , active { !values.empty() }
+{
+    if (!active) {
+        return;
+    }
+    member.dynamic_containers.assign(member.container_registers.size(), nullptr);
+    for (const auto& [id, value] : values) {
+        member.dynamic_containers[id] = std::make_shared<ContainerValue>(value);
+    }
+}
+
+Interpreter::Impl::StaticKernel::ReferenceContainerScope::~ReferenceContainerScope()
+{
+    if (active) {
+        member.dynamic_containers.clear();
+    }
+}
+
+std::string Interpreter::Impl::StaticKernel::native_container_mismatch(
+    const Member& member, const NativeContainerValues& values) const
+{
+    for (const auto& entry : values) {
+        const auto id = entry.first;
+        const auto& container = containers_[member.container_registers[id]];
+        const auto compiled = static_kernel_detail::dynamic_value(
+            dynamic_headers_[container.dynamic_header], container.type);
+        if (!member.dynamic_container(id)) {
+            return "container register " + std::to_string(id)
+                + " has no reference value";
+        }
+        const auto& reference = *member.dynamic_containers[id];
+        if (compiled == reference) {
+            continue;
+        }
+        auto mismatch = "container register " + std::to_string(id) + " compiled "
+            + std::to_string(compiled.elements.size()) + " elements, reference "
+            + std::to_string(reference.elements.size());
+        for (std::size_t element = 0U; element < compiled.elements.size()
+             && element < reference.elements.size(); ++element) {
+            if (!(compiled.elements[element] == reference.elements[element])) {
+                mismatch += "; element " + std::to_string(element) + " compiled "
+                    + compiled.elements[element].to_msb_string() + " reference "
+                    + reference.elements[element].to_msb_string();
+                break;
+            }
+        }
+        return mismatch;
+    }
+    return { };
+}
+
 void Interpreter::Impl::StaticKernel::verify_run(const std::uint32_t member_index)
 {
     auto& member = members_[member_index];
@@ -8404,6 +8520,9 @@ void Interpreter::Impl::StaticKernel::verify_run(const std::uint32_t member_inde
         ~ShadowReset() { pointer = saved; }
     } const shadow_reset { shadow_, shadow_ };
     shadow_ = &verify_shadow;
+    // The replay runs the reference's operations on the kernel's queues and
+    // dynamic arrays as they were before the compiled run.
+    const auto native_containers = native_container_values(member);
     run_compiled(member_index);
     verify_activation_mirrors(verify_shadow.compiled_host);
     const auto compiled_writes = verify_writes(nba_size);
@@ -8442,6 +8561,7 @@ void Interpreter::Impl::StaticKernel::verify_run(const std::uint32_t member_inde
                 body.registers[reg].b),
             kind);
     }
+    const ReferenceContainerScope reference_containers { member, native_containers };
     std::string replay_mismatch;
     {
         // The compiled run emitted the run's reports; the replay's are the
@@ -8535,6 +8655,9 @@ void Interpreter::Impl::StaticKernel::verify_run(const std::uint32_t member_inde
                 break;
             }
         }
+    }
+    if (mismatch.empty()) {
+        mismatch = native_container_mismatch(member, native_containers);
     }
     // Compiled SystemVerilog bodies keep no liveness (live_at_entry is
     // VHDL's): the operations' register liveness decides which registers

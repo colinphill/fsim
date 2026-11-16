@@ -111,6 +111,7 @@ fsim.frontend.string-case
 fsim.fst-closure
 fsim.fst-inventory
 fsim.fst-portability-contract
+fsim.fst-release-audit
 fsim.gate-migration-negative-probes
 fsim.ieee-package-inventory
 fsim.incremental-native-cache-freeze
@@ -128,6 +129,7 @@ fsim.portable-object-schema-freeze
 fsim.portable-stale-schema-policy
 fsim.project
 fsim.release-case-ids
+fsim.resource-portability-contract
 fsim.runtime
 fsim.runtime.acc_callback
 fsim.runtime.acc_handle
@@ -161,10 +163,13 @@ fsim.scv.recording
 fsim.scv.resources
 fsim.sdf-application-closure
 fsim.sdf-application-inventory
+fsim.sdf-application-release-audit
 fsim.sdf-inventory
 fsim.sdf-vital-closure
 fsim.sdf-vital-inventory
+fsim.sdf-vital-release-audit
 fsim.schema-identity
+fsim.schema-freeze-composition
 fsim.translation-unit-structure
 fsim.translation-unit-structure-selftest
 fsim.source-package-manifest
@@ -183,6 +188,7 @@ fsim.systemc.incremental
 fsim.systemc.plugin
 fsim.systemverilog-2023-inventory
 fsim.systemverilog-gap-inventory
+fsim.v2-input-rejection-ledger
 fsim.v3-deterministic-artifacts
 fsim.v3-hosted-toolchains
 fsim.v3-release-documentation

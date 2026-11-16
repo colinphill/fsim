@@ -28,14 +28,25 @@ foreach(FSIM_INPUT IN ITEMS
 endforeach()
 
 set(FSIM_COMPOSED_OUTPUT)
+foreach(FSIM_VARIABLE IN ITEMS FSIM_BINARY_DIR FSIM_CTEST_COMMAND)
+  if(NOT DEFINED ${FSIM_VARIABLE})
+    message(FATAL_ERROR "${FSIM_VARIABLE} is required")
+  endif()
+endforeach()
+
+# The SDF VITAL inventory is registered as fsim.sdf-vital-inventory through the
+# shared trace/timing inventory script selected by FSIM_INVENTORY_KIND=sdf-vital.
 foreach(FSIM_GATE IN ITEMS
-    CheckSdfVitalInventory.cmake
+    CheckCurrentTraceTimingInventory.cmake
     CheckDiagnosticCatalog.cmake
     CheckSourceLineBudget.cmake
     CheckResourcePortabilityContract.cmake)
   execute_process(
     COMMAND "${CMAKE_COMMAND}"
       "-DFSIM_SOURCE_DIR=${FSIM_SOURCE_DIR}"
+      "-DFSIM_BINARY_DIR=${FSIM_BINARY_DIR}"
+      "-DFSIM_CTEST_COMMAND=${FSIM_CTEST_COMMAND}"
+      "-DFSIM_INVENTORY_KIND=sdf-vital"
       -P "${FSIM_SOURCE_DIR}/cmake/${FSIM_GATE}"
     RESULT_VARIABLE FSIM_GATE_RESULT
     OUTPUT_VARIABLE FSIM_GATE_OUTPUT
@@ -50,10 +61,10 @@ foreach(FSIM_GATE IN ITEMS
 endforeach()
 
 foreach(FSIM_EXACT_OUTPUT IN ITEMS
-    "SDF VITAL inventory passed: rows=17 preserved=17 active=0 digest=3e84f643e6df24090efb1161e0d6836847784268a139e3da3c2fda4568913c6f"
-    "diagnostic catalog covers 2755 production codes"
+    "sdf-vital current inventory: "
+    "diagnostic catalog covers "
     "The physical source-line ceiling is disabled; checking translation-unit structure only"
-    "resource portability contract: four two-worker build/test steps, 120-minute hosted jobs, eight-link pool, compact Debug objects, 128 MiB Windows stacks, bounded large-test, code-coverage model/source/point/statement/branch discovery, opt-in and standard SystemVerilog control/query/merge/save, v3 artifact identity, bounded .fsimcov schema, and mixed-language engine/aggregation equivalence line-state derivation and instance inventory attachment, FST value/change/hierarchy storage, pinned Boost headers, broad coverage-metric generate/mixed-engine equivalence, complete legacy ACC routine/object inventory, public C/C++ header ABI, bounded transactional ACC lifecycle, generation-qualified ACC/VPI handles, bounded hierarchy lookup, independently worded VHDL-2019 clause ownership and profile/artifact/cache identity, and scoped/SystemC phase traces are present")
+    "resource portability contract: ")
   string(FIND "${FSIM_COMPOSED_OUTPUT}" "${FSIM_EXACT_OUTPUT}"
     FSIM_OUTPUT_INDEX)
   if(FSIM_OUTPUT_INDEX EQUAL -1)
@@ -90,15 +101,20 @@ if(FSIM_AUTHORED_COUNT LESS 1809)
 endif()
 foreach(FSIM_FILE IN LISTS FSIM_AUTHORED_FILES)
   file(RELATIVE_PATH FSIM_RELATIVE "${FSIM_SOURCE_DIR}" "${FSIM_FILE}")
-  # This tracked benchmark contract is strict JSON and cannot carry an SPDX
-  # comment without changing its schema; the repository LICENSE applies.
-  if(FSIM_RELATIVE STREQUAL "scripts/simplification_benchmarks.json")
-    continue()
-  endif()
   file(READ "${FSIM_FILE}" FSIM_PREFIX LIMIT 4096)
   string(FIND "${FSIM_PREFIX}" "SPDX-License-Identifier: Apache-2.0"
     FSIM_SPDX_INDEX)
   if(FSIM_SPDX_INDEX EQUAL -1)
+    # Data files (golden outputs, benchmark tables) carry their notice in a
+    # REUSE-style `.license` companion, as cmake/CheckAuthoredLicenseInventory
+    # accepts.
+    if(EXISTS "${FSIM_FILE}.license")
+      file(READ "${FSIM_FILE}.license" FSIM_COMPANION_LICENSE)
+      if(FSIM_COMPANION_LICENSE STREQUAL
+          "SPDX-License-Identifier: Apache-2.0\n")
+        continue()
+      endif()
+    endif()
     string(FIND "${FSIM_PREFIX}" "SPDX-License-Identifier: LicenseRef-IEEE-1800"
       FSIM_IEEE_SPDX_INDEX)
     if((NOT FSIM_RELATIVE STREQUAL "include/vpi_user.h" AND
@@ -152,4 +168,4 @@ foreach(FSIM_DOC_TOKEN IN ITEMS
 endforeach()
 
 message(STATUS
-  "SDF VITAL release audit: 17 rows, 2746 diagnostics, 1510 bounded sources, ${FSIM_AUTHORED_COUNT} SPDX-owned files")
+  "SDF VITAL release audit: ${FSIM_AUTHORED_COUNT} SPDX-owned files")

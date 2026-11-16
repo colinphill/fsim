@@ -5296,9 +5296,14 @@ ContainerValue Interpreter::Impl::StaticKernel::debug_container_register(
         || found->container_registers[reg] == no_container) {
         throw std::logic_error { "SimIR debug container local is unbound" };
     }
-    // Kernel containers are fixed packed or scalar arrays: element ordinal
-    // order is the reference value's element order.
+    // Kernel containers are fixed packed or scalar arrays, or queues and
+    // dynamic arrays: element ordinal order is the reference value's
+    // element order.
     const auto& container = containers_[found->container_registers[reg]];
+    if (container.storage == StaticKernelContainerStorage::dynamic) {
+        return static_kernel_detail::dynamic_value(
+            dynamic_headers_[container.dynamic_header], container.type);
+    }
     ContainerValue value;
     value.type = container.type;
     value.elements.reserve(container.count);
@@ -5563,6 +5568,16 @@ void Interpreter::Impl::StaticKernel::debug_write_container_register(
         throw std::logic_error { "SimIR debug container local is unbound" };
     }
     auto& container = containers_[found->container_registers[reg]];
+    if (container.storage == StaticKernelContainerStorage::dynamic) {
+        if (!(value.type == container.type)) {
+            throw std::logic_error {
+                "SimIR debug container local has another type"
+            };
+        }
+        static_kernel_detail::assign_dynamic_value(
+            dynamic_headers_[container.dynamic_header], value);
+        return;
+    }
     if (value.elements.size() != container.count) {
         throw std::logic_error {
             "SimIR debug container local has another element count"
@@ -5862,6 +5877,7 @@ std::optional<std::uint32_t> Interpreter::Impl::StaticKernel::run_behavioral_com
         && verify_thread_skip_reason(member_index) == nullptr) {
         verify_before.emplace();
         verify_before->registers = body.registers;
+        verify_before->containers = native_container_values(member);
         if (body.call_stack_base != 0U) {
             const auto depth = body.registers[body.call_stack_base].a;
             verify_before->stack.assign(body.call_entries.entries,
@@ -6412,6 +6428,8 @@ void Interpreter::Impl::StaticKernel::verify_thread_activation(
                   .to_msb_string()
             : std::string { };
     };
+    // The replay's queues and dynamic arrays: the kernel's at the start.
+    const ReferenceContainerScope reference_containers { member, before.containers };
     shadow.reference = true;
     std::string mismatch;
     std::uint32_t pc = start;
@@ -6678,6 +6696,9 @@ void Interpreter::Impl::StaticKernel::verify_thread_activation(
             mismatch = "register " + std::to_string(reg) + " compiled "
                 + compiled_registers[reg] + " reference " + reference;
         }
+    }
+    if (mismatch.empty()) {
+        mismatch = native_container_mismatch(member, before.containers);
     }
     // Self-test of this check: FSIM_KERNEL_VERIFY_INJECT=thread reports the
     // first verified activation as a mismatch.

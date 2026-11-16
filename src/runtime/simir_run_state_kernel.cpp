@@ -367,6 +367,34 @@ void Kernel::run_state_io(RunStateArchive& ar)
     // The containers are fixed by the design; their values are slot words.
     FSIM_RS_TABLE("kernel.impl", containers_, ar, *this,
         [](Container&) { });
+    // A member's queues and dynamic arrays (KOp::dyn): each header's
+    // elements, as the reference's value, in container order.
+    FSIM_RS_CUSTOM("kernel.impl", dynamic_headers_);
+    for (auto& container : containers_) {
+        if (!ar.ok()) {
+            return;
+        }
+        if (container.storage != StaticKernelContainerStorage::dynamic) {
+            continue;
+        }
+        if (container.dynamic_header >= dynamic_headers_.size()) {
+            ar.fail("a kernel queue or dynamic array has no header");
+            return;
+        }
+        auto& header = dynamic_headers_[container.dynamic_header];
+        ContainerValue value;
+        if (ar.saving()) {
+            value = static_kernel_detail::dynamic_value(header, container.type);
+        }
+        ar.io(value);
+        if (ar.loading() && ar.ok()) {
+            if (!(value.type == container.type)) {
+                ar.fail("a kernel queue or dynamic array has another type");
+                return;
+            }
+            static_kernel_detail::assign_dynamic_value(header, value);
+        }
+    }
     // The slot values are the section kernel.values (restore_value_section).
     FSIM_RS_CUSTOM("kernel.impl", arena_);
     FSIM_RS_CUSTOM("kernel.impl", published_);

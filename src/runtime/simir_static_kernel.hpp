@@ -121,6 +121,9 @@ enum class StaticKernelContainerStorage : std::uint8_t {
     element_signals,
     /// The whole memory is one kernel-owned packed signal.
     packed_signal,
+    /// A member's queue or dynamic array of packed elements of at most 64
+    /// bits (KOp::dyn): a kernel StaticKernelDynamicContainer.
+    dynamic,
 };
 
 struct StaticKernelContainerSpec {

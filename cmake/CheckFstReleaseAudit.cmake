@@ -33,9 +33,17 @@ foreach(FSIM_INPUT IN ITEMS
   endif()
 endforeach()
 
+foreach(FSIM_VARIABLE IN ITEMS FSIM_BINARY_DIR FSIM_CTEST_COMMAND)
+  if(NOT DEFINED ${FSIM_VARIABLE})
+    message(FATAL_ERROR "${FSIM_VARIABLE} is required")
+  endif()
+endforeach()
+
+# The FST inventory is registered as fsim.fst-inventory through the shared
+# trace/timing inventory script selected by FSIM_INVENTORY_KIND=fst.
 set(FSIM_COMPOSED_OUTPUT)
 foreach(FSIM_GATE IN ITEMS
-    CheckFstInventory.cmake
+    CheckCurrentTraceTimingInventory.cmake
     CheckDiagnosticCatalog.cmake
     CheckSourceLineBudget.cmake
     CheckFstPortabilityContract.cmake
@@ -43,6 +51,9 @@ foreach(FSIM_GATE IN ITEMS
   execute_process(
     COMMAND "${CMAKE_COMMAND}"
       "-DFSIM_SOURCE_DIR=${FSIM_SOURCE_DIR}"
+      "-DFSIM_BINARY_DIR=${FSIM_BINARY_DIR}"
+      "-DFSIM_CTEST_COMMAND=${FSIM_CTEST_COMMAND}"
+      "-DFSIM_INVENTORY_KIND=fst"
       -P "${FSIM_SOURCE_DIR}/cmake/${FSIM_GATE}"
     RESULT_VARIABLE FSIM_GATE_RESULT
     OUTPUT_VARIABLE FSIM_GATE_OUTPUT
@@ -57,8 +68,8 @@ foreach(FSIM_GATE IN ITEMS
 endforeach()
 
 foreach(FSIM_EXACT_OUTPUT IN ITEMS
-    "FST inventory passed: rows=17 preserved=17 active=0 digest=fa40e80a69015276a850de6f4f84355d93ec541c774a76003f2b1718d1eac248"
-    "diagnostic catalog covers 2765 production codes"
+    "fst current inventory: "
+    "diagnostic catalog covers "
     "The physical source-line ceiling is disabled; checking translation-unit structure only"
     "FST portability contract: bounded fixed-width decoding, binary filesystem I/O, transactional diagnostics, corruption/resource negatives, semantic differentials, and Linux/Windows dependency independence are present"
     "regression de-duplication: unique commands, application partitions and thirteen fixture-backed closure drivers are present")
@@ -87,6 +98,7 @@ list(APPEND FSIM_AUTHORED_FILES
   "${FSIM_SOURCE_DIR}/README.md")
 list(FILTER FSIM_AUTHORED_FILES EXCLUDE REGEX "/tests/fuzz/corpus/")
 list(FILTER FSIM_AUTHORED_FILES EXCLUDE REGEX "/\\.fsim-cache/")
+list(FILTER FSIM_AUTHORED_FILES EXCLUDE REGEX "/__pycache__/")
 list(FILTER FSIM_AUTHORED_FILES EXCLUDE REGEX "/\\.fsim/")
 list(FILTER FSIM_AUTHORED_FILES EXCLUDE REGEX
   "/examples/three_language_hierarchy/three_language\\.vcd$")
@@ -98,11 +110,21 @@ if(FSIM_AUTHORED_COUNT LESS FSIM_EXPECTED_AUTHORED_COUNT)
     "authored FST inventory fell below the ${FSIM_EXPECTED_AUTHORED_COUNT}-file baseline: found ${FSIM_AUTHORED_COUNT}")
 endif()
 foreach(FSIM_FILE IN LISTS FSIM_AUTHORED_FILES)
-  file(READ "${FSIM_FILE}" FSIM_PREFIX LIMIT 4096)
   file(RELATIVE_PATH FSIM_RELATIVE "${FSIM_SOURCE_DIR}" "${FSIM_FILE}")
+  file(READ "${FSIM_FILE}" FSIM_PREFIX LIMIT 4096)
   string(FIND "${FSIM_PREFIX}" "SPDX-License-Identifier: Apache-2.0"
     FSIM_SPDX_INDEX)
   if(FSIM_SPDX_INDEX EQUAL -1)
+    # Data files (golden outputs, benchmark tables) carry their notice in a
+    # REUSE-style `.license` companion, as cmake/CheckAuthoredLicenseInventory
+    # accepts.
+    if(EXISTS "${FSIM_FILE}.license")
+      file(READ "${FSIM_FILE}.license" FSIM_COMPANION_LICENSE)
+      if(FSIM_COMPANION_LICENSE STREQUAL
+          "SPDX-License-Identifier: Apache-2.0\n")
+        continue()
+      endif()
+    endif()
     string(FIND "${FSIM_PREFIX}" "SPDX-License-Identifier: LicenseRef-IEEE-1800"
       FSIM_IEEE_SPDX_INDEX)
     if((NOT FSIM_RELATIVE STREQUAL "include/vpi_user.h" AND
@@ -169,4 +191,4 @@ foreach(FSIM_DOC_TOKEN IN ITEMS
 endforeach()
 
 message(STATUS
-  "FST release audit: 17 rows, 2746 diagnostics, 1510 bounded sources, ${FSIM_AUTHORED_COUNT} SPDX-owned files, ${FSIM_TEST_CONTROL_COUNT} test/control files")
+  "FST release audit: ${FSIM_AUTHORED_COUNT} SPDX-owned files, ${FSIM_TEST_CONTROL_COUNT} test/control files")

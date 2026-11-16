@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
+cmake_minimum_required(VERSION 3.28)
+
 if(NOT DEFINED FSIM_SOURCE_DIR)
   message(FATAL_ERROR "FSIM_SOURCE_DIR is required")
 endif()
@@ -157,6 +159,8 @@ set(FSIM_SIMIR_COVERAGE_TEST
   "${FSIM_SOURCE_DIR}/tests/runtime/simir_coverage_test.cpp")
 set(FSIM_LLVM_COVERAGE_TEST
   "${FSIM_SOURCE_DIR}/tests/app/code_coverage_application_test.cpp")
+set(FSIM_STATIC_KERNEL_IMPLEMENTATION
+  "${FSIM_SOURCE_DIR}/src/runtime/simir_static_kernel.cpp")
 set(FSIM_DEBUG_COVERAGE_IMPLEMENTATION
   "${FSIM_SOURCE_DIR}/src/app/application_debug_coverage.cpp")
 set(FSIM_CODE_COVERAGE_CONTROL_PROJECT
@@ -2843,6 +2847,8 @@ file(READ "${FSIM_SIMIR_COVERAGE_TEST}"
   FSIM_SIMIR_COVERAGE_TEST_CONTENTS)
 file(READ "${FSIM_LLVM_COVERAGE_TEST}"
   FSIM_LLVM_COVERAGE_TEST_CONTENTS)
+file(READ "${FSIM_STATIC_KERNEL_IMPLEMENTATION}"
+  FSIM_STATIC_KERNEL_CONTENTS)
 file(READ "${FSIM_DEBUG_COVERAGE_IMPLEMENTATION}"
   FSIM_DEBUG_COVERAGE_IMPLEMENTATION_CONTENTS)
 file(READ "${FSIM_FST_WRITER}" FSIM_FST_WRITER_CONTENTS)
@@ -3134,8 +3140,7 @@ endforeach()
 
 foreach(FSIM_LLVM_COVERAGE_POLICY IN ITEMS
     "std::numeric_limits<std::uint64_t>::max()"
-    "the direct interpreter must execute the effective instance counter"
-    "compiled coverage overflow must be reported exactly once")
+    "the direct interpreter must execute the effective instance counter")
   string(FIND
     "${FSIM_LLVM_COVERAGE_TEST_CONTENTS}${FSIM_SIMIR_COVERAGE_TEST_CONTENTS}"
     "${FSIM_LLVM_COVERAGE_POLICY}"
@@ -3143,6 +3148,21 @@ foreach(FSIM_LLVM_COVERAGE_POLICY IN ITEMS
   if(FSIM_INDEX EQUAL -1)
     message(FATAL_ERROR
       "LLVM code coverage counter lost bounded direct-path policy: ${FSIM_LLVM_COVERAGE_POLICY}")
+  endif()
+endforeach()
+
+# The compiled static kernel records through the same saturating counter store
+# and reports a counter's first overflow exactly once through the hook.
+foreach(FSIM_STATIC_KERNEL_COVERAGE_POLICY IN ITEMS
+    "impl_.code_coverage_counters.record(op.counter)"
+    "update == CodeCoverageCounterUpdate::FirstOverflow"
+    "impl_.code_coverage_overflow_hook(op.counter)"
+    "impl_.code_coverage_overflow_hook(counter)")
+  string(FIND "${FSIM_STATIC_KERNEL_CONTENTS}"
+    "${FSIM_STATIC_KERNEL_COVERAGE_POLICY}" FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "compiled code coverage counter lost first-overflow reporting: ${FSIM_STATIC_KERNEL_COVERAGE_POLICY}")
   endif()
 endforeach()
 

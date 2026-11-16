@@ -576,6 +576,17 @@ void Interpreter::Impl::StaticKernel::execute_body(
             effect_slow(body, inst, at, member_index, origin, { inst.x, 0U },
                 { }, { }, inst.d);
             break;
+        case KOp::dyn: {
+            auto& header = dynamic_headers_[containers_[inst.aux].dynamic_header];
+            const auto* other = inst.z == no_container ? nullptr
+                : &dynamic_headers_[containers_[inst.z].dynamic_header];
+            const auto failure = static_kernel_detail::execute_dyn(inst, header,
+                other, registers);
+            if (failure != static_kernel_detail::DynFailure::none) {
+                fail_at(at, static_kernel_detail::dyn_fail_message(failure));
+            }
+            break;
+        }
         case KOp::wide_move:
             effect_slow(body, inst, at, member_index, origin, { inst.x, 0U },
                 inst.sub == 1U ? registers[inst.y] : Word { }, { }, inst.d);
@@ -2887,6 +2898,7 @@ void Interpreter::Impl::StaticKernel::set_instruction_helpers(
     helpers.sva_tick = &StaticKernel::native_sva_tick;
     helpers.sva_ensure = &StaticKernel::native_sva_ensure;
     helpers.sva_grow = &StaticKernel::native_sva_grow;
+    helpers.dyn_grow = &StaticKernel::native_dyn_grow;
     helpers.sva_post = &StaticKernel::native_sva_post;
     helpers.sva_filter = &StaticKernel::native_sva_filter;
     helpers.sva_check = &StaticKernel::native_sva_check;

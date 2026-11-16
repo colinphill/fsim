@@ -633,6 +633,20 @@ inline void kinst_flow(const KInst& inst, const std::uint32_t at,
     case KOp::mem_copy:
         fall();
         break;
+    case KOp::dyn: {
+        const auto op = static_cast<DynOp>(inst.sub);
+        if (dyn_reads_source(op)) {
+            use.push_back(inst.x);
+        }
+        if (dyn_reads_index(op)) {
+            use.push_back(inst.y);
+        }
+        if (dyn_writes_destination(op)) {
+            def = inst.d;
+        }
+        fall();
+        break;
+    }
     case KOp::wide_move:
         if (inst.sub == 1U) {
             use.push_back(inst.y);

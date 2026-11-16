@@ -11,6 +11,7 @@
 #include "simir_internal.hpp"
 #include "simir_kernel_word_ops.hpp"
 #include "simir_operation_kinds.hpp"
+#include "simir_static_kernel_dynamic.hpp"
 #include "simir_static_kernel_ir.hpp"
 #include "simir_static_kernel_native.hpp"
 #include "simir_static_kernel_pool.hpp"
@@ -1239,6 +1240,8 @@ private:
         std::uint32_t element_offset { };
         std::vector<std::uint32_t> element_slots;
         std::uint32_t packed_slot { static_kernel_detail::no_slot };
+        /// Storage dynamic: the container's entry in dynamic_headers_.
+        std::uint32_t dynamic_header { static_kernel_detail::no_slot };
     };
 
     struct FamilyLeaf {
@@ -1813,6 +1816,12 @@ private:
     /// differential check.
     static std::int64_t* native_sva_ensure(StaticKernelNativeFrame* frame,
         Word* registers, std::uint32_t at);
+    /// fsim_sk_dyn_grow: room for `needed` elements in a kernel queue or
+    /// dynamic array (KOp::dyn); nonzero with the frame's status set when
+    /// the memory is not available.
+    static std::uint32_t native_dyn_grow(StaticKernelNativeFrame* frame,
+        std::uint32_t at, StaticKernelDynamicContainer* container,
+        std::uint64_t needed);
     static void native_sva_grow(StaticKernelNativeFrame* frame,
         std::uint32_t at, std::uint32_t region, std::uint64_t needed);
     static void native_sva_post(StaticKernelNativeFrame* frame, std::uint32_t at);
@@ -2120,6 +2129,18 @@ private:
         const std::function<void(const char*)>& stage);
     /// The native view of containers_ (container_info_, container_elements_).
     void build_container_info();
+    /// Whether every reference-format container register of the member is a
+    /// queue or dynamic array the kernel can hold (native_dynamic_type) and
+    /// every operation naming one is a KOp::dyn operation.
+    [[nodiscard]] bool native_dynamic_containers(const Member& member) const;
+    /// Gives member `index` kernel containers of storage dynamic for its
+    /// reference-format registers (container_registers); the values move
+    /// into them at commit_dynamic_containers, or the containers are given
+    /// back (release_dynamic_containers from `containers` and `headers`).
+    void hold_dynamic_containers(std::uint32_t index);
+    void commit_dynamic_containers(std::uint32_t index);
+    void release_dynamic_containers(std::uint32_t index, std::size_t containers,
+        std::size_t headers);
     /// A port-association conversion's resolver program as a member body
     /// (build_fresh).
     static void rewrite_conversion(Member& member, SignalId target,
@@ -3163,8 +3184,29 @@ private:
     /// FSIM_KERNEL_VERIFY for threads: the state a compiled activation (from
     /// a resume entry to the next suspension) starts from, so that the same
     /// activation can be replayed on the reference evaluator.
+    /// FSIM_KERNEL_VERIFY: the values of a member's queues and dynamic
+    /// arrays the kernel holds (storage dynamic), by container register.
+    using NativeContainerValues
+        = std::vector<std::pair<ContainerRegisterId, ContainerValue>>;
+    [[nodiscard]] NativeContainerValues native_container_values(const Member& member) const;
+    /// The replay runs the reference's operations on `values` as the
+    /// member's reference-format registers, which exist while the scope
+    /// lives.
+    struct ReferenceContainerScope {
+        Member& member;
+        bool active { };
+        ReferenceContainerScope(Member& owner, const NativeContainerValues& values);
+        ReferenceContainerScope(const ReferenceContainerScope&) = delete;
+        ReferenceContainerScope& operator=(const ReferenceContainerScope&) = delete;
+        ~ReferenceContainerScope();
+    };
+    /// The first difference between the kernel's containers and the
+    /// replay's reference-format registers, or empty.
+    [[nodiscard]] std::string native_container_mismatch(const Member& member,
+        const NativeContainerValues& values) const;
     struct VerifyThreadState {
         decltype(CompiledBody::registers) registers;
+        NativeContainerValues containers;
         decltype(CompiledBody::wide_registers) wide;
         /// The call stack's return targets at the start.
         std::vector<std::uint64_t> stack;
@@ -4159,6 +4201,8 @@ private:
     /// element tables it points into.
     std::vector<StaticKernelContainerInfo> container_info_;
     std::vector<std::uint32_t> container_elements_;
+    /// The headers of the containers of storage dynamic (KOp::dyn).
+    static_kernel_detail::DynamicHeaders dynamic_headers_;
     /// The concurrent assertion tables (StaticKernelSvaTable), null in a
     /// kernel without a compiled directive. The monitors publish their
     /// block bases into *sva_blocks_ while it lives (sva::BlockSlot).

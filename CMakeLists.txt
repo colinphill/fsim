@@ -887,6 +887,7 @@ add_library(
     src/runtime/simir_static_kernel_behavioral.cpp
     src/runtime/simir_static_kernel_compiled.cpp
     src/runtime/simir_static_kernel_domains.cpp
+    src/runtime/simir_static_kernel_dynamic.cpp
     src/runtime/simir_static_kernel_execute.cpp
     src/runtime/simir_static_kernel_hosted.cpp
     src/runtime/simir_static_kernel_image.cpp

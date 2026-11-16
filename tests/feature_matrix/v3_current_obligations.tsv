@@ -110,7 +110,7 @@ RESCOV-018	tests/runtime/coverage_aggregation_test.cpp	fsim.runtime.coverage_agg
 RESABI-016	tests/runtime/acc_vpi_coherence_test.cpp	fsim.runtime.acc_vpi_coherence
 RESABI-017	cmake/CheckForeignAbiFreeze.cmake	fsim.foreign-abi-freeze
 V3CUR-ABI-001	cmake/CheckAbiSchemaInventory.cmake	fsim.abi-schema-inventory
-V3CUR-ABI-002	cmake/CheckV3SchemaFreeze.cmake	fsim.v3-schema-freeze
+V3CUR-ABI-002	cmake/CheckSchemaFreezeComposition.cmake	fsim.schema-freeze-composition
 V3CUR-ABI-003	cmake/CheckCurrentV2InputRejection.cmake	fsim.v3-v2-input-rejection
 V3CUR-ABI-004	cmake/CheckCoreApiContract.cmake	fsim.api.contract
 V3CUR-ABI-005	tests/api/api_test.cpp	fsim.api

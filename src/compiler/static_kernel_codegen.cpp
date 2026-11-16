@@ -5445,6 +5445,18 @@ private:
                 return true;
             case KOp::mem_copy:
                 return true;
+            case KOp::dyn: {
+                const auto op = static_cast<detail::DynOp>(
+                    inst.sub);
+                if (detail::dyn_reads_source(op)) {
+                    reads.push_back(inst.x);
+                }
+                if (detail::dyn_reads_index(op)) {
+                    reads.push_back(inst.y);
+                }
+                writes = detail::dyn_writes_destination(op);
+                return true;
+            }
             case KOp::wide_move:
                 reads = { inst.y };
                 return true;
@@ -7086,6 +7098,390 @@ private:
             builder_.CreateSelect(packed, info_field(element.info, i32_, 4U),
                 element_slot),
         };
+    }
+
+    // Kernel queues and dynamic arrays (KOp::dyn): the container's
+    // StaticKernelDynamicContainer, reached through its container info
+    // (storage 4, `elements`). Field offsets follow the ABI struct.
+    static constexpr std::uint64_t dyn_data = 0U;
+    static constexpr std::uint64_t dyn_size = 8U;
+    static constexpr std::uint64_t dyn_capacity = 16U;
+    static constexpr std::uint64_t dyn_head = 24U;
+    static constexpr std::uint64_t dyn_maximum = 32U;
+    static constexpr std::uint64_t dyn_limit = 40U;
+    static constexpr std::uint64_t dyn_fill = 48U;
+    static constexpr std::uint64_t dyn_empty = 64U;
+    static constexpr std::uint64_t dyn_flags = 84U;
+
+    [[nodiscard]] llvm::Value* dyn_header(const std::uint32_t binding_index)
+    {
+        auto* table = builder_.CreateLoad(ptr_, frame_field(64U));
+        auto* info = builder_.CreateInBoundsGEP(i8_, table,
+            builder_.CreateMul(builder_.CreateZExt(binding(binding_index, 0U), i64_),
+                constant(sizeof(runtime::simir::StaticKernelContainerInfo))));
+        return builder_.CreateLoad(ptr_, builder_.CreateConstInBoundsGEP1_64(i8_, info, 64U));
+    }
+
+    [[nodiscard]] llvm::Value* dyn_address(llvm::Value* header, const std::uint64_t offset)
+    {
+        return builder_.CreateConstInBoundsGEP1_64(i8_, header, offset);
+    }
+
+    [[nodiscard]] llvm::Value* dyn_load(llvm::Value* header, const std::uint64_t offset)
+    {
+        return builder_.CreateLoad(i64_, dyn_address(header, offset));
+    }
+
+    void dyn_store(llvm::Value* header, const std::uint64_t offset, llvm::Value* value)
+    {
+        builder_.CreateStore(value, dyn_address(header, offset));
+    }
+
+    /// The value word of element `ordinal`; its unknown word follows.
+    [[nodiscard]] llvm::Value* dyn_element_address(llvm::Value* header,
+        llvm::Value* ordinal)
+    {
+        auto* data = builder_.CreateLoad(ptr_, dyn_address(header, dyn_data));
+        auto* slot = builder_.CreateAnd(
+            builder_.CreateAdd(dyn_load(header, dyn_head), ordinal),
+            builder_.CreateSub(dyn_load(header, dyn_capacity), constant(1U)));
+        return builder_.CreateInBoundsGEP(i64_, data, builder_.CreateShl(slot, constant(1U)));
+    }
+
+    [[nodiscard]] Pair dyn_load_element(llvm::Value* header, llvm::Value* ordinal)
+    {
+        auto* address = dyn_element_address(header, ordinal);
+        return { builder_.CreateLoad(i64_, address),
+            builder_.CreateLoad(i64_, builder_.CreateConstInBoundsGEP1_64(i64_, address, 1U)) };
+    }
+
+    void dyn_store_element(llvm::Value* header, llvm::Value* ordinal, const Pair value)
+    {
+        auto* address = dyn_element_address(header, ordinal);
+        builder_.CreateStore(value.a, address);
+        builder_.CreateStore(value.b, builder_.CreateConstInBoundsGEP1_64(i64_, address, 1U));
+    }
+
+    [[nodiscard]] Pair dyn_pair(llvm::Value* header, const std::uint64_t offset)
+    {
+        return { dyn_load(header, offset), dyn_load(header, offset + 8U) };
+    }
+
+    /// Room for `needed` elements: fsim_sk_dyn_grow when the capacity is
+    /// short (the only runtime call of KOp::dyn).
+    void dyn_reserve(llvm::Value* header, llvm::Value* needed, const std::uint32_t at)
+    {
+        auto* grow = llvm::BasicBlock::Create(context_, "dyn_grow", &function_);
+        auto* room = llvm::BasicBlock::Create(context_, "dyn_room", &function_);
+        builder_.CreateCondBr(builder_.CreateICmpUGT(needed,
+                                  dyn_load(header, dyn_capacity)),
+            grow, room);
+        builder_.SetInsertPoint(grow);
+        auto* type = llvm::FunctionType::get(i32_, { ptr_, i32_, ptr_, i64_ }, false);
+        builder_.CreateCall(type, helper_symbol("fsim_sk_dyn_grow", type),
+            { frame_, llvm::ConstantInt::get(i32_, at), header, needed });
+        check_status();
+        builder_.CreateBr(room);
+        builder_.SetInsertPoint(room);
+    }
+
+    /// The reference's error `failure` (DynFailure) unless `ok`.
+    void dyn_check(llvm::Value* ok, const std::uint32_t at,
+        const detail::DynFailure failure)
+    {
+        check_or_fail(ok, at, detail::dyn_fail_first + static_cast<std::uint32_t>(failure));
+    }
+
+    /// Runs `body(i)` for i from `begin` up to `end` (exclusive), or down
+    /// from end - 1 to begin when `descending`.
+    template <typename Body>
+    void dyn_loop(llvm::Value* begin, llvm::Value* end, const bool descending, Body&& body)
+    {
+        // The index's back edge is a placeholder until the body is built
+        // (loop_phi), so the folding builder never sees a one-entry phi.
+        auto* before = builder_.GetInsertBlock();
+        auto* head = llvm::BasicBlock::Create(context_, "dyn_loop", &function_);
+        auto* step = llvm::BasicBlock::Create(context_, "dyn_step", &function_);
+        auto* latch = llvm::BasicBlock::Create(context_, "dyn_next", &function_);
+        auto* done = llvm::BasicBlock::Create(context_, "dyn_done", &function_);
+        builder_.CreateBr(head);
+        builder_.SetInsertPoint(head);
+        llvm::BranchInst::Create(head, latch);
+        auto* index = loop_phi(i64_, descending ? end : begin, before, latch);
+        builder_.CreateCondBr(descending ? builder_.CreateICmpUGT(index, begin)
+                                         : builder_.CreateICmpULT(index, end),
+            step, done);
+        builder_.SetInsertPoint(step);
+        auto* current = descending ? builder_.CreateSub(index, constant(1U)) : index;
+        body(current);
+        auto* following = descending ? current : builder_.CreateAdd(index, constant(1U));
+        builder_.CreateBr(latch);
+        close_loop_phi(index, following);
+        builder_.SetInsertPoint(done);
+    }
+
+    /// Continues in a block taken when `condition` holds; returns the block
+    /// where both ways meet (the caller branches to it at the end).
+    [[nodiscard]] llvm::BasicBlock* dyn_when(llvm::Value* condition)
+    {
+        auto* then = llvm::BasicBlock::Create(context_, "dyn_then", &function_);
+        auto* join = llvm::BasicBlock::Create(context_, "dyn_join", &function_);
+        builder_.CreateCondBr(condition, then, join);
+        builder_.SetInsertPoint(then);
+        return join;
+    }
+
+    void dyn_end(llvm::BasicBlock* join)
+    {
+        builder_.CreateBr(join);
+        builder_.SetInsertPoint(join);
+    }
+
+    /// A write's value check: a two-state element takes no unknown bits.
+    void dyn_check_value(llvm::Value* header, const Pair value, const std::uint32_t at,
+        const detail::DynFailure failure)
+    {
+        auto* two_state = builder_.CreateICmpNE(builder_.CreateAnd(
+                                                    builder_.CreateZExt(builder_.CreateLoad(i32_,
+                                                                            dyn_address(header, dyn_flags)),
+                                                        i64_),
+                                                    constant(1U)),
+            constant(0U));
+        dyn_check(builder_.CreateNot(builder_.CreateAnd(two_state,
+                      builder_.CreateICmpNE(value.b, constant(0U)))),
+            at, failure);
+    }
+
+    /// The new size after inserting into a queue of `size` elements: a
+    /// bounded queue keeps its first `maximum` (IEEE 1800-2023 7.10).
+    [[nodiscard]] llvm::Value* dyn_inserted_size(llvm::Value* header, llvm::Value* size)
+    {
+        auto* grown = builder_.CreateAdd(size, constant(1U));
+        return builder_.CreateSelect(
+            builder_.CreateICmpUGT(grown, dyn_load(header, dyn_maximum)), size, grown);
+    }
+
+    /// The per-container budget of an insertion (the reference's error when
+    /// the queue would exceed it and is not bounded below it).
+    void dyn_check_insert_budget(llvm::Value* header, llvm::Value* size,
+        const std::uint32_t at)
+    {
+        auto* limit = dyn_load(header, dyn_limit);
+        auto* over = builder_.CreateAnd(
+            builder_.CreateICmpUGT(builder_.CreateAdd(size, constant(1U)), limit),
+            builder_.CreateICmpUGT(dyn_load(header, dyn_maximum), limit));
+        dyn_check(builder_.CreateNot(over), at, detail::DynFailure::queue_budget);
+    }
+
+    void emit_dyn(const KInst& inst, const std::uint32_t at)
+    {
+        using detail::DynFailure;
+        using detail::DynOp;
+        if (two_state_) {
+            throw std::logic_error("static kernel queue operation in two-state code");
+        }
+        const auto op = static_cast<DynOp>(inst.sub);
+        const bool is_signed = (inst.flags & detail::flag_signed) != 0U;
+        auto* header = dyn_header(inst.aux);
+        const Pair index = detail::dyn_reads_index(op) ? load_register(inst.y) : zero_pair();
+        const Pair source = detail::dyn_reads_source(op) ? load_register(inst.x) : zero_pair();
+        auto* known = builder_.CreateICmpEQ(index.b, constant(0U));
+        // The signed index (sign extended), or the unsigned one.
+        auto* value = is_signed ? sign_extend(index.a, inst.width) : index.a;
+        // A write's, insertion's or deletion's requested position: known and
+        // not negative as a signed value (an unsigned one beyond the signed
+        // range is invalid). insert and delete(index) read it signed.
+        auto* position = op == DynOp::insert || op == DynOp::delete_at
+            ? sign_extend(index.a, inst.width) : value;
+        auto* requested = builder_.CreateAnd(known,
+            builder_.CreateICmpSGE(position, constant(0U)));
+        switch (op) {
+        case DynOp::read: {
+            dyn_check(known, at, DynFailure::index_unknown);
+            if (is_signed) {
+                dyn_check(builder_.CreateICmpSGE(value, constant(0U)), at,
+                    DynFailure::index_negative);
+            }
+            dyn_check(builder_.CreateICmpULT(value, dyn_load(header, dyn_size)), at,
+                DynFailure::index_range);
+            store_register(inst.d, dyn_load_element(header, value));
+            break;
+        }
+        case DynOp::write: {
+            dyn_check_value(header, source, at, DynFailure::write_mismatch);
+            auto* size = dyn_load(header, dyn_size);
+            auto* queue = builder_.CreateICmpNE(builder_.CreateAnd(
+                                                    builder_.CreateZExt(builder_.CreateLoad(i32_,
+                                                                            dyn_address(header, dyn_flags)),
+                                                        i64_),
+                                                    constant(2U)),
+                constant(0U));
+            auto* overwrite = builder_.CreateAnd(requested,
+                builder_.CreateICmpULT(position, size));
+            auto* append = builder_.CreateAnd(builder_.CreateAnd(requested,
+                                                  builder_.CreateICmpEQ(position, size)),
+                builder_.CreateAnd(queue,
+                    builder_.CreateICmpULT(size, dyn_load(header, dyn_maximum))));
+            auto* in_place = dyn_when(overwrite);
+            dyn_store_element(header, position, source);
+            dyn_end(in_place);
+            auto* appended = dyn_when(append);
+            dyn_check(builder_.CreateICmpULT(size, dyn_load(header, dyn_limit)), at,
+                DynFailure::queue_budget);
+            auto* grown = builder_.CreateAdd(size, constant(1U));
+            dyn_reserve(header, grown, at);
+            dyn_store(header, dyn_size, grown);
+            dyn_store_element(header, size, source);
+            dyn_end(appended);
+            break;
+        }
+        case DynOp::size:
+            store_register(inst.d,
+                { builder_.CreateAnd(dyn_load(header, dyn_size), constant(0xFFFF'FFFFU)),
+                    constant(0U) });
+            break;
+        case DynOp::delete_all:
+            dyn_store(header, dyn_size, constant(0U));
+            dyn_store(header, dyn_head, constant(0U));
+            break;
+        case DynOp::delete_at: {
+            auto* size = dyn_load(header, dyn_size);
+            auto* valid = dyn_when(builder_.CreateAnd(requested,
+                builder_.CreateICmpULT(position, size)));
+            auto* last = builder_.CreateSub(size, constant(1U));
+            dyn_loop(position, last, false, [&](llvm::Value* ordinal) {
+                dyn_store_element(header, ordinal,
+                    dyn_load_element(header, builder_.CreateAdd(ordinal, constant(1U))));
+            });
+            dyn_store(header, dyn_size, last);
+            dyn_store(header, dyn_head, builder_.CreateSelect(
+                builder_.CreateICmpEQ(last, constant(0U)), constant(0U),
+                dyn_load(header, dyn_head)));
+            dyn_end(valid);
+            break;
+        }
+        case DynOp::push_back:
+        case DynOp::push_front:
+        case DynOp::insert: {
+            dyn_check_value(header, source, at, DynFailure::queue_write_mismatch);
+            auto* size = dyn_load(header, dyn_size);
+            // An unknown, negative or out-of-range index inserts nothing
+            // (IEEE 1800-2023 7.10.2.2).
+            llvm::BasicBlock* valid = op == DynOp::insert
+                ? dyn_when(builder_.CreateAnd(requested,
+                      builder_.CreateICmpULE(position, size)))
+                : nullptr;
+            dyn_check_insert_budget(header, size, at);
+            dyn_reserve(header, builder_.CreateAdd(size, constant(1U)), at);
+            if (op == DynOp::push_front) {
+                dyn_store(header, dyn_head,
+                    builder_.CreateAnd(builder_.CreateSub(dyn_load(header, dyn_head),
+                                           constant(1U)),
+                        builder_.CreateSub(dyn_load(header, dyn_capacity), constant(1U))));
+                dyn_store_element(header, constant(0U), source);
+            } else if (op == DynOp::push_back) {
+                dyn_store_element(header, size, source);
+            } else {
+                dyn_loop(position, size, true, [&](llvm::Value* ordinal) {
+                    dyn_store_element(header, builder_.CreateAdd(ordinal, constant(1U)),
+                        dyn_load_element(header, ordinal));
+                });
+                dyn_store_element(header, position, source);
+            }
+            dyn_store(header, dyn_size, dyn_inserted_size(header, size));
+            if (valid != nullptr) {
+                dyn_end(valid);
+            }
+            break;
+        }
+        case DynOp::pop_front:
+        case DynOp::pop_back: {
+            // Popping an empty queue returns the element type's default
+            // value (IEEE 1800-2023 7.10.2.4, 7.10.2.5).
+            auto* size = dyn_load(header, dyn_size);
+            auto* before = builder_.GetInsertBlock();
+            auto* popping = llvm::BasicBlock::Create(context_, "dyn_pop", &function_);
+            auto* join = llvm::BasicBlock::Create(context_, "dyn_popped", &function_);
+            const auto empty = dyn_pair(header, dyn_empty);
+            builder_.CreateCondBr(builder_.CreateICmpEQ(size, constant(0U)), join, popping);
+            builder_.SetInsertPoint(popping);
+            auto* last = builder_.CreateSub(size, constant(1U));
+            const auto element = dyn_load_element(header,
+                op == DynOp::pop_front ? constant(0U) : last);
+            if (op == DynOp::pop_front) {
+                dyn_store(header, dyn_head,
+                    builder_.CreateAnd(builder_.CreateAdd(dyn_load(header, dyn_head),
+                                           constant(1U)),
+                        builder_.CreateSub(dyn_load(header, dyn_capacity), constant(1U))));
+            }
+            dyn_store(header, dyn_size, last);
+            dyn_store(header, dyn_head, builder_.CreateSelect(
+                builder_.CreateICmpEQ(last, constant(0U)), constant(0U),
+                dyn_load(header, dyn_head)));
+            auto* popped = builder_.GetInsertBlock();
+            builder_.CreateBr(join);
+            builder_.SetInsertPoint(join);
+            auto* a = builder_.CreatePHI(i64_, 2U);
+            a->addIncoming(empty.a, before);
+            a->addIncoming(element.a, popped);
+            auto* b = builder_.CreatePHI(i64_, 2U);
+            b->addIncoming(empty.b, before);
+            b->addIncoming(element.b, popped);
+            store_register(inst.d, { a, b });
+            break;
+        }
+        case DynOp::resize: {
+            dyn_check(builder_.CreateICmpEQ(source.b, constant(0U)), at,
+                DynFailure::size_unknown);
+            auto* count = source.a;
+            dyn_check(builder_.CreateICmpULE(count, dyn_load(header, dyn_limit)), at,
+                DynFailure::array_budget);
+            llvm::Value* kept = constant(0U);
+            llvm::Value* other = nullptr;
+            llvm::Value* alias = llvm::ConstantInt::getFalse(context_);
+            if (inst.z != std::numeric_limits<std::uint32_t>::max()) {
+                other = dyn_header(inst.z);
+                alias = builder_.CreateICmpEQ(other, header);
+                auto* other_size = dyn_load(other, dyn_size);
+                kept = builder_.CreateSelect(builder_.CreateICmpULT(count, other_size),
+                    count, other_size);
+            }
+            // A new array keeps nothing of its own unless it is its own
+            // initializer, whose first elements stay in place.
+            auto* fresh = dyn_when(builder_.CreateNot(alias));
+            dyn_store(header, dyn_size, constant(0U));
+            dyn_store(header, dyn_head, constant(0U));
+            dyn_end(fresh);
+            dyn_reserve(header, count, at);
+            if (other != nullptr) {
+                auto* copying = dyn_when(builder_.CreateNot(alias));
+                dyn_loop(constant(0U), kept, false, [&](llvm::Value* ordinal) {
+                    dyn_store_element(header, ordinal, dyn_load_element(other, ordinal));
+                });
+                dyn_end(copying);
+            }
+            const auto fill = dyn_pair(header, dyn_fill);
+            dyn_loop(kept, count, false, [&](llvm::Value* ordinal) {
+                dyn_store_element(header, ordinal, fill);
+            });
+            dyn_store(header, dyn_size, count);
+            break;
+        }
+        case DynOp::copy: {
+            auto* other = dyn_header(inst.z);
+            auto* distinct = dyn_when(builder_.CreateICmpNE(other, header));
+            auto* count = dyn_load(other, dyn_size);
+            dyn_store(header, dyn_size, constant(0U));
+            dyn_store(header, dyn_head, constant(0U));
+            dyn_reserve(header, count, at);
+            dyn_loop(constant(0U), count, false, [&](llvm::Value* ordinal) {
+                dyn_store_element(header, ordinal, dyn_load_element(other, ordinal));
+            });
+            dyn_store(header, dyn_size, count);
+            dyn_end(distinct);
+            break;
+        }
+        }
     }
 
     [[nodiscard]] Pair emit_mem_read(const KInst& inst, const std::uint32_t at)
@@ -15146,6 +15542,9 @@ private:
             // The runtime copies the arena words of the two containers.
             call_effect(at, zero_pair(), zero_pair(), zero_pair());
             break;
+        case KOp::dyn:
+            emit_dyn(inst, at);
+            break;
         case KOp::wide_move:
             // compile_body fuses only moves to an unresolved slot with a
             // one-field selection; the rest stay wide_load, wide_alu and
@@ -17385,6 +17784,7 @@ private:
         add("fsim_sk_sva_bind", helpers.sva_bind);
         add("fsim_sk_sva_verify_outcome", helpers.sva_verify_outcome);
         add("fsim_sk_sva_report_grow", helpers.sva_report_grow);
+        add("fsim_sk_dyn_grow", helpers.dyn_grow);
 #if defined(__MINGW32__)
         add("___chkstk_ms", &___chkstk_ms);
 #endif

@@ -50,7 +50,8 @@ static_assert(sizeof(StaticKernelWrite) == 56U);
 struct StaticKernelContainerInfo {
     /// 0: helpers only; 1: one slot per element; 2: one packed slot;
     /// 3: kernel-held elements, two planes of one word each from
-    /// packed_offset on.
+    /// packed_offset on; 4: a queue or dynamic array (KOp::dyn), whose
+    /// StaticKernelDynamicContainer `elements` points at.
     std::uint32_t storage { };
     /// Storage 2: the packed slot.
     std::uint32_t slot { };
@@ -67,7 +68,8 @@ struct StaticKernelContainerInfo {
     /// bit 2 (storage 1 and 2): blocking writes store in place; bit 3: with
     /// bit 2, no change is announced (silent slots).
     std::uint32_t flags { };
-    /// Storage 1: per element, its slot's arena offset and slot index.
+    /// Storage 1: per element, its slot's arena offset and slot index
+    /// (storage 4: the StaticKernelDynamicContainer).
     const std::uint32_t* elements { };
     /// Storage 2: the packed slot's arena offset, words per plane and width
     /// (storage 3: the first element's arena offset).
@@ -77,6 +79,36 @@ struct StaticKernelContainerInfo {
     std::uint32_t reserved { };
 };
 static_assert(sizeof(StaticKernelContainerInfo) == 88U);
+
+/// A kernel queue or dynamic array of packed elements of at most 64 bits
+/// (ABI; KOp::dyn, StaticKernelContainerInfo storage 4). Element i is the
+/// word pair at data[2 * slot], data[2 * slot + 1] (value and unknown
+/// planes), slot = (head + i) & (capacity - 1); capacity is 0 or a power of
+/// two, and a dynamic array keeps head 0. Generated code reloads `data`
+/// after any growth (fsim_sk_dyn_grow), the only runtime call.
+struct StaticKernelDynamicContainer {
+    std::uint64_t* data { };
+    std::uint64_t size { };
+    std::uint64_t capacity { };
+    std::uint64_t head { };
+    /// A bounded queue's largest element count (IEEE 1800-2023 7.10);
+    /// otherwise the largest std::uint64_t.
+    std::uint64_t maximum { };
+    /// The per-container owning-storage budget in elements
+    /// (maximum_container_elements of the type): a larger size is the
+    /// reference's error.
+    std::uint64_t limit { };
+    /// The element new[n] adds (initial_packed_element of the type).
+    std::uint64_t fill_a { };
+    std::uint64_t fill_b { };
+    /// The value a pop of an empty queue returns (7.10.2.4, 7.10.2.5).
+    std::uint64_t empty_a { };
+    std::uint64_t empty_b { };
+    std::uint32_t element_width { };
+    /// Bit 0: two-state elements; bit 1: a queue.
+    std::uint32_t flags { };
+};
+static_assert(sizeof(StaticKernelDynamicContainer) == 88U);
 
 /// The round's assignments in program order; generated code appends while
 /// count < capacity and calls the effect helper otherwise.
@@ -310,6 +342,11 @@ struct StaticKernelNativeHelpers {
     /// `fsim_sk_sva_report_grow`: room for one more KOp::sva_report row
     /// (StaticKernelSvaReports, which generated code reloads after it).
     void (*sva_report_grow)(StaticKernelNativeFrame*) { };
+    /// `fsim_sk_dyn_grow`: capacity for `needed` elements in the queue or
+    /// dynamic array (KOp::dyn), which generated code reloads after it;
+    /// nonzero when the frame's status now holds the reference's error.
+    std::uint32_t (*dyn_grow)(StaticKernelNativeFrame*, std::uint32_t at,
+        StaticKernelDynamicContainer* container, std::uint64_t needed) { };
     /// Wide-register instructions by kind (`fsim_sk_wide_<op>`): instruction
     /// `at` with the caller's register file, where wide values live, and the
     /// narrow operand words x, y and z; `out` receives a narrow result and
