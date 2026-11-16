@@ -10830,14 +10830,14 @@ bool Lowerer::allocate_hir_static_callable_declarations(
             if (scoped) {
                 hir_process_scope_ = input.nested_scope.value_or(
                     hir_process_scope_);
-                if (input.kind == semantic::sv::StatementKind::block) {
+                // A block that is no scope adds no level.
+                if (input.kind == semantic::sv::StatementKind::block
+                    && (!input.label.empty() || input.nested_scope)) {
                     local_scope_.push_back(!input.label.empty()
                             ? input.label
-                            : input.nested_scope
-                            ? "$block_"
+                            : "$block_"
                                 + std::to_string(
-                                    input.nested_scope->value())
-                            : std::string { "$block" });
+                                    input.nested_scope->value()));
                 }
             }
             const bool nested_valid = allocate(input.declarations)
@@ -24917,9 +24917,7 @@ std::optional<RegisterId> Lowerer::lower_hir_user_system_call(
             call_scope += '.' + hir_process_static_scope_;
         }
         for (const auto& scope_name : local_scope_) {
-            if (scope_name != "$block") {
-                call_scope += '.' + scope_name;
-            }
+            call_scope += '.' + scope_name;
         }
     }
     auto identity = task.name

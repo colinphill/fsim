@@ -22336,14 +22336,18 @@ bool Lowerer::lower_hir_statement_unsuspended(
         const auto block_begin = static_cast<InstructionIndex>(
             process_.operations.size());
         hir_process_scope_ = nested_scope.value_or(hir_process_scope_);
-        const auto scope_name = !label.empty()
-            ? std::string { label }
-            : nested_scope
-            ? "$block_" + std::to_string(nested_scope->value())
-            : std::string { "$block" };
-        local_scope_.push_back(scope_name);
+        // A block that is no scope (it declares nothing and has no label)
+        // adds no level.
+        const bool scope_level = !label.empty() || nested_scope.has_value();
+        if (scope_level) {
+            local_scope_.push_back(!label.empty()
+                    ? std::string { label }
+                    : "$block_" + std::to_string(nested_scope->value()));
+        }
         const auto restore_scope = [&] {
-            local_scope_.pop_back();
+            if (scope_level) {
+                local_scope_.pop_back();
+            }
             string_locals_ = saved_string_locals;
             locals_ = saved_locals;
             hir_local_string_registers_ = saved_hir_string_locals;

@@ -1367,6 +1367,67 @@ void Lowerer::add_hir_frame_local(const std::size_t callable,
         callable, declaration, true, process_.frame_locals.size() - 1U);
 }
 
+std::vector<std::string> Lowerer::hir_debug_scope_path(
+    const semantic::DeclarationId declaration_id) const
+{
+    const auto declaration
+        = specialized_hir_unit_->find_declaration(declaration_id);
+    auto scope = !declaration ? semantic::ScopeId { }
+        : declaration->systemverilog != nullptr
+        ? declaration->systemverilog->scope
+        : declaration->vhdl != nullptr ? declaration->vhdl->scope
+                                       : semantic::ScopeId { };
+    const auto& design = specialized_hir_unit_->design();
+    const auto& scopes = design.semantics.scopes();
+    if (!debug_unnamed_scope_ordinals_) {
+        // An unnamed block, fork or loop is a scope when it declares
+        // something (IEEE 1800-2023 9.3.5, 12.7.1); each gets a
+        // debugger-only name, `$unnamed_<n>`, n counting its parent's such
+        // scopes from one in source order.
+        std::unordered_set<std::uint32_t> declaring;
+        for (const auto& record : design.systemverilog_hir.declarations()) {
+            if (record.scope.valid()) {
+                declaring.insert(record.scope.value());
+            }
+        }
+        for (const auto& record : design.vhdl_hir.declarations()) {
+            if (record.scope.valid()) {
+                declaring.insert(record.scope.value());
+            }
+        }
+        std::unordered_map<std::uint32_t, std::uint32_t> counts;
+        auto& ordinals = debug_unnamed_scope_ordinals_.emplace();
+        for (const auto& record : scopes) {
+            if (record.role == semantic::ScopeRole::named
+                || record.role == semantic::ScopeRole::unnamed_process
+                || !record.parent
+                || !declaring.contains(record.id.value())) {
+                continue;
+            }
+            ordinals.emplace(
+                record.id.value(), ++counts[record.parent->value()]);
+        }
+    }
+    std::vector<std::string> path;
+    while (scope.valid() && scope != hir_debug_root_scope_
+        && scope.value() < scopes.size()) {
+        const auto& record = scopes[scope.value()];
+        if (record.role == semantic::ScopeRole::named) {
+            path.push_back(record.name);
+        } else if (const auto ordinal
+            = debug_unnamed_scope_ordinals_->find(scope.value());
+            ordinal != debug_unnamed_scope_ordinals_->end()) {
+            path.push_back("$unnamed_" + std::to_string(ordinal->second));
+        }
+        if (!record.parent) {
+            break;
+        }
+        scope = *record.parent;
+    }
+    std::ranges::reverse(path);
+    return path;
+}
+
 bool Lowerer::initialize_hir_declarations(
     const std::span<const semantic::DeclarationId> declarations)
 {
@@ -1381,17 +1442,12 @@ bool Lowerer::initialize_hir_declarations(
         local_frame = { };
         if (!active_hir_callable_) {
             std::string result;
-            for (const auto& scope_name : local_scope_) {
-                if (!result.empty()) {
-                    result += ".";
-                }
+            for (const auto& scope_name :
+                hir_debug_scope_path(declaration_id)) {
                 result += scope_name;
-            }
-            if (!result.empty()) {
                 result += ".";
             }
             result += name;
-            (void)declaration_id;
             return result;
         }
         bool renamed { };
@@ -1402,12 +1458,14 @@ bool Lowerer::initialize_hir_declarations(
         return result;
     };
     // The named scopes enclosing a debug local, outermost first.
-    const auto debug_scope_path = [&]() {
-        return active_hir_callable_
-            ? callee_debug_scope_path(
-                  hir_callable_frames_[*active_hir_callable_].debug_name)
-            : local_scope_;
-    };
+    const auto debug_scope_path
+        = [&](const semantic::DeclarationId declaration_id) {
+              return active_hir_callable_
+                  ? callee_debug_scope_path(
+                        hir_callable_frames_[*active_hir_callable_]
+                            .debug_name)
+                  : hir_debug_scope_path(declaration_id);
+          };
     const auto capture_scalar_subtype_range = [&](
         const semantic::CompiledDeclarationView& declaration) {
         if (declaration.vhdl == nullptr
@@ -1817,7 +1875,7 @@ bool Lowerer::initialize_hir_declarations(
             auto name = debug_name(declaration_id, input.name, local_frame);
             const bool first_debug_name = active_hir_callable_
                 || debug_local_occurrences_
-                       .emplace(declaration_id.value(), debug_scope_path())
+                       .emplace(declaration_id.value(), debug_scope_path(declaration_id))
                        .second;
             if (!active_hir_callable_) {
                 debug_local_names_.emplace(name);
@@ -1982,7 +2040,7 @@ bool Lowerer::initialize_hir_declarations(
                 declaration_id, declaration->vhdl->name, local_frame);
             const bool first_debug_name = active_hir_callable_
                 || debug_local_occurrences_
-                       .emplace(declaration_id.value(), debug_scope_path())
+                       .emplace(declaration_id.value(), debug_scope_path(declaration_id))
                        .second;
             if (!active_hir_callable_) {
                 debug_local_names_.emplace(name);
@@ -2272,7 +2330,7 @@ bool Lowerer::initialize_hir_declarations(
             auto name = debug_name(declaration_id, string_binding->name, local_frame);
             const bool first_debug_name = active_hir_callable_
                 || debug_local_occurrences_
-                       .emplace(declaration_id.value(), debug_scope_path())
+                       .emplace(declaration_id.value(), debug_scope_path(declaration_id))
                        .second;
             if (!active_hir_callable_) {
                 debug_local_names_.emplace(name);
@@ -2898,7 +2956,7 @@ bool Lowerer::initialize_hir_declarations(
         // callable has its own.
         const bool first_debug_name = active_hir_callable_
             || debug_local_occurrences_
-                   .emplace(declaration_id.value(), debug_scope_path())
+                   .emplace(declaration_id.value(), debug_scope_path(declaration_id))
                    .second;
         if (!active_hir_callable_) {
             debug_local_names_.emplace(name);
@@ -2947,7 +3005,7 @@ bool Lowerer::initialize_hir_declarations(
                 builtin_type,
                 runtime::simir::DebugLocalRole::variable,
                 std::move(local_frame),
-                debug_scope_path(),
+                debug_scope_path(declaration_id),
                 std::string { binding->name },
             });
         }
@@ -5498,6 +5556,7 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
         coverage_fsm_drafts_->erase(process_.id);
     }
     hir_process_scope_ = description.scope;
+    hir_debug_root_scope_ = description.scope;
     hir_process_static_scope_.clear();
     for (const auto declaration_id : description.declarations) {
         if (hir_static_storage(declaration_id)) {

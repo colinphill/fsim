@@ -121,3 +121,89 @@ endmodule
     assert(variable_seen && inner_seen);
     assert(fsim_session_destroy(session) == FSIM_STATUS_OK);
 }
+
+// Unnamed blocks and an unlabeled loop that declare something are scopes
+// (IEEE 1800-2023 9.3.5, 12.7.1). The debugger names each `$unnamed_<n>`,
+// n counting its parent's unnamed scopes in source order, so same-named
+// locals of sibling blocks are distinct objects found by their own paths;
+// a loop's body block is a scope within the loop's.
+void test_unnamed_scope_api(const std::filesystem::path& directory)
+{
+    {
+        std::ofstream source(directory / "unnamed_scopes.sv");
+        source << R"(
+module unnamed_scopes;
+  logic q;
+  initial begin
+    begin
+      automatic logic i = 1'b1;
+      q = i;
+    end
+    begin
+      automatic logic i = 1'b0;
+      q = i;
+    end
+    for (int j = 0; j < 1; j++) begin
+      automatic logic k = 1'b1;
+      q = k;
+    end
+  end
+endmodule
+)";
+    }
+    fsim::tests::api_workspace::expect(directory,
+        { "compile", "--lang", "systemverilog", "--standard", "2017",
+            "--library", "work", "unnamed_scopes.sv" });
+    fsim::tests::api_workspace::expect(directory,
+        { "elaborate", "--snapshot", "unnamed-scopes",
+            "sv:work.unnamed_scopes" });
+    fsim_session_t session = FSIM_INVALID_SESSION;
+    assert(fsim_session_create(nullptr, &session) == FSIM_STATUS_OK);
+    assert(fsim_session_open_snapshot(session,
+               fsim::support::path_to_utf8(directory).c_str(),
+               "unnamed-scopes")
+        == FSIM_STATUS_OK);
+    const auto info = [&](const fsim_object_t object) {
+        fsim_object_info_t result { };
+        result.struct_size = sizeof(result);
+        result.api_version = FSIM_API_VERSION;
+        assert(fsim_session_get_object_info(session, object, &result)
+            == FSIM_STATUS_OK);
+        return result;
+    };
+    const auto name = [](const fsim_string_view_t view) {
+        return std::string { view.data, view.size };
+    };
+    const auto find = [&](const char* path) {
+        fsim_object_t object = FSIM_INVALID_OBJECT;
+        assert(fsim_session_find_object(session, text(path), &object)
+            == FSIM_STATUS_OK);
+        return object;
+    };
+
+    const auto process = find("unnamed_scopes.process_0");
+    std::vector<fsim_object_t> scopes;
+    assert(fsim_session_visit_children(
+               session, process, collect_object, &scopes)
+        == FSIM_STATUS_OK);
+    assert(scopes.size() == 3);
+    const char* const expected[] { "$unnamed_1", "$unnamed_2", "$unnamed_3" };
+    for (std::size_t index = 0; index < scopes.size(); ++index) {
+        const auto scope_info = info(scopes[index]);
+        assert(scope_info.kind == FSIM_OBJECT_SCOPE);
+        assert(name(scope_info.name) == expected[index]);
+    }
+    const auto first = find("unnamed_scopes.process_0.$unnamed_1.i");
+    const auto second = find("unnamed_scopes.process_0.$unnamed_2.i");
+    assert(first != second);
+    assert(info(first).parent == scopes[0]);
+    assert(info(second).parent == scopes[1]);
+    assert(name(info(second).name) == "i");
+    const auto body = find("unnamed_scopes.process_0.$unnamed_3.$unnamed_1.k");
+    assert(info(info(body).parent).parent == scopes[2]);
+    fsim_object_t missing = FSIM_INVALID_OBJECT;
+    assert(fsim_session_find_object(
+               session, text("unnamed_scopes.process_0.i"), &missing)
+        != FSIM_STATUS_OK);
+    assert(fsim_session_destroy(session) == FSIM_STATUS_OK);
+}

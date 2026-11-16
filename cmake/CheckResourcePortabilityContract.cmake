@@ -4562,7 +4562,7 @@ foreach(FSIM_VHDL_2019_SEQUENTIAL_BLOCK_POLICY IN ITEMS
     "const auto lower_block = [&](const std::string_view label,"
     "const auto restore_scope = [&]"
     "hir_process_scope_ = nested_scope.value_or(hir_process_scope_)"
-    "local_scope_.push_back(scope_name)"
+    "const bool scope_level = !label.empty() || nested_scope.has_value()"
     "outer.constants.size() == 1U"
     "outer->declarations.size() == 3U"
     "verify_sequential_block_runtime"

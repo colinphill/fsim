@@ -6294,6 +6294,13 @@ private:
     // The generated scope name a process body's own static storage is
     // published under, when it is; empty otherwise.
     std::string hir_process_static_scope_;
+    // The scope of the process being lowered, where the scope paths of its
+    // debug locals start.
+    semantic::ScopeId hir_debug_root_scope_ { };
+    // The debugger name ordinal of each unnamed scope that declares
+    // something, computed on first use.
+    mutable std::optional<std::unordered_map<std::uint32_t, std::uint32_t>>
+        debug_unnamed_scope_ordinals_;
     std::map<std::size_t, SignalId>
         readonly_signal_write_operations_;
     std::unordered_map<std::uint32_t, RegisterId> hir_local_registers_;
@@ -6800,6 +6807,11 @@ private:
     // The simple name of each entry of the frame-local table, in its order.
     std::vector<std::string> frame_local_simple_names_;
     std::vector<std::string> local_scope_;
+    // The scopes enclosing a process local below its process, outermost
+    // first, as the debugger names them: a named scope by its name, an
+    // unnamed one that declares something by a debugger-only `$unnamed_<n>`.
+    [[nodiscard]] std::vector<std::string> hir_debug_scope_path(
+        semantic::DeclarationId declaration) const;
     /// The SystemVerilog tasks and functions whose bodies are lowering,
     /// innermost last: the name and the local_scope_ depth the body's own
     /// blocks start at, so a block in a task is named task.block in its

@@ -133,10 +133,11 @@ void test_scoped_locals(
   assert(
       debug_locals[1].name
       == "root_scope.inner_scope.value");
+  // An unnamed block, and the unlabeled loop declaring `lane`, are
+  // debugger scopes with generated names.
+  assert(debug_locals[2].name == "root_scope.$unnamed_1.anonymous");
   assert(
-      debug_locals[2].name.starts_with("root_scope.$block_")
-      && debug_locals[2].name.ends_with(".anonymous"));
-  assert(debug_locals[3].name == "root_scope.each.scratch");
+      debug_locals[3].name == "root_scope.$unnamed_2.each.scratch");
   assert(
       debug_locals[4].name
       == "root_scope.dynamic.scratch");

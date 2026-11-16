@@ -1468,14 +1468,14 @@ endmodule
     assert(
         scoped_process.debug_locals[1].name
         == "root_scope.inner_scope.value");
+    // An unnamed block is a debugger scope with a generated name.
     assert(
-        scoped_process.debug_locals[2].name.starts_with(
-            "root_scope.$block_")
-        && scoped_process.debug_locals[2].name.ends_with(
-            ".anonymous"));
+        scoped_process.debug_locals[2].name
+        == "root_scope.$unnamed_1.anonymous");
+    // The loop declaring `lane` is an unlabeled scope around its block.
     assert(
         scoped_process.debug_locals[3].name
-        == "root_scope.each.scratch");
+        == "root_scope.$unnamed_2.each.scratch");
     assert(
         scoped_process.debug_locals[4].name
         == "root_scope.dynamic.scratch");
@@ -1493,7 +1493,7 @@ endmodule
             scoped_process.debug_locals.end(),
             [](const auto& local) {
                 return local.name
-                    == "root_scope.each.scratch";
+                    == "root_scope.$unnamed_2.each.scratch";
             })
         == 1);
     auto scoped_interpreter =
