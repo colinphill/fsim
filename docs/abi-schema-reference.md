@@ -153,9 +153,9 @@ type information.
 
 | Family | Current identity | Top-level content |
 | --- | --- | --- |
-| `.fsimobj` | one SQLite container (kind `fsim-object`) holding format 10, portable schema 16, compiled-HIR bundle 12 | canonical metadata, v3 code-coverage identity, compiled semantic/SV/VHDL HIR, and source paths (relative to the source root: the compiling workspace, or the base directory outside one; absolute only for a Windows source on another drive or share) with content digests and coverage facts, never source text |
+| `.fsimobj` | one SQLite container (kind `fsim-object`) holding format 10, portable schema 16, compiled-HIR bundle 13 | canonical metadata, v3 code-coverage identity, compiled semantic/SV/VHDL HIR, and source paths (relative to the source root: the compiling workspace, or the base directory outside one; absolute only for a Windows source on another drive or share) with content digests and coverage facts, never source text |
 | `.fsimdesign` | one SQLite container (kind `fsim-design`) holding format 18, runtime ABI 1 | roots/bindings/provenance, v3 code-coverage identity, the configuration settings it was elaborated with (key, value, origin), one checksummed hierarchy-path table shared by runtime and DesignIR, and checksummed runtime, semantic, DesignIR, HIR, coverage, UVM, class-specialization, SDF, trace, SystemC, and SCV state. Each payload checksum is `xxh64:` and sixteen lowercase hex digits (XXH64, seed 0; the integrity check simulate repeats at load) or lowercase SHA-256 hex |
-| `.fsimlib` | one SQLite container (kind `fsim-library`) holding canonical TOML format 8, portable schema 16, compiled-HIR bundle 12 | logical-library metadata, compiled semantic/SV/VHDL HIR, source paths with content digests and coverage facts (never source text), and optional exact native accelerators |
+| `.fsimlib` | one SQLite container (kind `fsim-library`) holding canonical TOML format 8, portable schema 16, compiled-HIR bundle 13 | logical-library metadata, compiled semantic/SV/VHDL HIR, source paths with content digests and coverage facts (never source text), and optional exact native accelerators |
 | Workspace library catalog | SQLite schema 4 | artifact and dependency indexes with VHDL identifier-form columns; artifacts in analysis order (a recompiled artifact is the most recently analyzed), which selects an entity's latest architecture across files |
 | `.fsimscobj` | one SQLite container (kind `fsim-systemc-object`) holding format 2, runtime ABI 1, SystemC ABI 4 | one C++20 translation unit, dependency identity, and native object |
 | `.fsimscplugin` | one SQLite container (kind `fsim-systemc-plugin`) holding format 2, runtime ABI 1, SystemC ABI 4 | ordered object identities, link settings, sorted factory schema, and native shared library |
@@ -207,8 +207,13 @@ model `none`; enabled foundation coverage uses
 `fsim-code-coverage-foundation-v3`. Versioned v2 objects and designs are
 rejected directly.
 
-The compiled-HIR bundle is schema 12 and embeds semantic schema 8,
-SystemVerilog HIR schema 38, and VHDL HIR schema 18. Bundle schema 12
+The compiled-HIR bundle is schema 13 and embeds semantic schema 9,
+SystemVerilog HIR schema 38, and VHDL HIR schema 18. Bundle schema 13
+(semantic schema 9) records what each scope stands for
+(`Scope::role`: a named scope, an unnamed block or fork, a loop's parameter
+region, a case-matches item's pattern scope or an unlabeled process; IEEE
+1800-2023 9.2, 9.3, 12.6, 12.7; IEEE 1076-2019 10.10, 11.3), so no reader
+tests a scope's displayed placeholder name. Bundle schema 12
 (semantic schema 8, SystemVerilog HIR schema 38) records the built-in method
 a member call names (`Expression::builtin_method`,
 `ConstraintExpression::builtin_method`: the string, enumeration, array,

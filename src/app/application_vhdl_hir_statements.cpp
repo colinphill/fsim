@@ -34,8 +34,9 @@ void VhdlHirBuilder::add_statement_regions(
             const auto statement_source = source(statement.span);
             child_origin = origin(statement_source, enclosing_origin,
                 statement.label.empty() ? "VHDL statement" : statement.label);
-            child_scope = nested_scope(
-                enclosing_scope, "<loop>", statement_source, child_origin);
+            child_scope = nested_scope(enclosing_scope, "<loop>",
+                statement_source, child_origin,
+                semantic::ScopeRole::loop_parameters);
         }
         if (statement.kind == frontend::StatementKind::Block) {
             const auto statement_source = source(statement.span);
@@ -52,7 +53,9 @@ void VhdlHirBuilder::add_statement_regions(
                 enclosing_scope,
                 scope_name,
                 statement_source,
-                child_origin);
+                child_origin,
+                statement.label.empty() ? semantic::ScopeRole::unnamed_block
+                                        : semantic::ScopeRole::named);
             std::vector<semantic::DeclarationId> children;
             const auto span = [](const auto& values) {
                 return std::span { values.data(), values.size() };

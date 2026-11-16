@@ -6051,7 +6051,8 @@ private:
                                     = specialization_.design().semantics.scopes();
                                 const auto scope = declaration->vhdl->scope;
                                 if (scope.valid() && scope.value() < scopes.size()
-                                    && scopes[scope.value()].name == "<loop>") {
+                                    && scopes[scope.value()].role
+                                        == semantic::ScopeRole::loop_parameters) {
                                     return false;
                                 }
                                 return declaration->vhdl->form

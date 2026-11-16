@@ -181,6 +181,26 @@ enum class Language : std::uint8_t {
     systemc,
 };
 
+/// What a scope stands for. A scope with no name in the source keeps a
+/// displayed placeholder name; no reader tests that spelling.
+enum class ScopeRole : std::uint8_t {
+    // A scope its construct names: a unit, a named block, a labeled process,
+    // a subprogram, a class, a generate block.
+    named,
+    // An unnamed begin-end or VHDL block statement (IEEE 1800-2023 9.3.1).
+    unnamed_block,
+    // An unnamed fork-join block (9.3.2).
+    unnamed_fork,
+    // The region of a loop's parameter or loop variable (IEEE 1076-2019
+    // 10.10, IEEE 1800-2023 12.7.1) that no label names.
+    loop_parameters,
+    // The pattern variables of a case matches item (12.6).
+    match,
+    // An unlabeled process (9.2; IEEE 1076-2019 11.3).
+    unnamed_process,
+    last = unnamed_process,
+};
+
 enum class UnitKind : std::uint8_t {
     vhdl_entity,
     vhdl_architecture,
@@ -303,6 +323,7 @@ struct Scope {
     std::string name;
     SourceSpanId source;
     OriginId origin;
+    ScopeRole role{ScopeRole::named};
 };
 
 struct Unit {
@@ -417,7 +438,8 @@ public:
         std::optional<ScopeId> parent,
         std::string name,
         SourceSpanId source,
-        OriginId origin);
+        OriginId origin,
+        ScopeRole role = ScopeRole::named);
     [[nodiscard]] TypeId add_type(
         ScopeId scope,
         TypeKind kind,

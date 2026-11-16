@@ -31485,7 +31485,8 @@ bool HierarchyBuilder::validate_compiled_vhdl_selected_package_names(
     std::unordered_set<std::string> construct_labels;
     for (const auto& scope : compiled_->semantics.scopes()) {
         if ((scope.unit == architecture.id || scope.unit == entity->id)
-            && !scope.name.empty() && !scope.name.starts_with('<')) {
+            && !scope.name.empty()
+            && scope.role == semantic::ScopeRole::named) {
             construct_labels.insert(lowercase_ascii_copy(scope.name));
         }
     }

@@ -210,7 +210,7 @@ fsim_require_schema_diagnostic_tokens("${FSIM_DESIGN_TEST}"
 fsim_require_schema_diagnostic_tokens("${FSIM_LIBRARY_TEST}"
   "has_identity_diagnostic"
   "portable-unit schema 16"
-  "compiled-HIR schema 12"
+  "compiled-HIR schema 13"
   "stale-publication.fsimlib")
 fsim_require_schema_diagnostic_tokens("${FSIM_APPLICATION_TEST}"
   "unsupported design state FSIMUVM1 identity: found"

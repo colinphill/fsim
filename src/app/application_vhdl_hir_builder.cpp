@@ -382,14 +382,16 @@ void VhdlHirBuilder::add_design(const frontend::ParsedDesign& parsed)
     const semantic::ScopeId parent_scope,
     const std::string_view scope_name,
     const semantic::SourceSpanId span,
-    const semantic::OriginId scope_origin)
+    const semantic::OriginId scope_origin,
+    const semantic::ScopeRole role)
 {
     return model_.add_scope(
         scope_unit(parent_scope),
         parent_scope,
         std::string { scope_name },
         span,
-        scope_origin);
+        scope_origin,
+        role);
 }
 
 [[nodiscard]] semantic::DeclarationId VhdlHirBuilder::add_function_argument(
@@ -996,7 +998,9 @@ void VhdlHirBuilder::add_generate_body(
     const auto process_origin = origin(
         process_source, parent_origin, process_name);
     const auto process_scope = nested_scope(
-        parent_scope, process_name, process_source, process_origin);
+        parent_scope, process_name, process_source, process_origin,
+        input.name.empty() ? semantic::ScopeRole::unnamed_process
+                           : semantic::ScopeRole::named);
     const auto id = model_.add_process_identity(
         process_scope,
         process_name,

@@ -348,7 +348,8 @@ private:
         semantic::ScopeId parent_scope,
         std::string_view name,
         semantic::SourceSpanId span,
-        semantic::OriginId scope_origin);
+        semantic::OriginId scope_origin,
+        semantic::ScopeRole role = semantic::ScopeRole::named);
     [[nodiscard]] sv::Name name(
         std::string_view spelling,
         const frontend::SourceSpan& span,

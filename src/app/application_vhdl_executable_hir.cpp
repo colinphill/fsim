@@ -599,7 +599,7 @@ class VhdlExecutableBuilder final {
       const auto existing = std::ranges::find_if(
           model_.scopes(), [&](const semantic::Scope& candidate) {
             return candidate.parent == enclosing_scope
-                && candidate.name == "<loop>"
+                && candidate.role == semantic::ScopeRole::loop_parameters
                 && candidate.source == statement_source;
           });
       child_scope = existing != model_.scopes().end()
@@ -609,7 +609,8 @@ class VhdlExecutableBuilder final {
                 enclosing_scope,
                 "<loop>",
                 statement_source,
-                statement_origin);
+                statement_origin,
+                semantic::ScopeRole::loop_parameters);
       output.nested_scope = child_scope;
       output.declarations.push_back(loop_parameter(
           input.loop_variable,
@@ -617,11 +618,15 @@ class VhdlExecutableBuilder final {
           child_scope,
           statement_origin));
     } else if (input.kind == frontend::StatementKind::Block) {
-      const auto scope_name = input.label.empty() ? "<block>" : input.label;
+      // The region builder created the block's scope; an unlabeled one has
+      // no name to find it by.
       const auto found_scope = std::ranges::find_if(
           model_.scopes(), [&](const semantic::Scope& candidate) {
             return candidate.parent == enclosing_scope
-                && candidate.name == scope_name
+                && (input.label.empty()
+                        ? candidate.role == semantic::ScopeRole::unnamed_block
+                        : candidate.role == semantic::ScopeRole::named
+                            && candidate.name == input.label)
                 && candidate.source == statement_source;
           });
       if (found_scope == model_.scopes().end()) {

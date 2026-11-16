@@ -1660,7 +1660,8 @@ bool Lowerer::initialize_hir_declarations(
             const auto& scopes
                 = specialized_hir_unit_->design().semantics.scopes();
             return scope.valid() && scope.value() < scopes.size()
-                && scopes[scope.value()].name == "<loop>";
+                && scopes[scope.value()].role
+                    == semantic::ScopeRole::loop_parameters;
         }();
         if (declaration->systemverilog != nullptr) {
             if (const auto storage = hir_static_storage(declaration_id)) {
@@ -2873,7 +2874,8 @@ bool Lowerer::initialize_hir_declarations(
             : declaration->vhdl->scope;
         const bool loop_control = declaration_scope.valid()
             && declaration_scope.value() < scopes.size()
-            && scopes[declaration_scope.value()].name == "<loop>";
+            && scopes[declaration_scope.value()].role
+                == semantic::ScopeRole::loop_parameters;
         runtime::simir::DebugFrameLocal local_frame;
         auto name = debug_name(declaration_id, binding->name, local_frame);
         // A declaration initialized again (a fork's block item in a loop)
@@ -2957,11 +2959,22 @@ std::optional<Process> Lowerer::lower_hir_process(
     hierarchy_ = std::string { hierarchy };
 
     HirProcessDescription description;
+    // An unlabeled process has the name the lowering makes (IEEE 1800-2023
+    // 9.2; IEEE 1076-2019 11.3).
+    const auto& process_scopes
+        = specialized_hir_unit_->design().semantics.scopes();
+    const auto process_scope = source->systemverilog != nullptr
+        ? source->systemverilog->scope
+        : source->vhdl->scope;
+    const bool unnamed_process = process_scope.valid()
+        && process_scope.value() < process_scopes.size()
+        && process_scopes[process_scope.value()].role
+            == semantic::ScopeRole::unnamed_process;
     if (source->systemverilog != nullptr) {
         const auto& input = *source->systemverilog;
         description.source = input.source;
         description.scope = input.scope;
-        description.name = input.name == "<process>"
+        description.name = unnamed_process
             ? std::string { }
             : input.name;
         description.declarations = input.declarations;
@@ -3353,7 +3366,7 @@ std::optional<Process> Lowerer::lower_hir_process(
         const auto& input = *source->vhdl;
         description.source = input.source;
         description.scope = input.scope;
-        description.name = input.name == "<process>"
+        description.name = unnamed_process
             ? std::string { }
             : input.name;
         description.declarations = input.declarations;

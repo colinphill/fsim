@@ -808,7 +808,8 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
                     program_owner);
             }
             if (replay) {
-                if (process->systemverilog->name == "<process>") {
+                if (unnamed_process_scope(
+                        *compiled_, process->systemverilog->scope)) {
                     replay->instance.name = occurrence.path;
                 }
                 const auto runtime_process_id = replay->instance.id;
@@ -869,7 +870,8 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
                 return false;
             }
             if (process && process->systemverilog != nullptr
-                && process->systemverilog->name == "<process>") {
+                && unnamed_process_scope(
+                    *compiled_, process->systemverilog->scope)) {
                 lowered->name = occurrence.path;
             }
             lowered->language_standard = unit.standard;
@@ -1024,7 +1026,8 @@ bool HierarchyBuilder::lower_deferred_generated_systemverilog(
             && process->systemverilog != nullptr
             && process->systemverilog->concurrent_assertion;
         if (process && process->systemverilog != nullptr
-            && process->systemverilog->name == "<process>") {
+            && unnamed_process_scope(
+                *compiled_, process->systemverilog->scope)) {
             lowered->name = occurrence.path;
         }
         publish_systemverilog_process(*lowered, unit, concurrent_assertion,

@@ -9604,8 +9604,8 @@ Lowerer::hir_runtime_binding(
                 < specialized_hir_unit_->design().semantics.scopes().size()
             && specialized_hir_unit_->design().semantics.scopes()[
                    source.scope.value()]
-                       .name
-                == "<loop>";
+                       .role
+                == semantic::ScopeRole::loop_parameters;
         process_variable = materialized_local
             || loop_parameter
             || (source.scope == process_scope

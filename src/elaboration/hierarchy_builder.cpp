@@ -1559,9 +1559,6 @@ HierarchyBuilder::lower_cached_vhdl_occurrence(
         ? diagnostic::thread_cpu_now() : std::nullopt;
     const auto instance_path_uses_before = lowerer.hir_instance_path_uses();
     auto lowered = lower_occurrence();
-    if (process_source && lowered && lowered->name == "<process>") {
-        lowered->name = std::string { path };
-    }
     const auto invocation_after =
         lowerer.next_hir_callable_invocation_identity();
     if (const auto elapsed = diagnostic::thread_cpu_elapsed(
@@ -2329,7 +2326,8 @@ HierarchyBuilder::replay_systemverilog_process_template(
             continue;
         }
         if (!generated_occurrence
-            && (source.name.empty() || source.name == "<process>")) {
+            && (source.name.empty()
+                || unnamed_process_scope(*compiled_, source.scope))) {
             // The lowerer derives anonymous names from the new runtime
             // ProcessId; copying the cached suffix would retain the
             // prototype's stale `.process_<id>` suffix.

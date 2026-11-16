@@ -28856,9 +28856,10 @@ std::optional<std::string> Lowerer::hir_vhdl_path_text(
             if (!record.parent) {
                 break;
             }
-            if (record.name == "<process>") {
+            if (record.role == semantic::ScopeRole::unnamed_process) {
                 result.emplace_back();
-            } else if (!record.name.empty() && !record.name.starts_with('<')) {
+            } else if (!record.name.empty()
+                && record.role == semantic::ScopeRole::named) {
                 const auto* callable = subprogram_of_scope(record.id);
                 result.push_back(lower(record.name)
                     + (callable != nullptr ? signature(*callable) : ""));

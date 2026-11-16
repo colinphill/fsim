@@ -5116,17 +5116,13 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             // Placed under the instantiating module above.
         } else if (const auto matching_scope = published_scopes.find(path);
             matching_scope != published_scopes.end()) {
-            if (descriptor.name != "<process>") {
-                descriptor.parent = matching_scope->second;
-            }
+            descriptor.parent = matching_scope->second;
             descriptor.name
                 = "$process_" + std::to_string(process.runtime_index);
             synthesized_name = true;
         } else if (const auto* const scope
                    = recorded_generate_scope(instance_path, path)) {
-            if (descriptor.name != "<process>") {
-                holder = scope;
-            }
+            holder = scope;
             descriptor.name
                 = "$process_" + std::to_string(process.runtime_index);
             synthesized_name = true;

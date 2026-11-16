@@ -337,7 +337,8 @@ private:
         const semantic::ScopeId parent_scope,
         const std::string_view scope_name,
         const semantic::SourceSpanId span,
-        const semantic::OriginId scope_origin);
+        const semantic::OriginId scope_origin,
+        semantic::ScopeRole role = semantic::ScopeRole::named);
 
     [[nodiscard]] semantic::DeclarationId add_function_argument(
         const frontend::FunctionArgument& input,

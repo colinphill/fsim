@@ -53,6 +53,16 @@ using runtime::PackedLogic4;
 using namespace runtime::simir;
 using namespace elaboration_detail;
 
+/// Whether a process's scope is that of an unlabeled process (IEEE 1800-2023
+/// 9.2; IEEE 1076-2019 11.3), whose name the tool makes.
+[[nodiscard]] inline bool unnamed_process_scope(
+    const semantic::CompiledDesign& design, const semantic::ScopeId scope)
+{
+    const auto* record = design.find_scope(scope);
+    return record != nullptr
+        && record->role == semantic::ScopeRole::unnamed_process;
+}
+
 /// A package class-handle initializer that runs as a startup process, in
 /// declaration order (IEEE 1800-2023 6.21, 8.7): a `new`, a call of a native
 /// UVM singleton getter (`uvm_root::get()`, which the native services answer)

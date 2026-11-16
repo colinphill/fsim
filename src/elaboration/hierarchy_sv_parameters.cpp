@@ -247,7 +247,8 @@ HierarchyBuilder::compiled_systemverilog_scoped_parameter(
             if (scope == nullptr) {
                 break;
             }
-            if (!scope->name.empty() && !scope->name.starts_with('<')) {
+            if (!scope->name.empty()
+                && scope->role == semantic::ScopeRole::named) {
                 names.push_back(scope->name);
             }
             current = scope->parent;

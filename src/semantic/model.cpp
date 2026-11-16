@@ -327,7 +327,8 @@ ScopeId Model::add_scope(
     const std::optional<ScopeId> parent,
     std::string name,
     const SourceSpanId source,
-    const OriginId origin) {
+    const OriginId origin,
+    const ScopeRole role) {
     require_id(unit, units_, "scope has an invalid unit");
     if (parent) {
         require_id(*parent, scopes_, "scope has an invalid parent");
@@ -336,7 +337,7 @@ ScopeId Model::add_scope(
     require_id(origin, origins_, "scope has an invalid origin");
     const auto id = next_id<ScopeId>(scopes_.size());
     scopes_.push_back(
-        {id, unit, parent, std::move(name), source, origin});
+        {id, unit, parent, std::move(name), source, origin, role});
     return id;
 }
 

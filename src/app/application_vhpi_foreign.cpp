@@ -5890,6 +5890,16 @@ private:
     // generate statement. An unlabeled one has the implicit label `_P<n>`
     // (IEEE 1076-2019 19.4.2.3), which counts the unlabeled ones only, those
     // of the architecture after those of the entity.
+    // Whether a process is unlabeled (IEEE 1076-2019 11.3): its scope's
+    // role, not its displayed name.
+    [[nodiscard]] bool unnamed_process(const vhdl::Process& process) const
+    {
+        const auto& scopes = semantics_.scopes();
+        return process.scope.valid() && process.scope.value() < scopes.size()
+            && scopes[process.scope.value()].role
+                == semantic::ScopeRole::unnamed_process;
+    }
+
     [[nodiscard]] std::vector<Object*>& concurrent_statements(Object& region)
     {
         auto& result = region.lists[ListKind::statements];
@@ -5904,7 +5914,8 @@ private:
                     ? member.process->name
                     : member.statement->label;
                 const bool implicit = declared_label.empty()
-                    || declared_label == "<process>";
+                    || (member.process != nullptr
+                        && unnamed_process(*member.process));
                 const auto label = implicit
                     ? "_P" + std::to_string(sequence++)
                     : declared_label;
@@ -6058,11 +6069,13 @@ private:
         if (!result.empty() || unit.unit == nullptr) {
             return result;
         }
-        const auto implicit_label = [](const StatementMember& member) {
+        const auto implicit_label = [&](const StatementMember& member) {
             const auto& label = member.process != nullptr
                 ? member.process->name
                 : member.statement->label;
-            return label.empty() || label == "<process>";
+            return label.empty()
+                || (member.process != nullptr
+                    && unnamed_process(*member.process));
         };
         std::size_t sequence { };
         if (unit.kind == vhpiArchBodyK && unit.entity != nullptr) {

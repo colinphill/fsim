@@ -9956,7 +9956,7 @@ CompiledDeclarationResolution CompiledDesignResolver::resolve_vhdl(
                     // Named by the design unit, below.
                 } else if (same_vhdl_identifier(record->name, parts.front())) {
                     selected.push_back(enclosing);
-                } else if (record->name == "<loop>") {
+                } else if (record->role == ScopeRole::loop_parameters) {
                     // A loop scope is named by its statement's label.
                     const auto& statements = design_->vhdl_hir.statements();
                     if (std::ranges::any_of(statements,

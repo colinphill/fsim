@@ -1267,6 +1267,9 @@ namespace codec_detail {
         } else if constexpr (std::same_as<T, fsim::runtime::simir::ClassConstruction>) {
             return value >= fsim::runtime::simir::ClassConstruction::run_constructor
                 && value <= fsim::runtime::simir::ClassConstruction::last;
+        } else if constexpr (std::same_as<T, fsim::semantic::ScopeRole>) {
+            return value >= fsim::semantic::ScopeRole::named
+                && value <= fsim::semantic::ScopeRole::last;
         } else {
             // Every enumeration a saved record holds has its range checked
             // when it is read back: one without a branch fails the build.

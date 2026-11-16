@@ -476,7 +476,7 @@ bool HierarchyBuilder::lower_compiled_vhdl_generated_processes(
             }
             const bool anonymous_process = process
                 && process->vhdl != nullptr
-                && process->vhdl->name == "<process>";
+                && unnamed_process_scope(*compiled_, process->vhdl->scope);
             if (lowered->instance) {
                 auto& instance = *lowered->instance;
                 if (anonymous_process) {

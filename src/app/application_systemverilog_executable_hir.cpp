@@ -321,7 +321,8 @@ namespace {
                     }
                     --target;
                 } while (scope_name(ancestors[target]).empty()
-                    || scope_name(ancestors[target]).starts_with('<'));
+                    || model_.scopes()[ancestors[target].value()].role
+                        != semantic::ScopeRole::named);
                 if (scope_name(ancestors[target]) != parts[part]) {
                     return std::nullopt;
                 }
@@ -1849,9 +1850,16 @@ namespace {
                               ? "<loop>"
                               : "<block>")
                     : input.label;
+                const auto scope_role = input.label.empty()
+                    ? (input.kind == frontend::StatementKind::Fork
+                              ? semantic::ScopeRole::unnamed_fork
+                          : declares_loop_variable
+                              ? semantic::ScopeRole::loop_parameters
+                              : semantic::ScopeRole::unnamed_block)
+                    : semantic::ScopeRole::named;
                 child_scope = model_.add_scope(
                     scope_unit(enclosing_scope), enclosing_scope, scope_name,
-                    statement_source, statement_origin);
+                    statement_source, statement_origin, scope_role);
                 output.nested_scope = child_scope;
                 if (!input.systemverilog_imports.empty()) {
                     auto& imports = block_imports_[child_scope];
@@ -2226,7 +2234,7 @@ namespace {
                         })) {
                     item_scope = model_.add_scope(scope_unit(child_scope),
                         child_scope, "<match>", converted.source,
-                        statement_origin);
+                        statement_origin, semantic::ScopeRole::match);
                     for (const auto& choice : alternative.choices) {
                         pattern_variables(choice, item_scope, statement_origin);
                     }
