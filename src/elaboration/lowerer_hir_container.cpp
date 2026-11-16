@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "hierarchy_sv_constant_evaluator.hpp"
+#include "fsim/frontend/systemverilog_standard_package.hpp"
 #include "lowerer_internal.hpp"
 #include "fsim/semantic/systemverilog_structure_image.hpp"
 
@@ -1716,6 +1717,18 @@ Lowerer::hir_systemverilog_enumeration_method(
                     std::move(result), *type, receiver->systemverilog->scope);
             }
             return std::nullopt;
+        }
+        // The `state` a process's status() returns (IEEE 1800-2023 9.7): an
+        // int-based enumeration whose constants are numbered in order.
+        if (hir_process_status_query(source.operands.front())) {
+            const auto states = frontend::systemverilog_process_states();
+            for (std::size_t index = 0U; index < states.size(); ++index) {
+                result.names.emplace_back(states[index]);
+                result.values.push_back(index);
+            }
+            result.width = 32U;
+            result.signed_value = true;
+            return result;
         }
         // A chained call (`e.next(1).next(1)`) has the enumeration type of
         // the inner method's receiver.

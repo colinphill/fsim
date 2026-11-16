@@ -1419,7 +1419,7 @@ sim.impl	class_static_store	P+ids	application run state (S6)
 sim.impl	class_static_containers	D	artifact products and caches: storage identity -> container object id, read from the design at setup (the containers' values are saved with the interpreter containers)
 sim.impl	static_kernel_codegen	D	artifact products and caches: the static kernel's code generator, made with the interpreter from the design and the cache path; read only by native_cache_statistics
 sim.impl	class_methods	P+ids	application run state (S6)
-sim.impl	killing_randomize_state	W	work storage: a process kill sets the killing process's randomize() calls aside and the kill's return takes them back, inside one time step; what a process that killed itself left is never read again (9.7, 18.6.1)
+sim.impl	killing_randomize_states	W	work storage: a process kill sets the killing process's randomize() calls aside and the kill's return takes them back (one entry per killing process, since a kill can suspend its caller), inside one time step; what a process that killed itself left is never read again (9.7, 18.6.1)
 sim.impl	randomize_callback_contexts	W	work storage: a generated pre_randomize or post_randomize call pushes its entry and pops it when it returns, inside one time step, so it is empty at rest (18.6.1)
 sim.impl	lowered_randomize_calls	W	work storage: a randomize() call pushes its entry and pops it before the call returns, inside one time step, so it is empty at rest (18.6.1)
 sim.impl	uvm_objects	P+ids	saved by the app.uvm section (#188); handles to class objects keep their slot and generation, phase and objection handles are bound to the restoring run's services

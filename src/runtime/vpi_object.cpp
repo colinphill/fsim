@@ -974,6 +974,8 @@ SystemVerilogVpiObjectResult SystemVerilogVpiObjectRegistry::create(
         record.anonymous = anonymous;
         record.state_key = std::move(state_key);
         record.compilation_unit = descriptor.compilation_unit;
+        record.synthesized = descriptor.synthesized;
+        record.driver_index = descriptor.driver_index;
     } else {
         if (records_.size() >= slot_mask) {
             return { { }, SystemVerilogVpiObjectError::ResourceLimit };
@@ -1001,6 +1003,8 @@ SystemVerilogVpiObjectResult SystemVerilogVpiObjectRegistry::create(
             std::move(state_key),
             false,
             descriptor.compilation_unit,
+            descriptor.synthesized,
+            descriptor.driver_index,
         });
     }
 
@@ -1083,6 +1087,8 @@ SystemVerilogVpiObjectRegistry::lookup_locked(
                  record.source,
                  std::move(type),
                  record.compilation_unit,
+                 record.synthesized,
+                 record.driver_index,
              },
         { } };
 }

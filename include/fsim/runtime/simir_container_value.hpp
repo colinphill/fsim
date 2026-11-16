@@ -46,6 +46,9 @@ struct ContainerType {
   bool two_state{};
   bool signed_elements{};
   bool union_aggregate{};
+  // An unpacked tagged union: the first member is the hidden tag (it has no
+  // name) and the others are the union's members.
+  bool tagged_union{};
   bool aggregate_value{};
   bool queue{};
   bool associative{};

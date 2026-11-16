@@ -1361,7 +1361,7 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
                 named->alias.clear();
                 if (composed_element
                         ? !aliased.name.empty()
-                        : !base_definition->systemverilog->name.starts_with('@')) {
+                        : !base_definition->systemverilog->name.empty()) {
                     named->alias.push_back(std::move(aliased));
                 }
                 named->name = record->name;
@@ -1437,9 +1437,7 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
                     aggregate.members.push_back(std::move(*child));
                     aggregate.member_names.push_back(member.name);
                 }
-                if (!record->name.starts_with('@')) {
-                    aggregate.name = record->name;
-                }
+                aggregate.name = record->name;
                 named = std::move(aggregate);
                 break;
             }
@@ -1479,9 +1477,7 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
                     ++next;
                 }
                 enumeration.element.push_back(std::move(*base));
-                if (!record->name.starts_with('@')) {
-                    enumeration.name = record->name;
-                }
+                enumeration.name = record->name;
                 named = std::move(enumeration);
                 break;
             }
@@ -1741,6 +1737,7 @@ std::optional<ContainerType> systemverilog_container_type(
                 result.two_state = element->two_state;
                 result.signed_elements = element->signed_elements;
                 result.union_aggregate = element->union_aggregate;
+                result.tagged_union = element->tagged_union;
                 result.element_nominal_type
                     = element->element_nominal_type;
                 result.element_builtin_nominal
@@ -1928,10 +1925,11 @@ std::optional<ContainerType> systemverilog_container_type(
                     leaf.dimensions.emplace_back(0, 0);
                     return leaf;
                 };
-                // The tag leads the members; a void member holds no value.
+                // The tag leads the members and has no name; a void member
+                // holds no value.
                 if (tagged_aggregate) {
-                    result.member_names.emplace_back(
-                        systemverilog_tagged_union_tag_member);
+                    result.tagged_union = true;
+                    result.member_names.emplace_back();
                     result.element_types.push_back(packed_leaf(
                         std::max<std::uint32_t>(1U,
                             static_cast<std::uint32_t>(std::bit_width(

@@ -12658,7 +12658,8 @@ private:
     void record_call_result(const VpiFrameModel::Frame& frame)
     {
         const auto* const owner = frames_->thread(frame.thread);
-        if (!frame.has_call_site || owner == nullptr) {
+        if (!frame.has_call_site || owner == nullptr
+            || frame.host_serial != 0U) {
             return;
         }
         // The slots of the program's call-result table, not its debug
@@ -13263,22 +13264,12 @@ private:
     };
 
     // The executor's serial of a frame of a method the host class executor
-    // runs (its lowering suffix `@host-frame-<serial>`); none for a frame
-    // of generated code.
+    // runs; none for a frame of generated code.
     [[nodiscard]] static std::optional<std::uint64_t> host_frame_serial(
         const VpiFrameModel::Frame& frame)
     {
-        if (!frame.lowering.starts_with(host_frame_suffix)) {
-            return std::nullopt;
-        }
-        std::uint64_t serial { };
-        const auto digits = std::string_view { frame.lowering }.substr(
-            host_frame_suffix.size());
-        const auto [end, error] = std::from_chars(
-            digits.data(), digits.data() + digits.size(), serial);
-        return error == std::errc { } && end == digits.data() + digits.size()
-            ? std::optional { serial }
-            : std::nullopt;
+        return frame.host_serial != 0U ? std::optional { frame.host_serial }
+                                       : std::nullopt;
     }
 
     // The executor's serial of the frame a host frame variable belongs to.
@@ -14333,20 +14324,11 @@ private:
         // The driver objects are named after their design driver; the
         // specialization of the net is that of the first one's object.
         const auto first = info(drivers.front().first);
-        std::uint32_t driver_index { };
-        constexpr std::string_view prefix { "$driver_" };
-        if (!first || !first->name.starts_with(prefix)) {
+        if (!first || !first->driver_index
+            || *first->driver_index >= design.drivers().size()) {
             return;
         }
-        const auto digits = std::string_view { first->name }.substr(
-            prefix.size());
-        if (std::from_chars(digits.data(), digits.data() + digits.size(),
-                driver_index)
-                .ec
-            != std::errc { }
-            || driver_index >= design.drivers().size()) {
-            return;
-        }
+        const auto driver_index = *first->driver_index;
         const auto specialization
             = design.objects()
                   .at(design.drivers()[driver_index].object.value())
@@ -17463,18 +17445,15 @@ private:
         }
         for (const auto handle : drain(registry_.iterate_children(reference))) {
             const auto object = info(handle);
-            // Names starting `$` or `@` are the elaborator's own storage,
-            // not design objects.
-            // ITEM31-LEFT: the objects this test hides are the registry's
-            // `$process_N`, `$driver_N` and `$assertion` objects and the
-            // `$unit` package, but also any design object whose name starts
-            // with `$` (the elaborator's own storage signals carry no
-            // recorded origin). A flag on the descriptor and info set only
-            // where the first kinds are made would not select the same
-            // set, so the name test stays until every such object is
-            // typed at its producer.
+            // A generated object (a process, driver or assertion the
+            // service made, or storage the elaborator made for no
+            // declaration) is no design object, and neither is a name
+            // starting `@`.
+            // ITEM31-LEFT: the `@` names are the frame locals and counters
+            // the elaborator and the frontend name with a leading `@`; they
+            // carry no recorded origin yet.
             if (!object
-                || ((object->name.starts_with('$')
+                || ((object->synthesized
                         && object->kind != SystemVerilogVpiObjectKind::ClockingBlock)
                     || object->name.starts_with('@'))) {
                 continue;

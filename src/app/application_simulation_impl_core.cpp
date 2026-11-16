@@ -2080,22 +2080,26 @@ runtime::PackedLogic4 Simulation::Impl::invoke_lowered_randomize_step(
     // randomize() calls and callbacks it is in: they are set aside before
     // the kill and come back only when the kill returns.
     if (hook == Hook::process_kill_begin) {
-        killing_randomize_state = KilledRandomizeState {
+        killing_randomize_states.push_back(KilledRandomizeState {
             process,
             std::exchange(lowered_randomize_calls, { }),
             std::exchange(randomize_callback_contexts, { }),
-        };
+        });
         return done;
     }
     if (hook == Hook::process_kill_end) {
-        if (!killing_randomize_state
-            || killing_randomize_state->process != process) {
+        // The newest entry: one a process left by killing itself never
+        // returns.
+        const auto state = std::ranges::find(
+            std::ranges::reverse_view { killing_randomize_states }, process,
+            &KilledRandomizeState::process);
+        if (state.base() == killing_randomize_states.begin()) {
             throw std::logic_error { "process kill returned unmatched" };
         }
-        lowered_randomize_calls = std::move(killing_randomize_state->calls);
-        randomize_callback_contexts
-            = std::move(killing_randomize_state->contexts);
-        killing_randomize_state.reset();
+        const auto entry = std::prev(state.base());
+        lowered_randomize_calls = std::move(entry->calls);
+        randomize_callback_contexts = std::move(entry->contexts);
+        killing_randomize_states.erase(entry);
         return done;
     }
     if (hook == Hook::randomize_begin) {

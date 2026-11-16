@@ -134,6 +134,9 @@ ProcessInstanceProgram::ProcessInstanceProgram(Process process)
     , final { process.final }
     , startup_phase { process.startup_phase }
     , origin { process.origin }
+    , gate_driver_slot { process.gate_driver_slot }
+    , gate_driver_output { process.gate_driver_output }
+    , gate_driver_instance { std::move(process.gate_driver_instance) }
     , startup_order { process.startup_order }
     , startup_package_owner_id { process.startup_package_owner_id }
     , startup_writable_package_owner_ids {
@@ -171,6 +174,9 @@ ProcessInstanceProgram::ProcessInstanceProgram(
     , final { process.final() }
     , startup_phase { process.startup_phase() }
     , origin { process.origin() }
+    , gate_driver_slot { process.gate_driver_slot() }
+    , gate_driver_output { process.gate_driver_output() }
+    , gate_driver_instance { process.gate_driver_instance() }
     , startup_order { process.startup_order() }
     , startup_package_owner_id { process.startup_package_owner_id() }
     , startup_writable_package_owner_ids {
@@ -693,6 +699,25 @@ ProcessProgramView::origin() const noexcept
     return facade_ != nullptr ? facade_->origin : instance_->origin;
 }
 
+const support::GateDriverSlot&
+ProcessProgramView::gate_driver_slot() const noexcept
+{
+    return facade_ != nullptr ? facade_->gate_driver_slot
+                              : instance_->gate_driver_slot;
+}
+
+const std::uint32_t& ProcessProgramView::gate_driver_output() const noexcept
+{
+    return facade_ != nullptr ? facade_->gate_driver_output
+                              : instance_->gate_driver_output;
+}
+
+const std::string& ProcessProgramView::gate_driver_instance() const noexcept
+{
+    return facade_ != nullptr ? facade_->gate_driver_instance
+                              : instance_->gate_driver_instance;
+}
+
 const std::uint64_t& ProcessProgramView::startup_order() const noexcept
 {
     return facade_ != nullptr ? facade_->startup_order
@@ -797,6 +822,9 @@ Process ProcessProgramView::materialize_impl(
     process.scheduling_domain = scheduling_domain();
     process.startup_phase = startup_phase();
     process.origin = origin();
+    process.gate_driver_slot = gate_driver_slot();
+    process.gate_driver_output = gate_driver_output();
+    process.gate_driver_instance = gate_driver_instance();
     process.startup_order = startup_order();
     process.startup_package_owner_id = startup_package_owner_id();
     process.startup_writable_package_owner_ids

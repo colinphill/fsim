@@ -593,7 +593,12 @@ end architecture;
                 == fsim::runtime::simir::StaticCallKind::dpi_import
             && call->method_identity.empty()
             && call->dpi.c_name == "dpi_identity_c"
-            && call->dpi.arguments == "i";
+            && call->dpi.arguments.size() == 1U
+            && !call->dpi.arguments.front().reference
+            && call->dpi.arguments.front().array
+                == fsim::runtime::simir::DpiArrayKind::none
+            && call->dpi.arguments.front().element.code
+                == fsim::support::DpiCTypeCode::int_signed;
     }));
     auto interpreter = elaborated.design->create_interpreter();
     bool invoked_dpi { };

@@ -1271,16 +1271,16 @@ bool Simulation::gate_delays_accepted(const runtime::simir::ProcessId driver,
 
 namespace {
 
-// The labels the front end gives a gate's drivers: `g`, `g$one`,
-// `g$output<n>`.
-bool gate_driver_stem_matches(const std::string& name, const std::string_view full_name)
+// Whether the process drives an output of the gate whose full name is given:
+// its single driver, the value-one half of a bufif or notif, or one of its
+// output drivers.
+bool drives_gate_output(
+    const runtime::simir::Process& program, const std::string_view full_name)
 {
-    if (!name.starts_with(full_name)) {
-        return false;
-    }
-    const auto rest = std::string_view { name }.substr(full_name.size());
-    // ITEM46-LEFT: gate driver processes are named after the instance label plus a slot suffix and matched by that name; a typed form needs the primitive instance and driver slot on the statement, the HIR statement and the process record
-    return rest.empty() || rest == "$one" || rest.starts_with("$output");
+    return (program.gate_driver_slot == support::GateDriverSlot::single
+               || program.gate_driver_slot == support::GateDriverSlot::one
+               || program.gate_driver_slot == support::GateDriverSlot::output)
+        && program.gate_driver_instance == full_name;
 }
 
 } // namespace
@@ -1292,7 +1292,7 @@ std::vector<runtime::simir::ProcessId> Simulation::undelayed_gate_drivers(
     std::vector<ProcessId> found;
     for (ProcessId id = 0U; id < impl_->design_process_count; ++id) {
         const auto& program = process_program(impl_->running_process(id));
-        if (!gate_driver_stem_matches(program.name, full_name)) {
+        if (!drives_gate_output(program, full_name)) {
             continue;
         }
         const bool writes = std::ranges::any_of(program.operations,
@@ -1312,8 +1312,8 @@ std::vector<runtime::simir::ProcessId> Simulation::gate_driver_processes(
 {
     std::vector<runtime::simir::ProcessId> found;
     for (runtime::simir::ProcessId id = 0U; id < impl_->design_process_count; ++id) {
-        if (gate_driver_stem_matches(
-                process_program(impl_->running_process(id)).name, full_name)) {
+        if (drives_gate_output(
+                process_program(impl_->running_process(id)), full_name)) {
             found.push_back(id);
         }
     }

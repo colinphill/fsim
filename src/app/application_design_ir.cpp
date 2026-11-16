@@ -762,6 +762,7 @@ class DesignIrBuilder final {
           ? std::optional<semantic::SourceSpanId>{
                 model_.declarations()[declaration_id->value()].source}
           : base_object.source;
+      const auto base_origin = base_object.origin;
       const auto object = add_object(
           di::ObjectKind::signal,
           alias_name,
@@ -774,6 +775,11 @@ class DesignIrBuilder final {
           alias_source,
           alias_value ? alias_value : base_object.declaration_value,
           base->second);
+      // The clocking event a port forwards keeps its origin under the
+      // forwarded name; any other alias is a declared name of its own.
+      if (base_origin == support::GeneratedObjectOrigin::clocking_event) {
+        result_.mutable_objects()[object.value()].origin = base_origin;
+      }
       // Another path to the storage of an unnamed-scope variable, and a
       // storage key, are no names (6.21).
       result_.mutable_objects()[object.value()].no_hierarchical_name
@@ -1368,7 +1374,10 @@ class DesignIrBuilder final {
       }
       // A process the elaborator made for its own lowering is no process of
       // the source either.
-      if (input.origin() != support::GeneratedObjectOrigin::none) {
+      if (input.origin()
+          == support::GeneratedObjectOrigin::procedural_assign_driver) {
+        output.generated_name = true;
+      } else if (input.origin() != support::GeneratedObjectOrigin::none) {
         output.synthesized = true;
       }
       output.name = input.name();

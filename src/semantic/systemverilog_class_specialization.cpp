@@ -16,6 +16,7 @@
 #include <functional>
 #include <limits>
 #include <map>
+#include <optional>
 #include <ranges>
 #include <set>
 #include <span>
@@ -1364,6 +1365,8 @@ private:
             return identity.str();
         }
         std::string target_identity = type.target.spelling;
+        // The HIR type record that identifies an anonymous type.
+        std::optional<std::uint32_t> anonymous_type;
         if (type.target.target.valid()) {
             const auto* definition = record_for(types_, type.target.target);
             if (definition != nullptr) {
@@ -1372,9 +1375,7 @@ private:
                 // An anonymous structure or union type (`struct {int a;}
                 // s;`) is identified by its HIR type record.
                 if (target_identity.empty()) {
-                    // ITEM46-LEFT: identity of an anonymous type used as a specialization key string; needs a typed key
-                    target_identity = "@anonymous-type:"
-                        + std::to_string(type.target.target.value());
+                    anonymous_type = type.target.target.value();
                 }
             }
         }
@@ -1392,6 +1393,11 @@ private:
             target_identity.clear();
         }
         identity << "type:" << encoded(target_identity) << ':';
+        // An anonymous type is keyed by its HIR record, as a field of its own
+        // beside the (empty) name.
+        if (anonymous_type) {
+            identity << "anonymous-record=" << *anonymous_type << ':';
+        }
         if (type.value_form) {
             identity << static_cast<unsigned>(*type.value_form);
         } else {

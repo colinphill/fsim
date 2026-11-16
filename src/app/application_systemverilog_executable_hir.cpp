@@ -1374,6 +1374,10 @@ namespace {
             const std::string_view spelling,
             const std::uint64_t source_order = 0U) const noexcept
         {
+            // An anonymous type has no name; an empty spelling names nothing.
+            if (spelling.empty()) {
+                return { };
+            }
             auto visible_scope = std::optional { scope };
             while (visible_scope) {
                 const auto local = std::ranges::find_if(
@@ -1624,19 +1628,17 @@ namespace {
                 const auto type_origin = origin(
                     type_source, parent,
                     "anonymous SystemVerilog aggregate type");
-                // ITEM46-LEFT: name of an implicit type registered by name in the scope; needs a name-free implicit type registration
-                const auto name = "@anonymous-aggregate:"
-                    + std::to_string(type_source.value()) + ":"
-                    + std::to_string(parent.value());
+                // An anonymous type has no name: it is an implicit type that
+                // is reached by its id only.
                 const auto base = output;
                 const auto type_id = model_.add_type(scope,
-                    semantic::TypeKind::implicit, name, base.target,
+                    semantic::TypeKind::implicit, std::string { },
+                    base.target,
                     type_source, type_origin);
                 output.target.target = type_id;
                 sv::TypeDefinition definition;
                 definition.id = type_id;
                 definition.form = aggregate_form;
-                definition.name = name;
                 definition.base = base;
                 definition.source = type_source;
                 definition.origin = type_origin;
@@ -2068,6 +2070,9 @@ namespace {
                     input.verilog_drive_strength->one);
             }
             output.gate_primitive = input.gate_primitive;
+            output.gate_driver_slot = input.gate_driver_slot;
+            output.gate_driver_output = input.gate_driver_output;
+            output.gate_driver_instance = input.gate_driver_instance;
             output.verilog_switch_driver = input.verilog_switch_driver;
             output.verilog_switch_bidirectional
                 = input.verilog_switch_bidirectional;

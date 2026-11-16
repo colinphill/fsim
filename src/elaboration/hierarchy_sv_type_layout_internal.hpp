@@ -30,12 +30,6 @@ namespace fsim::elaboration::hierarchy_sv_type_layout_detail {
     const semantic::SpecializedHirUnit& specialization,
     const semantic::sv::TypeDefinition& type);
 
-// The name of the hidden tag member that leads the members of such a union.
-inline constexpr std::string_view systemverilog_tagged_union_tag_member {
-    // ITEM46-LEFT: name of the hidden tag member in the member name list of a tagged-union container type; needs a typed member kind on ContainerType
-    "@tag"
-};
-
 [[nodiscard]] std::optional<runtime::simir::ContainerType>
 systemverilog_container_type(
     const semantic::SpecializedHirUnit& working_specialization,

@@ -2842,9 +2842,9 @@ Simulation::Impl::Impl(
                 observer(interpreter->scheduler(), point);
             }
         });
-    // The frames of the methods the host class executor runs, named by the
-    // callee suffix `@host-frame-<serial>` the VPI reads their automatic
-    // variables by (IEEE 1800-2023 37.43).
+    // The frames of the methods the host class executor runs, carrying the
+    // executor's frame serial the VPI reads their automatic variables by
+    // (IEEE 1800-2023 37.43).
     class_hir_execution.set_frame_probe(
         [this](const std::optional<runtime::simir::ProcessId> process,
             const runtime::simir::ExecutionPointKind kind,
@@ -2871,8 +2871,8 @@ Simulation::Impl::Impl(
             runtime::simir::ExecutionPoint point {
                 id, id, 0U, kind, std::move(source)
             };
-            point.callee = std::string { callee } + std::string {
-                application_detail::host_frame_suffix } + std::to_string(frame);
+            point.callee = std::string { callee };
+            point.host_frame_serial = frame;
             point.callee_declaration = declaration.value() + 1U;
             auto observers = execution_point_observers;
             for (const auto& [_, observer] : observers) {

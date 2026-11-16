@@ -3539,10 +3539,20 @@ void VerilogParser::parse_gate_primitive(
         statement.value = value;
         statement.delay = delay;
         statement.verilog_drive_strength = strength;
-        // ITEM46-LEFT: gate driver processes are named after the instance label plus a slot suffix and matched by that name; a typed form needs the primitive instance and driver slot on the statement, the HIR statement and the process record
+        // The label is only the display name; the driver identity is typed.
         statement.label = base_label.empty() || mapped_targets.size() == 1
             ? base_label
             : base_label + "$output" + std::to_string(output);
+        if (!base_label.empty()) {
+            statement.gate_driver_instance = base_label;
+            if (mapped_targets.size() == 1) {
+                statement.gate_driver_slot = support::GateDriverSlot::single;
+            } else {
+                statement.gate_driver_slot = support::GateDriverSlot::output;
+                statement.gate_driver_output
+                    = static_cast<std::uint32_t>(output);
+            }
+        }
         statement.gate_primitive = operation;
         statement.span = cover(start.span, previous().span);
         if (tristate_drivers) {
@@ -3557,8 +3567,8 @@ void VerilogParser::parse_gate_primitive(
           high.verilog_drive_strength = VerilogDriveStrength{
               VerilogStrength::HighZ, declared.one, declared.span};
           if (!high.label.empty()) {
-            // ITEM46-LEFT: gate driver processes are named after the instance label plus a slot suffix and matched by that name; a typed form needs the primitive instance and driver slot on the statement, the HIR statement and the process record
             high.label += "$one";
+            high.gate_driver_slot = support::GateDriverSlot::one;
           }
           statements.push_back(std::move(statement));
           statements.push_back(std::move(high));

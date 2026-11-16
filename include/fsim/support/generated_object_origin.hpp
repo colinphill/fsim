@@ -69,6 +69,63 @@ enum class GeneratedObjectOrigin : std::uint8_t {
     // drives an actual from its formal, of a port association.
     port_input_adapter,
     port_output_adapter,
+    // The delayed copy of a clocking block's input (the input skew), and
+    // the flag that marks a synchronous drive as pending.
+    clocking_skew,
+    clocking_pending,
+    // The process that drives a procedural continuous assignment (IEEE
+    // 1800-2023 10.6.1); VPI publishes it under its generated name, hidden
+    // from iteration.
+    procedural_assign_driver,
 };
+
+// Whether the objects of this origin are named with a leading `$` and are
+// left out of a scope's children by the VPI (IEEE 1800-2023 37.12); every
+// other generated object keeps the source-like name it was made with.
+[[nodiscard]] constexpr bool vpi_hidden_origin(
+    const GeneratedObjectOrigin origin) noexcept
+{
+    switch (origin) {
+    case GeneratedObjectOrigin::monitored_value:
+    case GeneratedObjectOrigin::udp_signal:
+    case GeneratedObjectOrigin::mipd_copy:
+    case GeneratedObjectOrigin::mipd_source:
+    case GeneratedObjectOrigin::switch_control:
+    case GeneratedObjectOrigin::actual_adapter:
+    case GeneratedObjectOrigin::clocking_event:
+    case GeneratedObjectOrigin::clocking_skew:
+    case GeneratedObjectOrigin::generic_actual:
+    case GeneratedObjectOrigin::local_signal:
+    case GeneratedObjectOrigin::vital_source:
+    case GeneratedObjectOrigin::procedural_assign_owner:
+    case GeneratedObjectOrigin::force_owner:
+    case GeneratedObjectOrigin::class_static:
+    case GeneratedObjectOrigin::class_static_local:
+    case GeneratedObjectOrigin::local_event:
+        return true;
+    case GeneratedObjectOrigin::none:
+    case GeneratedObjectOrigin::monitor_driver:
+    case GeneratedObjectOrigin::udp_table_process:
+    case GeneratedObjectOrigin::udp_input_process:
+    case GeneratedObjectOrigin::udp_output_process:
+    case GeneratedObjectOrigin::toggle_coverage:
+    case GeneratedObjectOrigin::fsm_coverage:
+    case GeneratedObjectOrigin::mipd_driver:
+    case GeneratedObjectOrigin::mipd_clone:
+    case GeneratedObjectOrigin::port_default_driver:
+    case GeneratedObjectOrigin::inout_adapter:
+    case GeneratedObjectOrigin::array_element_output_adapter:
+    case GeneratedObjectOrigin::alias_adapter:
+    case GeneratedObjectOrigin::implicit_driver:
+    case GeneratedObjectOrigin::implicit_value:
+    case GeneratedObjectOrigin::string_change:
+    case GeneratedObjectOrigin::port_input_adapter:
+    case GeneratedObjectOrigin::port_output_adapter:
+    case GeneratedObjectOrigin::clocking_pending:
+    case GeneratedObjectOrigin::procedural_assign_driver:
+        return false;
+    }
+    return false;
+}
 
 } // namespace fsim::support

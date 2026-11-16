@@ -1475,6 +1475,10 @@ SdfNetDelaySplitResult split_sdf_net_delays(ElaboratedDesignState& state)
                 process.name += ".$mipd_clone"
                     + std::to_string(connection_copies.size() - 1U);
                 process.origin = support::GeneratedObjectOrigin::mipd_clone;
+                // A copy is no driver of the primitive.
+                process.gate_driver_slot = support::GateDriverSlot::none;
+                process.gate_driver_output = 0U;
+                process.gate_driver_instance.clear();
                 clone->second = process.id;
                 state.processes.push_back(std::move(process));
                 ++result.dual_written;
@@ -1733,16 +1737,17 @@ std::optional<SdfNetDelayGraft> plan_tranif_control_graft(
                 running_program(static_cast<ProcessId>(index)));
         }
     }
-    // The switch's two conducting processes (`<name>$left`, `<name>$right`)
+    // The switch's two conducting processes (the left and right slots)
     // read its control; the control is delayed for them alone (IEEE 1800-2023
     // 28.16: the turn-on and turn-off delays are the control's).
-    const std::string left = std::string { switch_name } + "$left";
-    const std::string right = std::string { switch_name } + "$right";
     std::vector<std::size_t> loads;
     std::optional<SignalId> control;
     for (std::size_t index = 0U; index < state.processes.size(); ++index) {
         const auto& process = state.processes[index];
-        if (process.name != left && process.name != right) {
+        if (process.gate_driver_instance != switch_name
+            || (process.gate_driver_slot != support::GateDriverSlot::switch_left
+                && process.gate_driver_slot
+                    != support::GateDriverSlot::switch_right)) {
             continue;
         }
         if (!process.switch_control
@@ -1780,6 +1785,8 @@ std::optional<SdfNetDelayGraft> plan_tranif_control_graft(
     Process driver;
     driver.id = static_cast<ProcessId>(first_process);
     driver.name = std::string { switch_name } + "$control";
+    driver.gate_driver_slot = support::GateDriverSlot::control;
+    driver.gate_driver_instance = std::string { switch_name };
     driver.scheduling_domain = ProcessSchedulingDomain::systemverilog;
     driver.static_sensitivity.push_back({ *control, EdgeKind::any });
     driver.operations.emplace_back(ReadSignal { 0U, *control });
@@ -1846,15 +1853,13 @@ std::size_t apply_sdf_device_gate_delays(ElaboratedDesignState& state,
             }
             for (std::size_t id = 0U; id < state.processes.size(); ++id) {
                 auto& process = state.processes[id];
-                // The labels the front end gives a gate's drivers: `g`,
-                // `g$one`, `g$output<n>`.
-                const std::string_view name { process.name };
-                if (!name.starts_with(primitive.full_name)) {
-                    continue;
-                }
-                const auto rest = name.substr(primitive.full_name.size());
-                // ITEM46-LEFT: gate driver processes are named after the instance label plus a slot suffix and matched by that name; a typed form needs the primitive instance and driver slot on the statement, the HIR statement and the process record
-                if (!(rest.empty() || rest == "$one" || rest.starts_with("$output"))) {
+                // The drivers of the gate's outputs: the single driver, the
+                // value-one half of a bufif or notif, and one per output.
+                if (process.gate_driver_instance != primitive.full_name
+                    || (process.gate_driver_slot != support::GateDriverSlot::single
+                        && process.gate_driver_slot != support::GateDriverSlot::one
+                        && process.gate_driver_slot
+                            != support::GateDriverSlot::output)) {
                     continue;
                 }
                 flatten(process);

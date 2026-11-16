@@ -217,161 +217,110 @@ void finish_type(CType& type)
         && parameter.element == 'z';
 }
 
-[[noreturn]] void malformed_identity(const std::string_view identity)
+[[noreturn]] void malformed_identity(const std::string_view c_name)
 {
     throw std::runtime_error { "malformed DPI import identity '"
-        + std::string { identity } + "'" };
+        + std::string { c_name } + "'" };
 }
 
-[[nodiscard]] CType parse_type(const std::string_view text,
-    std::size_t& position, const std::string_view identity)
+// The layout of one C value from its typed description.
+[[nodiscard]] CType make_type(const runtime::simir::DpiValueType& value,
+    const std::string_view c_name)
 {
-    const auto malformed = [&] { malformed_identity(identity); };
-    const auto number = [&]() -> std::int64_t {
-        const auto begin = position;
-        if (position < text.size() && text[position] == '-') {
-            ++position;
-        }
-        while (position < text.size() && text[position] >= '0'
-            && text[position] <= '9') {
-            ++position;
-        }
-        std::int64_t value { };
-        const auto result = std::from_chars(
-            text.data() + begin, text.data() + position, value);
-        if (begin == position || result.ec != std::errc { }) {
-            malformed();
-        }
-        return value;
-    };
-    if (position >= text.size()) {
-        malformed();
+    if (value.code == support::DpiCTypeCode::none) {
+        malformed_identity(c_name);
     }
     CType type;
-    type.code = text[position++];
-    if (type.code == 'R') {
-        if (position >= text.size() || text[position] != '(') {
-            malformed();
+    type.code = support::dpi_c_type_letter(value.code);
+    if (value.code == support::DpiCTypeCode::structure) {
+        if (value.members.empty()) {
+            malformed_identity(c_name);
         }
-        ++position;
-        for (;;) {
+        for (const auto& declared : value.members) {
             CMember member;
-            member.type = parse_type(text, position, identity);
-            while (position < text.size() && text[position] == '/') {
-                ++position;
-                member.bounds.push_back(static_cast<std::int32_t>(number()));
-                if (position >= text.size() || text[position] != '/') {
-                    malformed();
-                }
-                ++position;
-                member.bounds.push_back(static_cast<std::int32_t>(number()));
+            member.type = make_type(declared, c_name);
+            for (const auto& bound : declared.dimensions) {
+                member.bounds.push_back(
+                    static_cast<std::int32_t>(bound.left));
+                member.bounds.push_back(
+                    static_cast<std::int32_t>(bound.right));
             }
             type.members.push_back(std::move(member));
-            if (position >= text.size()) {
-                malformed();
-            }
-            const auto next = text[position++];
-            if (next == ')') {
-                break;
-            }
-            if (next != ';') {
-                malformed();
-            }
         }
-    } else if (type.code == 'B' || type.code == 'V') {
-        type.width = static_cast<std::size_t>(number());
+    } else if (value.code == support::DpiCTypeCode::bit_vector
+        || value.code == support::DpiCTypeCode::logic_vector) {
+        type.width = value.width;
         if (type.width == 0U) {
-            malformed();
+            malformed_identity(c_name);
         }
     }
     finish_type(type);
     return type;
 }
 
-[[nodiscard]] Signature parse_signature(
+[[nodiscard]] Signature make_signature(
     const runtime::simir::DpiCallIdentity& call)
 {
-    if (call.result == 0U) {
-        throw std::runtime_error { "malformed DPI import identity '"
-            + call.c_name + "#" + call.arguments + "'" };
+    if (call.result == support::DpiCTypeCode::none) {
+        malformed_identity(call.c_name);
     }
-    // The text of the identity names it in a message only.
-    const auto display = call.c_name + "#" + call.arguments;
-    const std::string_view identity { display };
     Signature signature;
     signature.linkage = call.c_name;
-    signature.result = static_cast<char>(call.result);
+    signature.result = support::dpi_c_type_letter(call.result);
     signature.context = call.context;
-    std::string_view arguments { call.arguments };
-    const auto malformed = [&] { malformed_identity(identity); };
-    while (!arguments.empty()) {
-        // A structure's members are `;`-separated, so a comma ends a
-        // formal.
-        const auto comma = arguments.find(',');
-        auto text = arguments.substr(0U, comma);
-        arguments = comma == std::string_view::npos
-            ? std::string_view { }
-            : arguments.substr(comma + 1U);
+    for (const auto& formal : call.arguments) {
         Parameter parameter;
-        if (text.starts_with('&')) {
-            parameter.reference = true;
-            text.remove_prefix(1U);
-        }
-        if (text.empty()) {
-            malformed();
-        }
-        parameter.code = text.front();
-        if (parameter.code == 'A' || parameter.code == 'D') {
-            std::size_t position = 1U;
+        parameter.reference = formal.reference;
+        if (formal.array != runtime::simir::DpiArrayKind::none) {
+            parameter.code
+                = formal.array == runtime::simir::DpiArrayKind::open ? 'A'
+                                                                      : 'D';
             auto layout = std::make_shared<CType>(
-                parse_type(text, position, identity));
+                make_type(formal.element, call.c_name));
             parameter.element = layout->code;
             parameter.width = layout->bits;
             parameter.layout = std::move(layout);
-            auto rest = text.substr(position);
-            if (!rest.empty()) {
-                if (rest.front() != '/') {
-                    malformed();
+            for (const auto& bound : formal.bounds) {
+                if (bound.run_time) {
+                    parameter.bounds.push_back(runtime_extent);
+                    parameter.bounds.push_back(runtime_extent);
+                } else {
+                    parameter.bounds.push_back(
+                        static_cast<std::int32_t>(bound.left));
+                    parameter.bounds.push_back(
+                        static_cast<std::int32_t>(bound.right));
                 }
-                rest.remove_prefix(1U);
-            }
-            while (!rest.empty()) {
-                const auto next = rest.find('/');
-                const auto bound = rest.substr(0U, next);
-                parameter.bounds.push_back(bound == "?"
-                        ? runtime_extent
-                        : static_cast<std::int32_t>(
-                              std::stol(std::string { bound })));
-                rest = next == std::string_view::npos
-                    ? std::string_view { }
-                    : rest.substr(next + 1U);
             }
             // An open array may have no unpacked dimension (`bit []`); a
             // sized one has them all, and its sizes are known.
-            if (parameter.width == 0U || parameter.bounds.size() % 2U != 0U
+            if (parameter.width == 0U
                 || (parameter.code == 'D'
                     && (parameter.bounds.empty()
                         || std::ranges::any_of(parameter.bounds,
                             [](const std::int32_t bound) {
                                 return bound == runtime_extent;
                             })))) {
-                malformed();
+                malformed_identity(call.c_name);
             }
-        } else if (parameter.code == 'R') {
-            std::size_t position = 0U;
+        } else if (formal.element.code == support::DpiCTypeCode::structure) {
             auto layout = std::make_shared<CType>(
-                parse_type(text, position, identity));
-            if (position != text.size()) {
-                malformed();
-            }
+                make_type(formal.element, call.c_name));
+            parameter.code = 'R';
             parameter.element = 'R';
             parameter.width = layout->bits;
             parameter.layout = std::move(layout);
-        } else if (parameter.code == 'B' || parameter.code == 'V') {
-            parameter.width = static_cast<std::size_t>(
-                std::stoull(std::string { text.substr(1U) }));
         } else {
-            parameter.width = code_width(parameter.code);
+            parameter.code = support::dpi_c_type_letter(formal.element.code);
+            if (formal.element.code == support::DpiCTypeCode::none) {
+                malformed_identity(call.c_name);
+            }
+            if (formal.element.code == support::DpiCTypeCode::bit_vector
+                || formal.element.code
+                    == support::DpiCTypeCode::logic_vector) {
+                parameter.width = formal.element.width;
+            } else {
+                parameter.width = code_width(parameter.code);
+            }
         }
         parameter.first_actual = signature.actual_total;
         if (is_string_array(parameter)) {
@@ -384,7 +333,7 @@ void finish_type(CType& type)
                 // passes whole, as one encoded actual.
                 if (parameter.code != 'A' || parameter.bounds.size() != 2U
                     || parameter.bounds.front() != runtime_extent) {
-                    malformed();
+                    malformed_identity(call.c_name);
                 }
                 parameter.whole_strings = true;
             } else {
@@ -1135,7 +1084,7 @@ void store_planned(const runtime::simir::DpiArgumentPlan& argument,
     const PackedLogic4& value, unsigned char* const cell)
 {
     Scalar scalar { };
-    switch (static_cast<char>(argument.code)) {
+    switch (support::dpi_c_type_letter(argument.code)) {
     case 'c':
     case 'C':
         scalar.u8 = static_cast<std::uint8_t>(known_word(value));
@@ -1169,7 +1118,7 @@ void store_planned(const runtime::simir::DpiArgumentPlan& argument,
     case 'B':
     case 'V':
         store_vector(value, argument.width,
-            static_cast<char>(argument.code) == 'V', cell);
+            support::dpi_c_type_letter(argument.code) == 'V', cell);
         return;
     default:
         throw std::runtime_error { "unsupported DPI argument type" };
@@ -1181,7 +1130,7 @@ void store_planned(const runtime::simir::DpiArgumentPlan& argument,
     const runtime::simir::DpiArgumentPlan& argument,
     const unsigned char* const cell)
 {
-    const auto code = static_cast<char>(argument.code);
+    const auto code = support::dpi_c_type_letter(argument.code);
     if (code == 'B' || code == 'V') {
         return load_vector(cell, argument.width, code == 'V');
     }
@@ -1391,7 +1340,7 @@ public:
         for (std::size_t index = 0U; index < count; ++index) {
             const auto& argument = plan.arguments[index];
             auto* const cell = buffer + argument.offset * 8U;
-            const auto code = static_cast<char>(argument.code);
+            const auto code = support::dpi_c_type_letter(argument.code);
             if (code == 'z') {
                 const char* const text = frame.read_text(argument.reg).c_str();
                 std::memcpy(cell, &text, sizeof(text));
@@ -1428,7 +1377,7 @@ public:
                 continue;
             }
             const auto* const cell = buffer + argument.offset * 8U;
-            if (static_cast<char>(argument.code) == 'z') {
+            if (support::dpi_c_type_letter(argument.code) == 'z') {
                 const char* text { };
                 std::memcpy(&text, cell, sizeof(text));
                 frame.write_text(argument.reg,
@@ -1437,7 +1386,7 @@ public:
                 frame.write(argument.reg, load_planned(argument, cell));
             }
         }
-        const auto code = static_cast<char>(plan.result);
+        const auto code = support::dpi_c_type_letter(plan.result);
         if (code == 'z') {
             const char* text { };
             std::memcpy(&text, result, sizeof(text));
@@ -1496,7 +1445,7 @@ private:
         const runtime::simir::DpiSitePlan& plan)
     {
         if (signature.parameters.size() != plan.arguments.size()
-            || signature.result != static_cast<char>(plan.result)
+            || signature.result != support::dpi_c_type_letter(plan.result)
             || signature.context != plan.identity.context
             || signature.actual_total != plan.arguments.size()
             || plan.arguments.size() > runtime::simir::dpi_planned_argument_limit) {
@@ -1505,7 +1454,7 @@ private:
         for (std::size_t index = 0U; index < plan.arguments.size(); ++index) {
             const auto& parameter = signature.parameters[index];
             const auto& argument = plan.arguments[index];
-            if (parameter.code != static_cast<char>(argument.code)
+            if (parameter.code != support::dpi_c_type_letter(argument.code)
                 || parameter.reference != argument.reference
                 || parameter.width != argument.width
                 || parameter.actual_count != 1U
@@ -1980,7 +1929,7 @@ private:
                 "a DPI export service ran outside a context import" };
         }
         auto& flight = **active;
-        const auto signature = parse_signature(identity);
+        const auto signature = make_signature(identity);
         const auto role = identity.role;
         const bool next = role == support::DpiHiddenImportRole::next;
         const bool serve = role == support::DpiHiddenImportRole::serve;
@@ -2343,14 +2292,18 @@ private:
     Import& resolve(const runtime::simir::DpiCallIdentity& call)
     {
         // Call sites of one import share its C call description.
-        const ImportKey key { call.c_name, call.arguments, call.result,
-            call.context };
-        const auto found = imports_.find(key);
-        if (found != imports_.end()) {
-            return *found->second;
+        auto& bucket = imports_[call.c_name];
+        for (const auto& [candidate, existing] : bucket) {
+            if (candidate.arguments == call.arguments
+                && candidate.result == call.result
+                && candidate.context == call.context) {
+                return *existing;
+            }
         }
+        ImportKey key { call.c_name, call.arguments, call.result,
+            call.context };
         auto import = std::make_unique<Import>();
-        import->signature = parse_signature(call);
+        import->signature = make_signature(call);
         void* symbol { };
         std::string error;
         for (const auto& library : libraries_) {
@@ -2382,17 +2335,26 @@ private:
             throw std::runtime_error { "cannot prepare the C call of DPI import '"
                 + import->signature.linkage + "'" };
         }
-        auto& stored = *imports_.emplace(key, std::move(import))
-                            .first->second;
+        auto& stored = *bucket.emplace_back(std::move(key), std::move(import))
+                            .second;
         return stored;
     }
 
     std::vector<std::unique_ptr<platform::DynamicLibrary>> libraries_;
     std::vector<std::unique_ptr<Flight>> flights_;
     ThreadEntry thread_entry_;
-    // The imports by C name, formals, result code and context flag.
-    using ImportKey = std::tuple<std::string, std::string, std::uint8_t, bool>;
-    std::map<ImportKey, std::unique_ptr<Import>> imports_;
+    // An import is told apart by its C name, formals, result type and
+    // context flag.
+    struct ImportKey {
+        std::string c_name;
+        std::vector<runtime::simir::DpiArgumentType> arguments;
+        support::DpiCTypeCode result { support::DpiCTypeCode::none };
+        bool context { };
+    };
+    // The imports by C name; the few of one name differ in the key.
+    std::map<std::string,
+        std::vector<std::pair<ImportKey, std::unique_ptr<Import>>>>
+        imports_;
     std::vector<std::unique_ptr<BoundSite>> sites_;
     std::unordered_map<std::string, std::unique_ptr<Scope>> scopes_;
     fsim_svdpi_call_context_v3 context_;

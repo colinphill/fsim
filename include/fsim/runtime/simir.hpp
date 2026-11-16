@@ -12,6 +12,7 @@
 #include "fsim/runtime/sva_storage.hpp"
 #include "fsim/runtime/systemverilog_scalar.hpp"
 #include "fsim/support/dpi_identity.hpp"
+#include "fsim/support/gate_driver.hpp"
 #include "fsim/support/generated_object_origin.hpp"
 #include "fsim/support/rare_vector.hpp"
 #include "fsim/support/sva_marker.hpp"
@@ -2097,6 +2098,16 @@ struct Process {
     support::GeneratedObjectOrigin origin {
         support::GeneratedObjectOrigin::none
     };
+    /// Which driver of a Verilog primitive instance this process is (IEEE
+    /// 1800-2023 28.3, 37.7): the hierarchical full name of the instance
+    /// (`top.u.g`), the slot, and for an output slot the output's index.
+    /// `none` and empty for a process that is no primitive's driver. The
+    /// process name is only the display name of the driver.
+    support::GateDriverSlot gate_driver_slot {
+        support::GateDriverSlot::none
+    };
+    std::uint32_t gate_driver_output { };
+    std::string gate_driver_instance;
     std::uint64_t startup_order { };
     /// Opaque design-local semantic unit identity of a package initializer.
     /// Zero is reserved for processes outside package startup.
@@ -2262,6 +2273,9 @@ struct ExecutionPoint {
     std::uint32_t callee_declaration { };
     std::string callee_receiver;
     bool callee_receiver_instance { };
+    // The serial of the executing frame of a method the host class executor
+    // runs (frame points only); 0 for a frame of generated code.
+    std::uint64_t host_frame_serial { };
     // The forking thread of a thread_start point; none for a process.
     std::optional<ProcessId> parent_process;
 

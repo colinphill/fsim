@@ -32680,8 +32680,39 @@ bool Lowerer::hir_process_handle_expression(
     if (const auto property = hir_class_property_profile(expression_id)) {
         return process_type(property->type);
     }
+    const auto returns_process
+        = [&](const semantic::DeclarationId callee) {
+        const auto record = specialized_hir_unit_->find_declaration(callee);
+        return record && record->systemverilog != nullptr
+            && record->systemverilog->callable
+            && ((record->systemverilog->type
+                    && process_type(*record->systemverilog->type))
+                || process_type(record->systemverilog->callable->return_type));
+    };
+    // A class method whose declared result is the process class (IEEE
+    // 1800-2023 9.7, 8.10): `h.get().kill()`.
+    if (source.kind == semantic::sv::ExpressionKind::class_method_call
+        || source.kind
+            == semantic::sv::ExpressionKind::class_static_method_call) {
+        const auto method
+            = hir_class_method_profile(expression_id, hir_process_scope_);
+        return method
+            && method->builtin == runtime::simir::ClassMethodHook::none
+            && returns_process(method->declaration);
+    }
     if (source.kind == semantic::sv::ExpressionKind::call) {
-        return source.marker == support::ExpressionMarker::sv_process_self;
+        if (source.marker == support::ExpressionMarker::sv_process_self) {
+            return true;
+        }
+        // A function whose declared result is the process class (13.4):
+        // `get_proc().kill()`.
+        // The element popped from a queue of process handles (7.10.2.6,
+        // 7.10.2.7): `jobs.pop_front().kill()`.
+        if (hir_queue_pop(source)) {
+            return hir_process_handle_expression(source.operands.front());
+        }
+        const auto callee = hir_referenced_declaration(expression_id);
+        return callee && returns_process(*callee);
     }
     // An element of an array of process handles, `jobs[i]`: the array's
     // declared type carries the process class of its elements.
@@ -32700,7 +32731,8 @@ bool Lowerer::hir_process_handle_expression(
 
 bool Lowerer::hir_process_handle_name(const std::string_view name) const
 {
-    // A variable whose declared type is process (IEEE 1800-2023 9.7).
+    // A variable whose declared type is process (IEEE 1800-2023 9.7), or a
+    // class property of that type through a handle (`h.p`, 8.4).
     if (specialized_hir_unit_ == nullptr) {
         return false;
     }
@@ -32710,10 +32742,26 @@ bool Lowerer::hir_process_handle_name(const std::string_view name) const
     const auto record = declaration
         ? specialized_hir_unit_->find_declaration(*declaration)
         : std::nullopt;
-    return record && record->systemverilog != nullptr
-        && record->systemverilog->type
-        && record->systemverilog->type->standard_class
+    if (record && record->systemverilog != nullptr) {
+        return record->systemverilog->type
+            && record->systemverilog->type->standard_class
+            == support::SystemVerilogStandardClass::process;
+    }
+    const auto property
+        = hir_named_class_property(name, hir_process_scope_, 0U);
+    return property && property->type != nullptr
+        && property->type->standard_class
         == support::SystemVerilogStandardClass::process;
+}
+
+bool Lowerer::hir_queue_pop(const semantic::sv::Expression& call) const
+{
+    // pop_front() and pop_back() return the element they remove (IEEE
+    // 1800-2023 7.10.2.6, 7.10.2.7); the container lowering names them the
+    // same way.
+    return call.kind == semantic::sv::ExpressionKind::call
+        && call.operands.size() == 1U
+        && (call.text == ".pop_front" || call.text == ".pop_back");
 }
 
 std::optional<RegisterId> Lowerer::lower_hir_string_to_packed(

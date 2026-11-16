@@ -572,6 +572,7 @@ include/fsim/support/design_library.hpp
 include/fsim/support/dpi_identity.hpp
 include/fsim/support/environment.hpp
 include/fsim/support/expression_marker.hpp
+include/fsim/support/gate_driver.hpp
 include/fsim/support/generated_object_origin.hpp
 include/fsim/support/glob_match.hpp
 include/fsim/support/identity128.hpp
@@ -2088,6 +2089,7 @@ tests/fixtures/compliance/sv_pattern_files_and_production_defaults.sv
 tests/fixtures/compliance/sv_patterns_and_aggregates.sv
 tests/fixtures/compliance/sv_port_width_mismatch.sv
 tests/fixtures/compliance/sv_procedural_inferred_clock_ab4.sv
+tests/fixtures/compliance/sv_process_method_receivers.sv
 tests/fixtures/compliance/sv_property_kinds_checked.sv
 tests/fixtures/compliance/sv_queue_pop_result_type_20261013.sv
 tests/fixtures/compliance/sv_randsequence.sv

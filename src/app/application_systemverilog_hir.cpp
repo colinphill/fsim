@@ -133,6 +133,10 @@ namespace systemverilog_hir_detail {
         const std::string_view spelling,
         const std::uint64_t source_order) noexcept
     {
+        // An anonymous type has no name; an empty spelling names nothing.
+        if (spelling.empty()) {
+            return { };
+        }
         const auto parent_scope = [&](const semantic::ScopeId candidate)
             -> std::optional<semantic::ScopeId> {
             if (!candidate.valid()
@@ -805,6 +809,10 @@ namespace systemverilog_hir_detail {
         const std::uint64_t source_order)
         const noexcept
     {
+        // An anonymous type has no name; an empty name names nothing.
+        if (type_name.empty()) {
+            return { };
+        }
         const auto qualifier_separator = type_name.rfind("::");
         const auto simple_name = qualifier_separator
                 == std::string_view::npos
@@ -1481,6 +1489,7 @@ namespace systemverilog_hir_detail {
         output.source = common.source;
         output.origin = common.origin;
         output.compilation_unit_identity = input.compilation_unit_identity;
+        output.content_digest = input.content_digest;
         output.standard = std::string {
             frontend::revision_string(input.standard_revision)
         };

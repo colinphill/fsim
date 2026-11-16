@@ -303,6 +303,7 @@ void VerilogParser::parse_switch_primitive(
     const auto emit = [&](Expression target,
                           Expression value,
                           std::string suffix,
+                          const support::GateDriverSlot slot,
                           std::optional<Expression> switch_source =
                               std::nullopt,
                           std::optional<Expression> switch_control =
@@ -330,6 +331,10 @@ void VerilogParser::parse_switch_primitive(
       }
       statement.label = instance_name.empty()
           ? std::string{} : instance_name + std::move(suffix);
+      if (!instance_name.empty()) {
+        statement.gate_driver_slot = slot;
+        statement.gate_driver_instance = instance_name;
+      }
       statement.span = cover(start.span, previous().span);
       statements.push_back(std::move(statement));
     };
@@ -388,7 +393,7 @@ void VerilogParser::parse_switch_primitive(
                 ExpressionKind::LogicLiteral,
                 operation == "pullup" ? "1'b1" : "1'b0",
                 {}, start.span},
-            {});
+            {}, support::GateDriverSlot::single);
       } else if (bidirectional) {
         auto left_value = mapped[1];
         auto right_value = mapped[0];
@@ -424,6 +429,11 @@ void VerilogParser::parse_switch_primitive(
           // that carries the turn-on and turn-off delays.
           control_driver.label = instance_name.empty()
               ? std::string{} : instance_name + "$control";
+          if (!instance_name.empty()) {
+            control_driver.gate_driver_slot
+                = support::GateDriverSlot::control;
+            control_driver.gate_driver_instance = instance_name;
+          }
           control_driver.span = start.span;
           statements.push_back(std::move(control_driver));
           mapped[2] = Expression{
@@ -444,10 +454,12 @@ void VerilogParser::parse_switch_primitive(
               std::move(right_control), std::move(right_value), start.span);
         }
         emit(
-            mapped[0], std::move(left_value), "$left", mapped[1],
+            mapped[0], std::move(left_value), "$left",
+            support::GateDriverSlot::switch_left, mapped[1],
             std::move(left_switch_control), active_high);
         emit(
-            mapped[1], std::move(right_value), "$right", mapped[0],
+            mapped[1], std::move(right_value), "$right",
+            support::GateDriverSlot::switch_right, mapped[0],
             std::move(right_switch_control), active_high);
       } else {
         auto control = mapped[2];
@@ -468,7 +480,7 @@ void VerilogParser::parse_switch_primitive(
             std::move(mapped[0]),
             conditional(
                 std::move(control), std::move(mapped[1]), start.span),
-            {}, std::move(switch_source));
+            {}, support::GateDriverSlot::single, std::move(switch_source));
       }
       instance_name = saved_name;
     }

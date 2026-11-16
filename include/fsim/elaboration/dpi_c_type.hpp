@@ -5,6 +5,7 @@
 #include "fsim/frontend/design_core.hpp"
 #include "fsim/frontend/systemverilog_scalars.hpp"
 #include "fsim/semantic/model.hpp"
+#include "fsim/support/dpi_identity.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -27,12 +28,11 @@ struct DpiCType {
     frontend::ValueDomain domain { frontend::ValueDomain::Unknown };
     bool signed_value { };
     bool string { };
-    // The C type of the value (IEEE 1800-2023 Annex H.7.4): c s i l
-    // for byte, shortint, int and longint (upper case when unsigned),
-    // b svBit, g svLogic, d double, f float, p chandle, z string, B an
-    // svBitVecVal vector, V an svLogicVecVal vector, R an unpacked
-    // structure (H.7.8).
-    char code { };
+    // The C type of the value (IEEE 1800-2023 Annex H.7.4): the integer
+    // atoms, svBit, svLogic, double, float, chandle, string, an
+    // svBitVecVal or svLogicVecVal vector, or an unpacked structure
+    // (H.7.8).
+    support::DpiCTypeCode code { support::DpiCTypeCode::none };
     frontend::SystemVerilogScalarKind scalar {
         frontend::SystemVerilogScalarKind::None
     };
@@ -114,11 +114,6 @@ enum class DpiTypeIssue : std::uint8_t {
 [[nodiscard]] std::optional<DpiTypeIssue> dpi_type_issue(
     std::span<const semantic::sv::SourceToken> tokens,
     const DpiTypeContext& context);
-
-// The signature text of a C type, as the DPI call service parses it: its
-// code, a vector's width, or `R(` the members `;`-separated, each followed
-// by `/left/right` per unpacked dimension, `)`.
-[[nodiscard]] std::string dpi_c_type_signature(const DpiCType& type);
 
 // The type's bit width as one stream: a vector's or atom's bits, or a
 // structure's members' (each times its elements).

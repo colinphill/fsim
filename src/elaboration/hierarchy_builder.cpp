@@ -1864,6 +1864,10 @@ HierarchyBuilder::lower_cached_systemverilog_concurrent_statement(
                 continue;
             }
             replay.name = replay_name;
+            if (!replay.gate_driver_instance.empty()) {
+                replay.gate_driver_instance = std::string { path } + "."
+                    + assignment.gate_driver_instance;
+            }
             if (!remap_systemverilog_template_process(
                     replay, *signal_remap, cached.instance.name,
                     replay.name, design_.signal_info_)) {

@@ -430,7 +430,7 @@ std::optional<DpiCType> dpi_builtin_shape_c_type(const DpiBuiltinShape& shape)
     const auto sized_packed = shape.sized_packed;
     result.string = base == Builtin::string;
     if (result.string) {
-        result.code = 'z';
+        result.code = support::DpiCTypeCode::string;
         return packed_width == 1U && !open_packed && !sized_packed
                 && !explicit_signed && !explicit_unsigned
             ? std::optional<DpiCType> { result }
@@ -440,24 +440,22 @@ std::optional<DpiCType> dpi_builtin_shape_c_type(const DpiBuiltinShape& shape)
     if (ranged && !support::systemverilog_integer_vector(base)) {
         return std::nullopt;
     }
-    result.code = base == Builtin::byte ? 'c'
-        : base == Builtin::shortint     ? 's'
-        : base == Builtin::int_type     ? 'i'
-        : base == Builtin::longint      ? 'l'
-        : base == Builtin::real || base == Builtin::realtime ? 'd'
-        : base == Builtin::shortreal    ? 'f'
-        : base == Builtin::chandle      ? 'p'
-        : base == Builtin::integer || base == Builtin::time ? 'V'
-        : base == Builtin::bit          ? (ranged ? 'B' : 'b')
-                                        : (ranged ? 'V' : 'g');
-    if (explicit_unsigned
-        && (result.code == 'c' || result.code == 's' || result.code == 'i'
-            || result.code == 'l')) {
-        result.code = static_cast<char>(result.code - 'a' + 'A');
+    result.code = base == Builtin::byte ? support::DpiCTypeCode::byte_signed
+        : base == Builtin::shortint     ? support::DpiCTypeCode::short_signed
+        : base == Builtin::int_type     ? support::DpiCTypeCode::int_signed
+        : base == Builtin::longint      ? support::DpiCTypeCode::long_signed
+        : base == Builtin::real || base == Builtin::realtime ? support::DpiCTypeCode::real
+        : base == Builtin::shortreal    ? support::DpiCTypeCode::shortreal
+        : base == Builtin::chandle      ? support::DpiCTypeCode::chandle
+        : base == Builtin::integer || base == Builtin::time ? support::DpiCTypeCode::logic_vector
+        : base == Builtin::bit          ? (ranged ? support::DpiCTypeCode::bit_vector : support::DpiCTypeCode::bit)
+                                        : (ranged ? support::DpiCTypeCode::logic_vector : support::DpiCTypeCode::logic);
+    if (explicit_unsigned) {
+        result.code = support::dpi_c_type_unsigned(result.code);
     }
-    result.scalar = result.code == 'd' ? frontend::SystemVerilogScalarKind::Real
-        : result.code == 'f' ? frontend::SystemVerilogScalarKind::ShortReal
-        : result.code == 'p' ? frontend::SystemVerilogScalarKind::Chandle
+    result.scalar = result.code == support::DpiCTypeCode::real ? frontend::SystemVerilogScalarKind::Real
+        : result.code == support::DpiCTypeCode::shortreal ? frontend::SystemVerilogScalarKind::ShortReal
+        : result.code == support::DpiCTypeCode::chandle ? frontend::SystemVerilogScalarKind::Chandle
                              : frontend::SystemVerilogScalarKind::None;
     const auto base_width = support::systemverilog_integral(base)
         ? support::systemverilog_builtin_width(base)
@@ -655,7 +653,7 @@ std::optional<DpiCType> dpi_struct_c_type(
     }
     constexpr std::uint64_t bit_limit = std::uint64_t { 1 } << 24U;
     DpiCType aggregate;
-    aggregate.code = 'R';
+    aggregate.code = support::DpiCTypeCode::structure;
     aggregate.domain = frontend::ValueDomain::Bit2;
     std::uint64_t bits { };
     for (const auto& member : definition.members) {
@@ -737,7 +735,7 @@ std::optional<DpiCType> dpi_reference_c_type(
                                  + "]"
                              : std::string { "-" })
                   << " dims=" << type.packed_dimensions.size()
-                  << " -> " << (result ? std::string(1, result->code) + ":"
+                  << " -> " << (result ? std::string(1, support::dpi_c_type_letter(result->code)) + ":"
                                        + std::to_string(result->width)
                                        : std::string { "none" })
                   << '\n';
@@ -811,13 +809,13 @@ std::optional<DpiCType> dpi_reference_c_type_impl(
                 ? aggregate.width + member_type->width
                 : std::max(aggregate.width, member_type->width);
         }
-        aggregate.code = four_state ? 'V' : 'B';
+        aggregate.code = four_state ? support::DpiCTypeCode::logic_vector : support::DpiCTypeCode::bit_vector;
         aggregate.domain = four_state ? frontend::ValueDomain::Logic4
                                       : frontend::ValueDomain::Bit2;
         element = aggregate;
     } else if (definition->form == Form::string) {
         DpiCType text;
-        text.code = 'z';
+        text.code = support::DpiCTypeCode::string;
         text.string = true;
         element = text;
     } else if (definition->form == Form::unpacked_structure) {
@@ -837,7 +835,7 @@ std::optional<DpiCType> dpi_reference_c_type_impl(
     // An unpacked structure has no packed dimensions (IEEE 1800-2023 7.2):
     // a range on its reference is the members' summed width, which leaves
     // out their unpacked dimensions, and does not size the C structure.
-    if (!element || element->code == 'R'
+    if (!element || element->code == support::DpiCTypeCode::structure
         || (!type.packed_range && type.packed_dimensions.size() < 2U)) {
         return element;
     }
@@ -855,7 +853,7 @@ std::optional<DpiCType> dpi_reference_c_type_impl(
     }
     element->width = static_cast<std::size_t>(*extent);
     const bool four_state = element->domain == frontend::ValueDomain::Logic4;
-    element->code = four_state ? 'V' : 'B';
+    element->code = four_state ? support::DpiCTypeCode::logic_vector : support::DpiCTypeCode::bit_vector;
     element->domain = four_state ? frontend::ValueDomain::Logic4
                                  : frontend::ValueDomain::Bit2;
     element->signed_value = false;
@@ -886,7 +884,7 @@ std::optional<DpiCType> dpi_c_type(
     }
     auto result = dpi_reference_c_type(*type, context, 0U);
     // The typedef the declaration names gives its structure the C name.
-    if (result && result->code == 'R' && context.struct_tag
+    if (result && result->code == support::DpiCTypeCode::structure && context.struct_tag
         && type->target.target.valid()) {
         result->tag
             = context.struct_tag(type->target.target, tokens.back().text);
@@ -964,30 +962,9 @@ std::optional<DpiTypeIssue> dpi_type_issue(
     return std::nullopt;
 }
 
-std::string dpi_c_type_signature(const DpiCType& type)
-{
-    if (type.code == 'R') {
-        std::string text = "R(";
-        for (std::size_t index = 0U; index < type.members.size(); ++index) {
-            const auto& member = type.members[index];
-            text += (index == 0U ? "" : ";") + dpi_c_type_signature(member.type);
-            for (const auto& [left, right] : member.dimensions) {
-                text += '/' + std::to_string(left) + '/'
-                    + std::to_string(right);
-            }
-        }
-        return text + ')';
-    }
-    std::string text(1U, type.code);
-    if (type.code == 'B' || type.code == 'V') {
-        text += std::to_string(type.width);
-    }
-    return text;
-}
-
 std::uint64_t dpi_c_type_stream_bits(const DpiCType& type)
 {
-    if (type.code != 'R') {
+    if (type.code != support::DpiCTypeCode::structure) {
         return type.width;
     }
     std::uint64_t bits { };
@@ -1127,53 +1104,59 @@ DpiTypeContext dpi_hir_type_context(
 
 namespace {
 
-std::string dpi_c_scalar(const char code)
+std::string dpi_c_scalar(const support::DpiCTypeCode code)
 {
     switch (code) {
-    case 'c':
+    case support::DpiCTypeCode::byte_signed:
         return "char";
-    case 'C':
+    case support::DpiCTypeCode::byte_unsigned:
         return "unsigned char";
-    case 's':
+    case support::DpiCTypeCode::short_signed:
         return "short";
-    case 'S':
+    case support::DpiCTypeCode::short_unsigned:
         return "unsigned short";
-    case 'i':
+    case support::DpiCTypeCode::int_signed:
         return "int";
-    case 'I':
+    case support::DpiCTypeCode::int_unsigned:
         return "unsigned int";
-    case 'l':
+    case support::DpiCTypeCode::long_signed:
         return "long long";
-    case 'L':
+    case support::DpiCTypeCode::long_unsigned:
         return "unsigned long long";
-    case 'd':
+    case support::DpiCTypeCode::real:
         return "double";
-    case 'f':
+    case support::DpiCTypeCode::shortreal:
         return "float";
-    case 'p':
+    case support::DpiCTypeCode::chandle:
         return "void*";
-    case 'z':
+    case support::DpiCTypeCode::string:
         return "const char*";
-    case 'b':
+    case support::DpiCTypeCode::bit:
         return "svBit";
-    case 'g':
+    case support::DpiCTypeCode::logic:
         return "svLogic";
-    default:
+    case support::DpiCTypeCode::none:
+    case support::DpiCTypeCode::void_result:
+    case support::DpiCTypeCode::task_status:
+    case support::DpiCTypeCode::bit_vector:
+    case support::DpiCTypeCode::logic_vector:
+    case support::DpiCTypeCode::structure:
         return { };
     }
+    return { };
 }
 
 // The C type of one value or array element: a vector is its canonical
 // type, an unpacked structure its generated typedef (H.7.8).
 std::string dpi_c_element(const DpiCType& type)
 {
-    if (type.code == 'R') {
+    if (type.code == support::DpiCTypeCode::structure) {
         return type.tag;
     }
-    if (type.code == 'B') {
+    if (type.code == support::DpiCTypeCode::bit_vector) {
         return "svBitVecVal";
     }
-    if (type.code == 'V') {
+    if (type.code == support::DpiCTypeCode::logic_vector) {
         return "svLogicVecVal";
     }
     return dpi_c_scalar(type.code);
@@ -1211,8 +1194,8 @@ std::optional<std::string> dpi_c_parameter(
         return std::string { input ? "const char* const* " : "const char** " }
             + name;
     }
-    if (sized_array || type->code == 'B' || type->code == 'V'
-        || type->code == 'R') {
+    if (sized_array || type->code == support::DpiCTypeCode::bit_vector
+        || type->code == support::DpiCTypeCode::logic_vector || type->code == support::DpiCTypeCode::structure) {
         return (input ? "const " : "") + element + "* " + name;
     }
     return element + (input ? " " : "* ") + name;
@@ -1222,8 +1205,9 @@ std::optional<std::string> dpi_c_parameter(
 // 1800-2023 35.5.5).
 std::optional<std::string> dpi_c_result(const std::optional<DpiCType>& type)
 {
-    if (!type || type->code == 'B' || type->code == 'V'
-        || type->code == 'R' || type->open_packed) {
+    if (!type || type->code == support::DpiCTypeCode::bit_vector
+        || type->code == support::DpiCTypeCode::logic_vector || type->code == support::DpiCTypeCode::structure
+        || type->open_packed) {
         return std::nullopt;
     }
     auto result = dpi_c_scalar(type->code);
@@ -1291,7 +1275,7 @@ std::optional<DpiCSignature> dpi_c_signature(
             if (!parameter) {
                 return std::nullopt;
             }
-            if (formal_type->code == 'R') {
+            if (formal_type->code == support::DpiCTypeCode::structure) {
                 aggregates.push_back(*formal_type);
             }
             parameters.push_back(*parameter);
@@ -1332,7 +1316,7 @@ std::optional<DpiCSignature> dpi_c_signature(
             if (!parameter) {
                 return std::nullopt;
             }
-            if (type->code == 'R') {
+            if (type->code == support::DpiCTypeCode::structure) {
                 aggregates.push_back(*type);
             }
             parameters.push_back(*parameter);
@@ -1348,7 +1332,8 @@ std::optional<DpiCSignature> dpi_c_signature(
 std::string dpi_c_member(const DpiCMember& member)
 {
     std::string text = "    " + dpi_c_element(member.type) + ' ' + member.name;
-    if (member.type.code == 'B' || member.type.code == 'V') {
+    if (member.type.code == support::DpiCTypeCode::bit_vector
+        || member.type.code == support::DpiCTypeCode::logic_vector) {
         text += '[' + std::to_string((member.type.width + 31U) / 32U) + ']';
     }
     for (const auto& [left, right] : member.dimensions) {
@@ -1365,7 +1350,7 @@ void dpi_c_struct_typedef(const DpiCType& type,
     std::set<std::string, std::less<>>& declared, std::string& out)
 {
     for (const auto& member : type.members) {
-        if (member.type.code == 'R') {
+        if (member.type.code == support::DpiCTypeCode::structure) {
             dpi_c_struct_typedef(member.type, declared, out);
         }
     }

@@ -16291,7 +16291,11 @@ void HierarchyBuilder::materialize_systemverilog_clocking_blocks(
         process.origin = support::GeneratedObjectOrigin::clocking_event;
         clocking_processes.push_back(std::move(process));
     };
-    const auto add_clocking_flag = [&](const std::string& full_name)
+    const auto add_clocking_flag = [&](const std::string& full_name,
+                                       const support::GeneratedObjectOrigin
+                                           origin
+                                       = support::GeneratedObjectOrigin::
+                                           clocking_event)
         -> std::optional<SignalId> {
         if (design_.signals_.size()
             >= std::numeric_limits<SignalId>::max()) {
@@ -16305,7 +16309,7 @@ void HierarchyBuilder::materialize_systemverilog_clocking_blocks(
         info.type_name = "bit";
         info.systemverilog_builtin = support::SystemVerilogBuiltinType::bit;
         info.source_domain = frontend::ValueDomain::Bit2;
-        info.origin = support::GeneratedObjectOrigin::clocking_event;
+        info.origin = origin;
         design_.signal_info_.push_back(std::move(info));
         design_.signals_.emplace_back(full_name,
             PackedLogic4(1U, Logic4::zero),
@@ -16531,7 +16535,9 @@ void HierarchyBuilder::materialize_systemverilog_clocking_blocks(
                     const auto pending = request
                         ? add_clocking_flag(
                               design_.signal_info_[*request].name
-                              + "$pending")
+                                  + "$pending",
+                              support::GeneratedObjectOrigin::
+                                  clocking_pending)
                         : std::nullopt;
                     if (!request || !pending) {
                         continue;
@@ -16577,6 +16583,8 @@ void HierarchyBuilder::materialize_systemverilog_clocking_blocks(
                     if (!skew_signal) {
                         continue;
                     }
+                    design_.signal_info_[*skew_signal].origin
+                        = support::GeneratedObjectOrigin::clocking_skew;
                     add_clocking_process(
                         skew_name + "$history",
                         actual->second,
@@ -23196,6 +23204,8 @@ HierarchyBuilder::evaluate_compiled_vhdl_composite_actual(
     if (!id) {
         return std::nullopt;
     }
+    design_.signal_info_[*id].origin
+        = support::GeneratedObjectOrigin::generic_actual;
     auto value = design_.signals_[*id].initial_value;
     if (design_.signals_.size() == *id + 1U) {
         design_.signals_.pop_back();

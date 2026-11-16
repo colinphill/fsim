@@ -4,6 +4,7 @@
 #include "fsim/semantic/model.hpp"
 #include "fsim/support/dpi_identity.hpp"
 #include "fsim/support/expression_marker.hpp"
+#include "fsim/support/gate_driver.hpp"
 #include "fsim/support/rare_vector.hpp"
 #include "fsim/support/sva_marker.hpp"
 #include "fsim/support/systemverilog_builtin_type.hpp"
@@ -604,6 +605,12 @@ struct Statement {
     // The gate type of a gate primitive instance's continuous assignment
     // (IEEE 1800-2023 28.3, 37.7); empty for every other statement.
     std::string gate_primitive;
+    // The driver of a primitive instance this assignment is: the label of the
+    // instance, which of its drivers, and the output index; `none` and empty
+    // for every other statement and for an unnamed instance.
+    support::GateDriverSlot gate_driver_slot { support::GateDriverSlot::none };
+    std::uint32_t gate_driver_output { };
+    std::string gate_driver_instance;
     std::vector<Sensitivity> sensitivities;
     std::string assertion_message;
     AssertionSeverity assertion_severity { AssertionSeverity::error };
@@ -2723,6 +2730,10 @@ struct Unit {
     std::vector<CovergroupDeclaration> coverage;
     std::vector<std::string> source_dependencies;
     std::string compilation_unit_identity;
+    // The frontend's content digest: two compiled copies of one unit with
+    // one digest are the same unit (a package in a shared header). Zero: no
+    // digest; such a copy never merges.
+    std::uint64_t content_digest { };
     std::string standard;
     std::string compatibility_profile;
     std::optional<DesignSchedulingDeclaration> scheduling_declaration;

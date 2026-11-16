@@ -336,6 +336,12 @@ struct SystemVerilogVpiObjectDescriptor {
     /// A package that holds a design file's compilation-unit declarations
     /// (`$unit`, IEEE 1800-2023 3.12.1).
     bool compilation_unit { };
+    /// An object the service makes for no declaration of the design (a
+    /// process, a driver or an assertion of a process): scans of a scope's
+    /// children leave it out.
+    bool synthesized { };
+    /// The index of the design driver a Driver object stands for.
+    std::optional<std::uint32_t> driver_index { };
 };
 
 struct SystemVerilogVpiObjectInfo {
@@ -349,6 +355,8 @@ struct SystemVerilogVpiObjectInfo {
     std::optional<SystemVerilogVpiSourceLocation> source;
     std::optional<SystemVerilogVpiTypeInfo> type;
     bool compilation_unit { };
+    bool synthesized { };
+    std::optional<std::uint32_t> driver_index { };
 };
 
 struct SystemVerilogVpiObjectResult {
@@ -644,6 +652,9 @@ private:
         bool on_demand_children { };
         // SystemVerilogVpiObjectDescriptor::compilation_unit.
         bool compilation_unit { };
+        // SystemVerilogVpiObjectDescriptor::synthesized and driver_index.
+        bool synthesized { };
+        std::optional<std::uint32_t> driver_index { };
     };
     struct IteratorRecord {
         std::uint16_t epoch { };

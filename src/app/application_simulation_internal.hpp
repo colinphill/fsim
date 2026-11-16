@@ -383,7 +383,9 @@ struct Simulation::Impl {
         std::vector<LoweredRandomizeCall> calls;
         std::vector<RandomizeCallbackContext> contexts;
     };
-    std::optional<KilledRandomizeState> killing_randomize_state;
+    // One entry per process inside a kill: a kill can suspend its caller,
+    // so another process's kill may begin and end within it.
+    std::vector<KilledRandomizeState> killing_randomize_states;
     // `message` of a run error, prefixed with each callback it left,
     // innermost first.
     [[nodiscard]] std::string randomize_callback_error(

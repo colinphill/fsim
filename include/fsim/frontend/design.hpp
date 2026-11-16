@@ -1819,6 +1819,14 @@ struct DesignUnit {
         systemverilog_standard_package;
     std::string library;
     std::string compilation_unit_identity;
+    // SystemVerilog: a digest of the unit's text after preprocessing and of
+    // the context that gives that text its meaning (the directives in force
+    // and, for a design element other than a package, the compilation-unit
+    // items it can see; a package cannot refer to those, IEEE 1800-2023
+    // 26.2), and the file that holds the text. Copies of one unit compiled
+    // into different objects (a package in a shared header) have one
+    // digest. Zero: no digest.
+    std::uint64_t content_digest { };
     std::string name;
     bool vhdl_extended_name { };
     // For a VHDL architecture, `name` is the architecture and `primary_name`

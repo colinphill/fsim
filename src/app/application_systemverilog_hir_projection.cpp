@@ -337,15 +337,13 @@ void SystemVerilogHirBuilder::apply_named_type_dimensions(
         const auto type_source = output.target.source;
         const auto type_origin = origin(
             type_source, parent, "anonymous SystemVerilog aggregate type");
-        // ITEM46-LEFT: name of an implicit type registered by name in the scope; needs a name-free implicit type registration
-        const auto name = "@anonymous-aggregate:"
-            + std::to_string(type_source.value()) + ":"
-            + std::to_string(parent.value());
+        // An anonymous type has no name: it is an implicit type that is
+        // reached by its id only.
         const auto base = output;
         const auto type_id = model_.add_type(
             scope,
             semantic::TypeKind::implicit,
-            name,
+            std::string { },
             base.target,
             type_source,
             type_origin);
@@ -354,7 +352,6 @@ void SystemVerilogHirBuilder::apply_named_type_dimensions(
         sv::TypeDefinition definition;
         definition.id = type_id;
         definition.form = aggregate_form;
-        definition.name = name;
         definition.base = base;
         definition.source = type_source;
         definition.origin = type_origin;

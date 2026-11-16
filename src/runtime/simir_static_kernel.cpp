@@ -172,34 +172,42 @@ void copy_bits(std::uint64_t* target, const std::uint32_t offset,
     return value.width() == 0U ? Logic4::x : value.get(0U);
 }
 
-/// The C width of a scalar DPI signature letter (IEEE 1800-2023 H.7.4), 0
-/// for a string (a pointer) and for a letter that is not a planned scalar.
-[[nodiscard]] std::optional<std::uint32_t> dpi_scalar_bits(const char code)
+/// The C width of a scalar DPI C type (IEEE 1800-2023 H.7.4), 0 for a
+/// string (a pointer) and nothing for a type that is not a planned scalar.
+[[nodiscard]] std::optional<std::uint32_t> dpi_scalar_bits(
+    const support::DpiCTypeCode code)
 {
+    using Code = support::DpiCTypeCode;
     switch (code) {
-    case 'c':
-    case 'C':
+    case Code::byte_signed:
+    case Code::byte_unsigned:
         return 8U;
-    case 's':
-    case 'S':
+    case Code::short_signed:
+    case Code::short_unsigned:
         return 16U;
-    case 'i':
-    case 'I':
-    case 'f':
+    case Code::int_signed:
+    case Code::int_unsigned:
+    case Code::shortreal:
         return 32U;
-    case 'l':
-    case 'L':
-    case 'd':
-    case 'p':
+    case Code::long_signed:
+    case Code::long_unsigned:
+    case Code::real:
+    case Code::chandle:
         return 64U;
-    case 'b':
-    case 'g':
+    case Code::bit:
+    case Code::logic:
         return 1U;
-    case 'z':
+    case Code::string:
         return 0U;
-    default:
+    case Code::none:
+    case Code::void_result:
+    case Code::task_status:
+    case Code::bit_vector:
+    case Code::logic_vector:
+    case Code::structure:
         return std::nullopt;
     }
+    return std::nullopt;
 }
 
 /// The imported DPI call `operation` (its `dpi` identity: the C name, the
@@ -222,52 +230,43 @@ void copy_bits(std::uint64_t* target, const std::uint32_t offset,
     if (operation.call_kind != StaticCallKind::dpi_import
         || identity.phase != DpiCallPhase::call
         || identity.role != support::DpiHiddenImportRole::none
-        || identity.result == 0U) {
+        || identity.result == support::DpiCTypeCode::none) {
         return plan;
     }
-    const auto result_code = static_cast<char>(identity.result);
+    using Code = support::DpiCTypeCode;
+    const auto result_code = identity.result;
     plan.result = identity.result;
-    const bool string_result = result_code == 'z';
-    const bool result_scalar = result_code == 'v' || result_code == 'T'
+    const bool string_result = result_code == Code::string;
+    const bool result_scalar = result_code == Code::void_result
+        || result_code == Code::task_status
         || dpi_scalar_bits(result_code).has_value();
     if (!result_scalar) {
         return plan;
     }
-    auto formals = std::string_view { identity.arguments };
     std::vector<DpiArgumentPlan> arguments;
     std::uint32_t offset { };
-    while (!formals.empty()) {
-        const auto comma = formals.find(',');
-        auto text = formals.substr(0U, comma);
-        formals = comma == std::string_view::npos
-            ? std::string_view { }
-            : formals.substr(comma + 1U);
-        DpiArgumentPlan argument;
-        if (text.starts_with('&')) {
-            argument.reference = true;
-            text.remove_prefix(1U);
-        }
-        if (text.empty()) {
+    for (const auto& formal : identity.arguments) {
+        // Open and sized arrays and structures leave the site generic.
+        if (formal.array != DpiArrayKind::none) {
             return plan;
         }
-        argument.code = static_cast<std::uint8_t>(text.front());
-        if (const auto bits = dpi_scalar_bits(text.front())) {
+        const auto code = formal.element.code;
+        DpiArgumentPlan argument;
+        argument.reference = formal.reference;
+        argument.code = code;
+        if (const auto bits = dpi_scalar_bits(code)) {
             argument.width = *bits;
             argument.words = 1U;
-        } else if (text.front() == 'B' || text.front() == 'V') {
-            std::uint32_t width { };
-            const auto digits = text.substr(1U);
-            const auto parsed = std::from_chars(
-                digits.data(), digits.data() + digits.size(), width);
-            if (parsed.ec != std::errc { }
-                || parsed.ptr != digits.data() + digits.size() || width == 0U) {
+        } else if (code == Code::bit_vector || code == Code::logic_vector) {
+            const auto width = formal.element.width;
+            if (width == 0U) {
                 return plan;
             }
             argument.width = width;
             // Eight-byte words: svBitVecVal takes four bytes per 32 bits,
             // svLogicVecVal eight.
-            argument.words = text.front() == 'B' ? (width + 63U) / 64U
-                                                 : (width + 31U) / 32U;
+            argument.words = code == Code::bit_vector ? (width + 63U) / 64U
+                                                      : (width + 31U) / 32U;
         } else {
             return plan;
         }
@@ -287,13 +286,13 @@ void copy_bits(std::uint64_t* target, const std::uint32_t offset,
     for (std::size_t index = 0U; index < arguments.size(); ++index) {
         const auto kind = operation.actual_kinds.empty()
             ? std::uint8_t { 0U } : operation.actual_kinds[index];
-        if (kind != (arguments[index].code == 'z' ? 1U : 0U)) {
+        if (kind != (arguments[index].code == Code::string ? 1U : 0U)) {
             return plan;
         }
         arguments[index].reg = operation.actuals[index];
-        const auto code = static_cast<char>(arguments[index].code);
+        const auto code = arguments[index].code;
         arguments[index].copy_out = arguments[index].reference
-            || ((code == 'B' || code == 'V')
+            || ((code == Code::bit_vector || code == Code::logic_vector)
                 && index < operation.actual_directions.size()
                 && operation.actual_directions[index]
                     != static_cast<std::uint8_t>(

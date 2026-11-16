@@ -623,6 +623,7 @@ namespace {
             && left.two_state == right.two_state
             && left.signed_elements == right.signed_elements
             && left.union_aggregate == right.union_aggregate
+            && left.tagged_union == right.tagged_union
             && left.element_nominal_type == right.element_nominal_type
             && left.element_builtin_nominal == right.element_builtin_nominal
             && left.element_nominal_type_id == right.element_nominal_type_id
@@ -961,6 +962,7 @@ std::optional<ContainerType> Lowerer::hir_systemverilog_container_type(
         result.two_state = element_type->two_state;
         result.signed_elements = element_type->signed_elements;
         result.union_aggregate = element_type->union_aggregate;
+        result.tagged_union = element_type->tagged_union;
         result.element_nominal_type = element_type->element_nominal_type;
         result.element_builtin_nominal
             = element_type->element_builtin_nominal;
@@ -5721,9 +5723,13 @@ Lowerer::hir_class_method_profile(
             result_type = &*specialized->return_type;
         }
     }
+    // A handle of a user class or of a built-in one (process, mailbox,
+    // semaphore; IEEE 1800-2023 9.7, 15.3, 15.4).
     const auto class_result = result_type
         && (result_type->value_form == semantic::sv::TypeForm::class_handle
-            || !result_type->class_identity.empty());
+            || !result_type->class_identity.empty()
+            || result_type->standard_class
+                != support::SystemVerilogStandardClass::none);
     const auto string_result = result_type
         && result_type->value_form == semantic::sv::TypeForm::string;
     const auto container_result = result_type && !class_result
@@ -20299,6 +20305,30 @@ namespace {
 
 } // namespace
 
+namespace {
+
+// The DPI call identity's description of a C type: its code, a vector's
+// width and an unpacked structure's members with their dimensions.
+runtime::simir::DpiValueType dpi_value_type(const DpiCType& type)
+{
+    runtime::simir::DpiValueType value;
+    value.code = type.code;
+    if (type.code == support::DpiCTypeCode::bit_vector
+        || type.code == support::DpiCTypeCode::logic_vector) {
+        value.width = static_cast<std::uint32_t>(type.width);
+    }
+    for (const auto& member : type.members) {
+        auto member_type = dpi_value_type(member.type);
+        for (const auto& [left, right] : member.dimensions) {
+            member_type.dimensions.push_back({ left, right, false });
+        }
+        value.members.push_back(std::move(member_type));
+    }
+    return value;
+}
+
+} // namespace
+
 std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
     const semantic::sv::DpiDeclaration& declaration,
     const std::span<const semantic::ExpressionId> actuals,
@@ -20419,7 +20449,7 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
         == semantic::sv::DpiCallableKind::task;
     // A task returns its disable status as a C int; a void function has no
     // result. Both use a one-bit placeholder destination.
-    char result_code = 'T';
+    auto result_code = support::DpiCTypeCode::task_status;
     const bool void_function = !result.task
         && declaration.return_type_tokens.size() == 1U
         && declaration.return_type_tokens.front().builtin
@@ -20429,7 +20459,7 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
         result.result_width = 1U;
         result.result_domain = frontend::ValueDomain::Bit2;
         if (void_function) {
-            result_code = 'v';
+            result_code = support::DpiCTypeCode::void_result;
         }
     } else {
         // A function result is a small value or a string, never a packed
@@ -20443,8 +20473,8 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
             }
             return std::nullopt;
         }
-        if (type->code == 'B' || type->code == 'V' || type->code == 'R'
-            || type->open_packed) {
+        if (type->code == support::DpiCTypeCode::bit_vector || type->code == support::DpiCTypeCode::logic_vector
+            || type->code == support::DpiCTypeCode::structure || type->open_packed) {
             illegal(DpiTypeIssue::not_small_value,
                 declaration.return_type_tokens, true);
             return std::nullopt;
@@ -20465,7 +20495,7 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
         return std::nullopt;
     }
     constexpr std::uint64_t array_bit_limit = std::uint64_t { 1 } << 24U;
-    std::string arguments;
+    std::vector<runtime::simir::DpiArgumentType> arguments;
     result.actuals.reserve(actuals.size());
     for (std::size_t index = 0U; index < actuals.size(); ++index) {
         const auto& formal = declaration.formals[index];
@@ -20522,8 +20552,9 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
             && declaration.hidden_role
                 == support::DpiHiddenImportRole::results
             && declaration.export_result && declaration.export_flows.empty()
-            && (open || array || type->code == 'R' || type->code == 'V'
-                || type->code == 'B')) {
+            && (open || array || type->code == support::DpiCTypeCode::structure
+                || type->code == support::DpiCTypeCode::logic_vector
+                || type->code == support::DpiCTypeCode::bit_vector)) {
             illegal(DpiTypeIssue::not_small_value, formal.type_tokens, true);
             return std::nullopt;
         }
@@ -20541,16 +20572,13 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
             result.actuals.back().width = 0U;
             result.actuals.back().domain = frontend::ValueDomain::String;
         }
-        if (!arguments.empty()) {
-            arguments += ',';
-        }
         const bool input = direction == frontend::PortDirection::Input;
         const auto four_state_domain = [](const DpiCType& element) {
             return element.domain == frontend::ValueDomain::Logic4
                 ? frontend::ValueDomain::Logic4
                 : frontend::ValueDomain::Bit2;
         };
-        if (!array && !open && type->code == 'R') {
+        if (!array && !open && type->code == support::DpiCTypeCode::structure) {
             // An unpacked structure (H.7.8): its members as one bit stream.
             auto container = hir_static_container_expression_type(
                 actuals[index]);
@@ -20569,20 +20597,21 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
             structure.signed_value = false;
             structure.scalar = frontend::SystemVerilogScalarKind::None;
             structure.open_array = std::move(*container);
-            arguments += (input ? "" : "&") + dpi_c_type_signature(*type);
+            runtime::simir::DpiArgumentType argument;
+            argument.reference = !input;
+            argument.element = dpi_value_type(*type);
+            arguments.push_back(std::move(argument));
             continue;
         }
         if (!array && !open) {
             // Outputs and inouts pass by reference; vectors always do
             // (IEEE 1800-2023 H.8.7 to H.8.10).
-            const bool vector = type->code == 'B' || type->code == 'V';
-            if (!input && !vector) {
-                arguments += '&';
-            }
-            arguments += type->code;
-            if (vector) {
-                arguments += std::to_string(type->width);
-            }
+            const bool vector = type->code == support::DpiCTypeCode::bit_vector
+                || type->code == support::DpiCTypeCode::logic_vector;
+            runtime::simir::DpiArgumentType argument;
+            argument.reference = !input && !vector;
+            argument.element = dpi_value_type(*type);
+            arguments.push_back(std::move(argument));
             continue;
         }
         // The element type: an open packed dimension takes the actual's
@@ -20591,7 +20620,7 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
         auto container = hir_static_container_expression_type(actuals[index]);
         if (!array) {
             // `bit []` with a packed actual.
-            if (container || element.code == 'R' || element.string) {
+            if (container || element.code == support::DpiCTypeCode::structure || element.string) {
                 return std::nullopt;
             }
             const auto width = hir_expression_width(
@@ -20606,8 +20635,11 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
             packed.domain = four_state_domain(element);
             packed.signed_value = false;
             packed.scalar = frontend::SystemVerilogScalarKind::None;
-            arguments += (input ? "" : "&") + std::string { 'A' }
-                + dpi_c_type_signature(element);
+            runtime::simir::DpiArgumentType argument;
+            argument.reference = !input;
+            argument.array = runtime::simir::DpiArrayKind::open;
+            argument.element = dpi_value_type(element);
+            arguments.push_back(std::move(argument));
             continue;
         }
         if (!container) {
@@ -20625,7 +20657,7 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
             }
             return std::nullopt;
         }
-        const bool aggregate_element = element.code == 'R';
+        const bool aggregate_element = element.code == support::DpiCTypeCode::structure;
         const bool string_element = element.string;
         const auto fits = [](const std::int64_t value) {
             return value >= std::numeric_limits<std::int32_t>::min() + 1
@@ -20744,24 +20776,28 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
                 entry.string_elements = static_cast<std::size_t>(elements);
             }
         }
-        // `A` (open, passed as a handle) or `D` (sized, passed as a pointer
-        // to the normalized elements), the element's code, then each
-        // unpacked dimension's `/left/right`.
-        arguments += (input ? "" : "&") + std::string { open ? 'A' : 'D' }
-            + dpi_c_type_signature(element);
+        // An open array passes as a handle, a sized one as a pointer to the
+        // normalized elements; each unpacked dimension has its bounds.
+        runtime::simir::DpiArgumentType argument;
+        argument.reference = !input;
+        argument.array = open ? runtime::simir::DpiArrayKind::open : runtime::simir::DpiArrayKind::sized;
+        argument.element = dpi_value_type(element);
         for (std::size_t dimension = 0U; dimension < bounds.size();
              ++dimension) {
+            runtime::simir::DpiBound bound;
             if (dynamic && dimension == 0U) {
-                arguments += "/?/?";
-                continue;
+                bound.run_time = true;
+            } else {
+                bound.left = bounds[dimension].first;
+                bound.right = bounds[dimension].second;
             }
-            arguments += '/' + std::to_string(bounds[dimension].first) + '/'
-                + std::to_string(bounds[dimension].second);
+            argument.bounds.push_back(bound);
         }
+        arguments.push_back(std::move(argument));
         entry.open_array = std::move(*container);
     }
     result.arguments = std::move(arguments);
-    result.result_code = static_cast<std::uint8_t>(result_code);
+    result.result_code = result_code;
     result.context
         = declaration.qualifier == semantic::sv::DpiQualifier::context;
     return result;

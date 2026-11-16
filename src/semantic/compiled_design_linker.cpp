@@ -2820,8 +2820,47 @@ bool relocation_fits(
             source.process_identities.size());
 }
 
+using UnitDigests = std::map<UnitKey, std::uint64_t>;
+
+// The frontend's content digest of a SystemVerilog unit; zero for any other.
+std::uint64_t unit_content_digest(const CompiledDesign& design, const Unit& unit)
+{
+    const auto hir_unit = std::ranges::find(
+        design.systemverilog_hir.units(), unit.id, &sv::Unit::id);
+    return hir_unit == design.systemverilog_hir.units().end()
+        ? std::uint64_t { }
+        : hir_unit->content_digest;
+}
+
+// The units `design` defines that an earlier input already defined from the
+// same content (a package in a header that several objects include). The
+// link keeps the earlier copy; this input's uses of the copy's members
+// become references to it.
+std::vector<UnitId> identical_unit_copies(const CompiledDesign& design,
+    const UnitDefinitions& units, const UnitDigests& digests)
+{
+    std::vector<UnitId> copies;
+    for (const auto& unit : design.semantics.units()) {
+        if (unit.kind == UnitKind::systemverilog_compilation_unit
+            || is_external_unit(design, unit)) {
+            continue;
+        }
+        const auto key = unit_key(design, unit);
+        const auto registered = units.find(key);
+        const auto digest = digests.find(key);
+        const auto content = unit_content_digest(design, unit);
+        if (registered != units.end() && registered->second
+            && digest != digests.end() && content != 0U
+            && digest->second == content) {
+            copies.push_back(unit.id);
+        }
+    }
+    return copies;
+}
+
 bool register_definitions(const CompiledDesign& design,
-    UnitDefinitions& units, std::set<std::string>& classes,
+    UnitDefinitions& units, UnitDigests& digests,
+    std::set<std::string>& classes,
     std::set<UdpKey>& udps, std::string& error)
 {
     for (const auto& unit : design.semantics.units()) {
@@ -2829,8 +2868,12 @@ bool register_definitions(const CompiledDesign& design,
             continue;
         }
         const auto definition = !is_external_unit(design, unit);
+        const auto key = unit_key(design, unit);
+        if (definition) {
+            digests.try_emplace(key, unit_content_digest(design, unit));
+        }
         const auto [registered, inserted]
-            = units.try_emplace(unit_key(design, unit), definition);
+            = units.try_emplace(key, definition);
         if (!inserted && definition && registered->second) {
             error = "compiled-HIR unit collision for logical identity '"
                 + std::string { normalized_library(unit.library) }
@@ -4587,18 +4630,33 @@ CompiledLinkResult link_compiled_designs(
     LinkedSourceIndex source_index;
     index_linked_sources(records, source_index);
     UnitDefinitions units;
+    UnitDigests digests;
     std::set<std::string> classes;
     std::set<UdpKey> udps;
     std::string collision;
     if (!register_definitions(
-            output, units, classes, udps, collision)) {
+            output, units, digests, classes, udps, collision)) {
         return { std::nullopt, std::move(collision) };
     }
     for (std::size_t index = 1; index < inputs.size(); ++index) {
         auto input = std::move(inputs[index]);
+        if (const auto copies = identical_unit_copies(input, units, digests);
+            !copies.empty()) {
+            auto projected = project_compiled_design(input,
+                [&](const Unit& unit) {
+                    return std::ranges::find(copies, unit.id) == copies.end();
+                },
+                [](const std::string_view) { return true; },
+                "compiled-HIR projection without identical unit copies is "
+                "structurally invalid");
+            if (!projected.ok()) {
+                return projected;
+            }
+            input = std::move(*projected.design);
+        }
         auto input_records = input.semantics.records();
         if (!register_definitions(
-                input, units, classes, udps, collision)) {
+                input, units, digests, classes, udps, collision)) {
             return { std::nullopt, std::move(collision) };
         }
         if (!relocation_fits(records, input_records)) {

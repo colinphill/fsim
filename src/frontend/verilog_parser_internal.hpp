@@ -9,6 +9,7 @@
 #include "fsim/frontend/systemverilog_scalars.hpp"
 #include "fsim/frontend/token.hpp"
 #include "fsim/support/dpi_identity.hpp"
+#include "fsim/support/payload_checksum.hpp"
 #include "fsim/support/rare_vector.hpp"
 
 #include <array>
@@ -1627,6 +1628,15 @@ class VerilogParser final : private detail::ParserBase {
   bool compilation_time_unit_declared_{};
   bool compilation_time_precision_declared_{};
   bool compilation_unit_has_design_item_{};
+  // The tokens of compilation-unit items outside every design element.
+  support::Xxh64 compilation_unit_items_digest_;
+  // Digests the tokens of one compilation-unit item, [begin, position()):
+  // the content of the design elements it added (from `first_unit` on), or
+  // of the compilation-unit items when it added none.
+  void record_unit_digests(
+      ParsedDesign& design, std::size_t begin, std::size_t first_unit);
+  // Folds each design element's context into its digest.
+  void finish_unit_digests(ParsedDesign& design);
   std::uint64_t module_time_unit_magnitude_{1};
   std::string module_time_unit_;
   std::string module_time_precision_;

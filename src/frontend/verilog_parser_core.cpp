@@ -220,7 +220,12 @@ ParseResult VerilogParser::run() {
                 tokens_.begin() + static_cast<std::ptrdiff_t>(index + 2U));
         }
     }
+    auto item_begin = position();
+    auto item_units = design.units.size();
     while (!at_end()) {
+        record_unit_digests(design, item_begin, item_units);
+        item_begin = position();
+        item_units = design.units.size();
         if (language_ == Language::SystemVerilog2017
             && match(TokenKind::Semicolon)) {
             // An empty compilation-unit item (IEEE 1800-2017 A.1.11).
@@ -592,6 +597,7 @@ ParseResult VerilogParser::run() {
             skip_to_semicolon();
         }
     }
+    record_unit_digests(design, item_begin, item_units);
     for (const auto& name : deferred_checker_units_) {
         const auto unit = std::ranges::find(
             design.units, name, &DesignUnit::name);
@@ -705,8 +711,92 @@ ParseResult VerilogParser::run() {
                 };
         }
     }
+    finish_unit_digests(design);
     normalize_udp_instances(design);
     return ParseResult { std::move(design), std::move(diagnostics_) };
+}
+
+namespace {
+
+void hash_number(support::Xxh64& state, const std::uint64_t value)
+{
+    std::array<std::byte, 8U> bytes { };
+    for (std::size_t index = 0U; index < bytes.size(); ++index) {
+        bytes[index] = static_cast<std::byte>((value >> (8U * index)) & 0xffU);
+    }
+    state.update(bytes);
+}
+
+void hash_text(support::Xxh64& state, const std::string_view text)
+{
+    hash_number(state, text.size());
+    state.update(text);
+}
+
+} // namespace
+
+void VerilogParser::record_unit_digests(ParsedDesign& design,
+    const std::size_t begin, const std::size_t first_unit)
+{
+    const auto end = std::min(position(), tokens_.size());
+    if (begin >= end) {
+        return;
+    }
+    support::Xxh64 state;
+    // Only copies of one file's text are one unit (a package in a header
+    // that several files include); the same text in two files is two
+    // declarations of one name.
+    const auto& file = tokens_[begin].span.physical_source_name.empty()
+        ? tokens_[begin].span.source_name
+        : tokens_[begin].span.physical_source_name;
+    hash_text(state, file.str());
+    for (std::size_t index = begin; index < end; ++index) {
+        const auto& token = tokens_[index];
+        hash_number(state, static_cast<std::uint64_t>(token.kind));
+        hash_number(state, static_cast<std::uint64_t>(token.generated_text));
+        hash_text(state, token.text);
+    }
+    const auto digest = state.finish();
+    if (design.units.size() <= first_unit) {
+        hash_number(compilation_unit_items_digest_, digest);
+        return;
+    }
+    for (auto index = first_unit; index < design.units.size(); ++index) {
+        design.units[index].content_digest = digest;
+    }
+}
+
+void VerilogParser::finish_unit_digests(ParsedDesign& design)
+{
+    const auto items = compilation_unit_items_digest_.finish();
+    for (auto& unit : design.units) {
+        if (unit.content_digest == 0U
+            || unit.systemverilog_compilation_unit_package) {
+            unit.content_digest = 0U;
+            continue;
+        }
+        support::Xxh64 state;
+        hash_number(state, unit.content_digest);
+        hash_number(state, static_cast<std::uint64_t>(unit.kind));
+        hash_number(state, static_cast<std::uint64_t>(unit.language));
+        hash_number(state, static_cast<std::uint64_t>(unit.standard_revision));
+        hash_number(state, static_cast<std::uint64_t>(unit.unconnected_drive));
+        hash_number(state, unit.is_cell ? 1U : 0U);
+        hash_text(state, unit.verilog_compatibility_profile);
+        hash_text(state, unit.library);
+        hash_text(state, unit.time_unit);
+        hash_text(state, unit.time_precision);
+        hash_text(state, unit.default_nettype);
+        hash_text(state, unit.default_decay_time);
+        hash_text(state, unit.standard_package_revision);
+        // A package cannot refer to compilation-unit items (IEEE 1800-2023
+        // 26.2); every other design element can see them.
+        if (unit.kind != UnitKind::SystemVerilogPackage) {
+            hash_number(state, items);
+        }
+        const auto digest = state.finish();
+        unit.content_digest = digest == 0U ? 1U : digest;
+    }
 }
 
 std::pair<std::string, std::string>

@@ -151,6 +151,8 @@ struct SystemVerilogVpiDeferredProcess {
     std::uint32_t process { };
     std::string name;
     std::string path;
+    // The name is the generated `$process_<index>`, not a source name.
+    bool synthesized_name { };
 };
 
 // A generate block occurrence that holds no published object, created

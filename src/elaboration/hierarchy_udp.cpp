@@ -5,6 +5,7 @@
 #include "fsim/support/sha256.hpp"
 #include "fsim/support/systemverilog_builtin_type.hpp"
 
+#include <algorithm>
 #include <iostream>
 #include <array>
 
@@ -1463,10 +1464,15 @@ void HierarchyBuilder::record_verilog_primitives(
         }
         return result;
     };
-    // A named gate is lowered to processes named after its instance (the
-    // statement label: `g`, `g[1]`, `g$output1`); the ones that hold a
-    // delayed write carry its delay. Indexed on the first delayed gate.
-    std::unordered_map<std::string, std::vector<runtime::simir::ProcessId>>
+    // A named gate is lowered to processes that carry the gate's instance
+    // and their driver slot; the ones that hold a delayed write carry its
+    // delay. Indexed on the first delayed gate.
+    struct DelayedDriver {
+        support::GateDriverSlot slot;
+        std::uint32_t output;
+        runtime::simir::ProcessId id;
+    };
+    std::unordered_map<std::string, std::vector<DelayedDriver>>
         delayed_drivers;
     bool indexed { };
     const auto index_drivers = [&] {
@@ -1486,7 +1492,11 @@ void HierarchyBuilder::record_verilog_primitives(
             if (!delayed) {
                 continue;
             }
-            delayed_drivers[view.name()].push_back(id);
+            if (view.gate_driver_slot() == support::GateDriverSlot::none) {
+                continue;
+            }
+            delayed_drivers[view.gate_driver_instance()].push_back(
+                { view.gate_driver_slot(), view.gate_driver_output(), id });
         }
     };
     for (const auto& primitive : primitives) {
@@ -1555,28 +1565,34 @@ void HierarchyBuilder::record_verilog_primitives(
             // generate scope of its iteration.
             const auto& driver_name = array_element != nullptr
                 ? array_element->driver_name : info.full_name;
-            // One process per output terminal (`$outputN`), and a bufif or
-            // notif without a delay splits into `$one`.
-            // A tranif's turn-on and turn-off delays are on its control's
-            // driver (`$control`).
-            // ITEM46-LEFT: gate driver processes are named after the instance label plus a slot suffix and matched by that name; a typed form needs the primitive instance and driver slot on the statement, the HIR statement and the process record
-            for (const auto& suffix : { std::string {}, std::string { "$one" },
-                     std::string { "$control" } }) {
-                const auto found = delayed_drivers.find(driver_name + suffix);
-                if (found != delayed_drivers.end()) {
-                    info.drivers.insert(info.drivers.end(),
-                        found->second.begin(), found->second.end());
+            // The drivers in slot order: the single output, the value-one
+            // half of a bufif or notif that has no delay, the control of a
+            // tranif (its turn-on and turn-off delays are on the control's
+            // driver), then one process per output terminal.
+            if (const auto found = delayed_drivers.find(driver_name);
+                found != delayed_drivers.end()) {
+                for (const auto slot : { support::GateDriverSlot::single,
+                         support::GateDriverSlot::one,
+                         support::GateDriverSlot::control }) {
+                    for (const auto& driver : found->second) {
+                        if (driver.slot == slot) {
+                            info.drivers.push_back(driver.id);
+                        }
+                    }
                 }
-            }
-            for (std::size_t output = 0U;; ++output) {
-                // ITEM46-LEFT: gate driver processes are named after the instance label plus a slot suffix and matched by that name; a typed form needs the primitive instance and driver slot on the statement, the HIR statement and the process record
-                const auto found = delayed_drivers.find(
-                    driver_name + "$output" + std::to_string(output));
-                if (found == delayed_drivers.end()) {
-                    break;
+                std::vector<DelayedDriver> outputs;
+                for (const auto& driver : found->second) {
+                    if (driver.slot == support::GateDriverSlot::output) {
+                        outputs.push_back(driver);
+                    }
                 }
-                info.drivers.insert(info.drivers.end(), found->second.begin(),
-                    found->second.end());
+                std::ranges::stable_sort(outputs,
+                    [](const DelayedDriver& left, const DelayedDriver& right) {
+                        return left.output < right.output;
+                    });
+                for (const auto& driver : outputs) {
+                    info.drivers.push_back(driver.id);
+                }
             }
         }
         info.source = compiled_source_span(*compiled_, primitive.source);

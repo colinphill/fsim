@@ -1537,6 +1537,8 @@ namespace {
                 std::move(descriptor.name_prefix),
                 descriptor.anonymous,
                 descriptor.compilation_unit,
+                descriptor.synthesized,
+                descriptor.driver_index,
             });
         if (!created) {
             const auto existing = registry.find(identity);
@@ -1615,7 +1617,8 @@ void defer_child(runtime::SystemVerilogVpiObjectRegistry& registry,
     const BuiltProject& project,
     const semantic::design::ProcessOccurrence& process,
     const fsim_vpi_handle_v1 parent, std::string name,
-    const std::string& path, std::string name_prefix = { })
+    const std::string& path, const bool synthesized_name,
+    std::string name_prefix = { })
 {
     const auto& specialization = project.design_ir.specializations().at(
         process.specialization.value());
@@ -1632,6 +1635,7 @@ void defer_child(runtime::SystemVerilogVpiObjectRegistry& registry,
     // event initializer) is never published, so a name here is a source
     // name.
     auto published_name = std::move(name);
+    bool renamed { };
     descriptor.name_prefix = std::move(name_prefix);
     // A checker-expanded assertion's name is unique under its prefix.
     for (std::uint32_t collision = 0U; descriptor.name_prefix.empty();
@@ -1652,11 +1656,13 @@ void defer_child(runtime::SystemVerilogVpiObjectRegistry& registry,
         }
         published_name
             = "$process_" + std::to_string(process.runtime_index);
+        renamed = true;
         if (collision != 0U) {
             published_name.push_back('_');
             published_name.append(std::to_string(collision));
         }
     }
+    descriptor.synthesized = synthesized_name || renamed;
     descriptor.name = std::move(published_name);
     return create_checked(registry, std::move(descriptor), path);
 }
@@ -1684,6 +1690,8 @@ create_systemverilog_vpi_driver(
     descriptor.kind = runtime::SystemVerilogVpiObjectKind::Driver;
     descriptor.parent = parent;
     descriptor.name = "$driver_" + std::to_string(driver.id.value());
+    descriptor.synthesized = true;
+    descriptor.driver_index = driver.id.value();
     auto stored = interpreter.driver_value(process.runtime_index, signal);
     const auto& signal_info = project.design.signals().at(signal);
     const auto category
@@ -2415,7 +2423,7 @@ void materialize_vpi_generate_scopes(
         for (const auto& process : deferred.processes) {
             (void)create_systemverilog_vpi_process(registry, project,
                 project.design_ir.processes().at(process.process), handle,
-                process.name, process.path);
+                process.name, process.path, process.synthesized_name);
         }
         if (deferred.unit) {
             publish_vpi_generate_blocks(registry, project, *deferred.unit,
@@ -4489,6 +4497,8 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         descriptor.parent = object_parent;
         descriptor.ordinal = element_place;
         descriptor.name = vpi_identifier(std::string { object_name });
+        descriptor.synthesized
+            = support::vpi_hidden_origin(object.origin);
         const auto direction = port == ports.end()
             ? runtime::SystemVerilogVpiDirection::None
             : vpi_direction(port->second->direction);
@@ -4675,6 +4685,8 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         descriptor.name = vpi_identifier(anonymous
                 ? std::string_view { anonymous->second->name }
                 : std::string_view { object.name });
+        descriptor.synthesized
+            = support::vpi_hidden_origin(object.origin);
         descriptor.type = memory_type(specialization.language, type);
         const bool interconnect_array = net_array
             && interconnect_nets.contains(
@@ -4967,6 +4979,8 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         descriptor.name = vpi_identifier(anonymous
                 ? std::string_view { anonymous->second->name }
                 : std::string_view { object.name });
+        descriptor.synthesized
+            = support::vpi_hidden_origin(object.origin);
         descriptor.type = std::move(type);
         const auto handle = create_checked(
             *result.registry, std::move(descriptor), path);
@@ -5094,6 +5108,11 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         // Another process of a generate scope that holds no published
         // object is created with the scope.
         const RecordedGenerateScope* holder { };
+        // A name the tool made: an unlabeled assertion's (IEEE 1800-2023
+        // 16.14) or a generated driver's.
+        bool synthesized_name = process.generated_name
+            || (assertion_source != nullptr
+                && !assertion_source->explicit_label);
         if (checker_expanded) {
             // Placed under the instantiating module above.
         } else if (const auto matching_scope = published_scopes.find(path);
@@ -5103,6 +5122,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             }
             descriptor.name
                 = "$process_" + std::to_string(process.runtime_index);
+            synthesized_name = true;
         } else if (const auto* const scope
                    = recorded_generate_scope(instance_path, path)) {
             if (descriptor.name != "<process>") {
@@ -5110,6 +5130,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             }
             descriptor.name
                 = "$process_" + std::to_string(process.runtime_index);
+            synthesized_name = true;
         } else if (leaf != std::string::npos) {
             const auto parent_path = path.substr(0U, leaf);
             if (const auto parent_scope = published_scopes.find(parent_path);
@@ -5131,18 +5152,20 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             auto& held = generate_scope_processes[holder->path.data()];
             held.instance = descriptor.parent;
             held.processes.push_back(
-                { process_index, std::move(descriptor.name), path });
+                { process_index, std::move(descriptor.name), path,
+                    synthesized_name });
             continue;
         }
         if (!asserted) {
             result.deferred[descriptor.parent].processes.push_back(
-                { process_index, std::move(descriptor.name), path });
+                { process_index, std::move(descriptor.name), path,
+                    synthesized_name });
             defer_child(*result.registry, descriptor.parent, path);
             continue;
         }
         const auto process_handle = create_systemverilog_vpi_process(
             *result.registry, project, process, descriptor.parent,
-            std::move(descriptor.name), path,
+            std::move(descriptor.name), path, synthesized_name,
             checker_expanded ? assertion_source->checker_instance
                              : std::string { });
         {
@@ -5151,6 +5174,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
                 = runtime::SystemVerilogVpiObjectKind::Assertion;
             assertion.parent = process_handle;
             assertion.name = "$assertion";
+            assertion.synthesized = true;
             runtime::SystemVerilogVpiTypeInfo assertion_type;
             assertion_type.language
                 = vpi_profile_language(project, specialization);
@@ -6021,7 +6045,7 @@ SystemVerilogVpiMaterializedChildren materialize_systemverilog_vpi_children(
     for (const auto& process : deferred.processes) {
         (void)create_systemverilog_vpi_process(registry, project,
             project.design_ir.processes().at(process.process), parent,
-            process.name, process.path);
+            process.name, process.path, process.synthesized_name);
     }
     for (const auto driver : deferred.drivers) {
         if (auto created = create_systemverilog_vpi_driver(registry, project,

@@ -190,6 +190,57 @@ enum class DpiCallPhase : std::uint8_t {
   last = finish,
 };
 
+/// One unpacked dimension of a DPI array formal or structure member: the
+/// bounds as declared, or, for the first dimension of a dynamic array or
+/// queue actual, a size the call gives at run time (`run_time`, the bounds
+/// then unused; IEEE 1800-2023 35.5.6.1, H.12.2).
+struct DpiBound {
+  std::int64_t left{};
+  std::int64_t right{};
+  bool run_time{};
+
+  friend bool operator==(const DpiBound&, const DpiBound&) = default;
+};
+
+/// The C type of one DPI value or array element (IEEE 1800-2023 H.7.4,
+/// H.7.8): its code, a vector's width in bits, and for an unpacked
+/// structure its members in order. As a structure member, `dimensions` are
+/// the member's unpacked dimensions, outermost first.
+struct DpiValueType {
+  support::DpiCTypeCode code{};
+  std::uint32_t width{};
+  std::vector<DpiBound> dimensions{};
+  std::vector<DpiValueType> members{};
+
+  friend bool operator==(const DpiValueType&, const DpiValueType&) = default;
+};
+
+/// How a DPI formal passes an array: not at all (a value or a structure),
+/// as an open array handle (H.12), or as a pointer to the normalized
+/// elements of a sized array (H.7.3, H.7.6).
+enum class DpiArrayKind : std::uint8_t {
+  none,
+  open,
+  sized,
+  last = sized,
+};
+
+/// One formal of the C signature of an imported DPI call. `reference`
+/// marks a value, array or structure passed by pointer (vectors always
+/// pass by pointer and carry no flag; H.8.7 to H.8.10). `element` is the
+/// value's type, or the array's element type, and `bounds` the array's
+/// unpacked dimensions, outermost first (none for a value, and for an open
+/// packed dimension without unpacked ones).
+struct DpiArgumentType {
+  bool reference{};
+  DpiArrayKind array{DpiArrayKind::none};
+  DpiValueType element{};
+  std::vector<DpiBound> bounds{};
+
+  friend bool operator==(const DpiArgumentType&, const DpiArgumentType&)
+      = default;
+};
+
 /// The identity of an imported DPI call: the C symbol, its signature, the
 /// flags of the import and, for a context import, the call site (IEEE
 /// 1800-2023 35.5.3, H.9). The hidden imports of a unit's export service
@@ -199,11 +250,10 @@ struct DpiCallIdentity {
   support::DpiHiddenImportRole role{support::DpiHiddenImportRole::none};
   /// The C linkage name of the import.
   std::string c_name;
-  /// The formals of the C signature, comma separated, each as its type code
-  /// (an `&` first marks one passed by pointer; see DpiArgumentPlan).
-  std::string arguments;
-  /// The code of the C result type.
-  std::uint8_t result{};
+  /// The formals of the C signature.
+  std::vector<DpiArgumentType> arguments;
+  /// The C result type.
+  support::DpiCTypeCode result{support::DpiCTypeCode::none};
   /// A context import: it runs with the caller's scope, file and line.
   bool context{};
   /// The instance, source file and line of the call site of a context
@@ -287,14 +337,12 @@ inline constexpr std::size_t dpi_planned_argument_limit{16};
 inline constexpr std::size_t dpi_planned_buffer_words{64};
 
 /// One argument of an imported DPI call, planned when the kernel image is
-/// built (IEEE 1800-2023 35.5, H.7.4, H.10.1). `code` is the argument's
-/// signature letter: c C s S i I l L (byte, shortint, int, longint, signed
-/// or unsigned), p (chandle), d (real), f (shortreal), z (string), b (bit),
-/// g (logic), B and V (packed bit and logic vectors, svBitVecVal and
-/// svLogicVecVal). `offset` and `words` place the argument's C value in the
+/// built (IEEE 1800-2023 35.5, H.7.4, H.10.1). `code` is the argument's C
+/// type: a scalar, a string, or a packed bit or logic vector (svBitVecVal
+/// and svLogicVecVal). `offset` and `words` place the argument's C value in the
 /// call's argument buffer, in eight-byte words.
 struct DpiArgumentPlan {
-  std::uint8_t code{};
+  support::DpiCTypeCode code{support::DpiCTypeCode::none};
   bool reference{};
   /// An output or inout formal: `reference`, or a vector, which passes by
   /// pointer in every direction and so carries no `&` (H.8.7 to H.8.10).
@@ -320,7 +368,7 @@ struct DpiSitePlan {
   /// The call's identity, as the call hooks take it.
   DpiCallIdentity identity;
   bool generic{true};
-  std::uint8_t result{};
+  support::DpiCTypeCode result{support::DpiCTypeCode::none};
   std::uint32_t result_width{};
   /// The words of the argument buffer.
   std::uint32_t buffer_words{};

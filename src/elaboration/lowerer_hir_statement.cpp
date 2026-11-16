@@ -175,10 +175,7 @@ std::optional<std::size_t> Lowerer::hir_tagged_union_aggregate_member(
 bool Lowerer::hir_tagged_union_aggregate(const ContainerType& type)
 {
     return type.element_kind == ContainerElementKind::Aggregate
-        && !type.member_names.empty()
-        && type.member_names.front()
-            == hierarchy_sv_type_layout_detail::
-                systemverilog_tagged_union_tag_member;
+        && !type.member_names.empty() && type.tagged_union;
 }
 
 std::optional<ContainerRegisterId>
@@ -28608,6 +28605,10 @@ void Lowerer::materialize_hir_procedural_continuous_assignments()
         description.always_comb_or_latch = true;
         auto driver = driver_lowerer.lower_hir_process_body(
             description, language_, hierarchy_);
+        if (driver) {
+            driver->origin
+                = support::GeneratedObjectOrigin::procedural_assign_driver;
+        }
         if (!driver) {
             report(
                 "FSIM-ELAB-SVPROCASSIGN-002",

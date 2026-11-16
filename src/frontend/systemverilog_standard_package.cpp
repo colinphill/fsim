@@ -104,4 +104,9 @@ systemverilog_process_state_value(const std::string_view member) noexcept
     return std::nullopt;
 }
 
+std::span<const std::string_view> systemverilog_process_states() noexcept
+{
+    return kProcessStates;
+}
+
 } // namespace fsim::frontend

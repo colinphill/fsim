@@ -44,6 +44,11 @@ systemverilog_standard_package(StandardRevision standard) noexcept;
 [[nodiscard]] std::optional<std::uint32_t>
 systemverilog_process_state_value(std::string_view member) noexcept;
 
+/// The constants of process's `state` enum in declaration order (9.7); the
+/// value of each is its position.
+[[nodiscard]] std::span<const std::string_view>
+systemverilog_process_states() noexcept;
+
 /// Finds one directly declared member in the selected standard-package view.
 /// Nested class member selection is validated by the owning class service.
 [[nodiscard]] const SystemVerilogStandardPackageDeclaration*

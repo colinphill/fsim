@@ -11,6 +11,7 @@
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/semantic/hierarchy_path.hpp"
 #include "fsim/support/dpi_identity.hpp"
+#include "fsim/support/gate_driver.hpp"
 #include "fsim/support/generated_object_origin.hpp"
 #include "fsim/support/sha256.hpp"
 #include "fsim/support/stack_growth.hpp"
@@ -369,7 +370,10 @@ namespace codec_detail {
         } else if constexpr (
             std::same_as<T, support::GeneratedObjectOrigin>) {
             return value >= support::GeneratedObjectOrigin::none
-                && value <= support::GeneratedObjectOrigin::port_output_adapter;
+                && value <= support::GeneratedObjectOrigin::procedural_assign_driver;
+        } else if constexpr (std::same_as<T, support::GateDriverSlot>) {
+            return value >= support::GateDriverSlot::none
+                && value <= support::GateDriverSlot::switch_right;
         } else if constexpr (std::same_as<T, semantic::CompiledReferenceKind>) {
             return value >= semantic::CompiledReferenceKind::package
                 && value <= semantic::CompiledReferenceKind::context;
@@ -1233,6 +1237,12 @@ namespace codec_detail {
         } else if constexpr (std::same_as<T, fsim::runtime::simir::DpiCallPhase>) {
             return value >= fsim::runtime::simir::DpiCallPhase::call
                 && value <= fsim::runtime::simir::DpiCallPhase::last;
+        } else if constexpr (std::same_as<T, fsim::support::DpiCTypeCode>) {
+            return value >= fsim::support::DpiCTypeCode::none
+                && value <= fsim::support::DpiCTypeCode::last;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::DpiArrayKind>) {
+            return value >= fsim::runtime::simir::DpiArrayKind::none
+                && value <= fsim::runtime::simir::DpiArrayKind::last;
         } else if constexpr (std::same_as<T, fsim::support::DpiHiddenImportRole>) {
             return value >= fsim::support::DpiHiddenImportRole::none
                 && value <= fsim::support::DpiHiddenImportRole::last;
@@ -1496,7 +1506,7 @@ namespace codec_detail {
     {
         // Every member is listed: one added to the record and not here
         // fails the build (the binding names each member).
-        [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11, m12, m13, m14, m15, m16, m17, m18, m19, m20, m21, m22, m23, m24, m25, m26, m27, m28] = value;
+        [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11, m12, m13, m14, m15, m16, m17, m18, m19, m20, m21, m22, m23, m24, m25, m26, m27, m28, m29, m30, m31] = value;
         return std::tie(
             value.id, value.name, value.static_sensitivity,
             value.operations, value.driver_regions, value.drive_strength,
@@ -1506,7 +1516,9 @@ namespace codec_detail {
             value.switch_bidirectional, value.switch_resistive,
             value.initialize, value.observed, value.reactive,
             value.program_owner, value.postponed, value.final,
-            value.startup_phase, value.origin, value.startup_order,
+            value.startup_phase, value.origin, value.gate_driver_slot,
+            value.gate_driver_output, value.gate_driver_instance,
+            value.startup_order,
             value.startup_package_owner_id,
             value.startup_writable_package_owner_ids,
             value.startup_writable_string_object_ids,
@@ -1763,6 +1775,7 @@ namespace codec_detail {
         hasher.add_bool(value.two_state);
         hasher.add_bool(value.signed_elements);
         hasher.add_bool(value.union_aggregate);
+        hasher.add_bool(value.tagged_union);
         hasher.add_bool(value.aggregate_value);
         hasher.add_bool(value.queue);
         hasher.add_bool(value.associative);
@@ -2377,6 +2390,9 @@ namespace codec_detail {
                 write(instance.final);
                 write(instance.startup_phase);
                 write(instance.origin);
+                write(instance.gate_driver_slot);
+                write(instance.gate_driver_output);
+                write(instance.gate_driver_instance);
                 write(instance.startup_order);
                 write(instance.startup_package_owner_id);
                 write(instance.startup_writable_package_owner_ids);
@@ -3309,6 +3325,9 @@ namespace codec_detail {
                     || !read(instance.final)
                     || !read(instance.startup_phase)
                     || !read(instance.origin)
+                    || !read(instance.gate_driver_slot)
+                    || !read(instance.gate_driver_output)
+                    || !read(instance.gate_driver_instance)
                     || !read(instance.startup_order)
                     || !read(instance.startup_package_owner_id)
                     || !read(instance.startup_writable_package_owner_ids)

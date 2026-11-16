@@ -75,6 +75,11 @@ struct ProcessInstanceProgram {
     support::GeneratedObjectOrigin origin {
         support::GeneratedObjectOrigin::none
     };
+    support::GateDriverSlot gate_driver_slot {
+        support::GateDriverSlot::none
+    };
+    std::uint32_t gate_driver_output { };
+    std::string gate_driver_instance;
     std::uint64_t startup_order { };
     std::uint32_t startup_package_owner_id { };
     std::vector<std::uint32_t> startup_writable_package_owner_ids;
@@ -237,6 +242,10 @@ public:
         startup_phase() const noexcept;
     [[nodiscard]] const support::GeneratedObjectOrigin&
         origin() const noexcept;
+    [[nodiscard]] const support::GateDriverSlot&
+        gate_driver_slot() const noexcept;
+    [[nodiscard]] const std::uint32_t& gate_driver_output() const noexcept;
+    [[nodiscard]] const std::string& gate_driver_instance() const noexcept;
     [[nodiscard]] const std::uint64_t& startup_order() const noexcept;
     [[nodiscard]] const std::uint32_t&
     startup_package_owner_id() const noexcept;

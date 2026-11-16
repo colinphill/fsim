@@ -209,6 +209,9 @@ struct ProcessOccurrence {
     // A process the frontend generated for an assertion construct (IEEE
     // 1800-2023 16.12, 16.17): no VPI process (37.63).
     bool synthesized{};
+    // A process VPI publishes under a name the tool made (the driver of a
+    // procedural continuous assignment), hidden from iteration.
+    bool generated_name{};
 };
 
 struct Conversion {

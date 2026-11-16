@@ -2195,6 +2195,9 @@ private:
         semantic::ExpressionId expression) const;
     // Whether `name` resolves to a variable of the built-in process class.
     [[nodiscard]] bool hir_process_handle_name(std::string_view name) const;
+    // A queue's pop_front() or pop_back() call.
+    [[nodiscard]] bool hir_queue_pop(
+        const semantic::sv::Expression& call) const;
     // Whether the expression is `p.status()` of a process handle.
     [[nodiscard]] bool hir_process_status_query(
         semantic::ExpressionId expression) const;
@@ -5274,11 +5277,11 @@ private:
         // A task or void function: the destination is a placeholder.
         bool result_void { };
         bool task { };
-        // The C signature the foreign service calls through: the codes of
-        // the formals (comma separated), the code of the result, and whether
-        // the import is a context import.
-        std::string arguments;
-        std::uint8_t result_code { };
+        // The C signature the foreign service calls through: the types of
+        // the formals, the type of the result, and whether the import is a
+        // context import.
+        std::vector<runtime::simir::DpiArgumentType> arguments;
+        support::DpiCTypeCode result_code { support::DpiCTypeCode::none };
         bool context { };
         // The role of a hidden import of a unit's export service, and, for
         // its argument and result imports, the export's result and the flow

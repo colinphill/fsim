@@ -3901,6 +3901,14 @@ std::optional<Process> Lowerer::lower_hir_concurrent_statement(
         return std::nullopt;
     }
     if (result && source->systemverilog != nullptr
+        && source->systemverilog->gate_driver_slot
+            != support::GateDriverSlot::none) {
+        result->gate_driver_slot = source->systemverilog->gate_driver_slot;
+        result->gate_driver_output = source->systemverilog->gate_driver_output;
+        result->gate_driver_instance = std::string { hierarchy } + "."
+            + source->systemverilog->gate_driver_instance;
+    }
+    if (result && source->systemverilog != nullptr
         && source->systemverilog->drive_zero
         && source->systemverilog->drive_one) {
         result->drive_strength = {

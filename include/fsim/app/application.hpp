@@ -874,7 +874,7 @@ public:
     [[nodiscard]] std::vector<runtime::simir::ProcessId>
     undelayed_gate_drivers(std::string_view full_name) const;
     /// Every process that drives an output of the gate whose full name is
-    /// given (`g`, `g$one`, `g$output<n>`), delayed or not: the driver
+    /// given (its single driver, the value-one half of a bufif or notif, or one driver per output), delayed or not: the driver
     /// objects of IEEE 1364-2001 Table 88 (reason_paramdrc) for its
     /// output terminals.
     [[nodiscard]] std::vector<runtime::simir::ProcessId>
