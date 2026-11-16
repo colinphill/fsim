@@ -138,6 +138,81 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-11-15: Gate BC checkpoint T: typed std classes and markers, defparam precedence, statement labels, sparse fixed arrays of any shape and their whole-array operations (`44c0446b`, `7494a1ff`, `2b8a062b`, `2af63b57`, sweeps `bcT4g`, `bcT4ga`)
+
+This is checkpoint T of gate BC (plan `.local-artifacts/followups/gate-bc-plan-1114.md`). The checkpoint T commit `44c0446b` was swept as `bcT` and lost 10 cases per mode. `7494a1ff` fixes them and adds whole-array operations on sparse arrays (item 26). `2b8a062b` updates test assertions that encoded behaviour `7494a1ff` corrected. `2af63b57` fixes a cocotb loss. Items 26 (static kernel, traces and the multi-dimensional class-property VPI view are left), 35 and 43-55 are in code. Items 15, 16, 18-25, 28, 31, 37, 41, 46 and 50-60 stay open. The new findings F33, F34 and F36 are on the Found list for the owner.
+
+**Contents:**
+- **Statement labels and for scopes (items 35, 52):** a label names any statement (9.3.5), so a labeled loop names its implicit block. A for loop with several initializers is one for scope with `vpiForInitStmt` (12.7.1).
+- **Typed calls, trace root and single-root dumps (items 43-45):** calls carry a typed `CallKind` {user, system}, not a leading `$`. The `__fsim_root` trace scope is a shared typed constant. A single-root VCD records root-relative names as storage aliases only; module variables are no longer dumped twice.
+- **std classes and randomize (items 47, 54, 55):** `process`, `mailbox`, `semaphore` and `weak_reference` are known by typed identity. A design declaration of one of these names hides the `std` wildcard import (26.7), and `process` is no reserved word (Table B.1). Scope randomize (18.12) is a typed marker.
+- **Constraint typedefs (items 48, 49):** typedef-of-time casts take the resolved built-in width. Constraint typedef casts and bind targets resolve by HIR identity.
+- **Defparam precedence (item 53):** a defparam wins over an instance parameter override, and the last defparam wins (23.10).
+- **Sparse fixed arrays (item 26):** an unpacked array beyond the dense storage budget is stored sparsely for any rank and for string elements. The background element comes from the initializer's default, keyed initializers work, and the form covers module and class statics. Large automatic arrays are stored sparsely too. Every element of such an array is visible to reductions, locators, ordering, compare, conditional select, streaming, `$readmem`/`$writemem`/`$fread`, `%p`, slices, VPI words and class properties, Tcl `get`/`set`, class and `std::randomize`, DPI string arrays and class HIR execution. Huge arrays have no budget refusals (owner 11-15).
+- **LRM fixes found on the way:**
+  - An ambiguous `?:` over unpacked arrays gives each mismatched element its Table 7-1 default (11.4.11). It used to merge the elements bit by bit (F31).
+  - for and repeat loops beyond the one-million static count run at run time (12.7; F32).
+  - `std::randomize` of a signed sub-word array takes its uniform range in signed order (F30).
+  - A dense `reverse()` reverses string and nested elements (F29).
+  - On v4, `$finish` in a final procedure skips the remaining kernel finals (9.2.3; F28).
+- **Checkpoint T sweep losses fixed (F27, F35):**
+  - class-handle indices of associative arrays;
+  - `break` inside a `foreach` of a constant function;
+  - typed pattern keys;
+  - randomize element states keyed by their built-in kind;
+  - the string index of typedef-element class arrays and container typedefs (the index metadata is now copied with the declarator).
+- **Heap settled for the run (cocotb):** when `Interpreter::start` finishes (static initialization and the start-of-simulation callbacks), the executable returns the pages freed so far to the system (`mi_collect(true)`). For the rest of the run it keeps freed pages mapped for reuse (`mi_option_purge_delay = -1`). This goes through a `fsim::support` heap-settle routine that only the executable installs. Before this, mimalloc purged freed pages lazily at arbitrary points of the run, and because its arenas use transparent huge pages, the resident size dropped in 2 MB steps. In the cocotb_suite run one such drop (4.3 MB at checkpoint T; checkpoint S was already at 1.9 MB) fell inside `test_trigger_memory_leak.test_rising_edge_leak`'s reference window, whose limit is 2 MB, and the test failed in master/Verilog. Now every window of that test moves by 64 KiB at most, and the resident size stays flat across timer, edge and value-change windows. This is an owner FYI (queued Q15).
+
+**Results:** see the table below (frozen archive `bcT4`, BASE `bcSg`/`bcSga`).
+
+| Suite | bcSg passed / in scope | bcT4g passed / in scope | Excluded (bcT4g) |
+|---|---:|---:|---:|
+| ivtest | 2633 / 2633 | 2633 / 2633 | 278 |
+| nvc | 1257 / 1257 | 1257 / 1257 | 225 |
+| sv-tests | 1496 / 1496 | 1496 / 1496 | 1 |
+| verilator | 2073 / 2073 | 2073 / 2073 | 342 |
+| vests | 3663 / 3663 | 3663 / 3663 | 2 |
+| vhdl-compliance | 65 / 65 | 65 / 65 | 7 |
+| cocotb 2.1 Verilog | 708 / 708 | 708 / 708 | 1 |
+| cocotb 2.1 VHDL | 646 / 646 | 646 / 646 | 1 |
+| cocotb master Verilog | 735 / 735 | 735 / 735 | 1 |
+| cocotb master VHDL | 666 / 666 | 666 / 666 | 1 |
+
+The normal sweep matches `bcSg` case for case: no losses and no gains. Checkpoint T's new behaviour is covered by the new fixtures and probes, not by corpus cases. The AOT sweep `bcT4ga` matches `bcSga` suite for suite (0 losses, 0 gains). The first sweep of `44c0446b` (`bcT`) lost 10 cases per mode; `7494a1ff` fixed them (F27). On the committed tree `2af63b57`, the full non-UVM ctest passes 2016/2016 and the UVM label 116/116, and cocotb is +0 -0 against `bcS` in all four configurations. Earlier runs on this checkpoint, before the heap fix, lost `test_rising_edge_leak` in master/Verilog (`bcT2`, `bcT3`). The verilator, sv-tests and constraint subsets were rerun after a guessed randomize change was reverted, with no change. D6 not run (block P).
+
+**Changed test assertions (every one, with the reason):**
+
+In `44c0446b`:
+- *Schema pins* (`schema_identity_test`, `application_test_artifact_phases`, `runtime_direct_artifact_rows_test`, `object_artifact_test`, `library_artifact_test`): compiled HIR and bundle 7 -> 8, runtime state 127 -> 128, design IR 13 -> 14, SV constraint HIR 33 -> 34, VHDL HIR 15 -> 16, with the matching rejection texts. These follow the typed markers and kinds in HIR and IR. Schema 7 joins the rejected prior schemas (`prior-compiled-hir-schema-v7`, the `.fsimlib` loop `{0..7, 9}`), and the future schema moves to 9.
+- *`elaborator_defparam_test`*: a second defparam of the same parameter used to be rejected with FSIM-ELAB-DEFPARAM-003. It now elaborates: the last defparam wins (23.10; owner 11-15, item 53/F19). The test asserts that `lanes[1]` and `lanes[0]` have the same VALUE identity. FSIM-ELAB-DEFPARAM-003 is retired.
+- *Typed markers instead of `@...` text* (exact marker equality, so `starts_with` checks became stricter). These files compare an `ExpressionMarker`, task marker or `aggregate_choice_marker`, plus its argument, instead of a spelling in `text`:
+  - frontend tests: `frontend_chandle_tests`, `frontend_class_tests`, `frontend_container_tests`, `frontend_coverage_tests`, `frontend_declaration_tests`, `frontend_generate_output_tests_part2`, `frontend_package_tests`, `frontend_preprocessing_tests`, `frontend_statement_tests`, `frontend_statement_tests_part2`;
+  - VHDL frontend tests: `frontend_vhdl_statement_core_tests`, `frontend_vhdl_statement_tests`, `frontend_vhdl_time_file_tests`, `frontend_vhdl_type_tests`, `frontend_vhdl_type_tests_part2`;
+  - tests built from HIR: `systemverilog_hir_application_test`, `elaborator_selection_test`, `compiled_design_test` (which also drops its `@vhdl-unspecified:private` spelling setup);
+  - casts: these read typed `SystemVerilogBuiltinType` / `SystemVerilogCastTarget` values.
+- *`elaborator_hir_lowering_test`*: fixtures set the typed `builtin` next to the type spelling, and the scope-randomize call carries the `sv_std_randomize` marker the frontend sets (18.12).
+- *`application_test_classes`*: `nominal_type == "logic"` becomes `builtin == SystemVerilogBuiltinType::logic`. *`elaborator_sv_aggregate_container_test`*: `!element_nominal_type.empty()` becomes `element_nominal_type_id.has_value()`.
+- *`foreign_vhpi_stable_mixed`*: extended, not reduced. A vector port `v` is added beside `p`, so the first expected line splits into `#c p ...` and `#c v ...`, and four `v'stable` / `v'quiet` change lines at 12000000 are added. Both ports start from SV static initializers, which are not transactions (6.8, owner 11-15).
+- *`foreign_vpi_statements`*: a `paired` task with `for (int a = 0, b = 5; ...)` is added, and each for loop lists its `vpiForInitStmt` assignments. Expected lines are added for both loops (12.7.1, 37.68).
+- *New tests*:
+  - compliance fixtures `sv_defparam_precedence`, `sv_sparse_fixed_shapes`, `sv_statement_labels` and `sv_std_class_names`;
+  - `foreign_vpi_statement_labels` (labeled for and foreach as scopes, 9.3.5, 37.12);
+  - `fsim.application.sv-initializer-targets` (interpreter, kernel, verified kernel);
+  - resolved, forced and aggregate initializer cases in `runtime_package_static_startup_tests`.
+
+In `7494a1ff` and `2b8a062b`:
+- *`elaborator_hir_lowering_test`*: a repeat of 1,000,001 iterations was a rejection test (FSIM-ELAB-073). It now elaborates and runs to completion with `q == "1"`, because a loop of any length is legal (12.7).
+- *`elaborator_selection_test`*:
+  - `repeat (1000001);` becomes a positive test: it elaborates and runs to completion.
+  - The invalid-loop fixture drops its 1,000,001-iteration for loop, which is now legal, and checks FSIM-ELAB-074 alone. That rejection is itself on the Found list as F36: 12.7.1 allows a for body to assign its loop variable.
+- *`elaborator_function_test`*: `merged_fixed = 1'bx ? f(8'h50) : f(8'h58)` expects every element all X (`bval == 0xff`, the Table 7-1 default for `logic [7:0]`); it was the bitwise merge (`bval == 0x08`). 11.4.11.
+- *`sv_function_application_test`*: element 1 of an ambiguous `?:` over `byte` arrays (52 versus 99) expects 0, the Table 7-1 default for `byte`, in the value table, the returned array and the VCD (`b00000000`). It was the bitwise merge, 32. 11.4.11.
+- *`runtime_container_tests`*: the merged element of an ambiguous select expects `XXXXXXXX` (11.4.11).
+- *Run-state classification*: `interp.impl finish_in_final` is scratch (S). A `$finish` in a final procedure sets it and ends the run, so it is false at every save point; the save audit checks it idle.
+- *New fixture content*: `sv_sparse_fixed_shapes` covers whole-array operations on two `int [0:2^25-1]` arrays, an ambiguous select over `logic [3:0] [0:2^24-1]` arrays, and an automatic `int [0:2^26-1]`.
+
+**Windows:** no mingw syntax sweep at this checkpoint; it runs only at the final commit of the full closure gate (owner 11-15).
+
 ### 2026-11-15: Gate BC checkpoint S: block S (part 1 in 3cba265e, part 2 here), VPI statement and scope model, static initializers, typed markers (this commit, sweeps `bcSg`, `bcSga`)
 
 This commit is checkpoint S of gate BC (plan `.local-artifacts/followups/gate-bc-plan-1114.md`; owner decisions in memory `gate-bc-decisions-1114`). Part 1 (3cba265e, committed without a sweep and pushed together with this commit) held items 2-9, 11-14 and 27; this commit adds the rest of the block S work done so far and carries the sweep and cocotb results for both parts. Items 15, 16, 18-26, 28, 31, 33b, 35-37 and 41 stay open for the next builds of the gate; findings made after 11-15 are on the plan's Found list for the owner (F1-F10).
