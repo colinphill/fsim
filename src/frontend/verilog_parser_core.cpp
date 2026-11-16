@@ -8,6 +8,8 @@
 #include "fsim/frontend/source.hpp"
 #include "fsim/frontend/token.hpp"
 #include "parser_support.hpp"
+#include "fsim/support/native_filesystem.hpp"
+#include "fsim/support/path.hpp"
 #include <algorithm>
 #include <cctype>
 #include <cstddef>
@@ -17,6 +19,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <tuple>
 #include <unordered_set>
 #include <utility>
@@ -745,11 +748,17 @@ void VerilogParser::record_unit_digests(ParsedDesign& design,
     support::Xxh64 state;
     // Only copies of one file's text are one unit (a package in a header
     // that several files include); the same text in two files is two
-    // declarations of one name.
+    // declarations of one name. The file is named by its resolved path, so
+    // every spelling that reaches it (relative, absolute, through a link)
+    // names it once; text with no file keeps its name.
     const auto& file = tokens_[begin].span.physical_source_name.empty()
         ? tokens_[begin].span.source_name
         : tokens_[begin].span.physical_source_name;
-    hash_text(state, file.str());
+    std::error_code resolve_error;
+    const auto resolved = support::native_fs::weakly_canonical(
+        support::path_from_utf8(file.str()), resolve_error);
+    hash_text(state,
+        resolve_error ? file.str() : support::path_to_utf8(resolved));
     for (std::size_t index = begin; index < end; ++index) {
         const auto& token = tokens_[index];
         hash_number(state, static_cast<std::uint64_t>(token.kind));

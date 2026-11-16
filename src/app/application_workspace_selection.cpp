@@ -360,7 +360,10 @@ namespace {
                 if (use_exported(dependency.library)) {
                     continue;
                 }
-                bool found { false };
+                // Every owner is selected (copies of one header's unit have
+                // several, which link as one unit); the dependency is current
+                // while one of them is the object it was compiled against.
+                bool current { false };
                 for (std::size_t candidate = 0; candidate < records_.size(); ++candidate) {
                     if (location(candidate).name != dependency.library) {
                         continue;
@@ -370,13 +373,12 @@ namespace {
                         })) {
                         continue;
                     }
-                    found = true;
                     select_record(candidate);
-                    if (artifact(candidate).fingerprint != dependency.fingerprint) {
-                        stale_dependency_ = true;
+                    if (artifact(candidate).fingerprint == dependency.fingerprint) {
+                        current = true;
                     }
                 }
-                if (!found) {
+                if (!current) {
                     stale_dependency_ = true;
                 }
             }

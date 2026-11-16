@@ -65,45 +65,35 @@ namespace {
         const project::SourceSet& sources, std::span<const std::string> replaced_sources,
         std::vector<CompiledUnitAvailability>& available_units)
     {
-        // The units the compiled sources replace.
-        std::set<std::string> replaced_units;
-        for (const auto& catalog : catalogs) {
-            if (catalog.location.name != sources.library) {
-                continue;
-            }
-            for (const auto& artifact : catalog.artifacts) {
-                for (const auto& owned : artifact.units) {
-                    if (std::ranges::find(replaced_sources, owned.source_key)
-                        != replaced_sources.end()) {
-                        replaced_units.insert(workspace::unit_identity(owned.unit));
-                    }
-                }
-            }
-        }
         // An object built on a unit that changed since, or that this compile
         // replaces, was compiled against another version of it (a package's
         // sequences copied from its source, IEEE 1800-2023 26.3): it is no
         // environment of the current one, and elaboration refuses it until
-        // it is recompiled (FSIM-WS-002).
+        // it is recompiled (FSIM-WS-002). A unit several objects own (copies
+        // of one header's unit) is current while one owner it was compiled
+        // against keeps it.
         const auto stale = [&](const workspace::ArtifactRecord& artifact) {
             return std::ranges::any_of(artifact.dependencies,
                 [&](const workspace::UnitDependency& dependency) {
                     const auto identity = workspace::unit_identity(dependency.unit);
-                    if (dependency.library == sources.library
-                        && replaced_units.contains(identity)) {
-                        return true;
-                    }
                     for (const auto& catalog : catalogs) {
                         if (catalog.location.name != dependency.library) {
                             continue;
                         }
                         for (const auto& provider : catalog.artifacts) {
+                            if (provider.fingerprint != dependency.fingerprint) {
+                                continue;
+                            }
                             if (std::ranges::any_of(provider.units,
                                     [&](const auto& owned) {
                                         return workspace::unit_identity(owned.unit)
-                                            == identity;
+                                            == identity
+                                            && (catalog.location.name != sources.library
+                                                || std::ranges::find(replaced_sources,
+                                                       owned.source_key)
+                                                    == replaced_sources.end());
                                     })) {
-                                return provider.fingerprint != dependency.fingerprint;
+                                return false;
                             }
                         }
                     }
@@ -912,6 +902,8 @@ int handle_workspace_compile(const cli::Invocation& invocation, const project::C
                 roots.push_back(source.path);
             }
         }
+        const auto digests = compiled_unit_content_digests(
+            *projection.design, sources.library);
         if (!publish_workspace_object(config, checked, std::move(*projection.design),
                 path, diagnostics, &roots)) {
             return false;
@@ -929,7 +921,10 @@ int handle_workspace_compile(const cli::Invocation& invocation, const project::C
                     + unit.name + "'");
                 return false;
             }
-            record->units.push_back({ unit, owner->second });
+            const auto digest = digests.find(
+                compiled_unit_metadata_key(unit, sources.library));
+            record->units.push_back({ unit, owner->second,
+                digest == digests.end() ? 0U : digest->second });
         }
         records.push_back(std::move(*record));
         return true;

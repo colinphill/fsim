@@ -5,6 +5,7 @@
 #include "fsim/support/path.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <map>
 #include <system_error>
 
@@ -113,18 +114,31 @@ bool merge_records(LibraryCatalog& catalog,
             return native_changed || plugin_changed;
         return record.sources.empty() || emptied.contains(record.id);
     });
-    std::map<std::string, std::string> owners;
+    // One owner per unit, except copies of one unit (the same nonzero
+    // content digest: a package in a header several sources include).
+    std::map<std::string, std::uint64_t> owners;
     for (const auto& record : catalog.artifacts) {
         for (const auto& owned : record.units)
-            owners.emplace(unit_identity(owned.unit), owned.source_key);
+            owners.emplace(unit_identity(owned.unit), owned.content_digest);
     }
     for (const auto& record : replacements) {
         for (const auto& owned : record.units) {
-            if (!owners.emplace(unit_identity(owned.unit), owned.source_key).second) {
-                error = "workspace definition collision for " + owned.unit.kind
-                    + " '" + owned.unit.name + "'; another source already owns this unit";
-                return false;
+            const auto [owner, inserted]
+                = owners.emplace(unit_identity(owned.unit), owned.content_digest);
+            if (inserted || (owner->second != 0U
+                    && owner->second == owned.content_digest)) {
+                continue;
             }
+            error = owner->second != 0U && owned.content_digest != 0U
+                ? "workspace definition collision for " + owned.unit.kind + " '"
+                    + owned.unit.name
+                    + "'; another object owns a different copy of this unit "
+                      "(two files declare it, or an included file changed "
+                      "since one source was compiled): recompile together "
+                      "every source that includes it"
+                : "workspace definition collision for " + owned.unit.kind + " '"
+                    + owned.unit.name + "'; another source already owns this unit";
+            return false;
         }
         catalog.artifacts.push_back(record);
     }

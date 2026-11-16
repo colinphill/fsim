@@ -887,10 +887,19 @@ struct SystemCLibraryRegistry {
 
 std::string unit_key(const frontend::DesignUnit& unit);
 
+// `digests`, when given, receives each entry's unit content digest (zero:
+// none).
 [[nodiscard]] std::vector<library::UnitIndexEntry>
 compiled_unit_metadata_entries(
     const semantic::CompiledDesign& design,
-    std::string_view expected_library);
+    std::string_view expected_library,
+    std::vector<std::uint64_t>* digests = nullptr);
+
+// The content digest of each unit and class of `library` that has one,
+// by compiled_unit_metadata_key: equal digests are copies of one unit.
+[[nodiscard]] std::map<std::string, std::uint64_t>
+compiled_unit_content_digests(
+    const semantic::CompiledDesign& design, std::string_view library);
 
 [[nodiscard]] std::string compiled_unit_metadata_key(
     const library::UnitIndexEntry& entry,

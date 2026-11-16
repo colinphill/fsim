@@ -6,6 +6,7 @@
 #include "application_workspace_store.hpp"
 #include "fsim/library/artifact.hpp"
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -36,9 +37,11 @@ public:
     [[nodiscard]] support::sqlite::Step step(std::string& error);
     [[nodiscard]] bool bind(int, std::string_view, std::string& error);
     [[nodiscard]] bool bind(int, int, std::string& error);
+    [[nodiscard]] bool bind_digest(int, std::uint64_t, std::string& error);
     [[nodiscard]] bool finish(std::string& error);
     [[nodiscard]] std::optional<std::string> text(int, std::string& error);
     [[nodiscard]] std::optional<int> integer(int, std::string& error);
+    [[nodiscard]] std::optional<std::uint64_t> digest(int, std::string& error);
 
 private:
     Database& database_;

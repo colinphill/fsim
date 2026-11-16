@@ -207,7 +207,7 @@ namespace {
             unit.name = factory.name;
             unit.artifact = metadata.library;
             unit.checksum = metadata.library_checksum;
-            record.units.push_back({ std::move(unit), { } });
+            record.units.push_back({ std::move(unit), { }, { } });
         }
     }
 

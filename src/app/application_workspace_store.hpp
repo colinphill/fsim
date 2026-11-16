@@ -3,6 +3,7 @@
 
 #include "fsim/library/artifact.hpp"
 
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -18,6 +19,11 @@ enum class ArtifactKind { Hdl, SystemCObject, SystemCPlugin };
 struct OwnedUnit {
     library::UnitIndexEntry unit;
     std::string source_key;
+    // The unit's content digest (its text, directives and defining file).
+    // Two objects may own one unit when both own a copy with the same
+    // nonzero digest: a package in a header both sources include. Zero:
+    // the unit has no digest and one owner.
+    std::uint64_t content_digest { };
 };
 
 struct UnitDependency {

@@ -4156,6 +4156,10 @@ tests/fixtures/vhdl_type_mark_visibility/legal_direct_qualified_and_overloaded_b
 tests/fixtures/vhdl_type_mark_visibility/library_marker.vhd
 tests/fixtures/vhdl_type_mark_visibility/run_compile_only.cmake
 tests/fixtures/vhdl_type_mark_visibility/run_explicit_library_mask.cmake
+tests/fixtures/workspace_shared_header/a.sv
+tests/fixtures/workspace_shared_header/inc/pkg.svh
+tests/fixtures/workspace_shared_header/run_shared_header.cmake
+tests/fixtures/workspace_shared_header/sub/b.sv
 tests/frontend/coverage_database_systemverilog_test.cpp
 tests/frontend/coverage_point_identity_test.cpp
 tests/frontend/coverage_source_identity_test.cpp

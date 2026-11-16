@@ -19,10 +19,11 @@ namespace fsim::app::workspace::detail {
 namespace {
 
 // The `metadata.version` of a catalog with the current table schema.
-// Version 4 records the order in which artifacts were analyzed; version 3
+// Version 5 records each unit's content digest and lets two objects own
+// copies of one unit; version 4 records the order in which artifacts were analyzed; version 3
 // named each artifact file after its primary unit beside the catalog;
 // version 2 kept read-only `artifacts/r<hex>` trees.
-constexpr int kCatalogSchemaVersion = 4;
+constexpr int kCatalogSchemaVersion = 5;
 
 class PendingCatalog final {
 public:
@@ -154,7 +155,7 @@ bool read_units(Database& database, LibraryCatalog& catalog,
         "SELECT owner, identity, language, kind, name, primary_name, "
         "architecture, "
         "artifact, checksum, standard, profile, name_form, primary_name_form, "
-        "source "
+        "source, content_digest "
         "FROM units ORDER BY owner, identity",
         error };
     if (!query)
@@ -165,13 +166,15 @@ bool read_units(Database& database, LibraryCatalog& catalog,
         const auto identity = query.text(1, error);
         auto unit = read_unit(query, 2, error);
         auto source = query.text(13, error);
-        if (!record || !unit || !identity || !source)
+        const auto digest = query.digest(14, error);
+        if (!record || !unit || !identity || !source || !digest)
             return false;
         if (*identity != unit_identity(*unit)) {
             error = "workspace unit identity does not match its metadata";
             return false;
         }
-        record->units.push_back({ std::move(*unit), std::move(*source) });
+        record->units.push_back(
+            { std::move(*unit), std::move(*source), *digest });
     }
     return status == support::sqlite::Step::done;
 }
@@ -227,11 +230,14 @@ bool insert_record(Database& database, const ArtifactRecord& record,
         Statement query { database,
             "INSERT INTO units(identity, owner, language, kind, name, primary_name, "
             "architecture, artifact, checksum, standard, profile, name_form, "
-            "primary_name_form, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "primary_name_form, source, content_digest) "
+            "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             error };
         if (!query || !query.bind(1, unit_identity(owned.unit), error)
             || !query.bind(2, record.id, error) || !bind_unit(query, 3, owned.unit, error)
-            || !query.bind(14, owned.source_key, error) || !query.finish(error))
+            || !query.bind(14, owned.source_key, error)
+            || !query.bind_digest(15, owned.content_digest, error)
+            || !query.finish(error))
             return false;
     }
     int ordinal = 0;

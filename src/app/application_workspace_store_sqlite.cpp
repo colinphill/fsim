@@ -10,6 +10,7 @@
 
 #include <limits>
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -31,12 +32,13 @@ constexpr std::array<std::pair<std::string_view, const char*>, 5> kSchema { {
         "CREATE TABLE sources(owner TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE, "
         "source TEXT NOT NULL, PRIMARY KEY(owner, source))" },
     { "units",
-        "CREATE TABLE units(identity TEXT PRIMARY KEY NOT NULL, "
+        "CREATE TABLE units(identity TEXT NOT NULL, "
         "owner TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE, "
         "language TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL, "
         "primary_name TEXT NOT NULL, architecture TEXT NOT NULL, artifact TEXT NOT NULL, "
         "checksum TEXT NOT NULL, standard TEXT NOT NULL, profile TEXT NOT NULL, source TEXT NOT NULL, "
-        "name_form INTEGER NOT NULL DEFAULT 0, primary_name_form INTEGER NOT NULL DEFAULT 0)" },
+        "name_form INTEGER NOT NULL DEFAULT 0, primary_name_form INTEGER NOT NULL DEFAULT 0, "
+        "content_digest INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(owner, identity))" },
     { "dependencies",
         "CREATE TABLE dependencies(owner TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE, "
         "ordinal INTEGER NOT NULL, library TEXT NOT NULL, language TEXT NOT NULL, kind TEXT NOT NULL, "
@@ -143,6 +145,25 @@ bool Statement::bind(const int index, const std::string_view value, std::string&
 bool Statement::bind(const int index, const int value, std::string& error)
 {
     return statement_.bind_integer(index, value, error);
+}
+
+bool Statement::bind_digest(
+    const int index, const std::uint64_t value, std::string& error)
+{
+    // SQLite integers are signed 64-bit: the digest's bits are stored.
+    return statement_.bind_integer(
+        index, std::bit_cast<std::int64_t>(value), error);
+}
+
+std::optional<std::uint64_t> Statement::digest(
+    const int index, std::string& error)
+{
+    const auto value = statement_.integer(index, error);
+    if (!value) {
+        error = "workspace library catalog digest is invalid";
+        return std::nullopt;
+    }
+    return std::bit_cast<std::uint64_t>(*value);
 }
 
 bool Statement::finish(std::string& error)

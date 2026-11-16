@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <map>
 #include <optional>
 #include <set>
@@ -86,7 +87,8 @@ ordered_workspace_objects(const std::span<const WorkspaceObjectSelection> object
             group.push_back({ &selection, std::move(key) });
         }
         // Equal identities select one unit twice, which resolve_selection
-        // refuses; until then they keep their catalog order.
+        // refuses unless they are copies of one unit; they keep their
+        // catalog order.
         std::ranges::stable_sort(group, { }, &OrderedSelection::key);
         for (const auto& item : group) {
             ordered.push_back(item.selection);
@@ -128,10 +130,12 @@ std::optional<ObjectSelection> resolve_selection(
     const WorkspaceObjectSelection& selection,
     const artifact::ObjectMetadata& metadata,
     const semantic::CompiledDesign& design,
-    std::set<std::string>& known_units,
+    std::map<std::string, std::uint64_t>& known_units,
     diagnostic::Engine& diagnostics)
 {
     const auto entries = compiled_unit_metadata_entries(design, metadata.library);
+    const auto digests
+        = compiled_unit_content_digests(design, metadata.library);
     const auto ids = indexed_unit_ids(design, metadata.library);
     if (entries.size() != ids.size()) {
         diagnostics.error(std::string { workspace_object_diagnostic },
@@ -154,7 +158,14 @@ std::optional<ObjectSelection> resolve_selection(
             return std::nullopt;
         }
         const auto key = compiled_unit_metadata_key(entry, metadata.library);
-        if (!known_units.insert(key).second) {
+        const auto digest = digests.find(key);
+        const auto [known, inserted] = known_units.emplace(
+            key, digest == digests.end() ? 0U : digest->second);
+        // Another object's copy of one unit (the same nonzero digest) is
+        // selected too; the linker keeps one of them.
+        if (!inserted
+            && (known->second == 0U || digest == digests.end()
+                || known->second != digest->second)) {
             diagnostics.error(std::string { workspace_object_diagnostic },
                 "library catalog selects duplicate object '" + key + "'");
             return std::nullopt;
@@ -432,7 +443,7 @@ std::optional<CompilationWorkspace> load_workspace_objects(
     }
     CompilationWorkspace result;
     std::vector<semantic::CompiledDesign> bundles;
-    std::set<std::string> known_units;
+    std::map<std::string, std::uint64_t> known_units;
     std::map<std::string, std::pair<std::string, std::filesystem::path>> source_versions;
     std::map<std::string, std::string> known_sources;
     CompilerEnvironment environment;

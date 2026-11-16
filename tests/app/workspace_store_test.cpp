@@ -225,7 +225,7 @@ int leave_hot_journal(const fs::path& database_path)
         return 10;
     }
     const int updated = sqlite3_exec(database,
-        "BEGIN IMMEDIATE; UPDATE metadata SET version=99 WHERE version=4",
+        "BEGIN IMMEDIATE; UPDATE metadata SET version=99 WHERE version=5",
         nullptr, nullptr, nullptr);
     if (updated != SQLITE_OK || sqlite3_changes(database) != 1
         || sqlite3_db_cacheflush(database) != SQLITE_OK) {
@@ -596,19 +596,20 @@ void test_mapping_and_corrupt_metadata()
     const auto modified = fs::last_write_time(database);
     assert(!consumer.read_library("work", error));
     assert(fs::last_write_time(database) == modified);
-    execute_sql(database, "UPDATE metadata SET version=4; CREATE TABLE foreign_data(value TEXT)");
+    execute_sql(database, "UPDATE metadata SET version=5; CREATE TABLE foreign_data(value TEXT)");
     assert(!consumer.read_library("work", error));
     assert(error.find("schema") != std::string::npos);
     execute_sql(database, "DROP TABLE foreign_data");
-    execute_sql(database, "UPDATE metadata SET version=4; UPDATE artifacts SET path='../outside'");
+    execute_sql(database, "UPDATE metadata SET version=5; UPDATE artifacts SET path='../outside'");
     assert(!consumer.read_library("work", error));
     assert(error.find("unsafe") != std::string::npos);
     execute_sql(database, "UPDATE artifacts SET path='nested/top.fsimobj'");
     assert(!consumer.read_library("work", error));
     assert(error.find("unsafe") != std::string::npos);
-    // Catalogs without analysis order, and of the read-only tree layout,
-    // ask for recompilation.
-    for (const auto* older : { "UPDATE metadata SET version=3",
+    // Catalogs without unit digests or analysis order, and of the read-only
+    // tree layout, ask for recompilation.
+    for (const auto* older : { "UPDATE metadata SET version=4",
+             "UPDATE metadata SET version=3",
              "UPDATE metadata SET version=2" }) {
         execute_sql(database, older);
         assert(!consumer.read_library("work", error));

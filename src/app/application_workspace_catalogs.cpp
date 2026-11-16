@@ -15,23 +15,33 @@
 namespace fsim::app::application_detail {
 namespace {
 
+    // The object that provides a dependency's unit: of the objects that own
+    // it (copies of one header's unit have several), the one the dependency
+    // was compiled against, else the first.
     const workspace::ArtifactRecord* provider(const WorkspaceCatalogs& catalogs,
         const workspace::UnitDependency& dependency)
     {
+        const auto identity = workspace::unit_identity(dependency.unit);
+        const workspace::ArtifactRecord* first { };
         for (const auto& catalog : catalogs) {
             if (catalog.location.name != dependency.library) {
                 continue;
             }
             for (const auto& artifact : catalog.artifacts) {
-                if (std::ranges::any_of(artifact.units, [&](const auto& owned) {
-                        return workspace::unit_identity(owned.unit)
-                            == workspace::unit_identity(dependency.unit);
+                if (std::ranges::none_of(artifact.units, [&](const auto& owned) {
+                        return workspace::unit_identity(owned.unit) == identity;
                     })) {
+                    continue;
+                }
+                if (artifact.fingerprint == dependency.fingerprint) {
                     return &artifact;
+                }
+                if (first == nullptr) {
+                    first = &artifact;
                 }
             }
         }
-        return nullptr;
+        return first;
     }
 
     bool dependency_reference(const semantic::CompiledReference& reference)

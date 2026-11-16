@@ -1027,7 +1027,8 @@ std::string unit_key(const frontend::DesignUnit& unit)  {
 
 std::vector<library::UnitIndexEntry> compiled_unit_metadata_entries(
     const semantic::CompiledDesign& design,
-    const std::string_view expected_library)
+    const std::string_view expected_library,
+    std::vector<std::uint64_t>* const digests)
 {
     std::vector<library::UnitIndexEntry> result;
     for (const auto& unit : design.systemverilog_hir.units()) {
@@ -1071,6 +1072,9 @@ std::vector<library::UnitIndexEntry> compiled_unit_metadata_entries(
             unit.external ? "extern-" + kind : kind, unit.name, { }, { },
             { }, { },
             unit.standard, unit.compatibility_profile });
+        if (digests != nullptr) {
+            digests->push_back(unit.content_digest);
+        }
     }
     for (const auto& unit : design.vhdl_hir.units()) {
         const auto library = unit.library.empty()
@@ -1110,6 +1114,36 @@ std::vector<library::UnitIndexEntry> compiled_unit_metadata_entries(
                 ? library::VhdlIdentifierForm::extended
                 : library::VhdlIdentifierForm::basic;
         result.push_back(std::move(entry));
+        if (digests != nullptr) {
+            digests->push_back(0U);
+        }
+    }
+    return result;
+}
+
+std::map<std::string, std::uint64_t> compiled_unit_content_digests(
+    const semantic::CompiledDesign& design,
+    const std::string_view library)
+{
+    std::map<std::string, std::uint64_t> result;
+    std::vector<std::uint64_t> digests;
+    const auto entries
+        = compiled_unit_metadata_entries(design, library, &digests);
+    for (std::size_t index = 0; index < entries.size(); ++index) {
+        if (digests[index] != 0U) {
+            result.emplace(compiled_unit_metadata_key(entries[index], library),
+                digests[index]);
+        }
+    }
+    // A class is one copy with the unit that declares it.
+    for (const auto& declaration : design.systemverilog_hir.classes()) {
+        const auto* const owner = compiled_class_owner(design, declaration);
+        const auto entry
+            = compiled_class_metadata_entry(design, declaration, library);
+        if (owner != nullptr && entry && owner->content_digest != 0U) {
+            result.emplace(compiled_unit_metadata_key(*entry, library),
+                owner->content_digest);
+        }
     }
     return result;
 }

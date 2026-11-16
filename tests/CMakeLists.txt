@@ -7458,6 +7458,20 @@ set_tests_properties(fsim.application.vhdl-workspace-object-order PROPERTIES
   LABELS "application;vhdl;positive"
   TIMEOUT 600)
 
+# A package in a header that separately compiled sources include links as
+# one package; differing copies are refused at compile.
+add_test(
+  NAME fsim.application.workspace-shared-header
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/workspace_shared_header"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/workspace_shared_header/run_shared_header.cmake"
+)
+set_tests_properties(fsim.application.workspace-shared-header PROPERTIES
+  LABELS "application;workspace;positive"
+  TIMEOUT 600)
+
 # Wide and nine-value operations the v4 kernel compiles inline, with no
 # runtime helper: weak 128-element vectors (dynamic selects, part inserts,
 # signal assignment), shifts and rotates with a signed amount, VHDL integer

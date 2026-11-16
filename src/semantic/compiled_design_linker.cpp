@@ -2878,6 +2878,17 @@ bool register_definitions(const CompiledDesign& design,
             error = "compiled-HIR unit collision for logical identity '"
                 + std::string { normalized_library(unit.library) }
                 + "." + unit.name + "'";
+            // Two units with digests are copies that differ: two files
+            // declare the unit, or a file several sources include changed
+            // since one of them was compiled.
+            if (const auto known = digests.find(key); known != digests.end()
+                && known->second != 0U
+                && unit_content_digest(design, unit) != 0U) {
+                error += "; the copies differ (two files declare it, or an "
+                         "included file changed since one source was "
+                         "compiled): recompile together every source that "
+                         "includes it";
+            }
             return false;
         }
         registered->second = registered->second || definition;
