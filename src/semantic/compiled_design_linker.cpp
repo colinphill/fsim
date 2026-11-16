@@ -2314,7 +2314,26 @@ void resolve_linked_systemverilog_types(CompiledDesign& design)
             }
         }
     }
-    if (!found && definitions.empty()) {
+    // A typed assignment pattern `T'{...}` (10.9) whose T another object
+    // declares, resolved from the pattern's scope like a typedef's name.
+    std::vector<std::pair<std::size_t, TypeId>> patterns;
+    for (std::size_t position = 0; position < hir.expressions().size();
+        ++position) {
+        const auto& expression = hir.expressions()[position];
+        if (expression.kind != sv::ExpressionKind::assignment_pattern
+            || expression.nominal_type.empty()
+            || expression.nominal_type_target
+            || !scope_valid(expression.scope)) {
+            continue;
+        }
+        sv::TypeReference named;
+        named.target.spelling = expression.nominal_type;
+        named.named = true;
+        if (const auto target = resolve(named, expression.scope)) {
+            patterns.emplace_back(position, *target);
+        }
+    }
+    if (!found && definitions.empty() && patterns.empty()) {
         return;
     }
     std::size_t next { };
@@ -2332,6 +2351,10 @@ void resolve_linked_systemverilog_types(CompiledDesign& design)
             : types[entry.position].members[entry.member].type;
         type.target.target = entry.target;
         type.standard_class = support::SystemVerilogStandardClass::none;
+    }
+    auto& expressions = design.systemverilog_hir.mutable_expressions();
+    for (const auto& [position, target] : patterns) {
+        expressions[position].nominal_type_target = target;
     }
     design.refresh_lookup_indexes();
 }

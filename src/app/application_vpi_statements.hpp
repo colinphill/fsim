@@ -318,9 +318,10 @@ public:
     [[nodiscard]] fsim_vpi_handle_v1 declaration_initializer(
         const VpiHirScope& scope, const std::string& name);
     /// The type of a formal argument or a return variable node.
-    /// The callable a ref obj node is a formal of, and the formal's position.
+    /// The callable a ref obj node is a formal of (its HIR declaration), and
+    /// the formal's position.
     struct RefFormal {
-        std::string callable;
+        semantic::DeclarationId callable;
         std::size_t position { };
         fsim_vpi_handle_v1 scope { };
     };

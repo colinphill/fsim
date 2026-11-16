@@ -7,13 +7,20 @@
 // signedness and state count, real and realtime, the same enumeration or
 // class. try_get and try_peek return a negative integer and leave the
 // message when the types differ (15.4.6, 15.4.8). A waiting get receives
-// a later put.
+// a later put. A typed pattern's message has the type its name selects,
+// a typedef of the module, an imported one or a package-qualified one
+// (10.9).
 `define CHECK(what, ok) \
   if (!(ok)) begin \
     $display("FAIL %s", what); \
     failures++; \
   end
+package sv_typeless_mailbox_pkg;
+  typedef struct packed { logic [3:0] hi; logic [3:0] lo; } shared_t;
+endpackage
+
 module sv_typeless_mailbox;
+  import sv_typeless_mailbox_pkg::*;
   typedef enum { RED, GREEN, BLUE } color_t;
   typedef struct packed { logic [3:0] hi; logic [3:0] lo; } pair_t;
   class packet;
@@ -107,6 +114,17 @@ module sv_typeless_mailbox;
       end
     join
     `CHECK("waiting get", r == 2.25 && $time == 5)
+
+    // Patterns typed by a package's typedef, imported and qualified.
+    begin
+      shared_t shared;
+      box.put(shared_t'{4'h5, 4'h6});
+      box.get(shared);
+      `CHECK("imported typed pattern message", shared == 8'h56)
+      box.put(sv_typeless_mailbox_pkg::shared_t'{4'h7, 4'h8});
+      box.get(shared);
+      `CHECK("qualified typed pattern message", shared == 8'h78)
+    end
 
     if (failures == 0) begin
       $display("PASS");

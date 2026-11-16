@@ -2759,7 +2759,7 @@ std::optional<VpiStatementModel::RefFormal> VpiStatementModel::ref_formal(
     if (found == formals.end()) {
         return std::nullopt;
     }
-    return RefFormal { callable->name,
+    return RefFormal { callable->id,
         static_cast<std::size_t>(found - formals.begin()), entry.scope };
 }
 

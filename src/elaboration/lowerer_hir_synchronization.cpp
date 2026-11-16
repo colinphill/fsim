@@ -201,18 +201,6 @@ Lowerer::hir_typeless_mailbox_message(const semantic::ExpressionId message,
     if (!declared) {
         declared = hir_systemverilog_value_type(message);
     }
-    if (!declared) {
-        // A typed assignment pattern's type, as its lowering names it.
-        const auto pattern = specialized_hir_unit_->find_expression(message);
-        if (pattern && pattern->systemverilog != nullptr
-            && pattern->systemverilog->kind
-                == semantic::sv::ExpressionKind::assignment_pattern
-            && !pattern->systemverilog->nominal_type.empty()) {
-            declared = hir_systemverilog_named_type(
-                pattern->systemverilog->nominal_type,
-                pattern->systemverilog->scope);
-        }
-    }
     const auto described = declared
         ? semantic::describe_systemverilog_type(
               *specialized_hir_unit_, *declared, hir_process_scope_)

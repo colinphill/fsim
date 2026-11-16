@@ -13780,7 +13780,8 @@ private:
         for (const auto serial : owner->frames) {
             if (after) {
                 if (const auto* const later = frames_->frame(serial);
-                    later != nullptr && later->callee == frame->callee
+                    later != nullptr
+                    && later->callee_declaration == frame->callee_declaration
                     && later->lowering == frame->lowering) {
                     ++newer;
                 }
@@ -16311,7 +16312,10 @@ private:
             if (frame == nullptr) {
                 return 0U;
             }
-            if (frame->callee == formal.callable) {
+            // A frame names its callable's HIR declaration as its index
+            // plus one.
+            if (formal.callable.valid()
+                && frame->callee_declaration == formal.callable.value() + 1U) {
                 if (!frame->has_call_site) {
                     return 0U;
                 }

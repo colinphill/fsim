@@ -1910,6 +1910,7 @@ public:
         for (auto& expression : expressions) {
             if (expression.referenced_name)
                 bind_name(*expression.referenced_name, expression.scope);
+            bind_pattern_type(expression);
         }
         for (auto& statement : statements)
             bind_name(statement.task, statement.scope);
@@ -2009,6 +2010,35 @@ private:
         if (resolved.status == semantic::CompiledResolutionStatus::unique) {
             name.selected = resolved.unique();
             name.overloads = resolved.candidates;
+        }
+    }
+
+    // An assignment pattern with a type prefix (`T'{...}`) has the type its
+    // name selects from the pattern's scope (IEEE 1800-2023 10.9), looked
+    // up like any type name: a local, module or package typedef, an
+    // imported one or a package-qualified one. Left unresolved when no type
+    // is found, which the pattern's lowering reports.
+    void bind_pattern_type(sv::Expression& expression)
+    {
+        if (expression.kind != sv::ExpressionKind::assignment_pattern
+            || expression.nominal_type.empty()
+            || expression.nominal_type_target)
+            return;
+        const auto* unit = scope_unit(expression.scope);
+        if (unit == nullptr)
+            return;
+        auto spelling = expression.nominal_type;
+        qualify_member(spelling, *unit, expression.source);
+        semantic::CompiledDesignResolver resolver { design_, unit->id };
+        if (const auto id = resolver
+                .resolve_systemverilog_named_type(
+                    spelling, expression.scope, false, 0U)
+                .unique()) {
+            const auto declaration = design_.find_declaration(*id);
+            if (declaration && declaration->systemverilog != nullptr
+                && declaration->systemverilog->declared_type)
+                expression.nominal_type_target
+                    = *declaration->systemverilog->declared_type;
         }
     }
 
