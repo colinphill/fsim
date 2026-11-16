@@ -1010,6 +1010,13 @@ private:
         /// Behavioral members: string registers shared by the member's
         /// threads, and the signal/edge list of WaitSensitivity.
         std::vector<std::string> strings;
+        /// The kernel container record of storage `strings` through which
+        /// compiled code reaches `strings` (KOp::str), and the scratch
+        /// string register a concatenation that reads its destination after
+        /// the first operand builds its result in (always left empty); both
+        /// no_slot until hold_string_file.
+        std::uint32_t string_file { static_kernel_detail::no_slot };
+        std::uint32_t string_scratch { static_kernel_detail::no_slot };
         std::vector<Sensitivity> wait_sensitivity;
         /// VHDL members with a specialized body (specialize_member): the
         /// original operation each operation stands for; empty otherwise.
@@ -1242,6 +1249,8 @@ private:
         std::uint32_t packed_slot { static_kernel_detail::no_slot };
         /// Storage dynamic: the container's entry in dynamic_headers_.
         std::uint32_t dynamic_header { static_kernel_detail::no_slot };
+        /// Storage strings: the member whose string registers it is.
+        std::uint32_t string_member { static_kernel_detail::no_slot };
     };
 
     struct FamilyLeaf {
@@ -1826,6 +1835,10 @@ private:
     static std::uint32_t native_dyn_reshape(StaticKernelNativeFrame* frame,
         std::uint32_t at, StaticKernelDynamicContainer* target,
         const StaticKernelDynamicContainer* source);
+    /// fsim_sk_str_reserve: capacity for `needed` bytes in a member's
+    /// string register (KOp::str), its bytes kept.
+    static std::uint32_t native_str_reserve(StaticKernelNativeFrame* frame,
+        std::uint32_t at, std::string* target, std::uint64_t needed);
     static void native_sva_grow(StaticKernelNativeFrame* frame,
         std::uint32_t at, std::uint32_t region, std::uint64_t needed);
     static void native_sva_post(StaticKernelNativeFrame* frame, std::uint32_t at);
@@ -2145,6 +2158,10 @@ private:
     void commit_dynamic_containers(std::uint32_t index);
     void release_dynamic_containers(std::uint32_t index, std::size_t containers,
         std::size_t headers);
+    /// A behavioral member's string file (Member::string_file) for the
+    /// compile, given back with the dynamic containers; false when the
+    /// member has no string registers.
+    bool hold_string_file(std::uint32_t index);
     /// A port-association conversion's resolver program as a member body
     /// (build_fresh).
     static void rewrite_conversion(Member& member, SignalId target,
@@ -3208,9 +3225,24 @@ private:
     /// replay's reference-format registers, or empty.
     [[nodiscard]] std::string native_container_mismatch(const Member& member,
         const NativeContainerValues& values) const;
+    /// The replay runs the reference's string operations on `values` as
+    /// the member's string registers; the compiled run's strings are put
+    /// back when the scope ends.
+    struct ReferenceStringScope {
+        Member& member;
+        std::vector<std::string> compiled;
+        ReferenceStringScope(Member& owner, const std::vector<std::string>& values);
+        ReferenceStringScope(const ReferenceStringScope&) = delete;
+        ReferenceStringScope& operator=(const ReferenceStringScope&) = delete;
+        ~ReferenceStringScope();
+        /// The first string register whose replay value differs from the
+        /// compiled run's, or empty.
+        [[nodiscard]] std::string mismatch() const;
+    };
     struct VerifyThreadState {
         decltype(CompiledBody::registers) registers;
         NativeContainerValues containers;
+        std::vector<std::string> strings;
         decltype(CompiledBody::wide_registers) wide;
         /// The call stack's return targets at the start.
         std::vector<std::uint64_t> stack;
@@ -3226,6 +3258,10 @@ private:
         /// The private arrays the thread's open private frames saved.
         std::vector<Member::SavedArray> saved_arrays;
         std::vector<Member::ArrayMark> saved_array_marks;
+        /// The runtime's part of the thread's open frames (frame_storage:
+        /// their strings and container bindings), which the replay's
+        /// frames restore as the compiled ones do.
+        std::vector<Member::Frame> runtime_frames;
     };
     /// The reason a member's activations are not replayed (named under
     /// FSIM_PROFILE_KERNEL), or null when they are.
@@ -3274,6 +3310,8 @@ private:
         /// Host entries the operation queued (queue_host_update,
         /// queue_host_task); the replay queues them too.
         std::vector<Pending> host_updates;
+        /// The string registers the operation changed, as it left them.
+        std::vector<std::pair<StringRegisterId, std::string>> strings;
     };
     /// A concurrent assertion's monitor tick of the compiled run (IEEE
     /// 1800-2023 16.14): the operation, the operand registers it read and the
@@ -3294,6 +3332,8 @@ private:
         std::vector<std::string> pending_reads;
         std::vector<std::pair<SignalId, PackedLogic4>> pending_commits;
         std::vector<Pending> pending_host_updates;
+        /// The member's string registers before the generic operation.
+        std::vector<std::string> pending_strings;
         /// The compiled run is inside a generic operation (between
         /// shadow_note_reads and shadow_record_generic).
         bool in_generic { };

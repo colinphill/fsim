@@ -25,6 +25,7 @@
 #include <map>
 #include <set>
 #include <typeinfo>
+#include <array>
 #include <cstring>
 #include <optional>
 #include <string_view>
@@ -161,10 +162,67 @@ void Interpreter::Impl::StaticKernel::commit_dynamic_containers(const std::uint3
     member.dynamic_containers.clear();
 }
 
+namespace {
+
+// Whether std::string has the layout generated code assumes for string
+// registers (KOp::str, static_kernel_codegen): the data pointer, the
+// length, then the local buffer of 15 bytes (data pointing at it) or the
+// allocated capacity.
+[[nodiscard]] bool string_layout_matches()
+{
+    static const bool matches = [] {
+        if (sizeof(std::string) != 32U) {
+            return false;
+        }
+        const std::string local(3U, 'a');
+        const std::string allocated(100U, 'b');
+        const auto fields = [](const std::string& text) {
+            std::array<std::uint64_t, 3U> words { };
+            std::memcpy(words.data(), static_cast<const void*>(&text), sizeof(words));
+            return words;
+        };
+        const auto local_words = fields(local);
+        const auto allocated_words = fields(allocated);
+        const auto address = [](const void* pointer) {
+            return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(pointer));
+        };
+        return local_words[0] == address(local.data()) && local_words[1] == local.size()
+            && local_words[0] == address(&local) + 16U && local.capacity() == 15U
+            && allocated_words[0] == address(allocated.data())
+            && allocated_words[1] == allocated.size()
+            && allocated_words[2] == allocated.capacity();
+    }();
+    return matches;
+}
+
+} // namespace
+
+bool Interpreter::Impl::StaticKernel::hold_string_file(const std::uint32_t index)
+{
+    auto& member = members_[index];
+    if (member.strings.empty() || !string_layout_matches()) {
+        return false;
+    }
+    if (member.string_scratch == no_slot) {
+        member.string_scratch = static_cast<std::uint32_t>(member.strings.size());
+        member.strings.emplace_back();
+    }
+    Container container;
+    container.object = no_container_object;
+    container.storage = StaticKernelContainerStorage::strings;
+    container.string_member = index;
+    member.string_file = static_cast<std::uint32_t>(containers_.size());
+    containers_.push_back(std::move(container));
+    return true;
+}
+
 void Interpreter::Impl::StaticKernel::release_dynamic_containers(
     const std::uint32_t index, const std::size_t containers, const std::size_t headers)
 {
     auto& member = members_[index];
+    if (member.string_file != no_slot && member.string_file >= containers) {
+        member.string_file = no_slot;
+    }
     for (std::size_t id = 0U; id < member.dynamic_containers.size(); ++id) {
         if (member.dynamic_containers[id] && id < member.container_registers.size()) {
             member.container_registers[id] = no_container;
@@ -356,10 +414,11 @@ void Interpreter::Impl::StaticKernel::compile_members()
         // same ones); a member that does not compile gives them back.
         const auto containers_before = containers_.size();
         const auto headers_before = dynamic_headers_.size();
-        const bool holds_dynamic = !members_[index].dynamic_containers.empty();
+        bool holds_dynamic = !members_[index].dynamic_containers.empty();
         if (holds_dynamic) {
             hold_dynamic_containers(index);
         }
+        holds_dynamic = hold_string_file(index) || holds_dynamic;
         try {
             if (index < restored_bodies.size() && restored_bodies[index].present
                 && restored_bodies[index].process == members_[index].process
@@ -420,6 +479,9 @@ void Interpreter::Impl::StaticKernel::compile_members()
                             differs = "wide_constants";
                         } else if (a->return_targets != b->return_targets) {
                             differs = "return_targets";
+                        } else if (a->string_operands != b->string_operands
+                            || a->string_bytes != b->string_bytes) {
+                            differs = "strings";
                         } else if (a->live_at_entry != b->live_at_entry) {
                             differs = "live_at_entry";
                         } else if (a->shadow_base != b->shadow_base) {
@@ -2182,6 +2244,119 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             return false;
         }
     };
+    // KOp::str for a string operation on the member's string registers
+    // (its string file, hold_string_file); false when the operation keeps
+    // the generic bridge (a register of another width than the reference's
+    // result, which that path converts).
+    const auto string_count = member.string_scratch != no_slot
+        ? member.string_scratch : static_cast<std::uint32_t>(member.strings.size());
+    const auto emit_str = [&](KInst& inst, const auto& op) -> bool {
+        using T = std::decay_t<decltype(op)>;
+        if (member.string_file == no_slot) {
+            return false;
+        }
+        const auto string = [&](const StringRegisterId id) { return id < string_count; };
+        const auto set = [&](const StrOp sub) {
+            inst.op = KOp::str;
+            inst.sub = static_cast<std::uint8_t>(sub);
+            inst.aux = member.string_file;
+        };
+        const auto index = [&](const RegisterId reg, const bool signed_index) {
+            // known_string_index: a nonempty index of at most 64 bits.
+            if (reg >= register_count || w(reg) == 0U || w(reg) > 64U) {
+                return false;
+            }
+            inst.y = narrow(reg);
+            inst.width = w(reg);
+            inst.flags = signed_index ? flag_signed : 0U;
+            return true;
+        };
+        if constexpr (std::is_same_v<T, CopyStringRegister>) {
+            if (!string(op.destination) || !string(op.source)) {
+                return false;
+            }
+            set(StrOp::copy);
+            inst.offset = op.destination;
+            inst.z = op.source;
+            return true;
+        } else if constexpr (std::is_same_v<T, LoadStringConstant>) {
+            if (!string(op.destination)) {
+                return false;
+            }
+            set(StrOp::load_constant);
+            inst.offset = op.destination;
+            inst.imm_a = body.string_bytes.size();
+            inst.imm_b = op.value.size();
+            body.string_bytes += op.value;
+            return true;
+        } else if constexpr (std::is_same_v<T, ConcatenateStrings>) {
+            if (!string(op.destination) || op.operands.empty()
+                || !std::ranges::all_of(op.operands, string)) {
+                return false;
+            }
+            set(StrOp::concat);
+            inst.offset = op.destination;
+            inst.imm_a = body.string_operands.size();
+            inst.imm_b = op.operands.size();
+            body.string_operands.insert(body.string_operands.end(), op.operands.begin(),
+                op.operands.end());
+            const auto later = std::find(op.operands.begin() + 1, op.operands.end(),
+                op.destination);
+            inst.width = op.operands.front() == op.destination ? 1U
+                : later != op.operands.end()                   ? 2U
+                                                               : 0U;
+            inst.z = member.string_scratch;
+            return true;
+        } else if constexpr (std::is_same_v<T, CompareStrings>) {
+            if (!string(op.lhs) || !string(op.rhs) || op.destination >= register_count
+                || w(op.destination) != 1U) {
+                return false;
+            }
+            set(StrOp::compare);
+            inst.d = narrow(op.destination);
+            inst.z = op.lhs;
+            inst.imm_b = op.rhs;
+            inst.imm_a = op.not_equal ? 1U : 0U;
+            return true;
+        } else if constexpr (std::is_same_v<T, StringLength>) {
+            if (!string(op.source) || op.destination >= register_count
+                || w(op.destination) != 32U) {
+                return false;
+            }
+            set(StrOp::length);
+            inst.d = narrow(op.destination);
+            inst.z = op.source;
+            return true;
+        } else if constexpr (std::is_same_v<T, StringIndex>) {
+            if (!string(op.source) || op.destination >= register_count
+                || w(op.destination) != 32U) {
+                return false;
+            }
+            set(StrOp::index);
+            if (!index(op.index, op.signed_index)) {
+                return false;
+            }
+            inst.d = narrow(op.destination);
+            inst.z = op.source;
+            return true;
+        } else if constexpr (std::is_same_v<T, StringReplaceByte>) {
+            if (!string(op.target) || op.source >= register_count || w(op.source) == 0U
+                || w(op.source) > 64U) {
+                return false;
+            }
+            set(StrOp::replace_byte);
+            if (!index(op.index, op.signed_index)) {
+                return false;
+            }
+            inst.offset = op.target;
+            inst.x = narrow(op.source);
+            // The byte register's width (the reference reads its low word).
+            inst.imm_a = w(op.source);
+            return true;
+        } else {
+            return false;
+        }
+    };
     // A frame operation of a recursive callable (body.frame_stack_base):
     // the registers its identity's pushes list, those a pop keeps marked.
     // The items (register-file indices) follow the wide storage's
@@ -3124,6 +3299,17 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             bool translated = true;
             visit_operation([&](const auto& op) {
                 using T = std::decay_t<decltype(op)>;
+                if constexpr (std::is_same_v<T, LoadStringConstant>
+                    || std::is_same_v<T, CopyStringRegister>
+                    || std::is_same_v<T, ConcatenateStrings>
+                    || std::is_same_v<T, CompareStrings>
+                    || std::is_same_v<T, StringLength>
+                    || std::is_same_v<T, StringIndex>
+                    || std::is_same_v<T, StringReplaceByte>) {
+                    if (emit_str(inst, op)) {
+                        return;
+                    }
+                }
                 if constexpr (behavioral_suspension<T>
                     || std::is_same_v<T, WaitSensitivity>
                     || std::is_same_v<T, Halt>) {

@@ -14,6 +14,7 @@
 #include <cstring>
 #include <new>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -311,11 +312,63 @@ enum class KOp : std::uint8_t {
     /// container's StaticKernelDynamicContainer; only capacity growth calls
     /// the runtime (fsim_sk_dyn_grow).
     dyn,
+    /// A string operation `sub` (StrOp; IEEE 1800-2023 6.16, 11.4) on the
+    /// member's string registers, which live in Member::strings: aux is the
+    /// member's string file (a kernel container record of storage
+    /// `strings`, bound per instance), whose `elements` points at the first
+    /// std::string. String register fields name string registers; the
+    /// others are kernel registers (see StrOp). Only capacity growth calls
+    /// the runtime (fsim_sk_str_reserve).
+    str,
 };
 
-/// Number of kernel instruction kinds (KOp values 0 .. dyn).
+/// Number of kernel instruction kinds (KOp values 0 .. str).
 inline constexpr std::size_t kernel_op_count
-    = static_cast<std::size_t>(KOp::dyn) + 1U;
+    = static_cast<std::size_t>(KOp::str) + 1U;
+
+/// KOp::str operations (KInst::sub). Kernel registers as elsewhere: d the
+/// one written (a numeric result), y an index (width bits, flag_signed:
+/// signed) and x a byte read; string registers in offset (the string
+/// written) and z and imm_b (strings read).
+enum class StrOp : std::uint8_t {
+    /// String offset = string z.
+    copy,
+    /// String offset = the bytes [imm_a, imm_a + imm_b) of
+    /// CompiledBody::string_bytes.
+    load_constant,
+    /// String offset = the concatenation of the string registers
+    /// CompiledBody::string_operands[imm_a .. imm_a + imm_b). width 1: offset
+    /// is the first operand (appended in place); width 2: offset is another
+    /// operand, so the result is built in the member's scratch string z first.
+    concat,
+    /// d = (string z == string imm_b) != imm_a (1 bit).
+    compare,
+    /// d = string z's length (32 bits).
+    length,
+    /// d = byte y of string z, 0 out of range (32 bits).
+    index,
+    /// Byte y of string offset = the low byte of register x (imm_a bits),
+    /// unless y is out of range or the byte is zero.
+    replace_byte,
+};
+
+[[nodiscard]] inline bool str_writes_string(const StrOp op) noexcept
+{
+    return op == StrOp::copy || op == StrOp::load_constant || op == StrOp::concat
+        || op == StrOp::replace_byte;
+}
+
+/// Writes register d.
+[[nodiscard]] inline bool str_writes_register(const StrOp op) noexcept
+{
+    return op == StrOp::compare || op == StrOp::length || op == StrOp::index;
+}
+
+/// Reads index register y.
+[[nodiscard]] inline bool str_reads_index(const StrOp op) noexcept
+{
+    return op == StrOp::index || op == StrOp::replace_byte;
+}
 
 /// KOp::dyn operations (KInst::sub), the SimIR container operations they
 /// carry out on a kernel queue or dynamic array.
@@ -383,6 +436,9 @@ enum class DynFailure : std::uint32_t {
     linear_negative,
     linear_range,
     sparse_budget,
+    concat_limit,
+    byte_unknown,
+    string_limit,
 };
 
 /// The native fail reason of the first DynFailure (native_fail_message).
@@ -734,6 +790,10 @@ struct CompiledBody {
     std::vector<std::uint32_t> wide_base;
     /// wide_const values, as registers.
     std::vector<kernel_word::Word> wide_constants;
+    /// KOp::str: concatenation operand lists (string registers) and the
+    /// bytes of string constants.
+    std::vector<std::uint32_t> string_operands;
+    std::string string_bytes;
     /// The plans of the directives whose tick is generated code
     /// (KOp::sva_tick, z the index plus one).
     std::vector<SvaNativePlan> sva_plans;

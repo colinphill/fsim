@@ -45,6 +45,7 @@
 #include <unistd.h>
 #include <cstddef>
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <limits>
 #include <map>
@@ -5459,6 +5460,18 @@ private:
                 writes = detail::dyn_writes_destination(op);
                 return true;
             }
+            case KOp::str: {
+                // String register fields name no register.
+                const auto op = static_cast<detail::StrOp>(inst.sub);
+                if (op == detail::StrOp::index || op == detail::StrOp::replace_byte) {
+                    reads.push_back(inst.y);
+                }
+                if (op == detail::StrOp::replace_byte) {
+                    reads.push_back(inst.x);
+                }
+                writes = detail::str_writes_register(op);
+                return true;
+            }
             case KOp::wide_move:
                 reads = { inst.y };
                 return true;
@@ -7506,6 +7519,245 @@ private:
             dyn_end(inserting);
         }
         dyn_end(stored);
+    }
+
+    // A member's string registers (KOp::str) are its Member::strings, which
+    // generated code reads and writes in the standard library's layout:
+    // the data pointer, the length, then the local buffer (data pointing at
+    // it, capacity 15) or the allocated capacity; the bytes end with a zero.
+    // StaticKernel::hold_string_file admits a member only after checking
+    // that layout at run time.
+    static_assert(sizeof(std::string) == 32U);
+    static constexpr std::uint64_t str_local_capacity = 15U;
+
+    /// String register `id` (a constant) of the member's string file.
+    [[nodiscard]] llvm::Value* str_object(llvm::Value* file, const std::uint64_t id)
+    {
+        return builder_.CreateConstInBoundsGEP1_64(i8_, file, id * sizeof(std::string));
+    }
+
+    [[nodiscard]] llvm::Value* str_data(llvm::Value* object)
+    {
+        return builder_.CreateLoad(ptr_, object);
+    }
+
+    [[nodiscard]] llvm::Value* str_size(llvm::Value* object)
+    {
+        return builder_.CreateLoad(i64_, builder_.CreateConstInBoundsGEP1_64(i8_, object, 8U));
+    }
+
+    /// The new length `size`, with the terminating zero after it.
+    void str_set_size(llvm::Value* object, llvm::Value* size)
+    {
+        builder_.CreateStore(size, builder_.CreateConstInBoundsGEP1_64(i8_, object, 8U));
+        builder_.CreateStore(llvm::ConstantInt::get(i8_, 0U),
+            builder_.CreateInBoundsGEP(i8_, str_data(object), size));
+    }
+
+    /// Room for `needed` bytes (the only runtime call of KOp::str).
+    void str_reserve(llvm::Value* object, llvm::Value* needed, const std::uint32_t at)
+    {
+        auto* local = builder_.CreateICmpEQ(str_data(object),
+            builder_.CreateConstInBoundsGEP1_64(i8_, object, 16U));
+        auto* capacity = builder_.CreateSelect(local, constant(str_local_capacity),
+            builder_.CreateLoad(i64_, builder_.CreateConstInBoundsGEP1_64(i8_, object, 16U)));
+        auto* grow = dyn_when(builder_.CreateICmpUGT(needed, capacity));
+        auto* type = llvm::FunctionType::get(i32_, { ptr_, i32_, ptr_, i64_ }, false);
+        builder_.CreateCall(type, helper_symbol("fsim_sk_str_reserve", type),
+            { frame_, llvm::ConstantInt::get(i32_, at), object, needed });
+        check_status();
+        dyn_end(grow);
+    }
+
+    void str_copy_bytes(llvm::Value* target, llvm::Value* source, llvm::Value* count)
+    {
+        builder_.CreateMemCpy(target, llvm::MaybeAlign(1), source, llvm::MaybeAlign(1), count);
+    }
+
+    /// Whether the `count` bytes at `left` and `right` are equal.
+    [[nodiscard]] llvm::Value* str_bytes_equal(llvm::Value* left, llvm::Value* right,
+        llvm::Value* count)
+    {
+        auto* before = builder_.GetInsertBlock();
+        auto* head = llvm::BasicBlock::Create(context_, "str_compare", &function_);
+        auto* step = llvm::BasicBlock::Create(context_, "str_byte", &function_);
+        auto* latch = llvm::BasicBlock::Create(context_, "str_next", &function_);
+        auto* done = llvm::BasicBlock::Create(context_, "str_compared", &function_);
+        builder_.CreateBr(head);
+        builder_.SetInsertPoint(head);
+        llvm::BranchInst::Create(head, latch);
+        auto* index = loop_phi(i64_, constant(0U), before, latch);
+        builder_.CreateCondBr(builder_.CreateICmpULT(index, count), step, done);
+        builder_.SetInsertPoint(step);
+        auto* same = builder_.CreateICmpEQ(
+            builder_.CreateLoad(i8_, builder_.CreateInBoundsGEP(i8_, left, index)),
+            builder_.CreateLoad(i8_, builder_.CreateInBoundsGEP(i8_, right, index)));
+        auto* next = builder_.CreateAdd(index, constant(1U));
+        auto* differs = builder_.GetInsertBlock();
+        builder_.CreateCondBr(same, latch, done);
+        close_loop_phi(index, next);
+        builder_.SetInsertPoint(done);
+        auto* equal = builder_.CreatePHI(llvm::Type::getInt1Ty(context_), 2U);
+        equal->addIncoming(llvm::ConstantInt::getTrue(context_), head);
+        equal->addIncoming(llvm::ConstantInt::getFalse(context_), differs);
+        return equal;
+    }
+
+    llvm::GlobalVariable* string_bytes_ { };
+
+    [[nodiscard]] llvm::Value* str_constant_bytes(const std::uint64_t offset)
+    {
+        if (string_bytes_ == nullptr) {
+            string_bytes_ = new llvm::GlobalVariable(*function_.getParent(),
+                llvm::ArrayType::get(i8_, body_.string_bytes.size()), true,
+                llvm::GlobalValue::PrivateLinkage,
+                llvm::ConstantDataArray::getString(context_, body_.string_bytes, false),
+                "string_constants");
+        }
+        return builder_.CreateConstInBoundsGEP1_64(i8_, string_bytes_, offset);
+    }
+
+    /// The bytes of the operands into `target` (not one of them) from
+    /// `offset` on; `sizes` are the operands' lengths.
+    void str_append_operands(llvm::Value* file, llvm::Value* target, llvm::Value* offset,
+        const std::uint32_t* operands, const std::size_t count,
+        const std::vector<llvm::Value*>& sizes, const std::size_t first)
+    {
+        auto* data = str_data(target);
+        for (auto index = first; index < count; ++index) {
+            str_copy_bytes(builder_.CreateInBoundsGEP(i8_, data, offset),
+                str_data(str_object(file, operands[index])), sizes[index]);
+            offset = builder_.CreateAdd(offset, sizes[index]);
+        }
+    }
+
+    /// KOp::str: the member's string registers through its string file aux.
+    void emit_str(const KInst& inst, const std::uint32_t at)
+    {
+        using detail::DynFailure;
+        using detail::StrOp;
+        auto* file = dyn_header(inst.aux);
+        switch (static_cast<StrOp>(inst.sub)) {
+        case StrOp::copy: {
+            if (inst.offset == inst.z) {
+                break;
+            }
+            auto* target = str_object(file, inst.offset);
+            auto* source = str_object(file, inst.z);
+            auto* size = str_size(source);
+            str_reserve(target, size, at);
+            str_copy_bytes(str_data(target), str_data(source), size);
+            str_set_size(target, size);
+            break;
+        }
+        case StrOp::load_constant: {
+            auto* target = str_object(file, inst.offset);
+            auto* size = constant(inst.imm_b);
+            str_reserve(target, size, at);
+            if (inst.imm_b != 0U) {
+                str_copy_bytes(str_data(target), str_constant_bytes(inst.imm_a), size);
+            }
+            str_set_size(target, size);
+            break;
+        }
+        case StrOp::concat: {
+            const auto* operands = body_.string_operands.data() + inst.imm_a;
+            const auto count = static_cast<std::size_t>(inst.imm_b);
+            std::vector<llvm::Value*> sizes;
+            llvm::Value* total = constant(0U);
+            for (std::size_t index = 0U; index < count; ++index) {
+                sizes.push_back(str_size(str_object(file, operands[index])));
+                total = builder_.CreateAdd(total, sizes.back());
+            }
+            // Operand lengths are within the limit, so the sum cannot wrap.
+            dyn_check(builder_.CreateICmpULE(total, constant(runtime::simir::maximum_string_bytes)), at,
+                DynFailure::concat_limit);
+            auto* target = str_object(file, inst.offset);
+            if (inst.width == 1U) {
+                // Appended in place: the first operand's bytes stay, and a
+                // later read of the target copies those (its old length).
+                str_reserve(target, total, at);
+                str_append_operands(file, target, sizes.front(), operands, count, sizes, 1U);
+                str_set_size(target, total);
+                break;
+            }
+            auto* build = inst.width == 2U ? str_object(file, inst.z) : target;
+            str_reserve(build, total, at);
+            str_append_operands(file, build, constant(0U), operands, count, sizes, 0U);
+            if (inst.width == 2U) {
+                str_reserve(target, total, at);
+                str_copy_bytes(str_data(target), str_data(build), total);
+                str_set_size(build, constant(0U));
+            }
+            str_set_size(target, total);
+            break;
+        }
+        case StrOp::compare: {
+            auto* left = str_object(file, inst.z);
+            auto* right = str_object(file, inst.imm_b);
+            auto* size = str_size(left);
+            auto* same_size = builder_.CreateICmpEQ(size, str_size(right));
+            const auto equal = dyn_choose(same_size, [&] {
+                return Pair { builder_.CreateZExt(
+                                  str_bytes_equal(str_data(left), str_data(right), size), i64_),
+                    constant(0U) };
+            }, { constant(0U), constant(0U) });
+            auto* result = inst.imm_a != 0U ? builder_.CreateXor(equal.a, constant(1U)) : equal.a;
+            store_register(inst.d, { result, constant(0U) });
+            break;
+        }
+        case StrOp::length:
+            store_register(inst.d, { builder_.CreateAnd(str_size(str_object(file, inst.z)),
+                                         constant(0xffffffffU)),
+                                       constant(0U) });
+            break;
+        case StrOp::index:
+        case StrOp::replace_byte: {
+            const bool replacing = static_cast<StrOp>(inst.sub) == StrOp::replace_byte;
+            auto* object = str_object(file, replacing ? inst.offset : inst.z);
+            const auto index = load_register(inst.y);
+            const auto mask = inst.width >= 64U ? ~std::uint64_t { 0 }
+                                                : (std::uint64_t { 1 } << inst.width) - 1U;
+            auto* bits = builder_.CreateAnd(index.a, constant(mask));
+            auto* size = str_size(object);
+            // known_string_index: unknown, negative (signed) or out of range
+            // selects no byte.
+            llvm::Value* valid = builder_.CreateAnd(
+                builder_.CreateICmpEQ(builder_.CreateAnd(index.b, constant(mask)), constant(0U)),
+                builder_.CreateICmpULT(bits, size));
+            if ((inst.flags & detail::flag_signed) != 0U) {
+                valid = builder_.CreateAnd(valid,
+                    builder_.CreateICmpEQ(
+                        builder_.CreateAnd(bits, constant(std::uint64_t { 1 } << (inst.width - 1U))),
+                        constant(0U)));
+            }
+            if (!replacing) {
+                store_register(inst.d, dyn_choose(valid, [&] {
+                    return Pair { builder_.CreateZExt(builder_.CreateLoad(i8_,
+                                      builder_.CreateInBoundsGEP(i8_, str_data(object), bits)),
+                                      i64_),
+                        constant(0U) };
+                }, { constant(0U), constant(0U) }));
+                break;
+            }
+            auto* replace = dyn_when(valid);
+            const auto byte = load_register(inst.x);
+            const auto byte_width = static_cast<std::uint32_t>(inst.imm_a);
+            const auto byte_mask = byte_width >= 64U ? ~std::uint64_t { 0 }
+                                                     : (std::uint64_t { 1 } << byte_width) - 1U;
+            dyn_check(builder_.CreateICmpEQ(builder_.CreateAnd(byte.b, constant(byte_mask)),
+                          constant(0U)),
+                at, DynFailure::byte_unknown);
+            dyn_check(builder_.CreateICmpULE(size, constant(runtime::simir::maximum_string_bytes)), at,
+                DynFailure::string_limit);
+            auto* low = builder_.CreateTrunc(byte.a, i8_);
+            auto* store = dyn_when(builder_.CreateICmpNE(low, llvm::ConstantInt::get(i8_, 0U)));
+            builder_.CreateStore(low, builder_.CreateInBoundsGEP(i8_, str_data(object), bits));
+            dyn_end(store);
+            dyn_end(replace);
+            break;
+        }
+        }
     }
 
     /// KOp::dyn on an associative array with integral keys (imm_a bit 0).
@@ -16127,6 +16379,9 @@ private:
         case KOp::dyn:
             emit_dyn(inst, at);
             break;
+        case KOp::str:
+            emit_str(inst, at);
+            break;
         case KOp::wide_move:
             // compile_body fuses only moves to an unresolved slot with a
             // one-field selection; the rest stay wide_load, wide_alu and
@@ -18368,6 +18623,9 @@ private:
         add("fsim_sk_sva_report_grow", helpers.sva_report_grow);
         add("fsim_sk_dyn_grow", helpers.dyn_grow);
         add("fsim_sk_dyn_reshape", helpers.dyn_reshape);
+        add("fsim_sk_str_reserve", helpers.str_reserve);
+        // llvm.memcpy of a run-time length (KOp::str).
+        add("memcpy", static_cast<void* (*)(void*, const void*, std::size_t)>(&std::memcpy));
 #if defined(__MINGW32__)
         add("___chkstk_ms", &___chkstk_ms);
 #endif
@@ -18930,6 +19188,9 @@ private:
             append(operand.unknown);
         }
         append_all(body.wide_base);
+        append_all(body.string_operands);
+        append(body.string_bytes.size());
+        text.append(body.string_bytes);
         append(body.wide_constants.size());
         for (const auto& word : body.wide_constants) {
             append(word.a);

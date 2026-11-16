@@ -57,7 +57,7 @@ using Impl = InterpreterEventAccess::Impl;
 inline constexpr std::uint32_t scheduler_version = 1U;
 inline constexpr std::uint32_t host_version = 4U;
 inline constexpr std::uint32_t process_version = 1U;
-inline constexpr std::uint32_t kernel_version = 5U;
+inline constexpr std::uint32_t kernel_version = 6U;
 
 /// Processes per "host.processes.<n>" section (the unit $incsave compares).
 inline constexpr std::size_t process_chunk = 4096U;

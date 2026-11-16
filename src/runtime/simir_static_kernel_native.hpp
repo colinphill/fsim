@@ -51,7 +51,9 @@ struct StaticKernelContainerInfo {
     /// 0: helpers only; 1: one slot per element; 2: one packed slot;
     /// 3: kernel-held elements, two planes of one word each from
     /// packed_offset on; 4: a queue or dynamic array (KOp::dyn), whose
-    /// StaticKernelDynamicContainer `elements` points at.
+    /// StaticKernelDynamicContainer `elements` points at; 5: a member's
+    /// string registers (KOp::str), `elements` pointing at the first
+    /// std::string.
     std::uint32_t storage { };
     /// Storage 2: the packed slot.
     std::uint32_t slot { };
@@ -371,6 +373,11 @@ struct StaticKernelNativeHelpers {
     std::uint32_t (*dyn_reshape)(StaticKernelNativeFrame*, std::uint32_t at,
         StaticKernelDynamicContainer* target,
         const StaticKernelDynamicContainer* source) { };
+    /// `fsim_sk_str_reserve`: capacity for `needed` bytes in the string
+    /// register at `target` (a std::string), its bytes kept; nonzero when
+    /// the memory is not available (the failure is reported).
+    std::uint32_t (*str_reserve)(StaticKernelNativeFrame*, std::uint32_t at, void* target,
+        std::uint64_t needed) { };
     /// Wide-register instructions by kind (`fsim_sk_wide_<op>`): instruction
     /// `at` with the caller's register file, where wide values live, and the
     /// narrow operand words x, y and z; `out` receives a narrow result and

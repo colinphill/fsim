@@ -332,6 +332,10 @@ void Kernel::run_state_io(RunStateArchive& ar)
         FSIM_RS_IO("kernel.member", program_ended, ar, member);
         FSIM_RS_IO("kernel.member", lazy_stamp, ar, member);
         FSIM_RS_IO("kernel.member", registers, ar, member);
+        // String registers keep their elements in place: compiled code
+        // reaches them through the string file (KOp::str).
+        FSIM_RS_TABLE("kernel.member", strings, ar, member,
+            [&](std::string& text) { ar.io(text); });
         FSIM_RS_IO("kernel.member", dynamic_containers, ar, member);
         FSIM_RS_IO("kernel.member", call_stack, ar, member);
         FSIM_RS_IO("kernel.member", frames, ar, member);

@@ -16,6 +16,7 @@
 
 #include <cstdint>
 #include <deque>
+#include <string>
 
 namespace fsim::runtime::simir::static_kernel_detail {
 
@@ -102,6 +103,12 @@ public:
 private:
     std::deque<StaticKernelDynamicContainer> headers_;
 };
+
+/// Executes KOp::str `inst` on the bytecode tier on the member's string
+/// registers `strings` (IEEE 1800-2023 6.16, 11.4). Returns DynFailure::none,
+/// or the reference's error to report.
+[[nodiscard]] DynFailure execute_str(const KInst& inst, const CompiledBody& body,
+    std::string* strings, kernel_word::Word* registers);
 
 /// The reference's message for a DynFailure.
 [[nodiscard]] const char* dyn_fail_message(DynFailure failure) noexcept;

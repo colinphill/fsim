@@ -654,6 +654,21 @@ inline void kinst_flow(const KInst& inst, const std::uint32_t at,
         fall();
         break;
     }
+    case KOp::str: {
+        // String register fields name no kernel register.
+        const auto op = static_cast<StrOp>(inst.sub);
+        if (op == StrOp::index || op == StrOp::replace_byte) {
+            use.push_back(inst.y);
+        }
+        if (op == StrOp::replace_byte) {
+            use.push_back(inst.x);
+        }
+        if (str_writes_register(op)) {
+            def = inst.d;
+        }
+        fall();
+        break;
+    }
     case KOp::wide_move:
         if (inst.sub == 1U) {
             use.push_back(inst.y);
@@ -968,6 +983,8 @@ public:
         list(body.wide_registers, [&](const PackedLogic4& value) { packed(value); });
         grouped(body.wide_base);
         grouped(body.wide_constants);
+        grouped(body.string_operands);
+        text(body.string_bytes);
         grouped(body.return_targets);
         grouped(body.live_at_entry);
         put(body.shadow_base);
@@ -1340,6 +1357,7 @@ public:
             && grouped(body.containers) && get(body.entry)
             && list(body.wide_registers, [&](PackedLogic4& value) { return packed(value); })
             && grouped(body.wide_base) && grouped(body.wide_constants)
+            && grouped(body.string_operands) && text(body.string_bytes)
             && grouped(body.return_targets) && grouped(body.live_at_entry)
             && get(body.shadow_base) && get(body.weak) && raw(body.tracked)
             && raw(body.u_mode) && raw(body.statement_starts)

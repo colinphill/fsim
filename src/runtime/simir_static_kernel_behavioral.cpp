@@ -5878,6 +5878,7 @@ std::optional<std::uint32_t> Interpreter::Impl::StaticKernel::run_behavioral_com
         verify_before.emplace();
         verify_before->registers = body.registers;
         verify_before->containers = native_container_values(member);
+        verify_before->strings = member.strings;
         if (body.call_stack_base != 0U) {
             const auto depth = body.registers[body.call_stack_base].a;
             verify_before->stack.assign(body.call_entries.entries,
@@ -5897,6 +5898,7 @@ std::optional<std::uint32_t> Interpreter::Impl::StaticKernel::run_behavioral_com
         // The thread's own (run_thread swapped them into the member).
         verify_before->saved_arrays = member.saved_arrays;
         verify_before->saved_array_marks = member.saved_array_marks;
+        verify_before->runtime_frames = member.frames;
         shadow_ = &verify_shadow;
     }
     behavioral_entry_ = start;
@@ -6108,6 +6110,11 @@ bool Interpreter::Impl::StaticKernel::replay_generic_record(
             record.results) {
             member.registers[result_register] = result_value;
         }
+        for (const auto& [id, text] : record.strings) {
+            if (id < member.strings.size()) {
+                member.strings[id] = text;
+            }
+        }
         // The operation's signal writes, as it made them
         // (a host signal's is recorded, not made).
         for (const auto& [signal, value] : record.commits) {
@@ -6158,6 +6165,7 @@ void Interpreter::Impl::StaticKernel::shadow_note_reads(
     shadow_->pending_reads.clear();
     shadow_->pending_commits.clear();
     shadow_->pending_host_updates.clear();
+    shadow_->pending_strings = member.strings;
     shadow_->in_generic = true;
     for (const auto reg : reads) {
         shadow_->pending_reads.push_back(reg < member.registers.size()
@@ -6181,6 +6189,13 @@ void Interpreter::Impl::StaticKernel::shadow_record_generic(
     record.host_updates = std::move(shadow_->pending_host_updates);
     shadow_->pending_host_updates.clear();
     shadow_->in_generic = false;
+    for (std::size_t id = 0U; id < member.strings.size(); ++id) {
+        if (id >= shadow_->pending_strings.size()
+            || member.strings[id] != shadow_->pending_strings[id]) {
+            record.strings.emplace_back(static_cast<StringRegisterId>(id), member.strings[id]);
+        }
+    }
+    shadow_->pending_strings.clear();
     for (const auto& written : writes) {
         if (written.reg < member.registers.size()) {
             record.results.emplace_back(written.reg, member.registers[written.reg]);
@@ -6416,6 +6431,7 @@ void Interpreter::Impl::StaticKernel::verify_thread_activation(
         member.call_stack.push_back(static_cast<InstructionIndex>(entry));
     }
     if (body.frame_stack_base != 0U) {
+        member.frames = before.runtime_frames;
         export_compiled_frames(member_index, body, before.registers,
             before.frames.data(), before.frame_pairs, member.frames);
         for (const auto& frame : member.frames) {
@@ -6430,6 +6446,8 @@ void Interpreter::Impl::StaticKernel::verify_thread_activation(
     };
     // The replay's queues and dynamic arrays: the kernel's at the start.
     const ReferenceContainerScope reference_containers { member, before.containers };
+    // The replay's string registers: the activation's at the start.
+    const ReferenceStringScope reference_strings { member, before.strings };
     shadow.reference = true;
     std::string mismatch;
     std::uint32_t pc = start;
@@ -6699,6 +6717,9 @@ void Interpreter::Impl::StaticKernel::verify_thread_activation(
     }
     if (mismatch.empty()) {
         mismatch = native_container_mismatch(member, before.containers);
+    }
+    if (mismatch.empty()) {
+        mismatch = reference_strings.mismatch();
     }
     // Self-test of this check: FSIM_KERNEL_VERIFY_INJECT=thread reports the
     // first verified activation as a mismatch.

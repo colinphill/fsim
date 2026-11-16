@@ -1217,7 +1217,9 @@ kernel.member	generic_mode	D	static member structure from the artifact
 kernel.member	frames_elided	D	static member structure from the artifact
 kernel.member	thread_contexts	D	static member structure from the artifact
 kernel.member	isolated_forks	D	static member structure from the artifact
-kernel.member	strings	D	static member structure from the artifact
+kernel.member	strings	P	member string registers (a suspended thread's strings, KOp::str)
+kernel.member	string_file	D	static member structure from the artifact
+kernel.member	string_scratch	D	static member structure from the artifact
 kernel.member	wait_sensitivity	D	static member structure from the artifact
 kernel.member	origin	D	static member structure from the artifact
 kernel.member	stripped_origin	D	static member structure from the artifact
@@ -1292,6 +1294,7 @@ kernel.container	element_offset	D	container map from the artifact
 kernel.container	element_slots	D	container map from the artifact
 kernel.container	packed_slot	D	container map from the artifact
 kernel.container	dynamic_header	D	container map from the artifact: the header index of a queue or dynamic array the kernel holds (the elements are kernel.impl dynamic_headers_)
+kernel.container	string_member	D	container map from the artifact
 kernel.thread	member	P	kernel thread state
 kernel.thread	pc	P	kernel thread state
 kernel.thread	call_stack	P	kernel thread state

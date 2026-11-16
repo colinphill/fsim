@@ -23,7 +23,7 @@ using namespace static_kernel_compiled_detail;
 namespace kw = kernel_word;
 
 namespace {
-constexpr std::string_view native_magic { "fsim-static-kernel-templates-v2" };
+constexpr std::string_view native_magic { "fsim-static-kernel-templates-v3" };
 
 /// The operands build_native binds to slots (bind_slot), in binding order:
 /// the field, and whether it holds the slot's arena offset (else its index;
@@ -102,6 +102,8 @@ bool same_body(const CompiledBody& left, const CompiledBody& right, const bool s
         || left.concat.size() != right.concat.size()
         || left.wide_base != right.wide_base
         || left.wide_constants.size() != right.wide_constants.size()
+        || left.string_operands != right.string_operands
+        || left.string_bytes != right.string_bytes
         || left.sva_plans != right.sva_plans) {
         return false;
     }
@@ -171,6 +173,7 @@ std::uint64_t hash_body(const CompiledBody& body, const bool shape)
         | body.parts.size() << 40U);
     mix(body.wide_base.size() | body.wide_constants.size() << 32U);
     mix(body.sva_plans.size());
+    mix(body.string_operands.size() | body.string_bytes.size() << 32U);
     return hash;
 }
 } // namespace
@@ -1009,6 +1012,21 @@ std::uint32_t Interpreter::Impl::StaticKernel::native_dyn_reshape(
     }
 }
 
+std::uint32_t Interpreter::Impl::StaticKernel::native_str_reserve(
+    StaticKernelNativeFrame* frame, const std::uint32_t at, std::string* target,
+    const std::uint64_t needed)
+{
+    try {
+        target->reserve(static_cast<std::size_t>(needed));
+        return 0U;
+    } catch (const std::exception&) {
+        native_fail(frame, at, static_kernel_detail::dyn_fail_first
+                + static_cast<std::uint32_t>(
+                    static_kernel_detail::DynFailure::out_of_memory));
+        return 1U;
+    }
+}
+
 void Interpreter::Impl::StaticKernel::native_fail(
     StaticKernelNativeFrame* frame, const std::uint32_t at,
     const std::uint32_t reason)
@@ -1715,6 +1733,9 @@ void Interpreter::Impl::StaticKernel::canonicalize_unit(const CompiledBody& inst
             if (inst.z != no_container) {
                 inst.z = bind(3U, inst.z, inst.z, 0U);
             }
+            break;
+        case KOp::str:
+            inst.aux = bind(3U, inst.aux, inst.aux, 0U);
             break;
         case KOp::mark:
             inst.x = bind(4U, inst.x, inst.x, 0U);
@@ -2492,6 +2513,11 @@ void Interpreter::Impl::StaticKernel::concatenate_members(CompiledBody& program,
             = static_cast<std::uint32_t>(program.concat.size());
         const auto constant_base
             = static_cast<std::uint32_t>(program.wide_constants.size());
+        const auto string_operand_base = program.string_operands.size();
+        const auto string_byte_base = program.string_bytes.size();
+        program.string_operands.insert(program.string_operands.end(),
+            body.string_operands.begin(), body.string_operands.end());
+        program.string_bytes += body.string_bytes;
         const auto plan_base = static_cast<std::uint32_t>(program.sva_plans.size());
         program.sva_plans.insert(program.sva_plans.end(), body.sva_plans.begin(),
             body.sva_plans.end());
@@ -2695,6 +2721,24 @@ void Interpreter::Impl::StaticKernel::concatenate_members(CompiledBody& program,
                 }
                 if (dyn_reads_index(op) || dyn_writes_index(op)) {
                     reg(inst.y);
+                }
+                break;
+            }
+            case KOp::str: {
+                const auto op = static_cast<StrOp>(inst.sub);
+                if (op == StrOp::index || op == StrOp::replace_byte) {
+                    reg(inst.y);
+                }
+                if (op == StrOp::replace_byte) {
+                    reg(inst.x);
+                }
+                if (str_writes_register(op)) {
+                    reg(inst.d);
+                }
+                if (op == StrOp::concat) {
+                    inst.imm_a += string_operand_base;
+                } else if (op == StrOp::load_constant) {
+                    inst.imm_a += string_byte_base;
                 }
                 break;
             }
@@ -3121,6 +3165,9 @@ void Interpreter::Impl::StaticKernel::build_partitions(
                     if (inst.z != no_container) {
                         inst.z = bind((std::uint64_t { 4 } << 40U) | inst.z);
                     }
+                    break;
+                case KOp::str:
+                    inst.aux = bind((std::uint64_t { 4 } << 40U) | inst.aux);
                     break;
                 case KOp::mark:
                     inst.x = 0U;

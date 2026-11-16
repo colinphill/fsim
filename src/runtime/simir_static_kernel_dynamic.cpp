@@ -334,6 +334,25 @@ struct SparseOrdinal {
     return DynFailure::none;
 }
 
+// The byte a string index register selects (known_string_index): none for
+// an unknown, negative (signed) or out-of-range index.
+[[nodiscard]] std::optional<std::size_t> string_byte_index(const KInst& inst,
+    const Word value, const std::size_t size) noexcept
+{
+    const auto mask = kernel_word::mask(inst.width);
+    if ((value.b & mask) != 0U) {
+        return std::nullopt;
+    }
+    const auto bits = value.a & mask;
+    if ((inst.flags & flag_signed) != 0U && ((bits >> (inst.width - 1U)) & 1U) != 0U) {
+        return std::nullopt;
+    }
+    if (bits >= size) {
+        return std::nullopt;
+    }
+    return static_cast<std::size_t>(bits);
+}
+
 // Removes element `at` (< size), shifting the later elements down.
 void erase_at(StaticKernelDynamicContainer& container, const std::uint64_t at) noexcept
 {
@@ -660,6 +679,74 @@ void DynamicHeaders::truncate(const std::size_t count) noexcept
     }
 }
 
+DynFailure execute_str(const KInst& inst, const CompiledBody& body, std::string* strings,
+    Word* registers)
+{
+    switch (static_cast<StrOp>(inst.sub)) {
+    case StrOp::copy:
+        if (inst.offset != inst.z) {
+            strings[inst.offset] = strings[inst.z];
+        }
+        return DynFailure::none;
+    case StrOp::load_constant:
+        strings[inst.offset].assign(body.string_bytes, static_cast<std::size_t>(inst.imm_a),
+            static_cast<std::size_t>(inst.imm_b));
+        return DynFailure::none;
+    case StrOp::concat: {
+        const auto* operands = body.string_operands.data() + inst.imm_a;
+        std::size_t total = 0U;
+        for (std::uint64_t index = 0U; index < inst.imm_b; ++index) {
+            const auto size = strings[operands[index]].size();
+            if (size > maximum_string_bytes - total) {
+                return DynFailure::concat_limit;
+            }
+            total += size;
+        }
+        std::string result;
+        result.reserve(total);
+        for (std::uint64_t index = 0U; index < inst.imm_b; ++index) {
+            result += strings[operands[index]];
+        }
+        strings[inst.offset] = std::move(result);
+        return DynFailure::none;
+    }
+    case StrOp::compare: {
+        const bool equal = strings[inst.z] == strings[inst.imm_b];
+        registers[inst.d] = { equal != (inst.imm_a != 0U) ? 1U : 0U, 0U };
+        return DynFailure::none;
+    }
+    case StrOp::length:
+        registers[inst.d] = { static_cast<std::uint32_t>(strings[inst.z].size()), 0U };
+        return DynFailure::none;
+    case StrOp::index: {
+        const auto& source = strings[inst.z];
+        const auto at = string_byte_index(inst, registers[inst.y], source.size());
+        registers[inst.d] = { at ? static_cast<unsigned char>(source[*at]) : 0U, 0U };
+        return DynFailure::none;
+    }
+    case StrOp::replace_byte: {
+        auto& target = strings[inst.offset];
+        const auto at = string_byte_index(inst, registers[inst.y], target.size());
+        if (!at) {
+            // A write out of range leaves the string unchanged (6.16).
+            return DynFailure::none;
+        }
+        const auto byte = registers[inst.x];
+        if ((byte.b & kernel_word::mask(static_cast<std::uint32_t>(inst.imm_a))) != 0U) {
+            return DynFailure::byte_unknown;
+        }
+        if (target.size() > maximum_string_bytes) {
+            return DynFailure::string_limit;
+        }
+        if ((byte.a & 0xffU) != 0U) {
+            target[*at] = static_cast<char>(byte.a & 0xffU);
+        }
+        return DynFailure::none;
+    }
+    }
+    return DynFailure::none;
+}
+
 const char* dyn_fail_message(const DynFailure failure) noexcept
 {
     switch (failure) {
@@ -699,6 +786,12 @@ const char* dyn_fail_message(const DynFailure failure) noexcept
         return "multidimensional linear index is out of range";
     case DynFailure::sparse_budget:
         return "sparse SimIR array exceeds its owning-storage budget";
+    case DynFailure::concat_limit:
+        return "string concatenation exceeds the string length limit";
+    case DynFailure::byte_unknown:
+        return "string replacement byte contains X or Z";
+    case DynFailure::string_limit:
+        return "string value exceeds the byte limit";
     }
     return "static kernel container operation failed";
 }

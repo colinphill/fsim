@@ -124,6 +124,9 @@ enum class StaticKernelContainerStorage : std::uint8_t {
     /// A member's queue or dynamic array of packed elements of at most 64
     /// bits (KOp::dyn): a kernel StaticKernelDynamicContainer.
     dynamic,
+    /// A behavioral member's string registers (KOp::str): its
+    /// Member::strings.
+    strings,
 };
 
 struct StaticKernelContainerSpec {

@@ -2175,6 +2175,19 @@ void Interpreter::Impl::StaticKernel::build_container_info()
             container_info_.push_back(info);
             continue;
         }
+        if (container.storage == StaticKernelContainerStorage::strings) {
+            // Member::strings keeps its elements in place from the member's
+            // build on (strings are assigned, never added or removed).
+            if (container.string_member >= members_.size()) {
+                throw std::logic_error { "static kernel string file has no member" };
+            }
+            info.storage = 5U;
+            info.elements = reinterpret_cast<const std::uint32_t*>(
+                members_[container.string_member].strings.data());
+            element_begin.push_back(container_elements_.size());
+            container_info_.push_back(info);
+            continue;
+        }
         const bool shape = (!vhdl_ || mixed_) && type.fixed && !type.associative
             && container.element_words == 1U
             && (type.element_kind == ContainerElementKind::Packed
@@ -6576,6 +6589,8 @@ Interpreter::Impl::StaticKernel::container_element_word(
     case StaticKernelContainerStorage::dynamic:
         return static_kernel_detail::dynamic_element(
             dynamic_headers_[container.dynamic_header], ordinal);
+    case StaticKernelContainerStorage::strings:
+        throw std::logic_error { "static kernel string file has no elements" };
     case StaticKernelContainerStorage::elements:
         break;
     }
@@ -6603,6 +6618,8 @@ PackedLogic4 Interpreter::Impl::StaticKernel::container_element(
             dynamic_headers_[container.dynamic_header], ordinal);
         return PackedLogic4::from_aval_bval(width, value.a, value.b);
     }
+    case StaticKernelContainerStorage::strings:
+        throw std::logic_error { "static kernel string file has no elements" };
     case StaticKernelContainerStorage::elements:
         break;
     }
@@ -6718,6 +6735,8 @@ void Interpreter::Impl::StaticKernel::write_container_element(
             Word { a.empty() ? 0U : a.front(), b.empty() ? 0U : b.front() });
         return;
     }
+    case StaticKernelContainerStorage::strings:
+        throw std::logic_error { "static kernel string file has no elements" };
     case StaticKernelContainerStorage::elements:
         break;
     }
@@ -6785,6 +6804,8 @@ void Interpreter::Impl::StaticKernel::write_container_element_word(
         static_kernel_detail::set_dynamic_element(
             dynamic_headers_[container.dynamic_header], ordinal, value);
         return;
+    case StaticKernelContainerStorage::strings:
+        throw std::logic_error { "static kernel string file has no elements" };
     case StaticKernelContainerStorage::elements:
         break;
     }
@@ -8461,6 +8482,35 @@ Interpreter::Impl::StaticKernel::ReferenceContainerScope::~ReferenceContainerSco
     if (active) {
         member.dynamic_containers.clear();
     }
+}
+
+Interpreter::Impl::StaticKernel::ReferenceStringScope::ReferenceStringScope(
+    Member& owner, const std::vector<std::string>& values)
+    : member { owner }
+    , compiled { owner.strings }
+{
+    // Assigned in place: compiled code holds the elements' addresses.
+    for (std::size_t id = 0U; id < member.strings.size() && id < values.size(); ++id) {
+        member.strings[id] = values[id];
+    }
+}
+
+Interpreter::Impl::StaticKernel::ReferenceStringScope::~ReferenceStringScope()
+{
+    for (std::size_t id = 0U; id < member.strings.size() && id < compiled.size(); ++id) {
+        member.strings[id] = std::move(compiled[id]);
+    }
+}
+
+std::string Interpreter::Impl::StaticKernel::ReferenceStringScope::mismatch() const
+{
+    for (std::size_t id = 0U; id < member.strings.size() && id < compiled.size(); ++id) {
+        if (member.strings[id] != compiled[id]) {
+            return "string register " + std::to_string(id) + " compiled \""
+                + compiled[id] + "\" reference \"" + member.strings[id] + "\"";
+        }
+    }
+    return { };
 }
 
 std::string Interpreter::Impl::StaticKernel::native_container_mismatch(

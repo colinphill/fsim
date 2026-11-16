@@ -596,6 +596,12 @@ void Interpreter::Impl::StaticKernel::build_parallel_plan()
                 }
                 ok = false;
                 break;
+            case KOp::str:
+                // The member's string registers; their growth runs on the
+                // leader.
+                touch_container(inst.aux, true);
+                ok = false;
+                break;
             case KOp::generic:
                 touch_operation(current, inst.x);
                 // A sequential member's output and severity messages wait
