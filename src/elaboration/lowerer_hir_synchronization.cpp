@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "lowerer_internal.hpp"
 
+#include <fsim/semantic/systemverilog_class_specialization.hpp>
 #include <fsim/semantic/systemverilog_type_descriptor.hpp>
 #include <fsim/support/payload_checksum.hpp>
 
@@ -197,7 +198,44 @@ Lowerer::hir_typeless_mailbox_message(const semantic::ExpressionId message,
     // The message's static type: a cast's target type (`T'(x)`, `T'{...}`,
     // 6.24.1, 10.9), the declared type of a variable, member, element or
     // class property, else the type of the expression's form.
-    auto declared = hir_systemverilog_cast_type(message);
+    // An enumeration literal has its enumeration's type (6.19.3), and a
+    // cast to a named type has that type, not the type it is based on.
+    std::optional<semantic::sv::TypeReference> declared;
+    if (const auto expression = specialized_hir_unit_->find_expression(message);
+        expression && expression->systemverilog != nullptr) {
+        const auto& source = *expression->systemverilog;
+        if (source.kind == semantic::sv::ExpressionKind::name
+            && source.referenced_name && source.referenced_name->selected) {
+            const auto literal = specialized_hir_unit_->find_declaration(
+                *source.referenced_name->selected);
+            if (literal && literal->systemverilog != nullptr
+                && literal->systemverilog->form
+                    == semantic::sv::DeclarationForm::enumeration_literal
+                && literal->systemverilog->type) {
+                declared = literal->systemverilog->type;
+            }
+        } else if (source.kind == semantic::sv::ExpressionKind::call
+            && source.marker == support::ExpressionMarker::sv_cast
+            && source.cast_target
+                == support::SystemVerilogCastTarget::named) {
+            const auto selected = hir_systemverilog_named_type_declaration(
+                source.marker_argument, source.scope);
+            const auto target = selected
+                ? specialized_hir_unit_->find_declaration(*selected)
+                : std::nullopt;
+            if (target && target->systemverilog != nullptr
+                && target->systemverilog->declared_type) {
+                semantic::sv::TypeReference type;
+                type.target.target = *target->systemverilog->declared_type;
+                type.target.spelling = target->systemverilog->name;
+                type.named = true;
+                declared = type;
+            }
+        }
+    }
+    if (!declared) {
+        declared = hir_systemverilog_cast_type(message);
+    }
     if (!declared) {
         declared = hir_systemverilog_value_type(message);
     }
@@ -245,16 +283,63 @@ Lowerer::hir_typeless_mailbox_message(const semantic::ExpressionId message,
         identity = "chandle";
         break;
     case Kind::enumeration:
-    case Kind::class_handle:
-        if (!described->nominal && described->nominal_name.empty()) {
+    case Kind::class_handle: {
+        // An enumeration is its enumeration type, however a typedef names
+        // it; a class type is its class and, for a parameterized class, the
+        // specialization its parameter values select (6.22.1, 8.25).
+        const auto wanted = described->kind == Kind::enumeration
+            ? semantic::sv::TypeForm::enumeration
+            : semantic::sv::TypeForm::class_handle;
+        std::optional<semantic::TypeId> nominal;
+        std::vector<semantic::TypeId> visited;
+        for (auto current = described->nominal.value_or(semantic::TypeId { });
+            current.valid()
+            && std::ranges::find(visited, current) == visited.end();) {
+            visited.push_back(current);
+            const auto type = specialized_hir_unit_->find_type(current);
+            if (!type || type->systemverilog == nullptr) {
+                break;
+            }
+            if (type->systemverilog->form == wanted) {
+                nominal = current;
+                break;
+            }
+            if (type->systemverilog->form != semantic::sv::TypeForm::alias) {
+                break;
+            }
+            current = type->systemverilog->base.target.target;
+        }
+        std::optional<std::uint32_t> specialization;
+        if (described->kind == Kind::class_handle && declared) {
+            const auto expression
+                = specialized_hir_unit_->find_expression(message);
+            const auto source = expression && expression->systemverilog
+                ? expression->systemverilog->source
+                : semantic::SourceSpanId { };
+            specialization
+                = hir_instance_class_specialization(*declared, source);
+            if (!specialization) {
+                const auto effective
+                    = hir_resolver().effective_systemverilog_type(
+                        *declared, hir_process_scope_);
+                if (effective && !effective->class_identity.empty()) {
+                    specialization = class_specializations().specialize(
+                        *effective, hir_running_class_specialization(),
+                        source);
+                }
+            }
+        }
+        if (specialization) {
+            identity = "class:" + std::to_string(*specialization);
+        } else if (nominal) {
+            identity = (described->kind == Kind::enumeration ? "enum:"
+                                                             : "class-type:")
+                + std::to_string(nominal->value());
+        } else {
             return refuse();
         }
-        identity = (described->kind == Kind::enumeration ? "enum:" : "class:")
-            + (described->nominal
-                    ? std::to_string(described->nominal->value())
-                    : std::string { })
-            + ":" + described->nominal_name;
         break;
+    }
     case Kind::string:
     case Kind::event:
     case Kind::interface:

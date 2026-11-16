@@ -815,8 +815,17 @@ void VerilogParser::parse_typedef(
         { },
         { },
         false });
+    // A literal of a named enumeration has the typedef's type (IEEE
+    // 1800-2023 6.19.3), the one its name selects.
+    const auto literal_source_order = systemverilog_source_order();
     for (auto& [parameter, parameter_name] :
         enum_parameters) {
+        Type literal_type { ValueDomain::Unknown, name.text, std::nullopt,
+            false };
+        literal_type.named_type = name.text;
+        literal_type.named_type_span = name.span;
+        literal_type.systemverilog_source_order = literal_source_order;
+        parameter.type = std::move(literal_type);
         add_parameter(
             unit, std::move(parameter), parameter_name);
     }

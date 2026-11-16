@@ -9,7 +9,11 @@
 // message when the types differ (15.4.6, 15.4.8). A waiting get receives
 // a later put. A typed pattern's message has the type its name selects,
 // a typedef of the module, an imported one or a package-qualified one
-// (10.9).
+// (10.9). An enumeration literal and a cast to an enumeration have the
+// enumeration's type (6.19.3, 6.24.1), which no other package's
+// enumeration of the same name shares; two specializations of one
+// parameterized class are different types, two handles of one are the
+// same (8.25, 6.22.1).
 `define CHECK(what, ok) \
   if (!(ok)) begin \
     $display("FAIL %s", what); \
@@ -17,6 +21,10 @@
   end
 package sv_typeless_mailbox_pkg;
   typedef struct packed { logic [3:0] hi; logic [3:0] lo; } shared_t;
+endpackage
+
+package sv_typeless_mailbox_other;
+  typedef enum { P_RED, P_GREEN } color_t;
 endpackage
 
 module sv_typeless_mailbox;
@@ -28,6 +36,9 @@ module sv_typeless_mailbox;
     function new(int id);
       this.id = id;
     endfunction
+  endclass
+  class sized #(int W = 1);
+    bit [W-1:0] value;
   endclass
 
   mailbox box = new;
@@ -124,6 +135,41 @@ module sv_typeless_mailbox;
       box.put(sv_typeless_mailbox_pkg::shared_t'{4'h7, 4'h8});
       box.get(shared);
       `CHECK("qualified typed pattern message", shared == 8'h78)
+    end
+
+    // Enumeration literals and casts carry their enumeration.
+    begin
+      color_t color;
+      sv_typeless_mailbox_other::color_t other;
+      int got;
+      box.put(GREEN);
+      got = box.try_get(other);
+      `CHECK("literal not another package's enumeration", got < 0)
+      got = box.try_get(color);
+      `CHECK("literal of the enumeration", got > 0 && color == GREEN)
+      box.put(color_t'(2));
+      got = box.try_get(color);
+      `CHECK("cast to the enumeration", got > 0 && color == BLUE)
+      box.put(sv_typeless_mailbox_other::P_GREEN);
+      got = box.try_get(color);
+      `CHECK("package literal not the module's enumeration", got < 0)
+      got = box.try_get(other);
+      `CHECK("package literal of its enumeration",
+        got > 0 && other == sv_typeless_mailbox_other::P_GREEN)
+    end
+
+    // Specializations of one parameterized class.
+    begin
+      sized #(4) four = new;
+      sized #(4) four_again;
+      sized #(8) eight;
+      int got;
+      four.value = 4'hA;
+      box.put(four);
+      got = box.try_get(eight);
+      `CHECK("other specialization", got < 0)
+      got = box.try_get(four_again);
+      `CHECK("same specialization", got > 0 && four_again.value == 4'hA)
     end
 
     if (failures == 0) begin

@@ -6787,6 +6787,10 @@ private:
         procedural_continuous_assignments_by_target_;
     std::unordered_map<std::string, StringRegisterId> string_locals_;
     std::unordered_set<std::string> debug_local_names_;
+    // The process locals that have a debug local: a declaration in the
+    // named scopes enclosing it.
+    std::set<std::pair<std::uint32_t, std::vector<std::string>>>
+        debug_local_occurrences_;
     std::unordered_set<std::string> frame_local_names_;
     // Set while the path of `ea[i].triggered` is built for the element
     // `ea[i]`: the suffix names the event's `triggered` property, not a

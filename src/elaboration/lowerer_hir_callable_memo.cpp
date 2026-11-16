@@ -787,15 +787,8 @@ void Lowerer::replay_hir_callable_body(
         local.scope_path = callee_debug_scope_path(
             hir_callable_frames_[callable].debug_name);
         local.leaf = body.debug_names[name].name;
-        const auto existing = std::ranges::find(process_.debug_locals,
-            local.name, &DebugLocal::name);
-        if (existing == process_.debug_locals.end()) {
-            debug_slots.push_back(process_.debug_locals.size());
-            process_.debug_locals.push_back(std::move(local));
-        } else {
-            debug_slots.push_back(static_cast<std::size_t>(
-                existing - process_.debug_locals.begin()));
-        }
+        debug_slots.push_back(process_.debug_locals.size());
+        process_.debug_locals.push_back(std::move(local));
     }
     std::vector<std::size_t> frame_slots;
     for (auto& [name, local] : body.frame_locals) {

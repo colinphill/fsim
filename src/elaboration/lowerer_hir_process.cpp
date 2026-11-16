@@ -1816,7 +1816,12 @@ bool Lowerer::initialize_hir_declarations(
             runtime::simir::DebugFrameLocal local_frame;
             auto name = debug_name(declaration_id, input.name, local_frame);
             const bool first_debug_name = active_hir_callable_
-                || debug_local_names_.emplace(name).second;
+                || debug_local_occurrences_
+                       .emplace(declaration_id.value(), debug_scope_path())
+                       .second;
+            if (!active_hir_callable_) {
+                debug_local_names_.emplace(name);
+            }
             if (first_initialization && first_debug_name) {
                 if (active_hir_callable_) {
                     bind_hir_frame_local(*active_hir_callable_, declaration_id,
@@ -1976,7 +1981,12 @@ bool Lowerer::initialize_hir_declarations(
             auto name = debug_name(
                 declaration_id, declaration->vhdl->name, local_frame);
             const bool first_debug_name = active_hir_callable_
-                || debug_local_names_.emplace(name).second;
+                || debug_local_occurrences_
+                       .emplace(declaration_id.value(), debug_scope_path())
+                       .second;
+            if (!active_hir_callable_) {
+                debug_local_names_.emplace(name);
+            }
             if (first_initialization && first_debug_name) {
                 process_.debug_container_locals.push_back(
                     DebugContainerLocal {
@@ -2261,7 +2271,12 @@ bool Lowerer::initialize_hir_declarations(
             runtime::simir::DebugFrameLocal local_frame;
             auto name = debug_name(declaration_id, string_binding->name, local_frame);
             const bool first_debug_name = active_hir_callable_
-                || debug_local_names_.emplace(name).second;
+                || debug_local_occurrences_
+                       .emplace(declaration_id.value(), debug_scope_path())
+                       .second;
+            if (!active_hir_callable_) {
+                debug_local_names_.emplace(name);
+            }
             if (first_initialization && first_debug_name) {
                 if (active_hir_callable_ && declaration->systemverilog != nullptr) {
                     bind_hir_frame_local(*active_hir_callable_, declaration_id,
@@ -2878,14 +2893,16 @@ bool Lowerer::initialize_hir_declarations(
                 == semantic::ScopeRole::loop_parameters;
         runtime::simir::DebugFrameLocal local_frame;
         auto name = debug_name(declaration_id, binding->name, local_frame);
-        // A declaration initialized again (a fork's block item in a loop)
-        // keeps one debug local.
+        // A declaration initialized again in the same named scopes (a fork's
+        // block item in a loop) keeps one debug local; each call of a
+        // callable has its own.
         const bool first_debug_name = active_hir_callable_
-            ? std::ranges::none_of(process_.debug_locals,
-                  [&](const DebugLocal& existing) {
-                      return existing.name == name;
-                  })
-            : debug_local_names_.emplace(name).second;
+            || debug_local_occurrences_
+                   .emplace(declaration_id.value(), debug_scope_path())
+                   .second;
+        if (!active_hir_callable_) {
+            debug_local_names_.emplace(name);
+        }
         // The parameter of a `for` loop and a local of a VHDL function are no
         // debug locals; a running call's frame reads them from the
         // frame-local table (IEEE 1076-2019 14.6 a, b).
@@ -5417,6 +5434,7 @@ void Lowerer::reset_hir_process_state()
     }
     string_locals_.clear();
     debug_local_names_.clear();
+    debug_local_occurrences_.clear();
     frame_local_names_.clear();
     hir_call_frame_numbers_.clear();
     frame_local_simple_names_.clear();
