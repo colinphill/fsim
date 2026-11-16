@@ -39,14 +39,14 @@ void ApplicationTestFixture::test_artifact_phase_semantics()
 {
     install_governed_process_address_space_ceiling();
     const ScopedCurrentDirectory source_root { directory / "work" };
-    static_assert(app::kRuntimeStateSchema == 129);
-    static_assert(app::kSemanticStateSchema == 6);
-    static_assert(app::kDesignIrStateSchema == 15);
-    static_assert(app::kCompiledHirBundleSchema == 9);
-    static_assert(app::kSystemVerilogConstraintHirStateSchema == 35);
-    static_assert(app::kSystemVerilogCoverageStateSchema == 7);
+    static_assert(app::kRuntimeStateSchema == 130);
+    static_assert(app::kSemanticStateSchema == 7);
+    static_assert(app::kDesignIrStateSchema == 16);
+    static_assert(app::kCompiledHirBundleSchema == 10);
+    static_assert(app::kSystemVerilogConstraintHirStateSchema == 36);
+    static_assert(app::kSystemVerilogCoverageStateSchema == 8);
     static_assert(app::kSystemVerilogUvmStateSchema == 3);
-    static_assert(app::kVhdlHirStateSchema == 17);
+    static_assert(app::kVhdlHirStateSchema == 18);
     const auto copy_artifact_tree = [](
                                         const std::filesystem::path& source_root,
                                         const std::filesystem::path& destination) {
@@ -463,9 +463,9 @@ end architecture;
             return diagnostic.code == "FSIM-ART-0001"
                 && diagnostic.message
                 == "unsupported .fsimobj identity: found format 12, "
-                   "portable-unit schema 16, and compiled-HIR schema 9; "
+                   "portable-unit schema 16, and compiled-HIR schema 10; "
                    "required format 11, portable-unit schema 16, and "
-                   "compiled-HIR schema 9; regenerate .fsimobj with this "
+                   "compiled-HIR schema 10; regenerate .fsimobj with this "
                    "fsim build";
         }));
     output.str({ });
@@ -596,7 +596,7 @@ end architecture;
         [](const auto& diagnostic) {
             return diagnostic.code == "FSIM-ART-0013"
                 && diagnostic.message.find(
-                       "found schema 14; required schema 15")
+                       "found schema 15; required schema 16")
                     != std::string::npos
                 && diagnostic.message.find("regenerate .fsimdesign")
                     != std::string::npos;
@@ -611,7 +611,7 @@ end architecture;
         [](const auto& diagnostic) {
             return diagnostic.code == "FSIM-ART-0013"
                 && diagnostic.message.find(
-                       "found schema 3; required schema 15")
+                       "found schema 3; required schema 16")
                     != std::string::npos
                 && diagnostic.message.find("regenerate .fsimdesign")
                     != std::string::npos;

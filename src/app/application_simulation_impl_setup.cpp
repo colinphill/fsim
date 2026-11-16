@@ -1174,24 +1174,25 @@ Simulation::Impl::Impl(
         [this, invoke_source_with_notifications](
             const auto handle, const auto identity, const auto builtin,
             auto& actuals, auto& string_actuals, const auto names,
-            const auto directions, const bool virtual_dispatch,
+            const auto roles, const auto directions,
+            const bool virtual_dispatch,
             const bool randomize_no_properties,
             const auto actual_references) {
             return invoke_source_with_notifications([&] {
                 return invoke_source_function(handle, identity, builtin,
                     actuals,
-                    string_actuals, names, directions, virtual_dispatch,
+                    string_actuals, names, roles, directions, virtual_dispatch,
                     randomize_no_properties, actual_references);
             });
         },
         [this, invoke_source_with_notifications](
             const auto identity, auto& actuals, auto& string_actuals,
-            const auto names, const auto directions,
+            const auto names, const auto roles, const auto directions,
             const auto actual_references, const auto static_specialization) {
             return invoke_source_with_notifications([&] {
                 return invoke_source_static_function(identity,
                     static_specialization, actuals, string_actuals, names,
-                    directions, actual_references);
+                    roles, directions, actual_references);
             });
         },
         [this](const auto handle, const auto property) {
@@ -1723,6 +1724,7 @@ Simulation::Impl::Impl(
             std::vector<runtime::PackedLogic4>& actuals,
             std::vector<std::string>& string_actuals,
             const std::span<const std::string> names,
+            const std::span<const runtime::simir::CallActualRole> roles,
             const std::span<const std::uint8_t> directions,
             const std::span<const runtime::SystemVerilogConstraintTemplate>
                 inline_constraints,
@@ -1852,7 +1854,7 @@ Simulation::Impl::Impl(
                     : invoke_source_function(
                           handle, method, runtime::simir::ClassMethodHook::none,
                           actuals, string_actuals,
-                          names, directions, virtual_dispatch,
+                          names, roles, directions, virtual_dispatch,
                           randomize_no_properties, {}, report_process);
                 return result;
             });
@@ -1881,6 +1883,7 @@ Simulation::Impl::Impl(
             std::vector<runtime::PackedLogic4>& actuals,
             std::vector<std::string>& string_actuals,
             const std::span<const std::string> names,
+            const std::span<const runtime::simir::CallActualRole> roles,
             const std::span<const std::uint8_t> directions,
             const std::string_view static_specialization) {
             return invoke_source_with_notifications([&] {
@@ -1897,7 +1900,7 @@ Simulation::Impl::Impl(
                 }
                 return invoke_source_static_function(method,
                     static_specialization, actuals, string_actuals, names,
-                    directions, {}, report_process);
+                    roles, directions, {}, report_process);
             });
         });
     interpreter->set_coverage_sample_hook(

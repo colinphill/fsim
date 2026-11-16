@@ -444,6 +444,8 @@ Lowerer::HirVhdlAccessHeap* Lowerer::hir_vhdl_access_heap(
             objects_type.index_width = 32U;
             objects_type.two_state_indices = true;
             objects_type.element_nominal_type = designated.type_mark.spelling;
+            objects_type.element_builtin_nominal
+                = designated.type_mark.builtin_declaration;
             if (!profile->members.empty()) {
                 objects_type = profile->heap_type;
             }
@@ -1086,6 +1088,8 @@ Lowerer::HirVhdlAccessHeap* Lowerer::hir_vhdl_access_heap(
     objects_type.index_width = 32U;
     objects_type.two_state_indices = true;
     objects_type.element_nominal_type = designated.type_mark.spelling;
+    objects_type.element_builtin_nominal
+        = designated.type_mark.builtin_declaration;
     return insert_heap(std::move(objects_type), std::nullopt);
 }
 

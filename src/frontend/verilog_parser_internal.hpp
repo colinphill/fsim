@@ -8,6 +8,7 @@
 #include "fsim/frontend/source.hpp"
 #include "fsim/frontend/systemverilog_scalars.hpp"
 #include "fsim/frontend/token.hpp"
+#include "fsim/support/dpi_identity.hpp"
 #include "fsim/support/rare_vector.hpp"
 
 #include <array>
@@ -175,6 +176,20 @@ struct SvaNameScope {
   // The clocking events of the scope's clocking blocks, by block name
   // (SystemVerilogClockingBlock::event_tokens).
   std::unordered_map<std::string, std::vector<Token>> clocking_events;
+};
+
+// One generated item of a unit's DPI export service: the source text the
+// parser reads back, and the role the import or callable it declares gets
+// (IEEE 1800-2023 35.5.3). The argument and result imports of an export also
+// say whether it has a result and how its formals flow.
+struct DpiGeneratedItem {
+  std::string text;
+  support::DpiHiddenImportRole import_role {
+      support::DpiHiddenImportRole::none };
+  bool export_result {};
+  std::vector<support::DpiExportFlow> export_flows;
+  support::DpiExportCallableRole callable_role {
+      support::DpiExportCallableRole::none };
 };
 
 class VerilogParser final : private detail::ParserBase {
@@ -1320,7 +1335,13 @@ class VerilogParser final : private detail::ParserBase {
       std::string_view tag,
       std::string_view callable,
       std::string_view end_callable,
-      std::string& text);
+      std::vector<DpiGeneratedItem>& items);
+  // Parses the generated items of an export service into `unit`, and gives
+  // the imports and callables each declares its typed role.
+  void parse_generated_dpi_items(
+      const std::vector<DpiGeneratedItem>& items,
+      const SourceSpan& span,
+      DesignUnit& unit);
   // The exports declared in a generate block, which export the callables of
   // that block (IEEE 1800-2023 35.7): the block gets its own export service.
   void finish_generate_block_dpi_exports(

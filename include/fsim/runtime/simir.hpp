@@ -11,6 +11,7 @@
 #include "fsim/runtime/simir_shared_vector.hpp"
 #include "fsim/runtime/sva_storage.hpp"
 #include "fsim/runtime/systemverilog_scalar.hpp"
+#include "fsim/support/dpi_identity.hpp"
 #include "fsim/support/generated_object_origin.hpp"
 #include "fsim/support/rare_vector.hpp"
 #include "fsim/support/sva_marker.hpp"
@@ -1780,11 +1781,6 @@ struct ProcessStatusQuery {
     RegisterId destination { };
     RegisterId source { };
 };
-/// Query whether a process has finished normally or was killed.
-struct ProcessCompleted {
-    RegisterId destination { };
-    RegisterId source { };
-};
 /// Suspend the current process until the target reaches a terminal state.
 struct ProcessAwait {
     RegisterId source { };
@@ -2265,6 +2261,7 @@ struct ExecutionPoint {
     // A frame point's DebugPoint::callee_declaration and callee_receiver.
     std::uint32_t callee_declaration { };
     std::string callee_receiver;
+    bool callee_receiver_instance { };
     // The forking thread of a thread_start point; none for a process.
     std::optional<ProcessId> parent_process;
 

@@ -1059,12 +1059,7 @@ endmodule
     const auto* lane1 = find_specialization(
         *elaborated.design, "configured_top.lanes[1].generated");
     assert(top && left && right && lane0 && lane1);
-    assert(std::ranges::any_of(
-        top->parameter_identity_values,
-        [](const auto& value) {
-            return value.first == "__configuration"
-                && value.second.starts_with("sv-config-v1;");
-        }));
+    assert(top->configuration_identity.starts_with("sv-config-v1;"));
     assert(left->library == "fast");
     assert(right->library == "slow");
     assert(lane0->library == "slow");
@@ -1082,12 +1077,7 @@ endmodule
     assert(
         parameter_identity(*left, "P")
         != parameter_identity(*right, "P"));
-    assert(std::ranges::any_of(
-        left->parameter_identity_values,
-        [](const auto& value) {
-            return value.first == "__configuration"
-                && value.second.starts_with("sv-config-v1;");
-        }));
+    assert(left->configuration_identity.starts_with("sv-config-v1;"));
     assert(std::ranges::any_of(
         right->parameter_values,
         [](const auto& value) {

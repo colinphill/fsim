@@ -361,6 +361,7 @@ include/fsim/elaboration/coverage_points.hpp
 include/fsim/elaboration/dpi_c_type.hpp
 include/fsim/elaboration/elaborator.hpp
 include/fsim/elaboration/sdf_net_delay_split.hpp
+include/fsim/elaboration/storage_key.hpp
 include/fsim/elaboration/verilog_coverage_points.hpp
 include/fsim/elaboration/vhdl_coverage_points.hpp
 include/fsim/elaboration/vital_wire_sources.hpp
@@ -568,6 +569,7 @@ include/fsim/support/atomic_shared_ptr.hpp
 include/fsim/support/bounded_bytes.hpp
 include/fsim/support/ctype_whitespace.hpp
 include/fsim/support/design_library.hpp
+include/fsim/support/dpi_identity.hpp
 include/fsim/support/environment.hpp
 include/fsim/support/expression_marker.hpp
 include/fsim/support/generated_object_origin.hpp
@@ -579,6 +581,7 @@ include/fsim/support/parallel_for.hpp
 include/fsim/support/path.hpp
 include/fsim/support/payload_checksum.hpp
 include/fsim/support/phase_profile.hpp
+include/fsim/support/process_method.hpp
 include/fsim/support/rare_vector.hpp
 include/fsim/support/sha256.hpp
 include/fsim/support/sqlite_database.hpp
@@ -589,6 +592,7 @@ include/fsim/support/teardown.hpp
 include/fsim/support/uvm_api_methods.hpp
 include/fsim/support/uvm_role.hpp
 include/fsim/support/vhdl_fixed_bounds.hpp
+include/fsim/support/vhdl_formal_conversion.hpp
 include/fsim/support/vhdl_identifier.hpp
 include/fsim/support/vhdl_standard_enumeration.hpp
 include/fsim/support/vhdl_time.hpp

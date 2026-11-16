@@ -1710,7 +1710,7 @@ void Simulation::Impl::add_constraint_state_variables(
                     : nullptr;
                 // A typedef from another scope keeps only its spelling; it
                 // resolves when the spelling names one typedef.
-                if (definition == nullptr && !element.target.spelling.empty()) {
+                if (definition == nullptr && element.names_type()) {
                     for (const auto& candidate :
                         built.systemverilog_hir.types()) {
                         if (candidate.name != element.target.spelling) {
@@ -2013,7 +2013,7 @@ void Simulation::Impl::run_randomize_callback(
         // The callbacks run in the process that called randomize()
         // (18.6.1), whose random number stream they draw from (18.14).
         (void)class_hir_execution.invoke_function(*method, target,
-            actuals, string_actuals, { }, { }, { }, calling_process);
+            actuals, string_actuals, { }, { }, { }, { }, calling_process);
     } catch (const std::exception& error) {
         throw std::runtime_error { std::string { name } + " of class '"
             + owner + "' failed in randomize(): " + error.what() };
@@ -2231,8 +2231,8 @@ runtime::PackedLogic4 Simulation::Impl::invoke_lowered_randomize_step(
     }
     auto result = class_execution.invoke_source_randomization_mode(
         handle, random_mode, target, actuals);
-    // ITEM46-LEFT: the whole-object target of rand_mode / constraint_mode
-    if (random_mode && target == "@object" && !actuals.empty()) {
+    // A call with no target sets the mode of the whole object.
+    if (random_mode && target.empty() && !actuals.empty()) {
         for (auto* const state : static_states) {
             state->enabled = actuals.front().low_word().aval != 0;
         }

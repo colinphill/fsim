@@ -81,7 +81,7 @@ using FileOperationGroup = OperationGroup<FileOpen, FileClose, FileWriteLiteral,
 
 using SchedulingOperationGroup = OperationGroup<WaitFor, WaitRegion, WaitOn, WaitPla, WaitOrder, EventTriggered, EventAlias, WaitSensitivity, WaitForever, Yield, Fork,
     ForkEnd, WaitFork, DisableFork, DisableBlock, ProcessSelf,
-    ProcessStatusQuery, ProcessCompleted, ProcessAwait,
+    ProcessStatusQuery, ProcessAwait,
     ProcessKill, ProcessSuspend, ProcessResume,
     ProcessGetRandState, ProcessSetRandState, ProcessSrandom,
     MailboxCreate, MailboxPut, MailboxGet,
@@ -333,7 +333,7 @@ static_assert(
         + std::variant_size_v<ControlOperationGroup::Storage>
         + std::variant_size_v<OutputOperationGroup::Storage>
         + std::variant_size_v<ClassOperationGroup::Storage>
-    == 206);
+    == 205);
 
 template <typename Alternative>
 [[nodiscard]] Alternative* operation_get_if(Operation* operation) noexcept

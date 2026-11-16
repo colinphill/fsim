@@ -47,8 +47,8 @@ public:
         const std::optional<VariableReference>>;
     // Receiver, method identity, the built-in method of an object the call
     // is (none for a method of the class), actuals, string actuals, actual
-    // names, directions, virtual dispatch, `randomize(null)` (IEEE 1800-2023
-    // 18.11.1), and the actuals' variable references.
+    // names, actual roles, directions, virtual dispatch, `randomize(null)`
+    // (IEEE 1800-2023 18.11.1), and the actuals' variable references.
     using FunctionInvoker = std::function<runtime::PackedLogic4(
         runtime::SystemVerilogClassHandle,
         std::string_view,
@@ -56,6 +56,7 @@ public:
         std::vector<runtime::PackedLogic4>&,
         std::vector<std::string>&,
         std::span<const std::string>,
+        std::span<const runtime::simir::CallActualRole>,
         std::span<const std::uint8_t>,
         bool,
         bool,
@@ -67,6 +68,7 @@ public:
         std::vector<runtime::PackedLogic4>&,
         std::vector<std::string>&,
         std::span<const std::string>,
+        std::span<const runtime::simir::CallActualRole>,
         std::span<const std::uint8_t>,
         ActualReferences,
         std::string_view)>;
@@ -420,6 +422,7 @@ public:
         std::vector<runtime::PackedLogic4>& actuals,
         std::vector<std::string>& string_actuals,
         std::span<const std::string> actual_names,
+        std::span<const runtime::simir::CallActualRole> actual_roles,
         std::span<const std::uint8_t> actual_directions,
         ActualReferences actual_references = {},
         std::optional<runtime::simir::ProcessId> report_process
@@ -831,6 +834,7 @@ private:
         std::vector<runtime::PackedLogic4>& actuals,
         std::vector<std::string>& string_actuals,
         std::span<const std::string> actual_names,
+        std::span<const runtime::simir::CallActualRole> actual_roles,
         std::span<const std::uint8_t> actual_directions,
         std::span<const std::optional<VariableReference>> actual_references,
         std::vector<std::size_t>* actual_formals);
@@ -840,6 +844,7 @@ private:
         std::vector<runtime::PackedLogic4>& actuals,
         std::vector<std::string>& string_actuals,
         std::span<const std::string> actual_names,
+        std::span<const runtime::simir::CallActualRole> actual_roles,
         std::span<const std::uint8_t> actual_directions,
         std::span<const std::optional<VariableReference>> actual_references,
         std::vector<std::size_t>* actual_formals);

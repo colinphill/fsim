@@ -465,6 +465,7 @@ struct Simulation::Impl {
         std::vector<runtime::PackedLogic4>& actuals,
         std::vector<std::string>& string_actuals,
         const std::span<const std::string> actual_names,
+        const std::span<const runtime::simir::CallActualRole> actual_roles,
         const std::span<const std::uint8_t> actual_directions,
         const bool virtual_dispatch,
         bool randomize_no_properties,
@@ -481,6 +482,7 @@ struct Simulation::Impl {
         std::vector<runtime::PackedLogic4>& actuals,
         std::vector<std::string>& string_actuals,
         const std::span<const std::string> actual_names,
+        const std::span<const runtime::simir::CallActualRole> actual_roles,
         const std::span<const std::uint8_t> actual_directions,
         application_detail::SystemVerilogClassHirExecution::ActualReferences
             actual_references = {},
@@ -776,7 +778,8 @@ struct Simulation::Impl {
         support::UvmRole method,
         std::vector<runtime::PackedLogic4>& actuals,
         std::vector<std::string>& string_actuals,
-        std::span<const std::string> actual_names);
+        std::span<const std::string> actual_names,
+        std::span<const runtime::simir::CallActualRole> actual_roles);
     /// The one object of each UVM library singleton class, allocated on the
     /// first `get()` (`uvm_root::get()` and its siblings, `@uvm-singleton:`).
     std::map<std::string, runtime::SystemVerilogClassHandle> uvm_singletons;

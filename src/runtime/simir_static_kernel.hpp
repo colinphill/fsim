@@ -1064,7 +1064,6 @@ template <typename OperationAt, typename Types, typename NineValued = std::nullp
                 // 18.13.5; the planner's process_handle group).
                 || std::is_same_v<T, ProcessSelf>
                 || std::is_same_v<T, ProcessStatusQuery>
-                || std::is_same_v<T, ProcessCompleted>
                 || std::is_same_v<T, ProcessAwait>
                 || std::is_same_v<T, ProcessKill>
                 || std::is_same_v<T, ProcessSuspend>
@@ -1755,7 +1754,8 @@ template <typename ViewOf, typename Ignored, typename Excluded, typename Resolve
             continue;
         }
         if (!program.static_sensitivity().empty() || event_driven(id)
-            || program.name().find(".port_actual_") != std::string::npos) {
+            || program.origin()
+                == support::GeneratedObjectOrigin::port_input_adapter) {
             for (const auto& region : program.driver_regions()) {
                 if (region.signal < settling.size()) {
                     settling[region.signal] = true;

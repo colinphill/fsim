@@ -37,8 +37,7 @@ runtime::PackedLogic4 invoke_systemverilog_randomization_mode(
   const auto identity = target;
   // An object-level call sets every random variable or constraint and has
   // no value (IEEE 1800-2017 18.8, 18.9).
-  // ITEM46-LEFT: payload of the @builtin-rand-mode: and @builtin-constraint-mode: identities; converts with that family
-  if (identity == "@object") {
+  if (identity.empty()) {
     const auto value = actuals.empty()
         ? runtime::Logic4Word{}
         : actuals.front().low_word();

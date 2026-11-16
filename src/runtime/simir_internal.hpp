@@ -2336,7 +2336,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
     // The identity guards against an operation replaced at the same
     // address; a null site is an identity the identity hook serves.
     struct DpiSite {
-        std::string identity;
+        DpiCallIdentity identity;
         const void* site { };
     };
     DpiSiteHooks dpi_site_hooks;
@@ -3527,9 +3527,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
     // One imported DPI function call (35.5): through the bound site, else
     // (the reference interpreter) through the call operation's site bound on
     // its first run when the service binds it, else the identity hook.
-    // `identity` is the operation's without the DPI prefix.
     [[nodiscard]] PackedLogic4 call_dpi_import(
-        const ClassStaticMethodCall&, std::string_view identity,
+        const ClassStaticMethodCall&,
         std::vector<PackedLogic4>& actuals,
         std::vector<std::string>& strings,
         const DpiBoundSite* bound = nullptr);

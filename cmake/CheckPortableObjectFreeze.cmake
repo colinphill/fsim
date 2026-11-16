@@ -96,9 +96,9 @@ fsim_require_portable_object_tokens("${FSIM_OBJECT_HEADER}"
   "through a private temporary file and one")
 fsim_require_portable_object_tokens("${FSIM_LIBRARY_HEADER}"
   "kPortableSchemaVersion = 16"
-  "kCompiledHirSchemaVersion = 9")
+  "kCompiledHirSchemaVersion = 10")
 fsim_require_portable_object_tokens("${FSIM_SCHEMA_HEADER}"
-  "kCompiledHirBundleSchema = 9")
+  "kCompiledHirBundleSchema = 10")
 fsim_require_portable_object_tokens("${FSIM_BUNDLE_HEADER}"
   "serialize_compiled_hir_bundle("
   "deserialize_compiled_hir_bundle(")
@@ -134,7 +134,7 @@ fsim_require_portable_object_tokens("${FSIM_OBJECT_TEST}"
   "kCodeCoverageArtifactDiagnostic"
   "stale-coverage"
   "kPortableSchemaVersion == 16U"
-  "kCompiledHirSchemaVersion == 9U"
+  "kCompiledHirSchemaVersion == 10U"
   "corrupt-magic"
   "stale-format"
   "future-format"

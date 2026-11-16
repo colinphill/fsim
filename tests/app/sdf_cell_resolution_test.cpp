@@ -86,8 +86,8 @@ fsim::elaboration::ElaboratedDesign make_design()
     };
     auto configured = specialization(8U, "vhdl:work.selected_configuration",
         "configured", Language::Vhdl2008);
-    configured.parameter_identity_values.emplace_back("__configuration",
-        "vhdl-configuration-v2;library=work;name=selected_configuration;entity=configured_top;architecture=rtl");
+    configured.configuration_identity = std::string {
+        "vhdl-configuration-v2;library=work;name=selected_configuration;entity=configured_top;architecture=rtl" };
     state.specializations.push_back(std::move(configured));
     SystemCInstanceInfo native_root;
     native_root.id = 0U;

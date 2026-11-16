@@ -2,6 +2,7 @@
 #pragma once
 
 #include "fsim/elaboration/coverage_inventory.hpp"
+#include "fsim/elaboration/storage_key.hpp"
 #include "fsim/frontend/design.hpp"
 #include "fsim/runtime/simir.hpp"
 #include "fsim/runtime/simir_driver_inventory.hpp"
@@ -259,7 +260,13 @@ struct PackedTypeMetadata {
     std::optional<frontend::IntegerRange> integer_base_range;
     std::uint8_t vhdl_integer_storage_width { };
     std::string nominal_type;
+    bool builtin_nominal { };
+    // The index of the HIR VHDL type definition this type was materialized
+    // from when `nominal_type` is derived from the HIR rather than from a
+    // source declaration; unset otherwise.
+    std::optional<std::uint32_t> hir_type;
     std::string vhdl_type_declaration;
+    bool builtin_declaration { };
     std::string vhdl_resolution_function;
     std::vector<std::string> enumeration_literals;
     std::optional<frontend::EnumerationRange> enumeration_range;
@@ -486,22 +493,6 @@ struct UserSystemTask {
     bool is_signed { };
 };
 
-/// Identity prefix, after the DPI function prefix, of a user system task call
-/// boundary. The full identity is
-/// `$vpi:<name>|<scope>|<file>|<line>|<column>`.
-inline constexpr std::string_view user_system_call_identity_prefix {
-    "$vpi:" };
-
-/// Identity prefix, after the DPI function prefix, of a call of a foreign
-/// VHDL subprogram's VHPI execution function. The full identity is
-/// `$vhpi:<library>\t<model>\t<name>\t<declaration>\t<scope>\t<width>`, and
-/// each actual name is `<formal>\t<declaration>`. A standard direct
-/// binding (IEEE 1076-2019 20.2.4.3) adds `\t=<execution function>`: its
-/// library is the object library path ("null" for a null specifier) and its
-/// model the subprogram designator.
-inline constexpr std::string_view vhdl_foreign_call_identity_prefix {
-    "$vhpi:" };
-
 /// Suffix of the name of the placeholder process of a foreign VHDL
 /// architecture's instance, after the instance path (IEEE 1076-2019 20.4).
 inline constexpr std::string_view vhdl_foreign_architecture_process_suffix {
@@ -602,6 +593,10 @@ struct SignalInfo {
     std::vector<PackedMemberMetadata> packed_members;
     std::optional<frontend::IntegerRange> integer_range;
     std::string nominal_type;
+    bool builtin_nominal { };
+    // The HIR VHDL type definition `nominal_type` was derived from (see
+    // PackedTypeMetadata::hir_type).
+    std::optional<std::uint32_t> hir_type;
     std::vector<std::string> enumeration_literals;
     std::optional<frontend::EnumerationRange> enumeration_range;
     bool is_port { };
@@ -1089,6 +1084,16 @@ struct SpecializationInfo {
     // metadata. Empty entries fall back to parameter_values.
     std::vector<std::pair<std::string, std::string>>
         parameter_identity_values;
+    // The identity of the configuration that controls this instance's
+    // binding (IEEE 1800-2023 33.7, IEEE 1076-2019 3.4); empty without one.
+    std::string configuration_identity;
+    // The canonical image of each unpacked array parameter, by parameter
+    // name (IEEE 1800-2023 6.24.3), and of each specparam, by name (IEEE
+    // 1800-2023 32.2). Neither list holds a parameter of
+    // `parameter_identity_values`.
+    std::vector<std::pair<std::string, std::string>>
+        aggregate_parameter_identities;
+    std::vector<std::pair<std::string, std::string>> specparam_identities;
     // Direct provenance for processes lowered from language HIR. Synthetic
     // concurrent, boundary, timing, and foreign processes intentionally do
     // not appear here; callers must not infer semantic ownership by position
@@ -1187,6 +1192,35 @@ struct SpecializationInfo {
     // (37.28 type parameter, vpiTypespec).
     std::vector<VpiTypeParameterInfo> vpi_type_parameters;
 };
+
+/// The name/identity pairs coverage derives an instance's identity from: the
+/// identities of the instance, else its parameter values. The aggregate and
+/// specparam identities and the configuration identity join the list under a
+/// key made of the name, a separator and the kind's letter, so a kind never
+/// collides with another; the key is only hashed.
+[[nodiscard]] inline std::vector<std::pair<std::string, std::string>>
+coverage_parameter_identities(const SpecializationInfo& specialization)
+{
+    auto result = specialization.parameter_identity_values;
+    const auto add = [&](const std::string& name, const std::string& identity,
+                         const char kind) {
+        result.emplace_back(name + '\x1f' + kind, identity);
+    };
+    for (const auto& [name, identity] :
+        specialization.aggregate_parameter_identities) {
+        add(name, identity, 'a');
+    }
+    for (const auto& [name, identity] : specialization.specparam_identities) {
+        add(name, identity, 's');
+    }
+    if (!specialization.configuration_identity.empty()) {
+        add(std::string { }, specialization.configuration_identity, 'c');
+    }
+    if (result.empty()) {
+        return specialization.parameter_values;
+    }
+    return result;
+}
 
 using UdpTableId = std::uint32_t;
 
@@ -2056,6 +2090,17 @@ private:
     std::unordered_map<
         std::string, runtime::simir::ContainerObjectId>
         container_by_name_;
+    // Construction drafts: the storage of the static variables of callables
+    // by instance path and declaration (StorageKey::callable_static), kept
+    // apart from the name maps because no user name finds them.
+    std::unordered_map<StorageKey, runtime::simir::SignalId, StorageKeyHash>
+        static_signal_by_key_;
+    std::unordered_map<
+        StorageKey, runtime::simir::StringObjectId, StorageKeyHash>
+        static_string_by_key_;
+    std::unordered_map<
+        StorageKey, runtime::simir::ContainerObjectId, StorageKeyHash>
+        static_container_by_key_;
     // Construction draft: the packed dimensions (left and right bounds,
     // outermost first) of a container object's packed elements, so a select
     // within an element named hierarchically finds its bits (IEEE 1800-2017

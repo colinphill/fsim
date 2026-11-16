@@ -247,6 +247,9 @@ struct TypeReference {
     TypeId target;
     SourceSpanId source;
     std::string spelling;
+    // A VHDL type mark naming a predefined type the tool supplies; the
+    // spelling is then its plain name (frontend Type::builtin_declaration).
+    bool builtin_declaration { };
 
     [[nodiscard]] bool resolved() const noexcept { return target.valid(); }
 

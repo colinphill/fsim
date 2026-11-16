@@ -1279,6 +1279,7 @@ bool gate_driver_stem_matches(const std::string& name, const std::string_view fu
         return false;
     }
     const auto rest = std::string_view { name }.substr(full_name.size());
+    // ITEM46-LEFT: gate driver processes are named after the instance label plus a slot suffix and matched by that name; a typed form needs the primitive instance and driver slot on the statement, the HIR statement and the process record
     return rest.empty() || rest == "$one" || rest.starts_with("$output");
 }
 

@@ -1215,20 +1215,12 @@ public:
                 const auto* const call = runtime::simir::operation_get_if<
                     runtime::simir::ClassStaticMethodCall>(
                     &program.operations[index]);
-                if (call == nullptr) {
+                if (call == nullptr
+                    || call->call_kind
+                        != runtime::simir::StaticCallKind::user_system_task) {
                     continue;
                 }
-                auto identity = std::string_view { call->method_identity };
-                if (!identity.starts_with(
-                        runtime::simir::systemverilog_dpi_function_prefix)) {
-                    continue;
-                }
-                identity.remove_prefix(
-                    runtime::simir::systemverilog_dpi_function_prefix.size());
-                if (identity.starts_with(
-                        elaboration::user_system_call_identity_prefix)) {
-                    (void)call_site(identity, call->actual_names);
-                }
+                (void)call_site(call->method_identity, call->actual_names);
             }
         }
         for (std::size_t site = 0U; site < calls_.size(); ++site) {
@@ -9906,9 +9898,8 @@ private:
         if (found != call_by_identity_.end()) {
             return found->second;
         }
-        // `$vpi:<name>|<scope>|<file>|<line>|<column>`
-        auto rest = identity.substr(
-            elaboration::user_system_call_identity_prefix.size());
+        // `<name>|<scope>|<file>|<line>|<column>`
+        auto rest = identity;
         CallSite site;
         const auto take = [&rest] {
             const auto separator = rest.find('|');
@@ -12895,10 +12886,8 @@ private:
         auto instance_path = std::string { design.path(
             design.instances().at(specialization.instance.value()).path) };
         // The receiver as the lowerer resolved it (Lowerer::record_vpi_callee).
-        // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
-        constexpr std::string_view absolute { "@instance:" };
-        if (frame.callee_receiver.starts_with(absolute)) {
-            instance_path = frame.callee_receiver.substr(absolute.size());
+        if (frame.callee_receiver_instance) {
+            instance_path = frame.callee_receiver;
         } else if (!frame.callee_receiver.empty()) {
             instance_path += "." + frame.callee_receiver;
         }
@@ -17476,9 +17465,14 @@ private:
             const auto object = info(handle);
             // Names starting `$` or `@` are the elaborator's own storage,
             // not design objects.
-            // ITEM31-LEFT: the VPI registry's object info has no flag for
-            // the `$process_N` and `$assertion` display names it holds, so
-            // the `$` test stays until the descriptor and info carry one.
+            // ITEM31-LEFT: the objects this test hides are the registry's
+            // `$process_N`, `$driver_N` and `$assertion` objects and the
+            // `$unit` package, but also any design object whose name starts
+            // with `$` (the elaborator's own storage signals carry no
+            // recorded origin). A flag on the descriptor and info set only
+            // where the first kinds are made would not select the same
+            // set, so the name test stays until every such object is
+            // typed at its producer.
             if (!object
                 || ((object->name.starts_with('$')
                         && object->kind != SystemVerilogVpiObjectKind::ClockingBlock)
@@ -24015,33 +24009,39 @@ std::unique_ptr<VpiForeignService> attach_vpi_modules(
         });
     }
     simulation.set_systemverilog_dpi_function_hook(
-        [live, dpi](const std::string_view identity,
+        [live, dpi](const runtime::simir::ClassStaticMethodCall& call,
             std::vector<PackedLogic4>& actuals,
             std::vector<std::string>& strings,
             const std::span<const std::string> names,
+            const std::span<const runtime::simir::CallActualRole>,
             const std::span<const std::uint8_t>) {
-            if (identity.starts_with(
-                    elaboration::user_system_call_identity_prefix)) {
-                return live->call(identity, actuals, names);
+            if (call.call_kind
+                == runtime::simir::StaticCallKind::user_system_task) {
+                return live->call(call.method_identity, actuals, names);
             }
-            if (dpi == nullptr) {
+            if (dpi == nullptr
+                || call.call_kind != runtime::simir::StaticCallKind::dpi_import) {
                 throw std::runtime_error {
-                    "SystemVerilog DPI function '" + std::string { identity }
+                    "SystemVerilog DPI function '"
+                    + (call.call_kind
+                                == runtime::simir::StaticCallKind::dpi_import
+                            ? call.dpi.c_name
+                            : call.method_identity)
                     + "' has no loaded implementation"
                 };
             }
             // A context import may call the VPI (IEEE 1800-2023 35.5.3).
-            if (DpiForeignService::context_import(identity)) {
+            if (call.dpi.context) {
                 CallScope scope { *live };
-                return dpi->call(identity, actuals, strings);
+                return dpi->call(call.dpi, actuals, strings);
             }
-            return dpi->call(identity, actuals, strings);
+            return dpi->call(call.dpi, actuals, strings);
         });
     if (dpi != nullptr) {
         // The bound call sites of the imports (see the hook above): a
         // context import runs with the caller's VPI context.
         simulation.set_systemverilog_dpi_site_hooks({
-            [dpi](const std::string_view identity) {
+            [dpi](const runtime::simir::DpiCallIdentity& identity) {
                 return dpi->bind(identity);
             },
             [live, dpi](const void* const site,

@@ -144,7 +144,7 @@ module fork_processes;
     disable fork;
     handle = process::self();
     result = handle.status();
-    result = handle.completed();
+    result = handle.status() == process::FINISHED;
     handle.await();
     handle.kill();
     handle.suspend();

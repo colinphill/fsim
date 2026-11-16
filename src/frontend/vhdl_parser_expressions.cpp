@@ -1053,6 +1053,7 @@ Expression VhdlParser::parse_primary()
         subtype.call_result_domain = external_type.domain;
         subtype.call_result_signed = external_type.is_signed;
         subtype.nominal_type = external_type.nominal_type;
+        subtype.builtin_nominal = external_type.builtin_nominal;
         auto external = marked_expression(
             support::ExpressionMarker::vhdl_external, { },
             { Expression { ExpressionKind::Identifier, target,

@@ -13,6 +13,7 @@ namespace fsim::app {
     std::vector<runtime::PackedLogic4>& actuals,
     std::vector<std::string>& string_actuals,
     const std::span<const std::string> actual_names,
+    const std::span<const runtime::simir::CallActualRole> actual_roles,
     const std::span<const std::uint8_t> actual_directions,
     const bool virtual_dispatch,
     const bool randomize_no_properties,
@@ -94,7 +95,8 @@ namespace fsim::app {
     // run on an object without the state its constructor makes.
     if (library_method && is_uvm_root_handle(handle)) {
         if (auto result = invoke_uvm_root_method(
-                method_name, actuals, string_actuals, actual_names)) {
+                method_name, actuals, string_actuals, actual_names,
+                actual_roles)) {
             return std::move(*result);
         }
     }
@@ -114,8 +116,8 @@ namespace fsim::app {
     // 13.1.3); the library constructors that would set them do not run.
     if ((method_name == UvmRole::get_name
             || method_name == UvmRole::get_full_name)
-        // ITEM46-LEFT: the trailing string actual of a call is marked by a reserved actual name that travels through every class hook, the VPI and VHPI call models and the class executor; a typed result flag on the call operations and the hook signatures is needed
-        && !actual_names.empty() && actual_names.back() == "@result-string"
+        && runtime::simir::last_call_actual_is(actual_roles,
+            actual_names.size(), runtime::simir::CallActualRole::string_result)
         && !string_actuals.empty()
         && (uvm_components.contains(handle) || uvm_objects.contains(handle))) {
         string_actuals.back() = uvm_components.contains(handle)
@@ -351,7 +353,8 @@ namespace fsim::app {
         }
         return class_hir_execution.invoke_function(
             *method, handle, actuals, string_actuals, actual_names,
-            actual_directions, actual_references, report_process);
+            actual_roles, actual_directions, actual_references,
+            report_process);
     }
     throw std::invalid_argument {
         "compiled HIR class method '" + std::string { canonical_identity }
@@ -384,6 +387,7 @@ Simulation::Impl::invoke_source_static_function(
     std::vector<runtime::PackedLogic4>& actuals,
     std::vector<std::string>& string_actuals,
     const std::span<const std::string> actual_names,
+    const std::span<const runtime::simir::CallActualRole> actual_roles,
     const std::span<const std::uint8_t> actual_directions,
     const application_detail::SystemVerilogClassHirExecution::ActualReferences
         actual_references,
@@ -565,9 +569,9 @@ Simulation::Impl::invoke_source_static_function(
         // A lowered create names the classes whose constructor chains the
         // process runs after this call.
         std::optional<std::string> lowered;
-        if (!actual_names.empty()
-            // ITEM46-LEFT: a reserved actual name marks the list actual of a lowered registry create; needs a typed flag on ClassStaticMethodCall and the static hook, like the result-string marker
-            && actual_names.back() == "@lowered-constructors"
+        if (runtime::simir::last_call_actual_is(actual_roles,
+                actual_names.size(),
+                runtime::simir::CallActualRole::lowered_constructors)
             && string_actuals.size() == actual_names.size()) {
             lowered = string_actuals.back();
         }
@@ -970,7 +974,7 @@ Simulation::Impl::invoke_source_static_function(
                                   : std::string { };
         }
         return class_hir_execution.invoke_function(
-            *method, 0, actuals, string_actuals, actual_names,
+            *method, 0, actuals, string_actuals, actual_names, actual_roles,
             actual_directions, actual_references, report_process, running);
     }
     throw std::invalid_argument {

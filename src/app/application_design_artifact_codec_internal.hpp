@@ -10,6 +10,7 @@
 #include "../runtime/simir_operation_list_sharing.hpp"
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/semantic/hierarchy_path.hpp"
+#include "fsim/support/dpi_identity.hpp"
 #include "fsim/support/generated_object_origin.hpp"
 #include "fsim/support/sha256.hpp"
 #include "fsim/support/stack_growth.hpp"
@@ -368,7 +369,7 @@ namespace codec_detail {
         } else if constexpr (
             std::same_as<T, support::GeneratedObjectOrigin>) {
             return value >= support::GeneratedObjectOrigin::none
-                && value <= support::GeneratedObjectOrigin::string_change;
+                && value <= support::GeneratedObjectOrigin::port_output_adapter;
         } else if constexpr (std::same_as<T, semantic::CompiledReferenceKind>) {
             return value >= semantic::CompiledReferenceKind::package
                 && value <= semantic::CompiledReferenceKind::context;
@@ -1226,6 +1227,27 @@ namespace codec_detail {
         } else if constexpr (std::same_as<T, fsim::runtime::simir::ClassMethodHook>) {
             return value >= fsim::runtime::simir::ClassMethodHook::none
                 && value <= fsim::runtime::simir::ClassMethodHook::last;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::StaticCallKind>) {
+            return value >= fsim::runtime::simir::StaticCallKind::class_method
+                && value <= fsim::runtime::simir::StaticCallKind::last;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::DpiCallPhase>) {
+            return value >= fsim::runtime::simir::DpiCallPhase::call
+                && value <= fsim::runtime::simir::DpiCallPhase::last;
+        } else if constexpr (std::same_as<T, fsim::support::DpiHiddenImportRole>) {
+            return value >= fsim::support::DpiHiddenImportRole::none
+                && value <= fsim::support::DpiHiddenImportRole::last;
+        } else if constexpr (std::same_as<T, fsim::support::DpiExportFlow>) {
+            return value >= fsim::support::DpiExportFlow::input
+                && value <= fsim::support::DpiExportFlow::last;
+        } else if constexpr (std::same_as<T, fsim::support::DpiExportCallableRole>) {
+            return value >= fsim::support::DpiExportCallableRole::none
+                && value <= fsim::support::DpiExportCallableRole::last;
+        } else if constexpr (std::same_as<T, fsim::support::VhdlFormalConversion>) {
+            return value >= fsim::support::VhdlFormalConversion::none
+                && value <= fsim::support::VhdlFormalConversion::last;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::CallActualRole>) {
+            return value >= fsim::runtime::simir::CallActualRole::argument
+                && value <= fsim::runtime::simir::CallActualRole::last;
         } else if constexpr (std::same_as<T, fsim::runtime::simir::ClassConstruction>) {
             return value >= fsim::runtime::simir::ClassConstruction::run_constructor
                 && value <= fsim::runtime::simir::ClassConstruction::last;
@@ -1353,7 +1375,7 @@ namespace codec_detail {
     {
         // Every member is listed: one added to the record and not here
         // fails the build (the binding names each member).
-        [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11, m12, m13, m14, m15, m16, m17, m18, m19, m20, m21, m22, m23] = value;
+        [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11, m12, m13, m14, m15, m16, m17, m18, m19, m20, m21, m22, m23, m24, m25, m26] = value;
         return std::tie(
             value.domain, value.spelling, value.systemverilog_scalar,
             value.systemverilog_net_type,
@@ -1362,7 +1384,8 @@ namespace codec_detail {
             value.is_signed, value.named_type, value.named_type_span,
             value.integer_range, value.integer_base_range,
             value.vhdl_integer_storage_width, value.nominal_type,
-            value.vhdl_type_declaration, value.vhdl_resolution_function,
+            value.builtin_nominal, value.hir_type, value.vhdl_type_declaration,
+            value.builtin_declaration, value.vhdl_resolution_function,
             value.enumeration_literals, value.enumeration_range,
             value.enumeration_base_range,
             value.vhdl_array, value.vhdl_access, value.vhdl_physical,
@@ -1644,9 +1667,10 @@ namespace codec_detail {
     {
         // Every member is listed: one added to the record and not here
         // fails the build (the binding names each member).
-        [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5] = value;
+        [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5, m6] = value;
         return std::tie(value.kind, value.source, value.scope, value.callee,
-            value.callee_declaration, value.callee_receiver);
+            value.callee_declaration, value.callee_receiver,
+            value.callee_receiver_instance);
     }
 
     template <typename T>
@@ -1763,6 +1787,7 @@ namespace codec_detail {
                 static_cast<std::int64_t>(right)));
         }
         hasher.add_string(value.element_nominal_type);
+        hasher.add_bool(value.element_builtin_nominal);
         hasher.add_bool(value.element_nominal_type_id.has_value());
         hasher.add_u64(value.element_nominal_type_id.value_or(0U));
         hasher.add_bool(value.vhdl_shaped);

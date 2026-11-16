@@ -699,7 +699,7 @@ struct ForeignModel final : Handle {
 };
 
 // The fields of an identity of a foreign subprogram call, separated by
-// tabs (see elaboration::vhdl_foreign_call_identity_prefix).
+// tabs (see runtime::simir::StaticCallKind::vhdl_foreign).
 [[nodiscard]] std::vector<std::string_view> split_identity(
     std::string_view identity)
 {
@@ -728,23 +728,12 @@ void visit_foreign_calls(const Simulation& simulation, Visit&& visit)
             const auto* const call = runtime::simir::operation_get_if<
                 runtime::simir::ClassStaticMethodCall>(
                 &program.operations[index]);
-            if (call == nullptr) {
+            if (call == nullptr
+                || call->call_kind
+                    != runtime::simir::StaticCallKind::vhdl_foreign) {
                 continue;
             }
-            auto identity = std::string_view { call->method_identity };
-            if (!identity.starts_with(
-                    runtime::simir::systemverilog_dpi_function_prefix)) {
-                continue;
-            }
-            identity.remove_prefix(
-                runtime::simir::systemverilog_dpi_function_prefix.size());
-            if (!identity.starts_with(
-                    elaboration::vhdl_foreign_call_identity_prefix)) {
-                continue;
-            }
-            identity.remove_prefix(
-                elaboration::vhdl_foreign_call_identity_prefix.size());
-            if (!visit(identity)) {
+            if (!visit(std::string_view { call->method_identity })) {
                 return;
             }
         }
@@ -1348,26 +1337,29 @@ public:
         // through the foreign call boundary; other calls pass on.
         simulation_.set_systemverilog_dpi_function_hook(
             [this, next = simulation_.systemverilog_dpi_function_hook()](
-                const std::string_view identity,
+                const runtime::simir::ClassStaticMethodCall& call,
                 std::vector<PackedLogic4>& actuals,
                 std::vector<std::string>& strings,
                 const std::span<const std::string> names,
+                const std::span<const runtime::simir::CallActualRole> roles,
                 const std::span<const std::uint8_t> directions) {
-                if (identity.starts_with(
-                        elaboration::vhdl_foreign_call_identity_prefix)) {
-                    return foreign_call(identity.substr(
-                            elaboration::vhdl_foreign_call_identity_prefix
-                                .size()),
-                        actuals, strings, names, directions);
+                if (call.call_kind
+                    == runtime::simir::StaticCallKind::vhdl_foreign) {
+                    return foreign_call(
+                        std::string_view { call.method_identity },
+                        actuals, strings, names, roles, directions);
                 }
                 if (!next) {
                     throw std::runtime_error {
                         "SystemVerilog DPI function '"
-                        + std::string { identity }
+                        + (call.call_kind
+                                    == runtime::simir::StaticCallKind::dpi_import
+                                ? call.dpi.c_name
+                                : call.method_identity)
                         + "' has no loaded implementation"
                     };
                 }
-                return next(identity, actuals, strings, names, directions);
+                return next(call, actuals, strings, names, roles, directions);
             });
         safe_point_token_ = simulation_.add_safe_point_hook(
             [this](runtime::Scheduler& scheduler,
@@ -11727,8 +11719,7 @@ private:
                     type = type_of_declaration(*declaration);
                 }
                 if (type == nullptr) {
-                    type = standard_type(
-                        vhdl::without_builtin_prefix(mark.spelling));
+                    type = standard_type(mark.spelling);
                 }
                 return type == nullptr ? nullptr : to_handle(type);
             }
@@ -14821,8 +14812,7 @@ private:
         }
         if (mark == nullptr) {
             // A predefined type may be bound without its declaration.
-            auto spelling
-                = vhdl::without_builtin_prefix(subtype.type_mark.spelling);
+            std::string_view spelling = subtype.type_mark.spelling;
             const bool numeric_bit = lower(spelling).find("numeric_bit.") != std::string::npos;
             if (const auto dot = spelling.rfind('.');
                 dot != std::string_view::npos) {
@@ -16399,7 +16389,7 @@ private:
             if (const auto* const type = subtype_object(subtype, nullptr)) {
                 return base_type_mark(*type);
             }
-            return upper(vhdl::without_builtin_prefix(subtype.type_mark.spelling));
+            return upper(subtype.type_mark.spelling);
         };
         if (object.kind == vhpiEnumLiteralK || object.kind == vhpiCharLiteralK) {
             if (object.type == nullptr) {
@@ -19439,10 +19429,11 @@ private:
     // `<library>\t<model>\t<name>\t<declaration>\t<scope>\t<result width>`,
     // followed by `\t=<execution function>` for a direct binding; each name
     // is `<formal>\t<declaration>`. A STRING result comes back in the
-    // trailing string actual named `@result-string`.
+    // trailing string actual whose role is `string_result`.
     [[nodiscard]] PackedLogic4 foreign_call(const std::string_view identity,
         std::vector<PackedLogic4>& actuals, std::vector<std::string>& strings,
         const std::span<const std::string> names,
+        const std::span<const runtime::simir::CallActualRole> roles,
         const std::span<const std::uint8_t> directions)
     {
         const auto fields = split_identity(identity);
@@ -19494,9 +19485,8 @@ private:
             && callable->callable->return_type) {
             call->type = subtype_object(*callable->callable->return_type, nullptr);
         }
-        const bool text_result = !names.empty()
-            // ITEM46-LEFT: the trailing string actual of a call is marked by a reserved actual name that travels through every class hook, the VPI and VHPI call models and the class executor; a typed result flag on the call operations and the hook signatures is needed
-            && names.back() == "@result-string";
+        const bool text_result = runtime::simir::last_call_actual_is(
+            roles, names.size(), runtime::simir::CallActualRole::string_result);
         const auto formals = names.size() - (text_result ? 1U : 0U);
         std::size_t expected_width { };
         if (fields.size() > 5U) {

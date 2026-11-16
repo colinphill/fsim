@@ -4166,8 +4166,7 @@ bool Lowerer::lower_hir_vhdl_file_statement(
                         return name == "time" || name == "delay_length";
                     };
                     if (is_time_name(vhdl_simple_name(
-                            semantic::vhdl::without_builtin_prefix(
-                                subtype->type_mark.spelling)))) {
+                            subtype->type_mark.spelling))) {
                         return true;
                     }
                     const auto* base = semantic::vhdl_base_type_definition(
@@ -4580,8 +4579,8 @@ bool Lowerer::lower_hir_vhdl_file_statement(
                     = vhdl_expression != nullptr
                     && vhdl_expression->kind
                         == semantic::vhdl::ExpressionKind::integer_literal
-                    // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
-                    && vhdl_expression->nominal_type == "@builtin:time"
+                    && vhdl_expression->builtin_nominal
+                    && vhdl_expression->nominal_type == "time"
                     && vhdl_expression->folded
                     && vhdl_expression->referenced_name
                     && !vhdl_expression->referenced_name->selected

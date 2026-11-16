@@ -1182,8 +1182,7 @@ struct FstTraceType {
         };
     }
     if (language == semantic::Language::vhdl
-        // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
-        && (signal.nominal_type == "@builtin:time"
+        && ((signal.builtin_nominal && signal.nominal_type == "time")
             || (signal.nominal_type.empty() && signal.type_name == "time"))) {
         metadata.kind = runtime::FstExtendedTypeKind::VhdlTime;
         metadata.language = runtime::FstTypeLanguage::Vhdl;

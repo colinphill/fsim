@@ -2019,7 +2019,7 @@ private:
             return;
         qualify_member(type.target.spelling, *unit, type.target.source);
         semantic::CompiledDesignResolver resolver { design_, unit->id };
-        if (!type.target.target.valid() && !type.target.spelling.empty()
+        if (!type.target.target.valid() && type.names_type()
             && !sv::names_builtin_type(type)) {
             const auto resolved = resolver.resolve_systemverilog_named_type(type.target.spelling, scope, false,
                 type.source_order);

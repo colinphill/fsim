@@ -32,9 +32,10 @@ namespace {
             type.integer_range = frontend::IntegerRange {
                 0, std::numeric_limits<std::int64_t>::max(), false
             };
-            // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
-            type.nominal_type = "@builtin:time";
+            type.nominal_type = "time";
+            type.builtin_nominal = true;
             type.vhdl_type_declaration = type.nominal_type;
+            type.builtin_declaration = true;
         }
         return type;
     }
@@ -77,9 +78,10 @@ namespace {
     {
         auto type = frontend::vhdl_predefined_integer_type(
             standard, spelling);
-        // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
-        type.nominal_type = "@builtin:integer";
+        type.nominal_type = "integer";
+        type.builtin_nominal = true;
         type.vhdl_type_declaration = type.nominal_type;
+        type.builtin_declaration = true;
         type.named_type_span = span;
         return type;
     }
@@ -298,8 +300,8 @@ namespace {
                 auto vector = vital_array_type(
                     name, "natural", count, logic, unit.span, natural_base);
                 vector.nominal_type.clear();
-                // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
-                vector.vhdl_type_declaration = "@builtin:std_logic_vector";
+                vector.vhdl_type_declaration = "std_logic_vector";
+                vector.builtin_declaration = true;
                 vector.packed_range = frontend::PackedRange {
                     static_cast<std::int64_t>(count - 1U), 0, true
                 };

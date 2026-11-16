@@ -116,6 +116,7 @@ constexpr std::uint32_t body_case = 4U;
 [[nodiscard]] bool type_implicit(const sv::TypeReference& type)
 {
     return type.builtin == support::SystemVerilogBuiltinType::none
+        && !type.type_of
         && type.target.spelling.find_first_not_of(" \t") == std::string::npos;
 }
 

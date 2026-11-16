@@ -589,17 +589,23 @@ end architecture;
         const auto* call = fsim::runtime::simir::operation_get_if<
             fsim::runtime::simir::ClassStaticMethodCall>(&operation);
         return call != nullptr
-            && call->method_identity == "@dpi:dpi_identity_c#i:i";
+            && call->call_kind
+                == fsim::runtime::simir::StaticCallKind::dpi_import
+            && call->method_identity.empty()
+            && call->dpi.c_name == "dpi_identity_c"
+            && call->dpi.arguments == "i";
     }));
     auto interpreter = elaborated.design->create_interpreter();
     bool invoked_dpi { };
     interpreter->set_dpi_function_call_hook(
-        [&](const std::string_view identity,
+        [&](const fsim::runtime::simir::ClassStaticMethodCall& call,
             std::vector<fsim::runtime::PackedLogic4>& actuals,
             std::vector<std::string>& strings,
             const std::span<const std::string> names,
+            const std::span<const fsim::runtime::simir::CallActualRole> roles,
             const std::span<const std::uint8_t> directions) {
-            assert(identity == "dpi_identity_c#i:i");
+            assert(call.dpi.c_name == "dpi_identity_c");
+            assert(roles.empty());
             assert(actuals.size() == 1U && strings.size() == 1U);
             assert(names.size() == 1U && names.front() == "value");
             assert(directions.size() == 1U);

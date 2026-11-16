@@ -413,26 +413,15 @@ Capture run_once(
           .unit
       == std::string{"vhdl:work.configuration_leaf("}
              + (fast_wrapper ? "fast)" : "rtl)"));
-  assert(std::ranges::any_of(
-      specialization(
+  assert(specialization(
           *project,
           "runtime_configuration.direct_configuration_child")
-          .parameter_identity_values,
-      [](const auto& item) {
-        return item.first == "__configuration"
-            && item.second.find("wrapper_configuration")
-                != std::string::npos;
-      }));
+          .configuration_identity.find("wrapper_configuration")
+      != std::string::npos);
   const auto& root =
       specialization(*project, "runtime_configuration");
-  assert(std::ranges::any_of(
-      root.parameter_identity_values,
-      [](const auto& item) {
-        return item.first == "__configuration"
-            && item.second.find(
-                   "vhdl-configuration-v2")
-                != std::string::npos;
-      }));
+  assert(root.configuration_identity.find("vhdl-configuration-v2")
+      != std::string::npos);
   assert(fsim::test::has_source_dependency(
       root.source_dependencies,
       config.source_sets.front().files[4]));

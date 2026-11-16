@@ -777,7 +777,8 @@ std::optional<runtime::PackedLogic4> Simulation::Impl::invoke_uvm_root_method(
     const support::UvmRole method,
     std::vector<runtime::PackedLogic4>& actuals,
     std::vector<std::string>& string_actuals,
-    const std::span<const std::string> actual_names)
+    const std::span<const std::string> actual_names,
+    const std::span<const runtime::simir::CallActualRole> actual_roles)
 {
     using Handle = runtime::SystemVerilogClassHandle;
     // The root's children are the top components of every root, in the name
@@ -793,9 +794,10 @@ std::optional<runtime::PackedLogic4> Simulation::Impl::invoke_uvm_root_method(
     const auto int_value = [](const bool value) {
         return runtime::PackedLogic4::from_aval_bval(32, value ? 1U : 0U, 0);
     };
-    const bool string_result = !actual_names.empty()
-        // ITEM46-LEFT: the trailing string actual of a call is marked by a reserved actual name that travels through every class hook, the VPI and VHPI call models and the class executor; a typed result flag on the call operations and the hook signatures is needed
-        && actual_names.back() == "@result-string" && !string_actuals.empty();
+    const bool string_result = runtime::simir::last_call_actual_is(
+            actual_roles, actual_names.size(),
+            runtime::simir::CallActualRole::string_result)
+        && !string_actuals.empty();
     const auto name_argument = [&]() -> std::string {
         return string_actuals.empty() ? std::string { } : string_actuals.front();
     };

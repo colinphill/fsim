@@ -261,20 +261,16 @@ void Lowerer::set_hir_code_coverage_active(const bool active) noexcept
 }
 
 void Lowerer::record_vpi_callee(const bool statement, const std::uint32_t id,
-    const semantic::DeclarationId declaration, const std::string_view receiver,
-    const semantic::OriginId dpi)
+    const semantic::DeclarationId declaration,
+    const InterfaceReceiver& receiver, const semantic::OriginId dpi)
 {
     if (hierarchy_.empty() || (!declaration.valid() && !dpi.valid())) {
         return;
     }
     // The instance path as hir_callee_unit resolves the receiver.
-    // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
-    constexpr std::string_view instance_prefix { "@instance:" };
     std::string instance;
     if (!receiver.empty()) {
-        instance = receiver.starts_with(instance_prefix)
-            ? std::string { receiver.substr(instance_prefix.size()) }
-            : hierarchy_ + "." + std::string { receiver };
+        instance = receiver.path_from(hierarchy_);
     }
     design_.record_vpi_callee(hierarchy_,
         VpiCalleeInfo {
@@ -687,7 +683,7 @@ void Lowerer::emit_debug_point(
     const frontend::SourceSpan& span,
     const std::string_view callee,
     const semantic::DeclarationId callee_declaration,
-    const std::string_view callee_receiver)
+    const InterfaceReceiver& callee_receiver)
 {
     DebugPoint point {
         kind,
@@ -699,7 +695,8 @@ void Lowerer::emit_debug_point(
         point.callee_declaration = callee_declaration.value() + 1U;
     }
     if (!callee_receiver.empty()) {
-        point.callee_receiver = InternedString { callee_receiver };
+        point.callee_receiver = InternedString { callee_receiver.text };
+        point.callee_receiver_instance = callee_receiver.is_instance_path();
     }
     process_.operations.emplace_back(std::move(point));
 }
@@ -4114,7 +4111,11 @@ std::optional<Process> Lowerer::lower_hir_input_actual(
     description.wildcard_sensitivity = true;
     description.require_wildcard_dependency = false;
     description.always_comb_or_latch = true;
-    return lower_hir_process_body(description, language, hierarchy);
+    auto process = lower_hir_process_body(description, language, hierarchy);
+    if (process) {
+        process->origin = support::GeneratedObjectOrigin::port_input_adapter;
+    }
+    return process;
 }
 
 std::optional<Process> Lowerer::lower_hir_elaboration_string(
@@ -4493,11 +4494,10 @@ Lowerer::lower_hir_vhdl_formal_conversion(
     const auto expression = value
         ? specialized_hir_unit_->find_expression(*value)
         : std::nullopt;
-    constexpr std::string_view implicit_prefix { "fsim__formal_conversion_" };
     // The effective side of an inout formal reads its actual, through the
     // actual part's function when there is one (IEEE 1076-2008 6.5.7.1).
-    const bool effective = input.label.starts_with(implicit_prefix)
-        && input.label.ends_with("$in");
+    const bool effective = input.formal_conversion
+        == support::VhdlFormalConversion::effective;
     if (!expression || expression->vhdl == nullptr
         || (!effective
             && (expression->vhdl->kind
@@ -4518,7 +4518,7 @@ Lowerer::lower_hir_vhdl_formal_conversion(
     if (!operand || operand->vhdl == nullptr
         || (!effective
             && operand->vhdl->kind != semantic::vhdl::ExpressionKind::name)
-        || !input.label.starts_with(implicit_prefix)
+        || input.formal_conversion == support::VhdlFormalConversion::none
         || (target_kind != semantic::vhdl::ExpressionKind::name
             && (effective
                 || (target_kind != semantic::vhdl::ExpressionKind::index
@@ -4671,7 +4671,11 @@ std::optional<Process> Lowerer::lower_hir_output_actual(
     description.wildcard_sensitivity = true;
     description.require_wildcard_dependency = false;
     description.always_comb_or_latch = true;
-    return lower_hir_process_body(description, language, hierarchy);
+    auto process = lower_hir_process_body(description, language, hierarchy);
+    if (process) {
+        process->origin = support::GeneratedObjectOrigin::port_output_adapter;
+    }
+    return process;
 }
 
 bool Lowerer::lower_hir_output_actual_write(

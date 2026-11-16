@@ -70,7 +70,10 @@ bool same_packed_type_metadata(
         || left.vhdl_integer_storage_width
             != right.vhdl_integer_storage_width
         || left.nominal_type != right.nominal_type
+        || left.builtin_nominal != right.builtin_nominal
+        || left.hir_type != right.hir_type
         || left.vhdl_type_declaration != right.vhdl_type_declaration
+        || left.builtin_declaration != right.builtin_declaration
         || left.vhdl_resolution_function != right.vhdl_resolution_function
         || left.enumeration_literals != right.enumeration_literals
         || !same_optional_range(
@@ -148,6 +151,8 @@ bool same_concurrent_signal_layout(
     if (left.width != right.width
         || (!interchangeable && left.type_name != right.type_name)
         || left.nominal_type != right.nominal_type
+        || left.builtin_nominal != right.builtin_nominal
+        || left.hir_type != right.hir_type
         || left.source_domain != right.source_domain
         || left.resolution != right.resolution
         || left.is_signed != right.is_signed

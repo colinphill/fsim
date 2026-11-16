@@ -3329,12 +3329,9 @@ std::optional<TypeId> CompiledDesignResolver::resolve_vhdl_named_type(
     }
 
     const auto separator = spelling.find_last_of(".:");
-    auto qualifier = separator == std::string_view::npos
+    const auto qualifier = separator == std::string_view::npos
         ? std::string_view { }
         : spelling.substr(0U, separator);
-    if (spelling.starts_with("vhdl-hir-type:")) {
-        qualifier = { };
-    }
 
     const Scope* owner = owner_scope
         ? find_scope(*design_, *owner_scope)
@@ -3635,7 +3632,6 @@ CompiledDesignResolver::resolve_vhdl_type_identity(
     if (!owner_scope || !resolutions_memoizable()) {
         return compute_vhdl_type_identity(spelling, owner_scope);
     }
-    spelling = vhdl::without_builtin_prefix(spelling);
     // A type name resolves alike in every iteration of a generate body.
     auto* const family = effective_->iteration_family_memo();
     auto& memo = family != nullptr ? *family : effective_->resolution_memo();
@@ -3680,7 +3676,6 @@ CompiledDesignResolver::compute_vhdl_type_identity(
             vhdl::BuiltinTypeIdentity::none,
             CompiledVhdlStandardScalarIdentity::none };
     }
-    spelling = vhdl::without_builtin_prefix(spelling);
     if (const auto type = resolve_vhdl_named_type(spelling, owner_scope)) {
         return { CompiledResolutionStatus::unique, type,
             vhdl::BuiltinTypeIdentity::none,
@@ -3840,7 +3835,6 @@ CompiledDesignResolver::resolve_vhdl_intrinsic_enumeration(
 {
     using Intrinsic = support::VhdlIntrinsicEnumeration;
     using Scalar = CompiledVhdlStandardScalarIdentity;
-    spelling = vhdl::without_builtin_prefix(spelling);
     if (design_ == nullptr || spelling.empty()) {
         return std::nullopt;
     }
@@ -3950,7 +3944,7 @@ CompiledDesignResolver::effective_systemverilog_type(
         if (record.form != sv::DeclarationForm::type_parameter
             && nominal_type) {
             result->target.target = *nominal_type;
-            if (result->target.spelling.empty()) {
+            if (!result->names_type()) {
                 result->target.spelling = record.name;
             }
         }
@@ -4047,7 +4041,7 @@ CompiledDesignResolver::effective_systemverilog_type(
             }
             return selected;
         }
-        if (reference.target.spelling.empty()
+        if (!reference.names_type()
             || sv::names_builtin_type(reference)) {
             return std::nullopt;
         }
@@ -4189,7 +4183,7 @@ CompiledDesignResolver::systemverilog_type_parameter_scoped_typedef(
     const auto owner = effective_systemverilog_type(qualifier, use_scope);
     if (!owner
         || (owner->class_identity.empty()
-            && owner->target.spelling.empty())) {
+            && !owner->names_type())) {
         return std::nullopt;
     }
     // A class type actual bound before class resolution keeps only its
@@ -4781,7 +4775,6 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
             auto spelling = std::string_view {
                 result.type_mark.spelling
             };
-            spelling = vhdl::without_builtin_prefix(spelling);
             const auto resolved = CompiledDesignResolver {
                 *design_, selected_unit_, effective_, active
             }.resolve_vhdl_type_identity(spelling, subtype_scope);
@@ -4800,7 +4793,6 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
             auto type_name = std::string_view {
                 result.type_mark.spelling
             };
-            type_name = vhdl::without_builtin_prefix(type_name);
             if (type_name.empty()
                 || type_name.find_first_of(".:") != std::string_view::npos) {
                 return;
@@ -5421,7 +5413,6 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
             || *declaration_id != *paired_declaration_id) {
             const auto builtin_spelling = [](const vhdl::Name& name) {
                 auto spelling = vhdl_spelling(name);
-                spelling = vhdl::without_builtin_prefix(spelling);
                 return spelling;
             };
             const auto is_builtin_std_ulogic = [&](const vhdl::Name& name) {
@@ -5990,8 +5981,7 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
         const auto builtin_array = effective.builtin_type
                 != vhdl::BuiltinTypeIdentity::none
             ? vhdl::builtin_type_name(effective.builtin_type)
-            : simple_vhdl_name(
-                  vhdl::without_builtin_prefix(effective.type_mark.spelling));
+            : simple_vhdl_name(effective.type_mark.spelling);
         const auto builtin_element = [&]() -> std::string_view {
             for (const auto& [array, element] :
                 std::initializer_list<std::pair<std::string_view,
@@ -6513,9 +6503,7 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
                             std::string_view { "u_float" } },
                         [&](const std::string_view name) {
                             return same_vhdl_identifier(
-                                vhdl::without_builtin_prefix(
-                                    effective->type_mark.spelling),
-                                name);
+                                effective->type_mark.spelling, name);
                         }))) {
                     compiler_owned_mark = effective->type_mark;
                     compiler_owned_provided = effective->provided_type;
@@ -6649,7 +6637,6 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
             }
             const auto unresolved_predefined_character = [&](
                 std::string_view spelling, const ScopeId scope) {
-                spelling = vhdl::without_builtin_prefix(spelling);
                 if (spelling.empty()
                     || !same_vhdl_identifier(
                         simple_vhdl_name(spelling), "character")) {
@@ -7447,7 +7434,6 @@ CompiledDesignResolver::effective_vhdl_constant_object_subtype(
             auto spelling = std::string_view {
                 dimension.index_subtype.spelling
             };
-            spelling = vhdl::without_builtin_prefix(spelling);
             const auto resolved = resolve_vhdl_named_type(
                 spelling, array_scope);
             if (resolved) {
@@ -8275,7 +8261,7 @@ CompiledDesignResolver::bind_vhdl_generics(
             || actual->type_mark.target.valid()
             || actual->builtin_type != vhdl::BuiltinTypeIdentity::none
             || actual->type_mark.spelling.empty()
-            || actual->type_mark.spelling.starts_with(vhdl::builtin_prefix)
+            || actual->type_mark.builtin_declaration
             || !use_scope.valid()) {
             continue;
         }
@@ -9499,7 +9485,7 @@ bool CompiledDesignResolver::vhdl_denotes_provided_package_member(
     // The last part of the name is `member` only if the spelling ends with
     // it after a '.' or at the start, so most rows of a provided-member
     // table are rejected before the name is split.
-    const auto name = vhdl::without_builtin_prefix(spelling);
+    const auto name = spelling;
     if (name.size() < member.size()
         || !support::equal_ignoring_ascii_case(
             name.substr(name.size() - member.size()), member)
@@ -9784,7 +9770,6 @@ bool CompiledDesignResolver::vhdl_standard_package_name_visible(
 bool CompiledDesignResolver::vhdl_builtin_type_visible(
     std::string_view spelling, const ScopeId use_scope) const
 {
-    spelling = vhdl::without_builtin_prefix(spelling);
     vhdl::Name name;
     name.spelling = spelling;
     name.canonical = spelling;

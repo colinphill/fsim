@@ -1388,11 +1388,8 @@ private:
             && type.class_identity.empty()
             && type.interface_type.empty()
             && !type.container_form) {
-            target_identity = type.four_state
-                // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
-                ? "@builtin:four-state-integral"
-                // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
-                : "@builtin:two-state-integral";
+            // The state of the type is part of the key below.
+            target_identity.clear();
         }
         identity << "type:" << encoded(target_identity) << ':';
         if (type.value_form) {
@@ -1749,7 +1746,7 @@ private:
                 return type(std::move(aliased), environment, owner, source);
             }
         }
-        if (!input.target.target.valid() && !input.target.spelling.empty()
+        if (!input.target.target.valid() && input.names_type()
             && !input.executable_width && !input.packed_range
             && input.class_identity.empty() && !input.container_form
             && input.value_form != TypeForm::class_handle
@@ -2110,7 +2107,7 @@ private:
                 // conversion name one specialization (IEEE 1800-2017
                 // 6.20.2, 8.25).
                 if (parameter.type
-                    && (!parameter.type->target.spelling.empty()
+                    && (parameter.type->names_type()
                         || parameter.type->packed_range)) {
                     const auto* literal = resolved->expression
                         ? expression_record(*resolved->expression)

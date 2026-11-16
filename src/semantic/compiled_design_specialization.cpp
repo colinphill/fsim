@@ -636,7 +636,6 @@ bool vhdl_is_predefined_standard_string(
                 declaration->vhdl->scope, "std", "standard");
         }
 
-        spelling = vhdl::without_builtin_prefix(spelling);
         if (support::equal_ignoring_ascii_case(spelling, "std.standard.string")
             || support::equal_ignoring_ascii_case(
                 spelling, "standard.string")) {
@@ -3649,7 +3648,6 @@ private:
             auto spelling = std::string_view {
                 effective->type_mark.spelling
             };
-            spelling = vhdl::without_builtin_prefix(spelling);
             if (!support::equal_ignoring_ascii_case(spelling, "boolean")
                 && !support::equal_ignoring_ascii_case(
                     spelling, "std.standard.boolean")) {
@@ -5885,7 +5883,6 @@ private:
             auto spelling = std::string_view {
                 effective->type_mark.spelling
             };
-            spelling = vhdl::without_builtin_prefix(spelling);
             // BIT_VECTOR is declared by implicitly visible STD.STANDARD.
             // Do not ask the use-clause visibility resolver to prove that
             // implicit visibility; accept only the exact predefined spelling
@@ -7832,8 +7829,8 @@ private:
                     const auto view = unit_.find_expression(operand);
                     if (!view || view->vhdl == nullptr
                         || (!view->vhdl->nominal_type.empty()
-                            // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
-                            && view->vhdl->nominal_type != "@builtin:integer")) {
+                            && !(view->vhdl->builtin_nominal
+                                && view->vhdl->nominal_type == "integer"))) {
                         return false;
                     }
                     if (view->vhdl->kind
@@ -9726,7 +9723,7 @@ private:
             }
         }
         if (!ambiguous_type_parameter && !type_parameter_id
-            && !type->target.spelling.empty()
+            && type->names_type()
             && !sv::names_builtin_type(*type)) {
             const auto named = resolver.resolve_systemverilog_named_type(
                                            type->target.spelling,
@@ -13359,12 +13356,8 @@ private:
                     auto spelling = std::string_view {
                         subtype->type_mark.spelling
                     };
-                    constexpr auto builtin_prefix = vhdl::builtin_prefix;
                     const bool compiler_builtin
-                        = spelling.starts_with(builtin_prefix);
-                    if (compiler_builtin) {
-                        spelling.remove_prefix(builtin_prefix.size());
-                    }
+                        = subtype->type_mark.builtin_declaration;
                     if (!support::equal_ignoring_ascii_case(
                             spelling, "bit_vector")
                         && !support::equal_ignoring_ascii_case(

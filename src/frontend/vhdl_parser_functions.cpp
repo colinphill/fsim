@@ -915,6 +915,7 @@ FunctionDeclaration VhdlParser::parse_vhdl_function(
     result_subtype.vhdl_type_declaration =
         vhdl_declaration_identity(
             *result_identifier, function.vhdl_return_identifier);
+    result_subtype.builtin_declaration = false;
     function.type_aliases.push_back(TypeAliasDeclaration {
         function.vhdl_return_identifier,
         std::move(result_subtype),

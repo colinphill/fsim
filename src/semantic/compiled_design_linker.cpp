@@ -2256,7 +2256,7 @@ void resolve_linked_systemverilog_types(CompiledDesign& design)
     };
     const auto resolve = [&](const sv::TypeReference& type,
                              const ScopeId scope) -> std::optional<TypeId> {
-        if (type.target.resolved() || type.target.spelling.empty()
+        if (type.target.resolved() || !type.names_type()
             || !type.class_identity.empty() || !scope_valid(scope)
             || type.implicit || !type.named) {
             return std::nullopt;

@@ -498,7 +498,7 @@ void HierarchyBuilder::compose_vhdl_output_routes()
             || standard == "2000" || standard == "2002"
             || standard == "2008" || standard == "2019";
     };
-    // An output adapter (`port_result_N`) that only copies parts of its
+    // An output adapter (of a port association) that only copies parts of its
     // formals into parts of its actuals; any other operation keeps it.
     std::map<std::size_t, std::vector<std::pair<SignalId, Route>>> adapters;
     std::unordered_map<SignalId, std::vector<std::size_t>> writers;
@@ -511,14 +511,14 @@ void HierarchyBuilder::compose_vhdl_output_routes()
                 list.push_back(index);
             }
         }
-        const std::string_view name { process.name() };
-        const auto leaf = name.substr(name.find_last_of('.') + 1U);
-        if (leaf.starts_with("port_actual_")) {
+        if (process.origin()
+            == support::GeneratedObjectOrigin::port_input_adapter) {
             for (const auto& region : process.driver_regions()) {
                 input_targets.insert(region.signal);
             }
         }
-        if (!leaf.starts_with("port_result_")
+        if (process.origin()
+                != support::GeneratedObjectOrigin::port_output_adapter
             || !vhdl_standard(process.language_standard())
             || process.scheduling_domain()
                 != ProcessSchedulingDomain::generic) {

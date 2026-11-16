@@ -252,39 +252,35 @@ namespace {
 
     // The library.cell name of the SystemVerilog configuration that controls
     // an instance's binding (IEEE 1800-2023 33.7 vpiConfig). The elaboration
-    // records the controlling configuration as the "__configuration"
-    // identity "sv-config-v1;<len>:<library>;<len>:<name>;..."; a nested
-    // `use config` rule replaces it for the instances beneath.
+    // records the controlling configuration as the identity
+    // "sv-config-v1;<len>:<library>;<len>:<name>;..."; a nested `use config`
+    // rule replaces it for the instances beneath.
     [[nodiscard]] std::string vpi_configuration_name(
         const elaboration::SpecializationInfo& recorded)
     {
         constexpr std::string_view prefix = "sv-config-v1;";
-        for (const auto& [name, identity] : recorded.parameter_identity_values) {
-            if (name != "__configuration"
-                || !std::string_view { identity }.starts_with(prefix)) {
-                continue;
-            }
-            std::string_view rest { identity };
-            rest.remove_prefix(prefix.size());
-            std::array<std::string, 2> fields;
-            for (auto& field : fields) {
-                const auto colon = rest.find(':');
-                if (colon == std::string_view::npos) {
-                    return { };
-                }
-                std::size_t length { };
-                const auto parsed = std::from_chars(
-                    rest.data(), rest.data() + colon, length);
-                if (parsed.ec != std::errc { }
-                    || rest.size() < colon + 1U + length + 1U) {
-                    return { };
-                }
-                field = std::string { rest.substr(colon + 1U, length) };
-                rest.remove_prefix(colon + 1U + length + 1U);
-            }
-            return fields[0].empty() ? fields[1] : fields[0] + '.' + fields[1];
+        std::string_view rest { recorded.configuration_identity };
+        if (!rest.starts_with(prefix)) {
+            return { };
         }
-        return { };
+        rest.remove_prefix(prefix.size());
+        std::array<std::string, 2> fields;
+        for (auto& field : fields) {
+            const auto colon = rest.find(':');
+            if (colon == std::string_view::npos) {
+                return { };
+            }
+            std::size_t length { };
+            const auto parsed = std::from_chars(
+                rest.data(), rest.data() + colon, length);
+            if (parsed.ec != std::errc { }
+                || rest.size() < colon + 1U + length + 1U) {
+                return { };
+            }
+            field = std::string { rest.substr(colon + 1U, length) };
+            rest.remove_prefix(colon + 1U + length + 1U);
+        }
+        return fields[0].empty() ? fields[1] : fields[0] + '.' + fields[1];
     }
 
     [[nodiscard]] runtime::SystemVerilogVpiObjectKind vpi_instance_kind(

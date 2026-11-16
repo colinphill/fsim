@@ -496,15 +496,25 @@ std::unique_ptr<ForeignLibraries> attach_foreign_libraries(
         }
     } else if (impl.dpi) {
         simulation.set_systemverilog_dpi_function_hook(
-            [dpi = impl.dpi.get()](const std::string_view identity,
+            [dpi = impl.dpi.get()](
+                const runtime::simir::ClassStaticMethodCall& call,
                 std::vector<runtime::PackedLogic4>& actuals,
                 std::vector<std::string>& strings,
                 const std::span<const std::string>,
+                const std::span<const runtime::simir::CallActualRole>,
                 const std::span<const std::uint8_t>) {
-                return dpi->call(identity, actuals, strings);
+                if (call.call_kind
+                    != runtime::simir::StaticCallKind::dpi_import) {
+                    throw std::runtime_error {
+                        "SystemVerilog call '" + call.method_identity
+                        + "' has no loaded implementation"
+                    };
+                }
+                return dpi->call(call.dpi, actuals, strings);
             });
         simulation.set_systemverilog_dpi_site_hooks({
-            [dpi = impl.dpi.get()](const std::string_view identity) {
+            [dpi = impl.dpi.get()](
+                const runtime::simir::DpiCallIdentity& identity) {
                 return dpi->bind(identity);
             },
             [dpi = impl.dpi.get()](const void* const site,

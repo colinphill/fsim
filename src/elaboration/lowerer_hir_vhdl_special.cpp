@@ -33,7 +33,6 @@ std::optional<SelectedVhdlName> selected_vhdl_name(
 frontend::VhdlSimulatorApi vhdl_environment_type_api(
     std::string_view spelling)
 {
-    spelling = semantic::vhdl::without_builtin_prefix(spelling);
     return frontend::vhdl_simulator_api(spelling);
 }
 
@@ -960,11 +959,12 @@ std::optional<ContainerObjectId> Lowerer::hir_vhdl_protected_anchor(
                   *specialized_hir_unit_, owners.candidates.front().member)
             : nullptr;
         if (member != nullptr) {
-            const auto found = container_objects_.find(vhdl_package_object_key(
-                hir_vhdl_package_member_path(owners.candidates.front()),
-                member->name + ".@protected"));
-            if (found != container_objects_.end()) {
-                anchor = found->second;
+            const auto* const found = container_objects_.find_storage(
+                vhdl_package_object_key(
+                    hir_vhdl_package_member_path(owners.candidates.front()),
+                    member->name + ".@protected"));
+            if (found != nullptr) {
+                anchor = *found;
             }
         }
     }
@@ -988,17 +988,18 @@ std::optional<ContainerObjectId> Lowerer::hir_vhdl_protected_anchor(
         if (declaration != nullptr && instance != nullptr
             && declaration->form == semantic::vhdl::DeclarationForm::variable) {
             const auto span = hir_source_span(declaration->source);
-            const auto found = container_objects_.find(vhdl_package_object_key(
-                *instance, declaration->name + ".@protected"));
-            if (found != container_objects_.end()
+            const auto* const found = container_objects_.find_storage(
+                vhdl_package_object_key(
+                    *instance, declaration->name + ".@protected"));
+            if (found != nullptr
                 && std::ranges::any_of(design_.vhdl_protected_object_info_,
                     [&](const VhdlProtectedObjectInfo& candidate) {
                         return candidate.declaration_span == span
                             && !candidate.members.empty()
                             && candidate.members.front().storage
-                                == found->second;
+                                == *found;
                     })) {
-                anchor = found->second;
+                anchor = *found;
             }
         }
         if (!anchor && declaration != nullptr
@@ -2213,8 +2214,8 @@ ContainerType Lowerer::hir_vhdl_environment_directory_container_type() const
     ContainerType type;
     type.element_kind = ContainerElementKind::String;
     type.element_width = 0U;
-    // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
-    type.element_nominal_type = "@builtin:std.textio.line";
+    type.element_nominal_type = "std.textio.line";
+    type.element_builtin_nominal = true;
     return type;
 }
 
@@ -2256,8 +2257,8 @@ Lowerer::hir_vhdl_environment_call_path_container_type() const
     string_member.element_width = 0U;
     string_member.fixed = true;
     string_member.dimensions = { { 0, 0 } };
-    // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
-    string_member.element_nominal_type = "@builtin:std.textio.line";
+    string_member.element_nominal_type = "std.textio.line";
+    string_member.element_builtin_nominal = true;
 
     ContainerType line_member;
     line_member.element_kind = ContainerElementKind::Packed;
@@ -2266,14 +2267,14 @@ Lowerer::hir_vhdl_environment_call_path_container_type() const
     line_member.signed_elements = true;
     line_member.fixed = true;
     line_member.dimensions = { { 0, 0 } };
-    // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
-    line_member.element_nominal_type = "@builtin:std.standard.positive";
+    line_member.element_nominal_type = "std.standard.positive";
+    line_member.element_builtin_nominal = true;
 
     ContainerType type;
     type.element_kind = ContainerElementKind::Aggregate;
     type.element_width = 0U;
-    // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
-    type.element_nominal_type = "@builtin:std.env.call_path_element";
+    type.element_nominal_type = "std.env.call_path_element";
+    type.element_builtin_nominal = true;
     type.element_types = {
         string_member,
         string_member,

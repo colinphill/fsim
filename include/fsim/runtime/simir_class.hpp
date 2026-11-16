@@ -139,6 +139,8 @@ struct ClassMethodCall {
   // `randomize(null)`: the checker call that randomizes no property (IEEE
   // 1800-2023 18.11.1).
   bool randomize_no_properties { };
+  // What each actual stands for; empty when every actual is an argument.
+  std::vector<CallActualRole> actual_roles { };
 };
 
 struct ClassStaticPropertyRead {
@@ -150,6 +152,73 @@ struct ClassStaticPropertyRead {
 struct ClassStaticPropertyWrite {
   RegisterId source{};
   std::string property_identity;
+};
+
+/// What a ClassStaticMethodCall calls. Imported DPI functions intentionally
+/// use the existing mutable static-call boundary: it keeps the
+/// native/interpreter handoff and copy-out semantics in a single SimIR
+/// operation, and the kind keeps them apart from a class method, a user
+/// system task and a foreign VHDL subprogram.
+enum class StaticCallKind : std::uint8_t {
+  /// A static method of a class, or a host service of the class library;
+  /// `method_identity` names it.
+  class_method,
+  /// An imported DPI function or task (IEEE 1800-2023 35.5); `dpi` is its
+  /// identity.
+  dpi_import,
+  /// A user system task or function (IEEE 1800-2023 38.3.3);
+  /// `method_identity` is `<name>|<scope>|<file>|<line>|<column>`.
+  user_system_task,
+  /// A foreign VHDL subprogram's VHPI execution function (IEEE 1076-2019
+  /// 20.4.2); `method_identity` is `<library>\t<model>\t<name>\t
+  /// <declaration>\t<scope>\t<width>`, and each actual name is
+  /// `<formal>\t<declaration>`. A standard direct binding (20.2.4.3) adds
+  /// `\t=<execution function>`: its library is the object library path
+  /// ("null" for a null specifier) and its model the subprogram designator.
+  vhdl_foreign,
+  last = vhdl_foreign,
+};
+
+/// The part of a context import's call the runtime service takes: a plain
+/// call, or the start or the finish of a context import that serves exports
+/// (the caller starts the C code, serves the export calls it makes, and
+/// then finishes the call).
+enum class DpiCallPhase : std::uint8_t {
+  call,
+  start,
+  finish,
+  last = finish,
+};
+
+/// The identity of an imported DPI call: the C symbol, its signature, the
+/// flags of the import and, for a context import, the call site (IEEE
+/// 1800-2023 35.5.3, H.9). The hidden imports of a unit's export service
+/// (`role`) are served by the runtime, not by C code.
+struct DpiCallIdentity {
+  DpiCallPhase phase{DpiCallPhase::call};
+  support::DpiHiddenImportRole role{support::DpiHiddenImportRole::none};
+  /// The C linkage name of the import.
+  std::string c_name;
+  /// The formals of the C signature, comma separated, each as its type code
+  /// (an `&` first marks one passed by pointer; see DpiArgumentPlan).
+  std::string arguments;
+  /// The code of the C result type.
+  std::uint8_t result{};
+  /// A context import: it runs with the caller's scope, file and line.
+  bool context{};
+  /// The instance, source file and line of the call site of a context
+  /// import.
+  std::string caller_instance;
+  std::string caller_file;
+  std::uint32_t caller_line{};
+  /// An argument or result import of an export (`role` `arguments` or
+  /// `results`): whether the export has a result, and how each formal
+  /// flows.
+  bool export_result{};
+  std::vector<support::DpiExportFlow> export_flows;
+
+  friend bool operator==(const DpiCallIdentity&, const DpiCallIdentity&)
+      = default;
 };
 
 struct ClassStaticMethodCall {
@@ -169,6 +238,13 @@ struct ClassStaticMethodCall {
   /// `string_property_write`), whose method identity is the property;
   /// `none` for a method or an imported function.
   ClassMethodHook hook{ClassMethodHook::none};
+  /// What the call calls; `method_identity` names a class method, a user
+  /// system task or a foreign VHDL subprogram, and is empty for an import.
+  StaticCallKind call_kind{StaticCallKind::class_method};
+  /// The identity of an imported DPI function (`call_kind` `dpi_import`).
+  DpiCallIdentity dpi{};
+  /// What each actual stands for; empty when every actual is an argument.
+  std::vector<CallActualRole> actual_roles{};
 };
 
 /// A dynamic array or queue of strings as the one string actual of an
@@ -205,14 +281,6 @@ struct ClassStaticMethodCall {
   return elements;
 }
 
-// Imported DPI functions intentionally use the existing mutable static-call
-// boundary. This keeps native/interpreter handoff and copy-out semantics in a
-// single SimIR operation while reserving an identity namespace that cannot
-// collide with a SystemVerilog class method.
-inline constexpr std::string_view systemverilog_dpi_function_prefix {
-    // ITEM46-LEFT: the DPI import identity is a text descriptor parsed by the DPI service, the kernel plan and the VPI and VHPI loaders; a typed form needs a descriptor on the call operation
-    "@dpi:" };
-
 /// The most formals and argument-buffer words (eight bytes each) a planned
 /// DPI call takes; a site beyond them is generic.
 inline constexpr std::size_t dpi_planned_argument_limit{16};
@@ -237,19 +305,20 @@ struct DpiArgumentPlan {
   std::uint32_t words{};
 };
 
-/// An imported DPI call site, fixed when the kernel image is built: the
-/// import's identity and C signature, the argument directions and kinds of
+/// A static call site that is not a class method's (an imported DPI
+/// function's, a user system task's or a foreign VHDL subprogram's), fixed
+/// when the kernel image is built: the import's identity and C signature, the argument directions and kinds of
 /// the call operation, and, for a site whose arguments are all of the types
 /// above (`generic` false), one plan per formal. A generic site (open
 /// arrays, structures, string arrays, a context import that serves exports)
 /// is called through the actual vectors.
 struct DpiSitePlan {
-  /// The call's identity without the DPI prefix, as the call hooks take it.
-  std::string identity;
-  std::string c_name;
-  /// `<arguments>:<result>[@c]`.
-  std::string signature;
-  bool context{};
+  /// What the call calls: only an imported DPI function (`dpi_import`) is
+  /// bound to the service's C symbols; the site of a user system task or a
+  /// foreign VHDL subprogram is called through the actual vectors.
+  StaticCallKind call_kind{StaticCallKind::dpi_import};
+  /// The call's identity, as the call hooks take it.
+  DpiCallIdentity identity;
   bool generic{true};
   std::uint8_t result{};
   std::uint32_t result_width{};

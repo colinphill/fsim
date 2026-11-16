@@ -27,6 +27,8 @@ struct SourceLocation;
 struct HostRequest;
 struct VcdControlEvent;
 struct DpiSitePlan;
+struct DpiCallIdentity;
+struct ClassStaticMethodCall;
 class DpiFrame;
 enum class AssertionSeverity : std::uint8_t;
 
@@ -100,19 +102,23 @@ using HostRequestHook = std::function<void(const HostRequestEvent&)>;
 using SystemCommandHook = std::function<std::int32_t(
     std::optional<std::string_view>)>;
 using VcdControlHook = std::function<void(const VcdControlEvent&)>;
-/// Execute one imported SystemVerilog DPI function. The identity is the
-/// declaration's C linkage name; mutable actual vectors carry output,
-/// inout, and ref copy-out values using the same representation as class
-/// call boundaries.
+/// Execute one static call boundary that is not a class method: an imported
+/// SystemVerilog DPI function, a user system task or a call of a foreign
+/// VHDL subprogram (`call_kind` of the operation says which; a DPI import's
+/// identity is `dpi`). Mutable actual vectors carry output, inout, and ref
+/// copy-out values using the same representation as class call boundaries.
+/// The span after the names is what each actual stands for
+/// (CallActualRole; empty when every actual is an argument).
 using DpiFunctionCallHook = std::function<PackedLogic4(
-    std::string_view,
+    const ClassStaticMethodCall&,
     std::vector<PackedLogic4>&,
     std::vector<std::string>&,
     std::span<const std::string>,
+    std::span<const CallActualRole>,
     std::span<const std::uint8_t>)>;
 
-/// The imported DPI call sites bound once. `bind` takes the identity a
-/// DpiFunctionCallHook would take and returns an opaque site (the C
+/// The imported DPI call sites bound once. `bind` takes the identity of the
+/// call a DpiFunctionCallHook would take and returns an opaque site (the C
 /// symbol, call interface and caller context resolved), or null when the
 /// service does not serve the identity as a plain import call; the
 /// reference interpreter binds each call operation on its first run and
@@ -120,7 +126,7 @@ using DpiFunctionCallHook = std::function<PackedLogic4(
 /// static kernel numbers its call sites when its image is built and
 /// binds them once at load (`bind_plan`).
 struct DpiSiteHooks {
-    std::function<const void*(std::string_view)> bind;
+    std::function<const void*(const DpiCallIdentity&)> bind;
     std::function<PackedLogic4(const void*, std::vector<PackedLogic4>&,
         std::vector<std::string>&)>
         call;

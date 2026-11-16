@@ -478,6 +478,9 @@ struct DebugPoint {
     // a task or function names that callable of that instance.
     std::uint32_t callee_declaration { };
     InternedString callee_receiver;
+    // The receiver is the absolute path of an instance, not a name written
+    // in the calling instance's scope.
+    bool callee_receiver_instance { };
 
     DebugPoint() = default;
     DebugPoint(

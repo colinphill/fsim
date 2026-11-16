@@ -4,11 +4,13 @@
 #include "fsim/frontend/source.hpp"
 #include "fsim/frontend/systemverilog_scalars.hpp"
 #include "fsim/frontend/token.hpp"
+#include "fsim/support/dpi_identity.hpp"
 #include "fsim/support/expression_marker.hpp"
 #include "fsim/support/rare_vector.hpp"
 #include "fsim/support/sva_marker.hpp"
 #include "fsim/support/systemverilog_builtin_type.hpp"
 #include "fsim/support/uvm_role.hpp"
+#include "fsim/support/vhdl_formal_conversion.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -127,6 +129,9 @@ struct Expression {
     // Preserve contextual VHDL nominal typing when enumeration constants or
     // user-defined attribute values are substituted into expressions.
     std::string nominal_type;
+    // `nominal_type` names a predefined type the tool supplies (see
+    // Type::builtin_nominal).
+    bool builtin_nominal { };
     // Verilog/SystemVerilog source string literals are decoded once by the
     // parser. The original token spelling remains in text for diagnostics and
     // cache/source provenance.
@@ -741,11 +746,19 @@ struct Type {
     // so two equally sized enumeration types never become assignment
     // compatible by accident.
     std::string nominal_type;
+    // The nominal type (and `vhdl_type_declaration`, when it is the same type)
+    // is a predefined type the tool itself supplies, such as STD.STANDARD
+    // TIME or a STD.ENV record, so `nominal_type` holds its plain lower-case
+    // name rather than a declaration identity.
+    bool builtin_nominal { };
     // Identity of the VHDL type or subtype declaration selected by this view.
     // Unlike nominal_type, this changes when a non-nominal subtype declaration
     // is selected and is used for source/cache provenance rather than type
     // compatibility.
     std::string vhdl_type_declaration;
+    // `vhdl_type_declaration` names a predefined type the tool supplies and
+    // holds its plain name.
+    bool builtin_declaration { };
     // Canonical selected function name from a VHDL subtype resolution
     // indication. Empty denotes an unresolved subtype.
     std::string vhdl_resolution_function;
@@ -1951,6 +1964,11 @@ struct Statement {
     // Canonical source label when the language permits a labeled statement.
     // Concurrent VHDL assertions use this for stable process/debug naming.
     std::string label;
+    // Whether the statement is one the front end made for a port
+    // association with a conversion function.
+    support::VhdlFormalConversion formal_conversion {
+        support::VhdlFormalConversion::none
+    };
 
     AssignmentKind assignment_kind { AssignmentKind::Blocking };
     Expression target;
@@ -2333,6 +2351,10 @@ struct FunctionDeclaration {
     bool lifetime_explicit { };
     // `extern function` prototype of an interface (IEEE 1800-2023 25.7.3).
     bool extern_prototype { };
+    // The role of a function the parser generates for a unit's DPI export
+    // service.
+    support::DpiExportCallableRole dpi_export_role {
+        support::DpiExportCallableRole::none };
     Language language { Language::SystemVerilog2017 };
     bool pure { };
     bool defined { true };
@@ -2398,6 +2420,10 @@ struct TaskDeclaration {
     // its `forkjoin` form, which several modules may export.
     bool extern_prototype { };
     bool extern_forkjoin { };
+    // The role of a task the parser generates for a unit's DPI export
+    // service.
+    support::DpiExportCallableRole dpi_export_role {
+        support::DpiExportCallableRole::none };
     SourceSpan span;
 };
 

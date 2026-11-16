@@ -622,6 +622,9 @@ void ElaboratedDesign::freeze_hierarchy_paths()
     signal_by_name_.clear();
     string_by_name_.clear();
     container_by_name_.clear();
+    static_signal_by_key_.clear();
+    static_string_by_key_.clear();
+    static_container_by_key_.clear();
     container_element_packed_shape_.clear();
     signal_packed_shape_.clear();
     event_array_by_name_.clear();
@@ -2098,11 +2101,12 @@ ElaboratedDesign::from_state_with_process_rows(
     if (state.code_coverage_inventory) {
         std::vector<CoverageInventoryOwner> owners;
         owners.reserve(state.specializations.size());
+        std::vector<std::vector<std::pair<std::string, std::string>>>
+            parameter_storage;
+        parameter_storage.reserve(state.specializations.size());
         for (const auto& specialization : state.specializations) {
-            const auto& parameters
-                = specialization.parameter_identity_values.empty()
-                ? specialization.parameter_values
-                : specialization.parameter_identity_values;
+            const auto& parameters = parameter_storage.emplace_back(
+                coverage_parameter_identities(specialization));
             owners.push_back(CoverageInventoryOwner {
                 specialization.id, specialization.instance,
                 specialization.language, specialization.source,

@@ -1070,6 +1070,8 @@ const char* Interpreter::Impl::run_class_operation(
         operation.method_identity, operation.hook, actuals, string_actuals,
         std::span<const std::string> { operation.actual_names }.first(
             argument_count),
+        std::span<const CallActualRole> { operation.actual_roles }.first(
+            std::min(operation.actual_roles.size(), argument_count)),
         std::span<const std::uint8_t> { operation.actual_directions }.first(
             argument_count),
         bound_constraints
@@ -1103,30 +1105,34 @@ const char* Interpreter::Impl::run_class_operation(
 }
 
 PackedLogic4 Interpreter::Impl::call_dpi_import(
-    const ClassStaticMethodCall& operation, const std::string_view identity,
+    const ClassStaticMethodCall& operation,
     std::vector<PackedLogic4>& actuals, std::vector<std::string>& strings,
     const DpiBoundSite* const bound)
 {
     if (bound != nullptr) {
         return bound->site != nullptr
             ? dpi_site_hooks.call(bound->site, actuals, strings)
-            : dpi_function_call_hook(identity, actuals, strings,
-                operation.actual_names, operation.actual_directions);
+            : dpi_function_call_hook(operation, actuals, strings,
+                operation.actual_names, operation.actual_roles,
+                operation.actual_directions);
     }
-    if (!dpi_site_hooks.bind) {
-        return dpi_function_call_hook(identity, actuals, strings,
-            operation.actual_names, operation.actual_directions);
+    if (operation.call_kind != StaticCallKind::dpi_import
+        || !dpi_site_hooks.bind) {
+        return dpi_function_call_hook(operation, actuals, strings,
+            operation.actual_names, operation.actual_roles,
+            operation.actual_directions);
     }
     auto& entry = dpi_sites[&operation];
-    if (entry.identity != identity) {
+    if (entry.identity != operation.dpi) {
         // First run of the operation (or another one at its address): bind
         // it once.
-        entry.site = dpi_site_hooks.bind(identity);
-        entry.identity = std::string { identity };
+        entry.site = dpi_site_hooks.bind(operation.dpi);
+        entry.identity = operation.dpi;
     }
     if (entry.site == nullptr) {
-        return dpi_function_call_hook(identity, actuals, strings,
-            operation.actual_names, operation.actual_directions);
+        return dpi_function_call_hook(operation, actuals, strings,
+            operation.actual_names, operation.actual_roles,
+            operation.actual_directions);
     }
     return dpi_site_hooks.call(entry.site, actuals, strings);
 }
@@ -1135,8 +1141,7 @@ const char* Interpreter::Impl::run_class_operation(
     ContainerRegisterAccess& access, const ClassStaticMethodCall& operation,
     const ProcessId process, const DpiBoundSite* const bound)
 {
-    const auto dpi = std::string_view { operation.method_identity }
-        .starts_with(systemverilog_dpi_function_prefix);
+    const auto dpi = operation.call_kind != StaticCallKind::class_method;
     if ((dpi && !dpi_function_call_hook)
         || (!dpi && !class_static_method_call_context_hook)) {
         return dpi ? "SystemVerilog DPI function service is unavailable"
@@ -1172,20 +1177,18 @@ const char* Interpreter::Impl::run_class_operation(
                       .string_elements)
             : std::string { });
     }
-    const auto identity = dpi
-        ? std::string_view { operation.method_identity }.substr(
-              systemverilog_dpi_function_prefix.size())
-        : std::string_view { operation.method_identity };
+    const auto identity = std::string_view { operation.method_identity };
     if (dpi) {
         // The service keys an import call chain by its process (IEEE
         // 1800-2023 35.9).
         DpiCallProcess::set_current(process);
     }
     auto result = dpi
-        ? call_dpi_import(operation, identity, actuals, string_actuals, bound)
+        ? call_dpi_import(operation, actuals, string_actuals, bound)
         : class_static_method_call_context_hook(process, identity,
               operation.hook, actuals, string_actuals, operation.actual_names,
-              operation.actual_directions, operation.class_specialization);
+              operation.actual_roles, operation.actual_directions,
+              operation.class_specialization);
     access.write(operation.destination, std::move(result));
     for (std::size_t index = 0; index < actuals.size(); ++index) {
         const auto string_actual = !operation.actual_kinds.empty()
@@ -3158,6 +3161,10 @@ void Interpreter::Impl::handle_boundary(
                           string_actuals,
                           std::span<const std::string> {
                               method->actual_names }.first(argument_count),
+                          std::span<const CallActualRole> {
+                              method->actual_roles }.first(
+                              std::min(method->actual_roles.size(),
+                                  argument_count)),
                           std::span<const std::uint8_t> {
                               method->actual_directions }.first(argument_count),
                           bound_constraints
@@ -3218,8 +3225,7 @@ void Interpreter::Impl::handle_boundary(
     }
     if (const auto* method = fsim::runtime::simir::operation_get_if<ClassStaticMethodCall>(
             &operation)) {
-        const auto dpi = std::string_view { method->method_identity }
-            .starts_with(systemverilog_dpi_function_prefix);
+        const auto dpi = method->call_kind != StaticCallKind::class_method;
         if ((dpi && !dpi_function_call_hook)
             || (!dpi && !class_static_method_call_context_hook)) {
             fail(process, dpi
@@ -3255,10 +3261,7 @@ void Interpreter::Impl::handle_boundary(
                               .string_elements)
                     : std::string { });
         }
-        const auto identity = dpi
-            ? std::string_view { method->method_identity }.substr(
-                  systemverilog_dpi_function_prefix.size())
-            : std::string_view { method->method_identity };
+        const auto identity = std::string_view { method->method_identity };
         if (dpi) {
             DpiCallProcess::set_current(process.id);
             // The call's position names it for the disable protocol (IEEE
@@ -3270,8 +3273,7 @@ void Interpreter::Impl::handle_boundary(
             method->destination,
             resize_class_value(
                 dpi
-                    ? call_dpi_import(
-                          *method, identity, actuals, string_actuals)
+                    ? call_dpi_import(*method, actuals, string_actuals)
                     : class_static_method_call_context_hook(
                           process.id,
                           identity,
@@ -3279,6 +3281,7 @@ void Interpreter::Impl::handle_boundary(
                           actuals,
                           string_actuals,
                           method->actual_names,
+                          method->actual_roles,
                           method->actual_directions,
                           method->class_specialization),
                 method->result_width));

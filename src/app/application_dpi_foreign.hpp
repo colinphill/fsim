@@ -49,11 +49,6 @@ public:
             time_scale;
     };
 
-    /// Whether `identity` (`<linkage>#<arguments>:<result>[@c|<instance>|
-    /// <file>|<line>]`) is a context import, which runs with the caller's
-    /// VPI and svdpi context.
-    [[nodiscard]] static bool context_import(std::string_view identity);
-
     virtual void set_clock(Clock clock) = 0;
 
     /// A $reset, vpiReset or vhpiReset is about to return the design to its
@@ -83,9 +78,12 @@ public:
     /// service does not serve the identity as an import call or its start
     /// or finish; it throws as `call` does for an identity with no loaded
     /// C implementation.
-    [[nodiscard]] virtual Site bind(std::string_view identity) = 0;
+    [[nodiscard]] virtual Site bind(
+        const runtime::simir::DpiCallIdentity& identity)
+        = 0;
 
-    /// Whether `site` is a context import (see `context_import`).
+    /// Whether `site` is a context import, which runs with the caller's VPI
+    /// and svdpi context.
     [[nodiscard]] virtual bool context_site(Site site) const noexcept = 0;
 
     /// Call a bound site; the same as `call` with the identity it was bound
@@ -115,7 +113,7 @@ public:
 
     /// Call one import. Output and inout actuals are written back in place.
     [[nodiscard]] virtual runtime::PackedLogic4 call(
-        std::string_view identity,
+        const runtime::simir::DpiCallIdentity& identity,
         std::vector<runtime::PackedLogic4>& actuals,
         std::vector<std::string>& strings)
         = 0;

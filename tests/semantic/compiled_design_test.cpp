@@ -4367,7 +4367,8 @@ void test_compiled_vhdl_resolver_retained_time_layout()
     const auto delay_type = add_type(
         "vitaldelaytype", vhdl::TypeForm::subtype);
     auto& delay_definition = builder.vhdl_hir.mutable_types().back();
-    delay_definition.base.type_mark.spelling = "@builtin:time";
+    delay_definition.base.type_mark.spelling = "time";
+    delay_definition.base.type_mark.builtin_declaration = true;
     delay_definition.base.domain = vhdl::ValueDomain::integer;
     delay_definition.base.executable_width = 64U;
     delay_definition.base.integer_storage_width = 64U;
@@ -13384,14 +13385,6 @@ void test_compiled_vhdl_type_identity_resolution()
     assert(qualified_bit_vector_2008.status
         == CompiledResolutionStatus::unique);
     assert(qualified_bit_vector_2008.builtin_type
-        == vhdl::BuiltinTypeIdentity::std_standard_bit_vector);
-    const auto marked_bit_vector_2008
-        = resolver_2008.resolve_vhdl_type_identity(
-            "@builtin:std.standard.bit_vector",
-            owner_scope(standard_2008));
-    assert(marked_bit_vector_2008.status
-        == CompiledResolutionStatus::unique);
-    assert(marked_bit_vector_2008.builtin_type
         == vhdl::BuiltinTypeIdentity::std_standard_bit_vector);
     const auto unrelated_qualified_bit_vector
         = resolver_2008.resolve_vhdl_type_identity(

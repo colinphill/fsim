@@ -202,56 +202,38 @@ void copy_bits(std::uint64_t* target, const std::uint32_t offset,
     }
 }
 
-/// The imported DPI call `operation` (identity `<c name>#<formals>:<result>
-/// [@c][|<instance>|<file>|<line>]` after the DPI prefix, with `!x` and `!f`
-/// marking the start and finish of a context import that serves exports) as a
-/// call site: its identity, directions and kinds, and, when every formal and
-/// the result are of the IEEE 1800-2023 H.7.4 scalar, string and packed
-/// vector types, a marshalling plan per formal. Anything else leaves the
-/// site generic.
+/// The imported DPI call `operation` (its `dpi` identity: the C name, the
+/// formals and the result, the context flag, and the phase that marks the
+/// start and finish of a context import that serves exports) as a call site:
+/// its identity, directions and kinds, and, when every formal and the result
+/// are of the IEEE 1800-2023 H.7.4 scalar, string and packed vector types, a
+/// marshalling plan per formal. Anything else leaves the site generic.
 [[nodiscard]] DpiSitePlan plan_dpi_site(const ClassStaticMethodCall& operation)
 {
     DpiSitePlan plan;
-    const std::string_view identity = std::string_view { operation.method_identity }
-        .substr(systemverilog_dpi_function_prefix.size());
-    plan.identity = std::string { identity };
+    const auto& identity = operation.dpi;
+    plan.call_kind = operation.call_kind;
+    plan.identity = identity;
     plan.directions = operation.actual_directions;
     plan.kinds = operation.actual_kinds;
     plan.result_width = operation.result_width;
-    // ITEM28-LEFT: the DPI export service is a name protocol end to end: the
-    // parser generates the hidden imports and hooks as text, and the runtime
-    // reads the mask and linkage out of their C identity; it needs a typed DPI
-    // call identity (runtime operation fields, codec) before the names can go.
-    if (identity.starts_with('$') || identity.starts_with("!x")
-        || identity.starts_with("!f")
-        || identity.starts_with("__fsim_dpi_export_")) {
+    // The start, the finish and the hidden imports of an export service are
+    // not plain import calls, and a call of another kind is no import.
+    if (operation.call_kind != StaticCallKind::dpi_import
+        || identity.phase != DpiCallPhase::call
+        || identity.role != support::DpiHiddenImportRole::none
+        || identity.result == 0U) {
         return plan;
     }
-    const auto hash = identity.find('#');
-    const auto colon = hash == std::string_view::npos
-        ? std::string_view::npos
-        : identity.find(':', hash);
-    if (colon == std::string_view::npos || colon + 1U >= identity.size()) {
-        return plan;
-    }
-    const auto bar = identity.find('|', colon);
-    const auto end = bar == std::string_view::npos ? identity.size() : bar;
-    const auto tail = identity.substr(colon + 1U, end - colon - 1U);
-    if (tail.empty()) {
-        return plan;
-    }
-    plan.c_name = std::string { identity.substr(0U, hash) };
-    plan.signature = std::string { identity.substr(hash + 1U, end - hash - 1U) };
-    plan.result = static_cast<std::uint8_t>(tail.front());
-    // ITEM46-LEFT: the DPI import identity is a text descriptor parsed by the DPI service, the kernel plan and the VPI and VHPI loaders; a typed form needs a descriptor on the call operation
-    plan.context = tail.substr(1U).starts_with("@c");
-    const bool string_result = tail.front() == 'z';
-    const bool result_scalar = tail.front() == 'v' || tail.front() == 'T'
-        || dpi_scalar_bits(tail.front()).has_value();
+    const auto result_code = static_cast<char>(identity.result);
+    plan.result = identity.result;
+    const bool string_result = result_code == 'z';
+    const bool result_scalar = result_code == 'v' || result_code == 'T'
+        || dpi_scalar_bits(result_code).has_value();
     if (!result_scalar) {
         return plan;
     }
-    auto formals = identity.substr(hash + 1U, colon - hash - 1U);
+    auto formals = std::string_view { identity.arguments };
     std::vector<DpiArgumentPlan> arguments;
     std::uint32_t offset { };
     while (!formals.empty()) {
@@ -2103,8 +2085,7 @@ void Interpreter::Impl::StaticKernel::plan_dpi_sites()
         for (std::size_t pc = 0U; pc < operations.size(); ++pc) {
             const auto* call = operation_get_if<ClassStaticMethodCall>(&operations[pc]);
             if (call == nullptr
-                || !std::string_view { call->method_identity }
-                        .starts_with(systemverilog_dpi_function_prefix)) {
+                || call->call_kind == StaticCallKind::class_method) {
                 continue;
             }
             if (member.dpi_site_at.empty()) {
@@ -2137,7 +2118,10 @@ Interpreter::Impl::StaticKernel::dpi_binding(const std::uint32_t site)
     if (!binding.resolved && impl_.dpi_site_hooks.bind_plan) {
         binding.resolved = true;
         try {
-            binding.site = impl_.dpi_site_hooks.bind_plan(dpi_sites_[site]);
+            binding.site = dpi_sites_[site].call_kind
+                    == StaticCallKind::dpi_import
+                ? impl_.dpi_site_hooks.bind_plan(dpi_sites_[site])
+                : nullptr;
             binding.planned = binding.site != nullptr
                 && impl_.dpi_site_hooks.planned
                 && impl_.dpi_site_hooks.planned(binding.site);

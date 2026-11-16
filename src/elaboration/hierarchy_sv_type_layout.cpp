@@ -69,7 +69,7 @@ std::optional<semantic::DeclarationId> specialized_type_parameter_formal(
             formal_id = actual.declaration;
         }
     }
-    if (formal_id || reference.target.spelling.empty()
+    if (formal_id || !reference.names_type()
         || semantic::sv::names_builtin_type(reference)
         || (name_only_without_target && reference.target.target.valid())) {
         return formal_id;
@@ -628,7 +628,7 @@ systemverilog_vpi_declared_type(
             case Form::enumeration: {
                 // An enumeration without a base type is an int (6.19).
                 auto base = record->base.target.resolved()
-                        || !record->base.target.spelling.empty()
+                        || record->base.names_type()
                     ? support::with_stack([&] { return self(self, record->base, record_scope, depth + 1U); })
                     : std::optional<Descriptor> { };
                 if (!base) {
@@ -696,7 +696,7 @@ systemverilog_vpi_declared_type(
                 && *input.value_form != Form::enumeration) {
                 return std::nullopt;
             }
-            if (atom == 0U && !input.target.spelling.empty()
+            if (atom == 0U && input.names_type()
                 && !support::systemverilog_integer_vector(input.builtin)
                 && input.net_kind == support::SystemVerilogNetKind::none) {
                 return std::nullopt;
@@ -1448,7 +1448,7 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
                 enumeration.kind = Kind::Enum;
                 // An enumeration without a base type is an int (6.19).
                 auto base = record->base.target.resolved()
-                        || !record->base.target.spelling.empty()
+                        || record->base.names_type()
                     ? support::with_stack([&] { return self(self, record->base, record_scope, depth + 1U); })
                     : std::optional<Typespec> { };
                 if (!base) {
@@ -1626,7 +1626,7 @@ std::optional<ContainerType> systemverilog_container_type(
         -> std::optional<ContainerType> {
         auto candidate = unresolved;
         if (!candidate.container_form && !candidate.target.target.valid()
-            && !candidate.target.spelling.empty()) {
+            && candidate.names_type()) {
             candidate = semantic::CompiledDesignResolver {
                 working_specialization
             }.effective_systemverilog_type(candidate, scope)
@@ -1743,6 +1743,8 @@ std::optional<ContainerType> systemverilog_container_type(
                 result.union_aggregate = element->union_aggregate;
                 result.element_nominal_type
                     = element->element_nominal_type;
+                result.element_builtin_nominal
+                    = element->element_builtin_nominal;
                 result.element_nominal_type_id
                     = element->element_nominal_type_id;
                 result.element_types
@@ -2042,6 +2044,8 @@ std::optional<ContainerType> systemverilog_container_type(
             if (!result.element_nominal_type.empty()) {
                 base->element_nominal_type
                     = result.element_nominal_type;
+                base->element_builtin_nominal
+                    = result.element_builtin_nominal;
             }
             if (result.element_nominal_type_id) {
                 base->element_nominal_type_id

@@ -5,6 +5,7 @@
 #include "fsim/frontend/source.hpp"
 #include "fsim/frontend/systemverilog_scalars.hpp"
 #include "fsim/frontend/token.hpp"
+#include "fsim/support/dpi_identity.hpp"
 #include "fsim/support/rare_vector.hpp"
 #include "fsim/support/uvm_role.hpp"
 #include <cstddef>
@@ -1542,6 +1543,13 @@ struct SystemVerilogDpiDeclaration {
     std::vector<Token> profile_tokens;
     SourceSpan profile_span;
     std::string linkage_name;
+    // The role of a hidden import the parser generates for a unit's export
+    // service; for its argument and result imports, whether the export has
+    // a result and how each formal of the export flows.
+    support::DpiHiddenImportRole hidden_role {
+        support::DpiHiddenImportRole::none };
+    bool export_result { };
+    std::vector<support::DpiExportFlow> export_flows;
     bool validated { };
     std::optional<SystemVerilogDpiResolvedProfile> resolved_profile;
     std::vector<Token> tokens;

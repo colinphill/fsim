@@ -69,16 +69,16 @@ endmodule
             return candidate.instance == "specify_top.dut";
         });
     assert(specialization != elaborated.design->specializations().end());
-    const auto& identities = specialization->parameter_identity_values;
+    const auto& identities = specialization->specparam_identities;
     const auto path_delay = std::ranges::find_if(
         identities,
         [](const auto& identity) {
-            return identity.first == "@specparam:PATH_DELAY";
+            return identity.first == "PATH_DELAY";
         });
     const auto path_pulse = std::ranges::find_if(
         identities,
         [](const auto& identity) {
-            return identity.first == "@specparam:PATHPULSE$a$z";
+            return identity.first == "PATHPULSE$a$z";
         });
     assert(path_delay != identities.end());
     assert(path_pulse != identities.end());

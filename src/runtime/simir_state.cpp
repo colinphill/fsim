@@ -2753,6 +2753,7 @@ void Interpreter::Impl::notify_execution_point(
         if (frame != nullptr) {
             point.callee_declaration = frame->callee_declaration;
             point.callee_receiver = frame->callee_receiver.str();
+            point.callee_receiver_instance = frame->callee_receiver_instance;
         }
         execution_point_hook(scheduler, point);
     }

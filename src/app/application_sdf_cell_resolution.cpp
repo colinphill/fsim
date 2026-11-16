@@ -42,14 +42,7 @@ namespace {
             const auto end = identity.find(';', value_begin);
             return identity.substr(value_begin, end - value_begin);
         };
-        for (const auto& [name, identity] :
-            specialization.parameter_identity_values) {
-            if (name != "__configuration")
-                continue;
-            if (auto entity = entity_value(identity))
-                return entity;
-        }
-        return std::nullopt;
+        return entity_value(specialization.configuration_identity);
     }
 
     std::string identity_cell_type(const std::string_view identity)

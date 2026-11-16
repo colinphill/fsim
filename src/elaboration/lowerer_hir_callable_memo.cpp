@@ -360,7 +360,7 @@ std::optional<std::string> Lowerer::hir_callable_body_memo_key(
         return refuse("callable kind");
     }
     if (frame.callee_unit != nullptr || frame.class_receiver
-        || frame.class_specialization || frame.interface_receiver
+        || frame.class_specialization || !frame.interface_receiver.empty()
         || !frame.vhdl_protected_members.empty()
         || !frame.vhdl_protected_formals.empty()
         || frame.vhdl_protected_receiver || frame.vhdl_protected_index) {

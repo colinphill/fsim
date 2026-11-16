@@ -612,6 +612,7 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
       // so ranges, attributes, and arithmetic follow INTEGER or REAL.
       type.spelling = floating ? "real" : "integer";
       type.vhdl_type_declaration = vhdl_declaration_identity(start, canonical_name);
+      type.builtin_declaration = false;
       expect(TokenKind::Semicolon, "';' after scalar type declaration",
              "FSIM-VHDL-PARSE-244");
       if (!duplicate) {
@@ -1829,6 +1830,7 @@ void VhdlParser::parse_subtype_declaration(DesignUnit &unit, const Token &start,
   auto type = parse_vhdl_type(true, true);
   type.vhdl_resolution_function = std::move(resolution_function);
   type.vhdl_type_declaration = vhdl_declaration_identity(start, canonical_name);
+  type.builtin_declaration = false;
   expect(TokenKind::Semicolon, "';' after subtype declaration",
          "FSIM-VHDL-PARSE-135");
   if (duplicate) {
@@ -2080,6 +2082,7 @@ void VhdlParser::parse_vhdl_object_alias(
         "FSIM-VHDL-PARSE-236");
     const auto canonical = vhdl_name(name.text);
     type.vhdl_type_declaration = vhdl_declaration_identity(start, canonical);
+    type.builtin_declaration = false;
     TypeAliasDeclaration alias;
     alias.name = canonical;
     alias.type = std::move(type);

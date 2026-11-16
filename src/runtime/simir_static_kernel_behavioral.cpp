@@ -4009,8 +4009,7 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             }
             access.write(op.destination, PackedLogic4::from_aval_bval(
                 64U, take_handle(running_thread_), 0U));
-        } else if constexpr (std::is_same_v<T, ProcessStatusQuery>
-            || std::is_same_v<T, ProcessCompleted>) {
+        } else if constexpr (std::is_same_v<T, ProcessStatusQuery>) {
             MemberContainerAccess access { *this, member_index, pc };
             const auto status = record_status(
                 *handle_record(member_index, pc, access.read(op.source)).second);

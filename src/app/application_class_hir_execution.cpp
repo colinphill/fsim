@@ -806,7 +806,7 @@ semantic::TypeId SystemVerilogClassHirExecution::named_type_target(
     const auto& spelling = type.target.spelling;
     if (semantics_ == nullptr || !scope.valid()
         || scope.value() >= semantics_->scopes().size()
-        || type.target.target.valid() || spelling.empty()
+        || type.target.target.valid() || !type.names_type()
         || !type.class_identity.empty() || type.virtual_interface
         || type.value_form == semantic::sv::TypeForm::class_handle
         || type.value_form == semantic::sv::TypeForm::string) {
@@ -927,7 +927,7 @@ std::size_t SystemVerilogClassHirExecution::variable_width(
             element.executable_width.reset();
             // `[3:0]` alone (implicit logic, 6.7.1) has 1-bit elements.
             const auto element_width = !element.target.target.valid()
-                    && element.target.spelling.empty()
+                    && !element.names_type()
                 ? std::optional<std::size_t> { 1U }
                 : self(self, element, scope);
             if (!element_width || *element_width == 0U
@@ -1010,7 +1010,7 @@ SystemVerilogClassHirExecution::packed_select_bounds(
             return std::nullopt;
         }
         const bool bit_element = !reference.target.target.valid()
-            && (reference.target.spelling.empty()
+            && (!reference.names_type()
                 || support::systemverilog_integer_vector(reference.builtin));
         // An integer atom takes no packed dimension (A.2.2.1); a range kept
         // with one is its own `[W-1:0]`.
@@ -1049,7 +1049,7 @@ SystemVerilogClassHirExecution::packed_select_bounds(
         if (definition != nullptr
             && definition->form == semantic::sv::TypeForm::enumeration
             && !definition->base.target.target.valid()
-            && definition->base.target.spelling.empty()
+            && !definition->base.names_type()
             && !definition->base.packed_range) {
             return Bounds { 31, 0 };
         }
@@ -3363,17 +3363,21 @@ SystemVerilogClassHirExecution::invoke_package_function(
         string_actuals.emplace_back();
     }
     auto invocation_names = actual_names;
+    std::vector<runtime::simir::CallActualRole> invocation_roles;
     if (returns_string) {
         actuals.emplace_back(64U, runtime::Logic4::zero);
         string_actuals.emplace_back();
-        // ITEM46-LEFT: the trailing string actual of a call is marked by a reserved actual name that travels through every class hook, the VPI and VHPI call models and the class executor; a typed result flag on the call operations and the hook signatures is needed
-        invocation_names.emplace_back("@result-string");
+        invocation_names.emplace_back();
+        invocation_roles.assign(
+            actual_names.size(), runtime::simir::CallActualRole::argument);
+        invocation_roles.push_back(
+            runtime::simir::CallActualRole::string_result);
     }
     std::vector<std::size_t> bound_actual_formals;
     const CallSite site { *this, call.source };
     const auto result = invoke_function_impl(method, 0U, actuals,
-        string_actuals, invocation_names, { }, actual_references,
-        &bound_actual_formals);
+        string_actuals, invocation_names, invocation_roles, { },
+        actual_references, &bound_actual_formals);
     if (returns_string) {
         if (string_actuals.empty())
             throw std::logic_error {
@@ -4176,7 +4180,7 @@ SystemVerilogClassHirExecution::evaluate_class_array_query(
             return std::nullopt;
         if (definition->form == TypeForm::enumeration
             && !definition->base.target.target.valid()
-            && definition->base.target.spelling.empty()
+            && !definition->base.names_type()
             && !definition->base.executable_width
             && definition->base.packed_dimensions.empty()
             && !definition->base.packed_range) {
@@ -4455,7 +4459,7 @@ SystemVerilogClassHirExecution::evaluate_class_array_query(
                     return std::nullopt;
                 if (definition->form == TypeForm::enumeration
                     && !definition->base.target.target.valid()
-                    && definition->base.target.spelling.empty()
+                    && !definition->base.names_type()
                     && !definition->base.executable_width
                     && definition->base.packed_dimensions.empty()
                     && !definition->base.packed_range) {
@@ -6771,7 +6775,7 @@ SystemVerilogClassHirExecution::evaluate_packed(
             && only_actual->marker
                 == support::ExpressionMarker::randomize_null;
         auto result = invoke_function_(receiver_handle, identity, builtin,
-            actuals, string_actuals, names, directions, virtual_dispatch,
+            actuals, string_actuals, names, { }, directions, virtual_dispatch,
             randomize_no_properties, ActualReferences { });
         if (typed_frame && !pending_call_frames_.back().consumed) {
             throw std::invalid_argument {
@@ -7093,7 +7097,7 @@ SystemVerilogClassHirExecution::evaluate_packed(
         const CallSite site { *this, value->source };
         const auto result = invoke_static_function_(
             identity, actuals,
-            string_actuals, names, { }, ActualReferences { },
+            string_actuals, names, { }, { }, ActualReferences { },
             call.specialization);
         return selected_method != nullptr && selected_method->return_type
             ? apply_context(result, selected_method->return_type->signed_value,
@@ -8531,7 +8535,7 @@ SystemVerilogClassHirExecution::evaluate_pure_packed(
             if (!target.valid())
                 target = named_type_target(*current, scope);
             if (!target.valid()) {
-                if (!current->target.spelling.empty()
+                if (current->names_type()
                     && !support::systemverilog_integral(current->builtin))
                     return std::nullopt;
                 break;
@@ -9961,12 +9965,12 @@ SystemVerilogClassHirExecution::execute(
                         };
                     }
                     (void)invoke_static_function_(method_identity, actuals,
-                        string_actuals, names, directions, actual_references,
-                        static_target.specialization);
+                        string_actuals, names, { }, directions,
+                        actual_references, static_target.specialization);
                 } else {
                     (void)invoke_function_(receiver->low_word().aval,
                         method_identity, runtime::simir::ClassMethodHook::none,
-                        actuals, string_actuals, names, directions,
+                        actuals, string_actuals, names, { }, directions,
                         virtual_dispatch, false, actual_references);
                 }
                 if (typed_frame && !pending_call_frames_.back().consumed) {
@@ -11008,8 +11012,10 @@ SystemVerilogClassHirExecution::evaluate_string_call(
         }
     }
     auto invocation_names = actual_names;
-    // ITEM46-LEFT: the trailing string actual of a call is marked by a reserved actual name that travels through every class hook, the VPI and VHPI call models and the class executor; a typed result flag on the call operations and the hook signatures is needed
-    invocation_names.emplace_back("@result-string");
+    invocation_names.emplace_back();
+    std::vector<runtime::simir::CallActualRole> invocation_roles(
+        actual_names.size(), runtime::simir::CallActualRole::argument);
+    invocation_roles.push_back(runtime::simir::CallActualRole::string_result);
     actuals.emplace_back(64U, runtime::Logic4::zero);
     string_actuals.emplace_back();
     const bool typed_frame = !typed_actuals.empty();
@@ -11025,15 +11031,15 @@ SystemVerilogClassHirExecution::evaluate_string_call(
         if (!invoke_static_function_)
             return std::nullopt;
         (void)invoke_static_function_(canonical_identity, actuals,
-            string_actuals, invocation_names, {}, actual_references,
-            static_target.specialization);
+            string_actuals, invocation_names, invocation_roles, {},
+            actual_references, static_target.specialization);
     } else {
         if (!invoke_function_)
             return std::nullopt;
         (void)invoke_function_(receiver_handle, canonical_identity,
             runtime::simir::ClassMethodHook::none, actuals,
-            string_actuals, invocation_names, {}, virtual_dispatch, false,
-            actual_references);
+            string_actuals, invocation_names, invocation_roles, {},
+            virtual_dispatch, false, actual_references);
     }
     if (typed_frame && !pending_call_frames_.back().consumed) {
         throw std::invalid_argument {
@@ -11240,6 +11246,7 @@ runtime::PackedLogic4 SystemVerilogClassHirExecution::invoke_function(
     std::vector<runtime::PackedLogic4>& actuals,
     std::vector<std::string>& string_actuals,
     const std::span<const std::string> actual_names_view,
+    const std::span<const runtime::simir::CallActualRole> actual_roles_view,
     const std::span<const std::uint8_t> actual_directions_view,
     const ActualReferences actual_references,
     const std::optional<runtime::simir::ProcessId> report_process,
@@ -11255,7 +11262,8 @@ runtime::PackedLogic4 SystemVerilogClassHirExecution::invoke_function(
     const ScopedValue<std::string> static_context { static_specialization_,
         handle == 0U ? std::string { specialization } : std::string { } };
     return invoke_function_impl(method, handle, actuals, string_actuals,
-        actual_names_view, actual_directions_view, actual_references, nullptr);
+        actual_names_view, actual_roles_view, actual_directions_view,
+        actual_references, nullptr);
 }
 
 std::optional<std::int64_t>
@@ -11279,14 +11287,15 @@ runtime::PackedLogic4 SystemVerilogClassHirExecution::invoke_function_impl(
     std::vector<runtime::PackedLogic4>& actuals,
     std::vector<std::string>& string_actuals,
     const std::span<const std::string> actual_names_view,
+    const std::span<const runtime::simir::CallActualRole> actual_roles_view,
     const std::span<const std::uint8_t> actual_directions_view,
     const std::span<const std::optional<VariableReference>> actual_references,
     std::vector<std::size_t>* const actual_formals_output)
 {
     return support::with_stack([&] {
         return invoke_function_body(method, handle, actuals, string_actuals,
-            actual_names_view, actual_directions_view, actual_references,
-            actual_formals_output);
+            actual_names_view, actual_roles_view, actual_directions_view,
+            actual_references, actual_formals_output);
     });
 }
 
@@ -11296,16 +11305,17 @@ runtime::PackedLogic4 SystemVerilogClassHirExecution::invoke_function_body(
     std::vector<runtime::PackedLogic4>& actuals,
     std::vector<std::string>& string_actuals,
     const std::span<const std::string> actual_names_view,
+    const std::span<const runtime::simir::CallActualRole> actual_roles_view,
     const std::span<const std::uint8_t> actual_directions_view,
     const std::span<const std::optional<VariableReference>> actual_references,
     std::vector<std::size_t>* const actual_formals_output)
 {
     // A string result travels in a trailing hidden string actual, which the
     // caller copies back like an output string argument.
-    // ITEM46-LEFT: the trailing string actual of a call is marked by a reserved actual name that travels through every class hook, the VPI and VHPI call models and the class executor; a typed result flag on the call operations and the hook signatures is needed
-    constexpr std::string_view result_name { "@result-string" };
     const bool string_result = !actual_names_view.empty()
-        && actual_names_view.back() == result_name
+        && runtime::simir::last_call_actual_is(actual_roles_view,
+            actual_names_view.size(),
+            runtime::simir::CallActualRole::string_result)
         && !actuals.empty() && string_actuals.size() == actuals.size();
     std::vector<std::string> names(
         actual_names_view.begin(), actual_names_view.end());

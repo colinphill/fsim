@@ -120,28 +120,45 @@ vhdl_character_control_literal_code(const std::string_view name)
 // The binding key of an object of a package instance declared in a design
 // unit or block: the instance has its own objects (IEEE 1076-2008 4.9), so
 // they are bound by instance declaration and lower-case simple name.
-[[nodiscard]] inline std::string vhdl_package_object_key(
+[[nodiscard]] inline StorageKey vhdl_package_object_key(
     const semantic::DeclarationId instance, const std::string_view name)
 {
-    // ITEM46-LEFT: binding key string of a VHDL package-instance object in the design name maps; needs a typed key in those maps
-    return "@pkgobj:" + std::to_string(instance.value()) + "."
-        + lowercase_ascii_copy(name);
+    return StorageKey { StorageKey::Kind::package_object, { instance.value() },
+        lowercase_ascii_copy(name) };
 }
 
 // The same for an instance declared in a generic package template, which
 // each instance of the template has its own of (`g1.nb.s`): bound by the
 // instances from the outermost.
-[[nodiscard]] inline std::string vhdl_package_object_key(
+[[nodiscard]] inline StorageKey vhdl_package_object_key(
     const std::span<const semantic::DeclarationId> path,
     const std::string_view name)
 {
-    // ITEM46-LEFT: binding key string of a VHDL package-instance object in the design name maps; needs a typed key in those maps
-    std::string key { "@pkgobj:" };
+    StorageKey key { StorageKey::Kind::package_object, { },
+        lowercase_ascii_copy(name) };
     for (const auto instance : path) {
-        key += std::to_string(instance.value());
-        key += '.';
+        key.declarations.push_back(instance.value());
     }
-    return key + lowercase_ascii_copy(name);
+    return key;
+}
+
+// The storage of a static variable of a callable: in the maps of one
+// instance by declaration alone, in the design's maps with the instance
+// path.
+[[nodiscard]] inline StorageKey callable_static_storage_key(
+    const semantic::DeclarationId declaration, std::string path = { })
+{
+    return StorageKey { StorageKey::Kind::callable_static,
+        { declaration.value() }, std::move(path) };
+}
+
+// An element of a named-event array declaration, by the element's index
+// text.
+[[nodiscard]] inline StorageKey event_array_element_key(
+    const semantic::DeclarationId declaration, std::string index)
+{
+    return StorageKey { StorageKey::Kind::event_array_element,
+        { declaration.value() }, std::move(index) };
 }
 
 [[nodiscard]] inline bool equal_ignoring_ascii_case(

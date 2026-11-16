@@ -753,7 +753,6 @@ bool visit_known_region_accesses(
             return false;
         } else if constexpr (std::is_same_v<T, ProcessSelf>
             || std::is_same_v<T, ProcessStatusQuery>
-            || std::is_same_v<T, ProcessCompleted>
             || std::is_same_v<T, ProcessAwait>
             || std::is_same_v<T, ProcessKill>
             || std::is_same_v<T, ProcessSuspend>

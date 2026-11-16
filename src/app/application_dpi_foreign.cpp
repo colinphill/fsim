@@ -28,11 +28,13 @@
 #include <deque>
 #include <filesystem>
 #include <limits>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <thread>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
 #include <span>
@@ -286,22 +288,21 @@ void finish_type(CType& type)
     return type;
 }
 
-[[nodiscard]] Signature parse_signature(const std::string_view identity)
+[[nodiscard]] Signature parse_signature(
+    const runtime::simir::DpiCallIdentity& call)
 {
-    const auto hash = identity.find('#');
-    const auto colon = hash == std::string_view::npos
-        ? std::string_view::npos
-        : identity.find(':', hash);
-    if (colon == std::string_view::npos || colon + 1U >= identity.size()) {
+    if (call.result == 0U) {
         throw std::runtime_error { "malformed DPI import identity '"
-            + std::string { identity } + "'" };
+            + call.c_name + "#" + call.arguments + "'" };
     }
+    // The text of the identity names it in a message only.
+    const auto display = call.c_name + "#" + call.arguments;
+    const std::string_view identity { display };
     Signature signature;
-    signature.linkage = std::string { identity.substr(0U, hash) };
-    signature.result = identity[colon + 1U];
-    // ITEM46-LEFT: the DPI import identity is a text descriptor parsed by the DPI service, the kernel plan and the VPI and VHPI loaders; a typed form needs a descriptor on the call operation
-    signature.context = identity.substr(colon + 2U).starts_with("@c");
-    auto arguments = identity.substr(hash + 1U, colon - hash - 1U);
+    signature.linkage = call.c_name;
+    signature.result = static_cast<char>(call.result);
+    signature.context = call.context;
+    std::string_view arguments { call.arguments };
     const auto malformed = [&] { malformed_identity(identity); };
     while (!arguments.empty()) {
         // A structure's members are `;`-separated, so a comma ends a
@@ -454,31 +455,24 @@ void finish_type(CType& type)
     }
 }
 
-// The caller of a context import: `|<instance>|<file>|<line>` after the
-// signature.
+// The caller of a context import: the instance, file and line of its call
+// site.
 struct Caller {
     std::string_view instance;
     std::string_view file;
     int line { };
 };
 
-[[nodiscard]] std::optional<Caller> caller_of(const std::string_view identity)
+[[nodiscard]] std::optional<Caller> caller_of(
+    const runtime::simir::DpiCallIdentity& identity)
 {
-    const auto bar = identity.find('|');
-    if (bar == std::string_view::npos) {
-        return std::nullopt;
-    }
-    auto rest = identity.substr(bar + 1U);
-    const auto first = rest.find('|');
-    const auto last = rest.rfind('|');
-    if (first == std::string_view::npos || last == first) {
+    if (!identity.context) {
         return std::nullopt;
     }
     Caller caller;
-    caller.instance = rest.substr(0U, first);
-    caller.file = rest.substr(first + 1U, last - first - 1U);
-    const auto line = rest.substr(last + 1U);
-    (void)std::from_chars(line.data(), line.data() + line.size(), caller.line);
+    caller.instance = identity.caller_instance;
+    caller.file = identity.caller_file;
+    caller.line = static_cast<int>(identity.caller_line);
     return caller;
 }
 
@@ -1335,18 +1329,18 @@ public:
         thread_entry_ = std::move(entry);
     }
 
-    PackedLogic4 call(const std::string_view identity,
+    PackedLogic4 call(const runtime::simir::DpiCallIdentity& identity,
         std::vector<PackedLogic4>& actuals,
         std::vector<std::string>& strings) override
     {
-        if (identity.starts_with("!x")) {
-            start(identity.substr(2U), actuals, strings);
+        if (identity.phase == runtime::simir::DpiCallPhase::start) {
+            start(identity, actuals, strings);
             return PackedLogic4(1U, Logic4::zero);
         }
-        if (identity.starts_with("!f")) {
-            return finish(identity.substr(2U), actuals, strings);
+        if (identity.phase == runtime::simir::DpiCallPhase::finish) {
+            return finish(identity, actuals, strings);
         }
-        if (identity.starts_with(export_prefix)) {
+        if (identity.role != support::DpiHiddenImportRole::none) {
             return serve_export(identity, actuals, strings);
         }
         auto& import = resolve(identity);
@@ -1360,7 +1354,7 @@ public:
         return run_call(import, nullptr, { }, 0, actuals, strings);
     }
 
-    Site bind(const std::string_view identity) override
+    Site bind(const runtime::simir::DpiCallIdentity& identity) override
     {
         return bind_site(identity);
     }
@@ -1460,8 +1454,7 @@ public:
 
     [[nodiscard]] bool context_site(const Site site) const noexcept override
     {
-        const auto& bound = *static_cast<const BoundSite*>(site);
-        return DpiForeignService::context_import(bound.identity);
+        return static_cast<const BoundSite*>(site)->identity.context;
     }
 
     PackedLogic4 call_site(const Site site, std::vector<PackedLogic4>& actuals,
@@ -1480,19 +1473,12 @@ public:
     }
 
 private:
-    // ITEM28-LEFT: the DPI export service is a name protocol end to end: the
-    // parser generates the hidden imports and hooks as text, and the runtime
-    // reads the mask and linkage out of their C identity; it needs a typed DPI
-    // call identity (runtime operation fields, codec) before the names can go.
-    static constexpr std::string_view export_prefix { "__fsim_dpi_export_" };
-
     // A call site bound by `bind`: what a call needs of its identity, parsed
     // once.
     struct BoundSite {
         enum class Kind { call, start, finish };
         Kind kind { Kind::call };
-        // The identity without the start or finish marker.
-        std::string identity;
+        runtime::simir::DpiCallIdentity identity;
         Import* import { };
         // The caller's scope, file and line of a context import.
         Scope* scope { };
@@ -1511,7 +1497,7 @@ private:
     {
         if (signature.parameters.size() != plan.arguments.size()
             || signature.result != static_cast<char>(plan.result)
-            || signature.context != plan.context
+            || signature.context != plan.identity.context
             || signature.actual_total != plan.arguments.size()
             || plan.arguments.size() > runtime::simir::dpi_planned_argument_limit) {
             return false;
@@ -1530,29 +1516,22 @@ private:
         return true;
     }
 
-    BoundSite* bind_site(const std::string_view identity)
+    BoundSite* bind_site(const runtime::simir::DpiCallIdentity& identity)
     {
-        // The export services and the other services' identities
-        // (`$vpi:`, `$vhpi:`) are not import calls.
-        if (identity.starts_with(export_prefix) || identity.starts_with('$')) {
+        // The hidden imports of the export services are not import calls.
+        if (identity.role != support::DpiHiddenImportRole::none) {
             return nullptr;
         }
         auto site = std::make_unique<BoundSite>();
-        auto text = identity;
-        if (identity.starts_with("!x")) {
+        if (identity.phase == runtime::simir::DpiCallPhase::start) {
             site->kind = BoundSite::Kind::start;
-            text.remove_prefix(2U);
-        } else if (identity.starts_with("!f")) {
+        } else if (identity.phase == runtime::simir::DpiCallPhase::finish) {
             site->kind = BoundSite::Kind::finish;
-            text.remove_prefix(2U);
         }
-        site->identity = std::string { text };
+        site->identity = identity;
         if (site->kind != BoundSite::Kind::finish) {
-            site->import = &resolve(text);
-            if (const auto caller = site->kind == BoundSite::Kind::start
-                        || site->import->signature.context
-                    ? caller_of(text)
-                    : std::nullopt) {
+            site->import = &resolve(identity);
+            if (const auto caller = caller_of(identity)) {
                 site->scope = &scope_named(caller->instance);
                 site->file = std::string { caller->file };
                 site->line = caller->line;
@@ -1741,7 +1720,7 @@ private:
 
     // Start a context import whose C code may call exports: the caller
     // serves those calls until the code returns, then finishes the call.
-    void start(const std::string_view identity,
+    void start(const runtime::simir::DpiCallIdentity& identity,
         const std::vector<PackedLogic4>& actuals,
         const std::vector<std::string>& strings)
     {
@@ -1793,13 +1772,13 @@ private:
         } };
     }
 
-    PackedLogic4 finish(const std::string_view identity,
+    PackedLogic4 finish(const runtime::simir::DpiCallIdentity& identity,
         std::vector<PackedLogic4>& actuals, std::vector<std::string>& strings)
     {
         const auto found = find_flight(runtime::DpiCallProcess::current());
         if (found == flights_.end()) {
             throw std::runtime_error { "DPI import '"
-                + std::string { identity } + "' finished without a start" };
+                + identity.c_name + "' finished without a start" };
         }
         auto flight = std::move(*found);
         flights_.erase(found);
@@ -1809,7 +1788,7 @@ private:
             if (!flight->done) {
                 // The C code waits for an export nobody serves.
                 auto message = flight->error.empty()
-                    ? "DPI import '" + std::string { identity }
+                    ? "DPI import '" + identity.c_name
                         + "' returned while its C code called an export"
                     : flight->error;
                 flight->thread.detach();
@@ -1988,11 +1967,11 @@ private:
     // The hidden imports through which a unit's service runs the exports
     // that a context import's C code calls: `next` waits for an export
     // call (returning its 1-based position among the unit's exports) or
-    // for the C code to return (0); `args_<mask>__<linkage>` delivers the
-    // export's actuals; `return_<mask>__<linkage>` hands back its result
-    // and outputs and lets the C code continue. The mask is `r` (a result)
-    // or `v`, then per formal `i` (input), `o` (output) or `b` (inout).
-    PackedLogic4 serve_export(const std::string_view identity,
+    // for the C code to return (0); the `arguments` import delivers the
+    // export's actuals; the `results` import hands back its result and
+    // outputs and lets the C code continue. The identity says whether the
+    // export has a result and how each formal flows.
+    PackedLogic4 serve_export(const runtime::simir::DpiCallIdentity& identity,
         std::vector<PackedLogic4>& actuals, std::vector<std::string>& strings)
     {
         const auto active = find_flight(runtime::DpiCallProcess::current());
@@ -2001,19 +1980,19 @@ private:
                 "a DPI export service ran outside a context import" };
         }
         auto& flight = **active;
-        const auto signature
-            = parse_signature(identity.substr(0U, identity.find('|')));
-        const auto name = std::string_view { signature.linkage }.substr(
-            export_prefix.size());
-        if (name == "next" || name == "serve") {
+        const auto signature = parse_signature(identity);
+        const auto role = identity.role;
+        const bool next = role == support::DpiHiddenImportRole::next;
+        const bool serve = role == support::DpiHiddenImportRole::serve;
+        if (next || serve) {
             std::unique_lock lock { flight.mutex };
-            if (name == "next") {
+            if (next) {
                 flight.turn.wait(lock, [&] { return !flight.c_turn; });
             }
             if (flight.done) {
                 return from_bits(0U, 32U);
             }
-            if (name == "serve" && flight.c_turn) {
+            if (serve && flight.c_turn) {
                 return from_bits(0U, 32U);
             }
             // The export call is served by the scope the call chain is in
@@ -2022,7 +2001,7 @@ private:
             // the compilation unit, which a step names `$unit` (35.5.2).
             const auto caller = caller_of(identity);
             const std::string_view scope_text
-                = name == "serve" && strings.size() > 1U
+                = serve && strings.size() > 1U
                 ? std::string_view { strings[1U] }
                 : std::string_view { };
             const bool any_scope = scope_text == "$unit";
@@ -2032,7 +2011,7 @@ private:
                                                     : std::string_view { };
             const bool local = any_scope
                 || (flight.scope != nullptr && flight.scope->name == own);
-            if (name == "next" && flight.handed) {
+            if (next && flight.handed) {
                 // A step of every other scope has run and none served the
                 // call.
                 return reject(flight, "DPI export '" + flight.name
@@ -2055,7 +2034,7 @@ private:
                     ? std::string_view { }
                     : names.substr(space + 1U);
             }
-            if (name == "next") {
+            if (next) {
                 // The scope does not declare the export: the steps of the
                 // other scopes, and of the compilation unit, get to serve
                 // it.
@@ -2069,13 +2048,12 @@ private:
         Call call;
         prepare(hidden, call, actuals, strings);
         const auto& parameters = signature.parameters;
-        // The directions of the export's formals follow the result mark.
-        const auto prefix = name.substr(0U, name.find('_'));
-        const auto mask = name.substr(prefix.size() + 1U,
-            name.find("__") - prefix.size() - 1U);
-        if (prefix == "args") {
+        // The directions of the export's formals follow the result.
+        const auto& flows = identity.export_flows;
+        if (role == support::DpiHiddenImportRole::arguments) {
             for (std::size_t index = 0U; index < parameters.size(); ++index) {
-                if (index + 1U < mask.size() && mask[index + 1U] != 'o') {
+                if (index < flows.size()
+                    && flows[index] != support::DpiExportFlow::output) {
                     std::memcpy(c_data(call.slots[index], parameters[index]),
                         flight.arguments[index], c_bytes(parameters[index]));
                 }
@@ -2083,9 +2061,9 @@ private:
             (void)complete(hidden, call, actuals, strings);
             return PackedLogic4(1U, Logic4::zero);
         }
-        if (prefix != "return") {
+        if (role != support::DpiHiddenImportRole::results) {
             throw std::runtime_error { "unknown DPI export service '"
-                + std::string { name } + "'" };
+                + identity.c_name + "'" };
         }
         const auto deliver = [&](void* const target, const std::size_t index) {
             const auto& parameter = parameters[index];
@@ -2099,14 +2077,15 @@ private:
             std::memcpy(target, c_data(call.slots[index], parameter),
                 c_bytes(parameter));
         };
-        const std::size_t first = mask.starts_with('r') ? 1U : 0U;
+        const std::size_t first = identity.export_result ? 1U : 0U;
         if (first == 1U && flight.result != nullptr && !parameters.empty()) {
             deliver(flight.result, 0U);
         }
-        for (std::size_t index = 1U; index < mask.size(); ++index) {
-            const auto parameter = first + index - 1U;
-            if (mask[index] != 'i' && parameter < parameters.size()) {
-                deliver(flight.arguments[index - 1U], parameter);
+        for (std::size_t index = 0U; index < flows.size(); ++index) {
+            const auto parameter = first + index;
+            if (flows[index] != support::DpiExportFlow::input
+                && parameter < parameters.size()) {
+                deliver(flight.arguments[index], parameter);
             }
         }
         const std::lock_guard lock { flight.mutex };
@@ -2361,17 +2340,17 @@ private:
         return 0;
     }
 
-    Import& resolve(const std::string_view full_identity)
+    Import& resolve(const runtime::simir::DpiCallIdentity& call)
     {
         // Call sites of one import share its C call description.
-        const auto identity = full_identity.substr(
-            0U, full_identity.find('|'));
-        const auto found = imports_.find(std::string { identity });
+        const ImportKey key { call.c_name, call.arguments, call.result,
+            call.context };
+        const auto found = imports_.find(key);
         if (found != imports_.end()) {
             return *found->second;
         }
         auto import = std::make_unique<Import>();
-        import->signature = parse_signature(identity);
+        import->signature = parse_signature(call);
         void* symbol { };
         std::string error;
         for (const auto& library : libraries_) {
@@ -2403,8 +2382,7 @@ private:
             throw std::runtime_error { "cannot prepare the C call of DPI import '"
                 + import->signature.linkage + "'" };
         }
-        auto& stored = *imports_.emplace(std::string { identity },
-                                    std::move(import))
+        auto& stored = *imports_.emplace(key, std::move(import))
                             .first->second;
         return stored;
     }
@@ -2412,7 +2390,9 @@ private:
     std::vector<std::unique_ptr<platform::DynamicLibrary>> libraries_;
     std::vector<std::unique_ptr<Flight>> flights_;
     ThreadEntry thread_entry_;
-    std::unordered_map<std::string, std::unique_ptr<Import>> imports_;
+    // The imports by C name, formals, result code and context flag.
+    using ImportKey = std::tuple<std::string, std::string, std::uint8_t, bool>;
+    std::map<ImportKey, std::unique_ptr<Import>> imports_;
     std::vector<std::unique_ptr<BoundSite>> sites_;
     std::unordered_map<std::string, std::unique_ptr<Scope>> scopes_;
     fsim_svdpi_call_context_v3 context_;
@@ -2431,12 +2411,6 @@ thread_local const Import* Service::noncontext_import { };
 #endif
 
 } // namespace
-
-bool DpiForeignService::context_import(const std::string_view identity)
-{
-    // ITEM46-LEFT: the DPI import identity is a text descriptor parsed by the DPI service, the kernel plan and the VPI and VHPI loaders; a typed form needs a descriptor on the call operation
-    return identity.substr(0U, identity.find('|')).ends_with("@c");
-}
 
 std::unique_ptr<DpiForeignService> load_dpi_libraries(
     const std::span<const std::string> libraries,

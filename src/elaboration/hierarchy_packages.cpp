@@ -509,6 +509,8 @@ namespace {
         type.vhdl_array = signal.vhdl_array;
         type.packed_members = signal.packed_members;
         type.nominal_type = signal.nominal_type;
+        type.builtin_nominal = signal.builtin_nominal;
+        type.hir_type = signal.hir_type;
         return compiled_container_bridge_packed_shape(type);
     }
 
@@ -1031,6 +1033,8 @@ namespace {
         type.named_type = signal.type_name;
         type.integer_range = signal.integer_range;
         type.nominal_type = signal.nominal_type;
+        type.builtin_nominal = signal.builtin_nominal;
+        type.hir_type = signal.hir_type;
         type.enumeration_literals = signal.enumeration_literals;
         type.enumeration_range = signal.enumeration_range;
         type.vhdl_array = signal.vhdl_array;
@@ -1609,12 +1613,9 @@ namespace {
                 || current.domain != semantic::vhdl::ValueDomain::bit2) {
                 return false;
             }
-            auto spelling = std::string_view { current.type_mark.spelling };
-            constexpr auto builtin_prefix = semantic::vhdl::builtin_prefix;
-            const bool compiler_builtin = spelling.starts_with(builtin_prefix);
-            if (compiler_builtin) {
-                spelling.remove_prefix(builtin_prefix.size());
-            }
+            const auto spelling
+                = std::string_view { current.type_mark.spelling };
+            const bool compiler_builtin = current.type_mark.builtin_declaration;
             if (compiled_vhdl_name_equal(
                     spelling, "std.standard.bit_vector")) {
                 return true;
@@ -3856,8 +3857,7 @@ namespace {
         };
         const auto nominal_identity = [&](const semantic::vhdl::TypeDefinition&
                                               definition) {
-            return "vhdl-hir-type:"
-                + std::to_string(definition.id.value()) + ":"
+            return std::to_string(definition.id.value()) + ":"
                 + canonical_name(definition.name);
         };
         const auto concrete_range = [&](const semantic::vhdl::RangeConstraint&
@@ -4428,8 +4428,9 @@ namespace {
                              subtype.type_mark.target.value())
                     .second) {
                 result.named_type = subtype.type_mark.spelling;
-                result.nominal_type = "vhdl-hir-type:"
-                    + std::to_string(subtype.type_mark.target.value());
+                result.nominal_type
+                    = std::to_string(subtype.type_mark.target.value());
+                result.hir_type = subtype.type_mark.target.value();
                 return result;
             }
             const auto type = specialization.find_type(
@@ -4456,7 +4457,8 @@ namespace {
                 : definition.name;
             result.named_type = result.spelling;
             result.nominal_type = nominal_identity(definition);
-            result.vhdl_type_declaration = result.nominal_type;
+            result.hir_type = definition.id.value();
+            result.vhdl_type_declaration = canonical_name(definition.name);
             // An element subtype names a predefined vector visible where
             // the composite type is declared, which the signal's owner may
             // not see (IEEE 1076-2008 12.3).
@@ -4505,6 +4507,7 @@ namespace {
                     result.spelling = spelling;
                     result.named_type = spelling;
                     result.vhdl_type_declaration = declaration;
+                    result.builtin_declaration = false;
                 }
             } else if (definition.form == TypeForm::enumeration) {
                 result.domain = frontend::ValueDomain::Bit2;
@@ -14844,8 +14847,8 @@ namespace {
         append_local_generic_subprograms(entity);
         append_local_generic_subprograms(architecture);
         if (!applied_configuration_identity.empty()) {
-            specialization.parameter_identity_values.emplace_back(
-                "__configuration", applied_configuration_identity);
+            specialization.configuration_identity
+                = applied_configuration_identity;
         }
         if (!applied_component_identity.empty()) {
             specialization.parameter_identity_values.emplace_back(
@@ -15023,14 +15026,13 @@ namespace {
     // A name that is no built-in type names a typedef, resolved in the
     // declaration's scope even when it is a compilation-unit typedef the
     // reference does not bind (IEEE 1800-2023 3.12.1, 6.18).
-    const auto& spelling = type.target.spelling;
     const bool built_in = type.builtin != support::SystemVerilogBuiltinType::none
         && type.builtin != support::SystemVerilogBuiltinType::void_type;
     return type.target.target.valid()
         || (type.value_form
             && (*type.value_form == semantic::sv::TypeForm::unpacked_structure
                 || *type.value_form == semantic::sv::TypeForm::unpacked_union))
-        || (!spelling.empty() && type.class_identity.empty() && !type.implicit
+        || (type.names_type() && type.class_identity.empty() && !type.implicit
             && !built_in);
 }
 
@@ -17593,10 +17595,9 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit_in_stack(
     validate_verilog_specify(
         unit, *specialized, path, signals, specialization);
     if (active_compiled_systemverilog_configuration_ != nullptr) {
-        specialization.parameter_identity_values.emplace_back(
-            "__configuration",
-            systemverilog_configuration_identity(
-                *active_compiled_systemverilog_configuration_));
+        specialization.configuration_identity
+            = systemverilog_configuration_identity(
+                *active_compiled_systemverilog_configuration_);
     }
 
     std::size_t concurrent_order { };
@@ -17691,7 +17692,7 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit_in_stack(
                   return;
               }
               const auto named = [](const semantic::sv::TypeReference& type) {
-                  return !type.target.spelling.empty()
+                  return type.names_type()
                       && type.builtin
                           == support::SystemVerilogBuiltinType::none
                       && !type.container_form && !type.virtual_interface
@@ -17974,7 +17975,7 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit_in_stack(
             // "<let>/<formal>".
             for (const auto& let : unit_record->lets) {
                 for (const auto& port : let.ports) {
-                    if (!port.type || port.type->target.spelling.empty()
+                    if (!port.type || !port.type->names_type()
                         || port.type->builtin
                             != support::SystemVerilogBuiltinType::none
                         || port.type->container_form
@@ -19839,10 +19840,8 @@ bool HierarchyBuilder::append_compiled_systemverilog_parameter_metadata(
         if (image) {
             published_parameter_names.insert(
                 declaration->systemverilog->name);
-            specialization.parameter_identity_values.emplace_back(
-                // ITEM46-LEFT: name inside parameter_identity_values, a vector of string pairs saved in the artifact; a typed form needs a struct entry with a kind and every reader
-                "@aggregate:" + declaration->systemverilog->name,
-                image->canonical());
+            specialization.aggregate_parameter_identities.emplace_back(
+                declaration->systemverilog->name, image->canonical());
         }
         return true;
     }
@@ -20849,7 +20848,7 @@ HierarchyBuilder::compiled_systemverilog_root_parameter_actuals(
         // A typedef of a real type is a real parameter (6.18).
         auto real_builtin = type ? type->builtin
                                  : support::SystemVerilogBuiltinType::none;
-        if (type && !type->target.spelling.empty()
+        if (type && type->names_type()
             && frontend::systemverilog_scalar_kind(real_builtin)
                 == frontend::SystemVerilogScalarKind::None) {
             if (const auto underlying
@@ -22123,6 +22122,8 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
                 info.vhdl_physical = type.vhdl_physical;
                 info.packed_members = type.packed_members;
                 info.nominal_type = type.nominal_type;
+                info.builtin_nominal = type.builtin_nominal;
+                info.hir_type = type.hir_type;
                 info.enumeration_literals = type.enumeration_literals;
                 info.enumeration_range = type.enumeration_range;
             }
@@ -22797,6 +22798,8 @@ std::optional<SignalId> HierarchyBuilder::add_compiled_vhdl_constant_signal(
         info.packed_range = type->packed_range;
         info.integer_range = type->integer_range;
         info.nominal_type = type->nominal_type;
+        info.builtin_nominal = type->builtin_nominal;
+        info.hir_type = type->hir_type;
         info.direction = frontend::PortDirection::Input;
         info.declaration_span = compiled_source_span(
             *compiled_, declaration.source);
@@ -22853,6 +22856,8 @@ std::optional<SignalId> HierarchyBuilder::add_compiled_vhdl_constant_signal(
     info.packed_members = type->packed_members;
     info.integer_range = type->integer_range;
     info.nominal_type = type->nominal_type;
+    info.builtin_nominal = type->builtin_nominal;
+    info.hir_type = type->hir_type;
     info.direction = frontend::PortDirection::Input;
     info.declaration_span = compiled_source_span(
         *compiled_, declaration.source);
@@ -22928,6 +22933,8 @@ HierarchyBuilder::add_compiled_vhdl_external_constant_signal(
     info.packed_range = type->packed_range;
     info.integer_range = type->integer_range;
     info.nominal_type = type->nominal_type;
+    info.builtin_nominal = type->builtin_nominal;
+    info.hir_type = type->hir_type;
     info.direction = frontend::PortDirection::Input;
     info.declaration_span = compiled_source_span(
         *compiled_, declaration.source);
@@ -23005,6 +23012,8 @@ HierarchyBuilder::add_compiled_vhdl_elaborated_scalar_constant_signal(
     info.packed_range = type->packed_range;
     info.integer_range = type->integer_range;
     info.nominal_type = type->nominal_type;
+    info.builtin_nominal = type->builtin_nominal;
+    info.hir_type = type->hir_type;
     info.direction = frontend::PortDirection::Input;
     info.declaration_span = compiled_source_span(
         *compiled_, declaration.source);
@@ -23127,6 +23136,8 @@ HierarchyBuilder::add_compiled_vhdl_composite_value_signal(
     info.packed_members = type->packed_members;
     info.integer_range = type->integer_range;
     info.nominal_type = type->nominal_type;
+    info.builtin_nominal = type->builtin_nominal;
+    info.hir_type = type->hir_type;
     info.direction = frontend::PortDirection::Input;
     info.declaration_span = compiled_source_span(*compiled_, source);
     const auto runtime_domain = info.source_domain;
@@ -25500,13 +25511,13 @@ bool HierarchyBuilder::materialize_compiled_vhdl_local_package_objects(
         }
         for (const auto& [name, signal] : instance_signals) {
             if (name.find('.') == std::string::npos) {
-                signals.emplace(
+                signals.emplace_storage(
                     vhdl_package_object_key(instance_id, name), signal);
             }
         }
         for (const auto& [name, container] : instance_containers) {
             if (!name.starts_with(instance_path + ".")) {
-                container_objects.emplace(
+                container_objects.emplace_storage(
                     vhdl_package_object_key(instance_id, name), container);
             }
         }
@@ -25551,13 +25562,13 @@ bool HierarchyBuilder::materialize_compiled_vhdl_local_package_objects(
                 }
                 for (const auto& [name, signal] : nested_signals) {
                     if (name.find('.') == std::string::npos) {
-                        signals.emplace(
+                        signals.emplace_storage(
                             vhdl_package_object_key(ids, name), signal);
                     }
                 }
                 for (const auto& [name, container] : nested_containers) {
                     if (!name.starts_with(nested_path + ".")) {
-                        container_objects.emplace(
+                        container_objects.emplace_storage(
                             vhdl_package_object_key(ids, name), container);
                     }
                 }
@@ -25794,9 +25805,7 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
                 : object_type->vhdl->name;
             object.nominal_type = materialized_object_type
                 ? materialized_object_type->nominal_type
-                : "vhdl-hir-type:"
-                    + std::to_string(
-                        object_type->vhdl->id.value())
+                : std::to_string(object_type->vhdl->id.value())
                     + ":" + object_type->vhdl->name;
             object.declaration_span = compiled_source_span(
                 *compiled_, declaration.source);
@@ -27356,6 +27365,8 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
         info.packed_members = type.packed_members;
         info.integer_range = type.integer_range;
         info.nominal_type = type.nominal_type;
+        info.builtin_nominal = type.builtin_nominal;
+        info.hir_type = type.hir_type;
         info.enumeration_literals = type.enumeration_literals;
         info.enumeration_range = type.enumeration_range;
         if (declaration.subtype->type_mark.target.valid()) {
@@ -27388,6 +27399,8 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
                 info.nominal_type = std::string { logical_name }
                     + ":" + definition->vhdl->name + ":"
                     + std::string { working_path };
+                info.builtin_nominal = false;
+                info.hir_type.reset();
             }
         }
     }

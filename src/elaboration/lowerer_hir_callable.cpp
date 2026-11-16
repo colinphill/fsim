@@ -624,6 +624,7 @@ namespace {
             && left.signed_elements == right.signed_elements
             && left.union_aggregate == right.union_aggregate
             && left.element_nominal_type == right.element_nominal_type
+            && left.element_builtin_nominal == right.element_builtin_nominal
             && left.element_nominal_type_id == right.element_nominal_type_id
             && left.element_types == right.element_types
             && left.member_names == right.member_names;
@@ -948,6 +949,8 @@ std::optional<ContainerType> Lowerer::hir_systemverilog_container_type(
         result.element_width = 0U;
         result.element_nominal_type
             = element_type->element_nominal_type;
+        result.element_builtin_nominal
+            = element_type->element_builtin_nominal;
         result.element_nominal_type_id
             = element_type->element_nominal_type_id;
         result.element_types.push_back(std::move(*element_type));
@@ -959,6 +962,8 @@ std::optional<ContainerType> Lowerer::hir_systemverilog_container_type(
         result.signed_elements = element_type->signed_elements;
         result.union_aggregate = element_type->union_aggregate;
         result.element_nominal_type = element_type->element_nominal_type;
+        result.element_builtin_nominal
+            = element_type->element_builtin_nominal;
         result.element_nominal_type_id
             = element_type->element_nominal_type_id;
         result.element_types = std::move(element_type->element_types);
@@ -3065,7 +3070,7 @@ Lowerer::hir_class_property_profile(
     // A property typed by a type parameter whose actual is a class holds a
     // handle (IEEE 1800-2017 8.25); the access carries the actual class.
     const auto typed_by_type_parameter = [&] {
-        if (selected->type.target.spelling.empty()) {
+        if (!selected->type.names_type()) {
             return false;
         }
         for (const auto& candidate :
@@ -3086,7 +3091,7 @@ Lowerer::hir_class_property_profile(
     };
     // Inside a method frame that binds the property's type parameter to a
     // class handle, the shared body reads the handle.
-    const bool frame_handle_type = !selected->type.target.spelling.empty()
+    const bool frame_handle_type = selected->type.names_type()
         && active_hir_callable_
         && *active_hir_callable_ < hir_callable_frames_.size()
         && std::ranges::find(
@@ -5884,7 +5889,7 @@ Lowerer::hir_class_task_profile(
     }
 
     auto selected_declaration = std::optional<semantic::DeclarationId> { };
-    auto interface_receiver = std::optional<std::string> { };
+    auto interface_receiver = InterfaceReceiver { };
     bool instance_function { };
     const semantic::sv::ClassMethod* selected = nullptr;
     if (class_call) {
@@ -5975,7 +5980,7 @@ Lowerer::hir_class_task_profile(
                 instance_function = selected_declaration.has_value();
             }
             if (selected_declaration) {
-                interface_receiver = std::string { receiver };
+                interface_receiver = InterfaceReceiver::named(receiver);
             } else if (const auto instance = hir_instance_callable(
                            receiver, identity.substr(separator + 1U), false)) {
                 // `u.t(...)`: a task of a module instance (23.8).
@@ -6011,7 +6016,7 @@ Lowerer::hir_class_task_profile(
                             receiver, identity.substr(separator + 1U),
                             function)) {
                         selected_declaration = *prototype;
-                        interface_receiver = std::string { receiver };
+                        interface_receiver = InterfaceReceiver::named(receiver);
                         instance_function = function;
                         break;
                     }
@@ -6099,12 +6104,12 @@ Lowerer::hir_class_task_profile(
     }
     // An unqualified call from one interface task to another runs on the
     // caller's instance (IEEE 1800-2017 25.7).
-    if (!class_call && !interface_receiver
+    if (!class_call && interface_receiver.empty()
         && identity.find_first_of(".:") == std::string_view::npos
         && active_hir_callable_
         && *active_hir_callable_ < hir_callable_frames_.size()) {
         const auto& caller = hir_callable_frames_[*active_hir_callable_];
-        const auto caller_declaration = caller.interface_receiver
+        const auto caller_declaration = !caller.interface_receiver.empty()
             ? specialized_hir_unit_->find_declaration(caller.declaration)
             : std::nullopt;
         if (caller_declaration && caller_declaration->systemverilog != nullptr
@@ -6115,22 +6120,17 @@ Lowerer::hir_class_task_profile(
     }
     // `ifc.t()` inside a task of a module instance called by its path
     // (`u.t2()`, 23.8) names that instance's interface port or instance.
-    if (!class_call && interface_receiver
-        // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
-        && !interface_receiver->starts_with("@instance:")
+    if (!class_call
+        && interface_receiver.kind == InterfaceReceiver::Kind::name
         && systemverilog_interface_types_ != nullptr && active_hir_callable_
         && *active_hir_callable_ < hir_callable_frames_.size()) {
         const auto& caller = hir_callable_frames_[*active_hir_callable_];
-        if (caller.interface_receiver
-            // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
-            && caller.interface_receiver->starts_with("@instance:")) {
-            auto path = caller.interface_receiver->substr(
-                            // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
-                            std::string_view { "@instance:" }.size())
-                + "." + *interface_receiver;
+        if (caller.interface_receiver.is_instance_path()) {
+            auto path = caller.interface_receiver.text + "."
+                + interface_receiver.text;
             if (systemverilog_interface_types_->contains(path)) {
-                // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
-                interface_receiver = "@instance:" + std::move(path);
+                interface_receiver = InterfaceReceiver::instance(
+                    std::move(path));
             }
         }
     }
@@ -6334,7 +6334,7 @@ Lowerer::bind_hir_class_actuals(
             && formal_record.type->class_identity.empty()
             && !formal_record.type->container_form
             && !formal_record.type->packed_range
-            && !formal_record.type->target.spelling.empty()) {
+            && formal_record.type->names_type()) {
             const auto bound = hir_resolver().effective_systemverilog_type(
                 *formal_record.type, formal_record.scope);
             if (bound && bound->value_form == semantic::sv::TypeForm::string
@@ -6400,7 +6400,7 @@ Lowerer::bind_hir_class_actuals(
             return false;
         };
         if (formal_record.type->class_identity.empty()
-            && !formal_record.type->target.spelling.empty()
+            && formal_record.type->names_type()
             && class_type_parameter()) {
             const auto actual_record
                 = specialized_hir_unit_->find_expression(expression);
@@ -7271,8 +7271,10 @@ std::optional<RegisterId> Lowerer::lower_hir_uvm_lowered_create(
         LoadStringConstant { list, std::move(lowered_classes) });
     actuals.push_back(list);
     actual_kinds.push_back(1U);
-    // ITEM46-LEFT: a reserved actual name marks the list actual of a lowered registry create; needs a typed flag on ClassStaticMethodCall and the static hook, like the result-string marker
-    actual_names.emplace_back("@lowered-constructors");
+    std::vector<CallActualRole> actual_roles(
+        actual_names.size(), CallActualRole::argument);
+    actual_roles.push_back(CallActualRole::lowered_constructors);
+    actual_names.emplace_back();
     actual_directions.push_back(
         static_cast<std::uint8_t>(frontend::PortDirection::Input));
     const auto handle = allocate_register(64U, frontend::ValueDomain::Bit2);
@@ -7287,6 +7289,7 @@ std::optional<RegisterId> Lowerer::lower_hir_uvm_lowered_create(
         actual_kinds,
     };
     allocation.class_specialization = profile.registry_specialization;
+    allocation.actual_roles = std::move(actual_roles);
     process_.operations.emplace_back(std::move(allocation));
     reload_hir_class_container_caches();
     // The factory constructs the object with the create's name and parent
@@ -7995,7 +7998,7 @@ bool Lowerer::lower_uvm_api_constructor(
         constructor->declaration,
         constructor->canonical_identity,
         std::nullopt,
-        std::nullopt,
+        InterfaceReceiver { },
         std::move(bound),
         false,
         true,
@@ -8336,7 +8339,7 @@ bool Lowerer::lower_hir_class_construction(
             constructor->declaration,
             constructor->canonical_identity,
             std::nullopt,
-            std::nullopt,
+            InterfaceReceiver { },
             std::move(*bound),
             false,
             true,
@@ -9463,7 +9466,7 @@ Lowerer::lower_hir_class_function_call(
         profile.declaration,
         profile.identity,
         profile.receiver,
-        std::nullopt,
+        InterfaceReceiver { },
         profile.actuals,
         profile.static_method,
         true,
@@ -9734,6 +9737,7 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
     std::vector<RegisterId> actuals;
     std::vector<std::uint8_t> actual_kinds;
     std::vector<std::string> actual_names;
+    std::vector<CallActualRole> actual_roles;
     std::vector<std::uint8_t> actual_directions;
     actuals.reserve(profile->actuals.size());
     actual_kinds.reserve(profile->actuals.size());
@@ -9865,8 +9869,9 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
         process_.operations.emplace_back(LoadStringConstant { text, { } });
         actuals.push_back(text);
         actual_kinds.push_back(1U);
-        // ITEM46-LEFT: the trailing string actual of a call is marked by a reserved actual name that travels through every class hook, the VPI and VHPI call models and the class executor; a typed result flag on the call operations and the hook signatures is needed
-        actual_names.emplace_back("@result-string");
+        actual_roles.assign(actual_names.size(), CallActualRole::argument);
+        actual_roles.push_back(CallActualRole::string_result);
+        actual_names.emplace_back();
         actual_directions.push_back(
             static_cast<std::uint8_t>(frontend::PortDirection::Output));
         *string_result = text;
@@ -9950,6 +9955,7 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
             static_cast<std::uint32_t>(profile->result_width),
             actual_kinds,
         };
+        operation.actual_roles = actual_roles;
         operation.class_specialization = hir_static_call_specialization(
             profile->identity, profile->declaration, profile->specialization);
         if (!profile->registry_specialization.empty()) {
@@ -9971,6 +9977,7 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
         operation.inline_constraints = std::move(*inline_constraints);
         operation.hook = profile->builtin;
         operation.randomize_no_properties = randomize_without_properties;
+        operation.actual_roles = actual_roles;
         process_.operations.emplace_back(std::move(operation));
     }
     reload_hir_class_container_caches();
@@ -10171,7 +10178,7 @@ bool Lowerer::lower_hir_randomize_callback(const semantic::SourceSpanId source,
             item.declaration,
             item.identity,
             std::nullopt,
-            std::nullopt,
+            InterfaceReceiver { },
             { },
             false,
             true,
@@ -10854,18 +10861,18 @@ bool Lowerer::allocate_hir_static_callable_declarations(
 
 std::optional<std::pair<semantic::DeclarationId,
     std::vector<std::pair<std::uint64_t, std::string>>>>
-Lowerer::hir_virtual_interface_instances(const std::string_view receiver,
-    const semantic::ScopeId scope) const
+Lowerer::hir_virtual_interface_instances(
+    const InterfaceReceiver& receiver_name, const semantic::ScopeId scope) const
 {
     // The instances a virtual interface variable named `receiver` can
     // designate: every instance of its interface type, by handle.
-    if (specialized_hir_unit_ == nullptr || receiver.empty()
-        // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
-        || receiver.starts_with("@instance:")
+    if (specialized_hir_unit_ == nullptr
+        || receiver_name.kind != InterfaceReceiver::Kind::name
         || systemverilog_interface_handles_ == nullptr
         || systemverilog_interface_types_ == nullptr) {
         return std::nullopt;
     }
+    const std::string_view receiver { receiver_name.text };
     const auto resolve_handle = [&](const std::string_view name) {
         return hir_resolver()
             .resolve_systemverilog(
@@ -10997,13 +11004,13 @@ bool Lowerer::lower_hir_class_task_call(
     }
     // A step task of an export scope runs in that instance (IEEE 1800-2023
     // 35.5.3).
-    if (hir_task_receiver_override_ && !profile->static_method) {
+    if (!hir_task_receiver_override_.empty() && !profile->static_method) {
         profile->interface_receiver
-            = *std::exchange(hir_task_receiver_override_, std::nullopt);
+            = std::exchange(hir_task_receiver_override_, { });
     }
     if (!profile->static_method && !profile->receiver) {
         record_vpi_callee(true, statement_id.value(), profile->declaration,
-            profile->interface_receiver.value_or(std::string { }));
+            profile->interface_receiver);
     }
     if (!profile->static_method) {
         if (const auto exact = hir_class_receiver_instance_specialization(
@@ -11021,7 +11028,7 @@ bool Lowerer::lower_hir_class_task_call(
             return false;
         }
     } else if (!profile->static_method && hir_class_receiver_register_
-        && !profile->interface_receiver
+        && profile->interface_receiver.empty()
         && std::ranges::any_of(
             specialized_hir_unit_->design().systemverilog_hir.classes(),
             [&](const semantic::sv::ClassDeclaration& owner) {
@@ -11107,8 +11114,7 @@ bool Lowerer::lower_hir_class_task_call(
                         profile->forkjoin.bodies) {
                         (void)other;
                         if (other_path != path
-                            && under(alias,
-                                hir_forkjoin_module_path(other_path))) {
+                            && under(alias, other_path.text)) {
                             other_exporter = true;
                         }
                     }
@@ -11650,15 +11656,13 @@ bool Lowerer::lower_hir_class_task_call(
     // A task of the interface a virtual interface handle names (`v.t()`,
     // IEEE 1800-2017 25.9) runs on that instance: test the handle against
     // each instance of the interface type.
-    if (profile->interface_receiver
-        // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
-        && !profile->interface_receiver->starts_with("@instance:")
+    if (profile->interface_receiver.kind == InterfaceReceiver::Kind::name
         && systemverilog_interface_handles_ != nullptr
         && systemverilog_interface_types_ != nullptr) {
         const auto statement = specialized_hir_unit_->find_statement(
             statement_id);
         const auto dispatch = hir_virtual_interface_instances(
-            *profile->interface_receiver,
+            profile->interface_receiver,
             statement && statement->systemverilog != nullptr
                 ? statement->systemverilog->scope
                 : semantic::ScopeId { });
@@ -11674,8 +11678,7 @@ bool Lowerer::lower_hir_class_task_call(
                     instances, [&](const std::string& path) {
                         auto instance_profile = *profile;
                         instance_profile.interface_receiver
-                            // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
-                            = "@instance:" + path;
+                            = InterfaceReceiver::instance(path);
                         return lower_hir_class_task_invocation(
                             statement_id, instance_profile, receiver);
                     });
@@ -12147,6 +12150,7 @@ bool Lowerer::lower_hir_class_task_invocation(
         std::vector<RegisterId> actuals;
         std::vector<std::uint8_t> actual_kinds;
         std::vector<std::string> actual_names;
+        std::vector<CallActualRole> actual_roles;
         std::vector<std::uint8_t> actual_directions;
         const auto hidden_string_result = type->string ? 1U : 0U;
         actuals.reserve(profile.actuals.size() + hidden_string_result);
@@ -12198,8 +12202,9 @@ bool Lowerer::lower_hir_class_task_invocation(
                 result, { } });
             actuals.push_back(result);
             actual_kinds.push_back(1U);
-            // ITEM46-LEFT: the trailing string actual of a call is marked by a reserved actual name that travels through every class hook, the VPI and VHPI call models and the class executor; a typed result flag on the call operations and the hook signatures is needed
-            actual_names.emplace_back("@result-string");
+            actual_roles.assign(actual_names.size(), CallActualRole::argument);
+            actual_roles.push_back(CallActualRole::string_result);
+            actual_names.emplace_back();
             actual_directions.push_back(
                 static_cast<std::uint8_t>(frontend::PortDirection::Output));
         }
@@ -12213,7 +12218,7 @@ bool Lowerer::lower_hir_class_task_invocation(
         // A runtime method sees, and may change, this object's container
         // properties.
         flush_hir_class_container_caches();
-        process_.operations.emplace_back(ClassMethodCall {
+        ClassMethodCall method_call {
             destination,
             *receiver,
             profile.identity,
@@ -12223,7 +12228,9 @@ bool Lowerer::lower_hir_class_task_invocation(
             static_cast<std::uint32_t>(result_width),
             virtual_dispatch,
             actual_kinds,
-        });
+        };
+        method_call.actual_roles = std::move(actual_roles);
+        process_.operations.emplace_back(std::move(method_call));
         reload_hir_class_container_caches();
         for (std::size_t index { }; index < profile.actuals.size(); ++index) {
             const auto& actual = profile.actuals[index];
@@ -12336,9 +12343,9 @@ Lowerer::lower_hir_class_callable_invocation(
     auto frame_index = hir_callable_frames_.size();
     bool new_frame { true };
     CallableKeyReservation key_reservation;
-    if (profile.interface_receiver) {
+    if (!profile.interface_receiver.empty()) {
         const auto key = std::to_string(profile.declaration.value())
-            + ":" + *profile.interface_receiver + ref_key;
+            + ":" + profile.interface_receiver.key() + ref_key;
         const auto found = hir_interface_callable_indices_.find(key);
         if (found != hir_interface_callable_indices_.end()) {
             frame_index = found->second;
@@ -12382,8 +12389,8 @@ Lowerer::lower_hir_class_callable_invocation(
         // A task called through an interface instance has that instance's
         // types (IEEE 1800-2017 25.7); a class of a generated scope runs
         // in that scope.
-        const auto* const callee_unit = profile.interface_receiver
-            ? hir_callee_unit(*profile.interface_receiver)
+        const auto* const callee_unit = !profile.interface_receiver.empty()
+            ? hir_callee_unit(profile.interface_receiver)
             : profile.specialization
             ? hir_generate_class_unit(*profile.specialization)
             : nullptr;
@@ -13282,11 +13289,9 @@ Lowerer::lookup_hir_effective_vhdl_subtype(
         }
         auto scoped_subtype = subtype;
         const auto resolver = hir_resolver();
-        constexpr auto builtin_prefix = semantic::vhdl::builtin_prefix;
         if (!scoped_subtype.type_mark.target.valid()
             && !scoped_subtype.type_mark.spelling.empty()
-            && !scoped_subtype.type_mark.spelling.starts_with(
-                builtin_prefix)) {
+            && !scoped_subtype.type_mark.builtin_declaration) {
             if (const auto named_type = resolver.resolve_vhdl_named_type(
                     scoped_subtype.type_mark.spelling, hir_process_scope_)) {
                 // Restoring the visible nominal type lets the resolver derive
@@ -14075,16 +14080,6 @@ Lowerer::hir_interface_instance_through_modport(
     }
 }
 
-std::string_view Lowerer::hir_forkjoin_module_path(
-    const std::string_view receiver) noexcept
-{
-    // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
-    constexpr std::string_view instance_prefix { "@instance:" };
-    return receiver.starts_with(instance_prefix)
-        ? receiver.substr(instance_prefix.size())
-        : receiver;
-}
-
 std::optional<semantic::DeclarationId> Lowerer::hir_interface_port_prototype(
     const std::string_view receiver, const std::string_view member,
     const bool function) const
@@ -14129,7 +14124,7 @@ std::optional<semantic::DeclarationId> Lowerer::hir_interface_port_prototype(
     }
 }
 
-std::optional<std::pair<semantic::DeclarationId, std::string>>
+std::optional<std::pair<semantic::DeclarationId, InterfaceReceiver>>
 Lowerer::hir_exported_interface_callable(const std::string_view receiver,
     const semantic::DeclarationId declaration, const bool function,
     HirForkjoinBodies* const forkjoin) const
@@ -14223,11 +14218,10 @@ Lowerer::hir_exported_interface_callable(const std::string_view receiver,
         }
         // A call through a module instance (`top.m1.a.t()`, 25.7.4) is the
         // call of that module's body only.
-        std::optional<std::string> selected_module;
+        std::optional<InterfaceReceiver> selected_module;
         for (const auto& [other, other_receiver] : forkjoin->bodies) {
             (void)other;
-            const auto other_path
-                = hir_forkjoin_module_path(other_receiver);
+            const std::string_view other_path { other_receiver.text };
             if (reached_by.size() > other_path.size() + 1U
                 && reached_by.starts_with(other_path)
                 && reached_by[other_path.size()] == '.'
@@ -14241,20 +14235,21 @@ Lowerer::hir_exported_interface_callable(const std::string_view receiver,
                 return body.second != *selected_module;
             });
         }
-        return std::pair { declaration, std::string { receiver } };
+        return std::pair { declaration, InterfaceReceiver::named(receiver) };
     }
     const auto exporter = systemverilog_interface_exports_->find(key);
     if (exporter == systemverilog_interface_exports_->end()) {
         // The exporting instance may be elaborated after this process; the
         // call fails and the process is retried then.
         hierarchical_reference_missed_ = true;
-        return std::pair { semantic::DeclarationId { }, std::string { } };
+        return std::pair { semantic::DeclarationId { }, InterfaceReceiver { } };
     }
     return hir_instance_callable(exporter->second, name, function)
-        .value_or(std::pair { semantic::DeclarationId { }, std::string { } });
+        .value_or(std::pair {
+            semantic::DeclarationId { }, InterfaceReceiver { } });
 }
 
-std::optional<std::pair<semantic::DeclarationId, std::string>>
+std::optional<std::pair<semantic::DeclarationId, InterfaceReceiver>>
 Lowerer::hir_instance_callable(const std::string_view receiver,
     const std::string_view member, const bool function) const
 {
@@ -14326,7 +14321,7 @@ Lowerer::hir_instance_callable(const std::string_view receiver,
             return std::nullopt;
         }
         if (local.first) {
-            return std::pair { *local.first, std::string { receiver } };
+            return std::pair { *local.first, InterfaceReceiver::named(receiver) };
         }
         if (ancestor_systemverilog_specializations_ != nullptr
             && !hierarchy_.empty()) {
@@ -14378,8 +14373,7 @@ Lowerer::hir_instance_callable(const std::string_view receiver,
                 target_path += ".";
                 target_path.append(receiver.data(), receiver.size());
                 return std::pair { *parent_member.first,
-                    // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
-                    "@instance:" + target_path };
+                    InterfaceReceiver::instance(std::move(target_path)) };
             }
         }
     }
@@ -14545,8 +14539,8 @@ Lowerer::hir_instance_callable(const std::string_view receiver,
         hierarchical_reference_missed_ = true;
         return std::nullopt;
     }
-    // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
-    return std::pair { *selected, "@instance:" + target_path };
+    return std::pair { *selected,
+        InterfaceReceiver::instance(std::move(target_path)) };
 }
 
 std::optional<Lowerer::HirCallableType> Lowerer::hir_callable_type(
@@ -14578,7 +14572,7 @@ std::optional<Lowerer::HirCallableType> Lowerer::hir_callable_type(
         if (!hir_generic_binding_frames_.empty()
             && source.type->class_identity.empty()
             && !source.type->container_form && !source.type->packed_range
-            && !source.type->target.spelling.empty()) {
+            && source.type->names_type()) {
             const auto bound = hir_resolver().effective_systemverilog_type(
                 *source.type, source.scope);
             if (bound
@@ -16337,7 +16331,6 @@ Lowerer::hir_vhdl_function_result_proof(
                 const auto builtin_unsigned_visible = [&] (
                     std::string_view spelling,
                     const semantic::ScopeId scope) {
-                    spelling = semantic::vhdl::without_builtin_prefix(spelling);
                     if (const auto separator
                             = spelling.find_last_of(":.");
                         separator != std::string_view::npos) {
@@ -16820,7 +16813,6 @@ Lowerer::hir_vhdl_function_result_proof(
         };
         const auto exact_standard_spelling = [](
             std::string_view spelling, const std::string_view type_name) {
-            spelling = semantic::vhdl::without_builtin_prefix(spelling);
             const auto standard_name
                 = std::string { "standard." } + std::string { type_name };
             const auto fully_qualified
@@ -16836,11 +16828,6 @@ Lowerer::hir_vhdl_function_result_proof(
             const std::string_view type_name,
             std::unordered_set<std::uint32_t>& visited_types,
             std::unordered_set<std::uint32_t>& visited_declarations) -> bool {
-            constexpr auto builtin_prefix = semantic::vhdl::builtin_prefix;
-            if (name.spelling.starts_with(builtin_prefix)) {
-                name.spelling.erase(0U, builtin_prefix.size());
-                name.canonical = name.spelling;
-            }
             if (!name.spelling.empty()) {
                 const auto visible = resolver.resolve_vhdl(
                     name, scope, [](const auto&) { return true; });
@@ -17031,15 +17018,7 @@ Lowerer::hir_vhdl_function_result_proof(
                 expected_element_name.canonical
                     = expected_element->type_mark.spelling;
             }
-            auto expected_element_resolver_name = expected_element_name;
-            constexpr auto builtin_type_prefix = semantic::vhdl::builtin_prefix;
-            if (expected_element_resolver_name.spelling.starts_with(
-                    builtin_type_prefix)) {
-                expected_element_resolver_name.spelling.erase(
-                    0U, builtin_type_prefix.size());
-                expected_element_resolver_name.canonical
-                    = expected_element_resolver_name.spelling;
-            }
+            const auto& expected_element_resolver_name = expected_element_name;
             auto expected_element_definition_type = expected_element_type;
             bool expected_element_is_standard_bit_vector
                 { };
@@ -17382,8 +17361,7 @@ Lowerer::hir_vhdl_function_result_proof(
                           || expression.builtin_operator
                               != semantic::vhdl::BuiltinOperatorIdentity::none
                           || (!expression.nominal_type.empty()
-                              // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
-                              && expression.nominal_type != "@builtin:integer")
+                              && !semantic::vhdl::is_builtin_nominal(expression, "integer"))
                           || !expression.referenced_name
                           || expression.referenced_name->spelling
                               != expression.text
@@ -17401,9 +17379,7 @@ Lowerer::hir_vhdl_function_result_proof(
                           == semantic::vhdl::ExpressionKind::integer_literal
                           && operand->vhdl->operands.empty()
                           && (operand->vhdl->nominal_type.empty()
-                              || operand->vhdl->nominal_type
-                                  // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
-                                  == "@builtin:integer");
+                              || semantic::vhdl::is_builtin_nominal(*operand->vhdl, "integer"));
                   };
             const auto is_runtime_standard_integer_expression
                 = [&](const auto& self,
@@ -17420,9 +17396,7 @@ Lowerer::hir_vhdl_function_result_proof(
                     == semantic::vhdl::ExpressionKind::integer_literal) {
                     return source.operands.empty()
                         && (source.nominal_type.empty()
-                            || source.nominal_type
-                                // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
-                                == "@builtin:integer");
+                            || semantic::vhdl::is_builtin_nominal(source, "integer"));
                 }
                 if (source.kind
                         == semantic::vhdl::ExpressionKind::unary
@@ -17431,8 +17405,7 @@ Lowerer::hir_vhdl_function_result_proof(
                     && source.builtin_operator
                         == semantic::vhdl::BuiltinOperatorIdentity::none
                     && (source.nominal_type.empty()
-                        // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
-                        || source.nominal_type == "@builtin:integer")
+                        || semantic::vhdl::is_builtin_nominal(source, "integer"))
                     && source.referenced_name
                     && source.referenced_name->spelling == source.text
                     && !source.referenced_name->selected
@@ -17446,8 +17419,7 @@ Lowerer::hir_vhdl_function_result_proof(
                         == semantic::vhdl::ExpressionKind::name
                     && source.operands.empty()
                     && (source.nominal_type.empty()
-                        // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
-                        || source.nominal_type == "@builtin:integer")
+                        || semantic::vhdl::is_builtin_nominal(source, "integer"))
                     && source.referenced_name
                     && source.referenced_name->selected
                     && source.referenced_name->overloads.size() == 1U
@@ -17483,8 +17455,7 @@ Lowerer::hir_vhdl_function_result_proof(
                     && source.builtin_operator
                         == semantic::vhdl::BuiltinOperatorIdentity::none
                     && (source.nominal_type.empty()
-                        // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
-                        || source.nominal_type == "@builtin:integer")
+                        || semantic::vhdl::is_builtin_nominal(source, "integer"))
                     && source.referenced_name
                     && source.referenced_name->spelling == source.text
                     && !source.referenced_name->selected
@@ -17509,9 +17480,7 @@ Lowerer::hir_vhdl_function_result_proof(
                         if (element->vhdl->kind
                                 == semantic::vhdl::ExpressionKind::integer_literal
                             && (element->vhdl->nominal_type.empty()
-                                || element->vhdl->nominal_type
-                                    // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
-                                    == "@builtin:integer")) {
+                                || semantic::vhdl::is_builtin_nominal(*element->vhdl, "integer"))) {
                             // Untyped integer literals are universal integers;
                             // this exact compiler marker is the only typed
                             // literal identity that bypasses type resolution.
@@ -18288,18 +18257,22 @@ Lowerer::hir_interface_function_profile(
     const auto& call = *expression->systemverilog;
     // The step function of another instance's exports runs in that
     // instance (IEEE 1800-2023 35.5.3).
-    // ITEM28-LEFT: the DPI export service is a name protocol end to end: the
-    // parser generates the hidden imports and hooks as text, and the runtime
-    // reads the mask and linkage out of their C identity; it needs a typed DPI
-    // call identity (runtime operation fields, codec) before the names can go.
-    if (hir_interface_receiver_override_
-        // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
-        && hir_interface_receiver_override_->starts_with("@instance:")
-        && call.kind == semantic::sv::ExpressionKind::call
-        && call.text.starts_with("__fsim_dpi_export_step")) {
+    if (hir_interface_receiver_override_.is_instance_path()
+        && call.kind == semantic::sv::ExpressionKind::call) {
         if (const auto callee = hir_referenced_declaration(expression_id)) {
-            return HirInterfaceFunctionProfile {
-                *callee, *hir_interface_receiver_override_, { } };
+            const auto callee_declaration
+                = specialized_hir_unit_->find_declaration(*callee);
+            const auto role = callee_declaration
+                    && callee_declaration->systemverilog != nullptr
+                    && callee_declaration->systemverilog->callable
+                ? callee_declaration->systemverilog->callable->dpi_export_role
+                : support::DpiExportCallableRole::none;
+            if (role == support::DpiExportCallableRole::step
+                || role == support::DpiExportCallableRole::step_hook
+                || role == support::DpiExportCallableRole::block_step) {
+                return HirInterfaceFunctionProfile {
+                    *callee, hir_interface_receiver_override_, { } };
+            }
         }
     }
     // An unqualified call from a function or task of a module instance
@@ -18311,9 +18284,7 @@ Lowerer::hir_interface_function_profile(
         && active_hir_callable_
         && *active_hir_callable_ < hir_callable_frames_.size()) {
         const auto& caller = hir_callable_frames_[*active_hir_callable_];
-        const auto callee = caller.interface_receiver
-                // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
-                && caller.interface_receiver->starts_with("@instance:")
+        const auto callee = caller.interface_receiver.is_instance_path()
             ? hir_referenced_declaration(expression_id)
             : std::nullopt;
         const auto callee_declaration = callee
@@ -18330,7 +18301,7 @@ Lowerer::hir_interface_function_profile(
             && caller_declaration->systemverilog->scope
                 == callee_declaration->systemverilog->scope) {
             return HirInterfaceFunctionProfile {
-                *callee, *caller.interface_receiver, { } };
+                *callee, caller.interface_receiver, { } };
         }
     }
     if (call.kind != semantic::sv::ExpressionKind::call
@@ -18412,7 +18383,8 @@ Lowerer::hir_interface_function_profile(
                 exported->first, exported->second, { } };
         }
         return HirInterfaceFunctionProfile {
-            *declaration, receiver_name, receiver_scope };
+            *declaration, InterfaceReceiver::named(receiver_name),
+            receiver_scope };
     }
     // `u.f(...)`: a function of a module instance (23.8), or of an
     // interface instance through one of its modports (25.5).
@@ -19071,17 +19043,21 @@ bool Lowerer::hir_vhdl_actual_matches_formal(
     // 1076-2019 16.12): a RECORD_VALUE_MIRROR is not a VALUE_MIRROR.
     if (formal_subtype && !formal_subtype->type_mark.target.valid()) {
         constexpr std::string_view reflection_prefix {
-            // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
-            "@builtin:std.reflection."
+            "std.reflection."
         };
-        const auto reflection_mark = [&](const std::string_view spelling) {
-            return spelling.size() > reflection_prefix.size()
+        // A mirror type is a predefined type the tool supplies in package
+        // STD.REFLECTION.
+        const auto reflection_mark
+            = [&](const semantic::TypeReference& mark) {
+            return mark.builtin_declaration
+                && mark.spelling.size() > reflection_prefix.size()
                 && equal_ignoring_ascii_case(
-                    spelling.substr(0U, reflection_prefix.size()),
+                    std::string_view { mark.spelling }.substr(
+                        0U, reflection_prefix.size()),
                     reflection_prefix);
         };
         const auto& formal_mark = formal_subtype->type_mark.spelling;
-        if (reflection_mark(formal_mark)) {
+        if (reflection_mark(formal_subtype->type_mark)) {
             auto actual_subtype = hir_vhdl_expression_subtype(actual_id);
             if (actual_subtype) {
                 if (auto effective
@@ -19090,7 +19066,7 @@ bool Lowerer::hir_vhdl_actual_matches_formal(
                 }
             }
             if (actual_subtype
-                && reflection_mark(actual_subtype->type_mark.spelling)
+                && reflection_mark(actual_subtype->type_mark)
                 && !equal_ignoring_ascii_case(
                     actual_subtype->type_mark.spelling, formal_mark)) {
                 return false;
@@ -19132,7 +19108,6 @@ bool Lowerer::hir_vhdl_actual_matches_formal(
             auto spelling = std::string_view {
                 subtype.type_mark.spelling
             };
-            spelling = semantic::vhdl::without_builtin_prefix(spelling);
             spelling = simple_name_of(spelling);
             return same_hir_identifier(spelling, "line", true)
                 && hir_resolver().vhdl_builtin_type_visible(
@@ -20331,6 +20306,9 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
 {
     HirDpiFunctionProfile result;
     result.linkage_name = declaration.linkage_name;
+    result.hidden_role = declaration.hidden_role;
+    result.export_result = declaration.export_result;
+    result.export_flows = declaration.export_flows;
     result.origin = declaration.origin;
     result.owner_scope = declaration.owner_scope;
     // Typedef names resolve in the declaration's scope (35.5.6).
@@ -20532,24 +20510,18 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
         const bool open = open_dimension || type->open_packed;
         // An array of strings passes one `const char*` per element (IEEE
         // 1800-2023 35.5.6, H.7.4); an export has none.
-        // ITEM28-LEFT: the DPI export service is a name protocol end to end: the
-        // parser generates the hidden imports and hooks as text, and the runtime
-        // reads the mask and linkage out of their C identity; it needs a typed DPI
-        // call identity (runtime operation fields, codec) before the names can go.
         if (type->string && array
-            && declaration.linkage_name.starts_with("__fsim_dpi_export_")) {
+            && declaration.hidden_role != support::DpiHiddenImportRole::none) {
             return std::nullopt;
         }
         // An export's result passes as the first formal of its service
         // import; it is a small value like an import's (IEEE 1800-2023
-        // 35.5.5).
-        // ITEM28-LEFT: the DPI export service is a name protocol end to end: the
-        // parser generates the hidden imports and hooks as text, and the runtime
-        // reads the mask and linkage out of their C identity; it needs a typed DPI
-        // call identity (runtime operation fields, codec) before the names can go.
+        // 35.5.5). Only the result import of an export without formals is
+        // checked here, as before.
         if (index == 0U
-            && declaration.linkage_name.starts_with(
-                "__fsim_dpi_export_return_r__")
+            && declaration.hidden_role
+                == support::DpiHiddenImportRole::results
+            && declaration.export_result && declaration.export_flows.empty()
             && (open || array || type->code == 'R' || type->code == 'V'
                 || type->code == 'B')) {
             illegal(DpiTypeIssue::not_small_value, formal.type_tokens, true);
@@ -20788,11 +20760,10 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
         }
         entry.open_array = std::move(*container);
     }
-    result.signature = arguments + ':' + result_code
-        + (declaration.qualifier == semantic::sv::DpiQualifier::context
-                // ITEM46-LEFT: the DPI import identity is a text descriptor parsed by the DPI service, the kernel plan and the VPI and VHPI loaders; a typed form needs a descriptor on the call operation
-                ? "@c"
-                : "");
+    result.arguments = std::move(arguments);
+    result.result_code = static_cast<std::uint8_t>(result_code);
+    result.context
+        = declaration.qualifier == semantic::sv::DpiQualifier::context;
     return result;
 }
 
@@ -21162,7 +21133,7 @@ std::optional<RegisterId> Lowerer::lower_hir_callable_actual(
             const auto& formal_type = *declaration->systemverilog->type;
             builtin = formal_type.builtin;
             // A formal of a type alias of a real type is real (6.18).
-            if (!formal_type.target.spelling.empty()
+            if (formal_type.names_type()
                 && frontend::systemverilog_scalar_kind(builtin) == Kind::None) {
                 if (const auto underlying
                     = hir_resolver().underlying_systemverilog_type(
@@ -22347,9 +22318,9 @@ Lowerer::lower_hir_function_call_value(
         ? hir_interface_function_profile(
               expression_id, hir_process_scope_)
         : std::nullopt;
-    if (interface_callable && hir_interface_receiver_override_) {
-        interface_callable->receiver = *std::exchange(
-            hir_interface_receiver_override_, std::nullopt);
+    if (interface_callable && !hir_interface_receiver_override_.empty()) {
+        interface_callable->receiver
+            = std::exchange(hir_interface_receiver_override_, { });
     } else if (interface_callable) {
         // A function of the interface a virtual interface handle names
         // (`v.f()`, IEEE 1800-2017 25.9) runs on that instance: test the
@@ -22384,12 +22355,12 @@ Lowerer::lower_hir_function_call_value(
             }
             const bool dispatched = lower_hir_virtual_interface_dispatch(
                 *handle, dispatch->second, [&](const std::string& path) {
-                    // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
-                    hir_interface_receiver_override_ = "@instance:" + path;
+                    hir_interface_receiver_override_
+                        = InterfaceReceiver::instance(path);
                     discarding_call_result_ = discarded;
                     const auto value = lower_hir_function_call_value(
                         expression_id, expected_width);
-                    hir_interface_receiver_override_.reset();
+                    hir_interface_receiver_override_ = { };
                     if (!value || (result && !value->packed)
                         || (container_result && !value->container)) {
                         return false;
@@ -22427,8 +22398,8 @@ Lowerer::lower_hir_function_call_value(
                    : std::nullopt;
     if (resolution && expression && expression->systemverilog != nullptr) {
         record_vpi_callee(false, expression_id.value(), resolution->body,
-            interface_callable ? std::string_view { interface_callable->receiver }
-                               : std::string_view { });
+            interface_callable ? interface_callable->receiver
+                               : InterfaceReceiver { });
     }
     if (!resolution) {
         if (const auto predefined = expression && expression->vhdl != nullptr
@@ -22938,8 +22909,7 @@ Lowerer::lower_hir_function_call_value(
     CallableKeyReservation key_reservation;
     if (interface_callable) {
         const auto key = callable_key + "|receiver:"
-            + std::to_string(interface_callable->receiver.size()) + ":"
-            + interface_callable->receiver;
+            + interface_callable->receiver.key();
         const auto found = hir_interface_callable_indices_.find(key);
         if (found != hir_interface_callable_indices_.end()) {
             frame_index = found->second;
@@ -24431,14 +24401,20 @@ std::optional<RegisterId> Lowerer::emit_hir_dpi_call(
         actual_kinds.push_back(string ? 1U : 0U);
     }
     emit_debug_point(DebugPointKind::call, span);
-    auto identity = std::string { systemverilog_dpi_function_prefix }
-        + profile.linkage_name + '#' + profile.signature;
+    DpiCallIdentity identity;
+    identity.role = profile.hidden_role;
+    identity.c_name = profile.linkage_name;
+    identity.arguments = profile.arguments;
+    identity.result = profile.result_code;
+    identity.context = profile.context;
+    identity.export_result = profile.export_result;
+    identity.export_flows = profile.export_flows;
     // A context import sees the instance of its declaration and its call
     // site (IEEE 1800-2023 35.5.3, H.9).
-    // ITEM46-LEFT: the DPI import identity is a text descriptor parsed by the DPI service, the kernel plan and the VPI and VHPI loaders; a typed form needs a descriptor on the call operation
-    if (profile.signature.ends_with("@c")) {
-        identity += '|' + hir_instance_path() + '|'
-            + span.source_name.str() + '|' + std::to_string(span.begin.line);
+    if (profile.context) {
+        identity.caller_instance = hir_instance_path();
+        identity.caller_file = span.source_name.str();
+        identity.caller_line = static_cast<std::uint32_t>(span.begin.line);
     }
     // A string result returns in one more string actual (the DPI
     // service's convention).
@@ -24453,49 +24429,44 @@ std::optional<RegisterId> Lowerer::emit_hir_dpi_call(
     // A context import of a unit with DPI exports starts its C call, serves
     // the export calls the C code makes from the calling process (IEEE
     // 1800-2023 35.5.3), and then finishes the call.
-    // ITEM46-LEFT: the DPI import identity is a text descriptor parsed by the DPI service, the kernel plan and the VPI and VHPI loaders; a typed form needs a descriptor on the call operation
-    // ITEM28-LEFT: the DPI export service is a name protocol end to end: the
-    // parser generates the hidden imports and hooks as text, and the runtime
-    // reads the mask and linkage out of their C identity; it needs a typed DPI
-    // call identity (runtime operation fields, codec) before the names can go.
-    const auto* const export_hook = profile.signature.ends_with("@c")
-            && !profile.linkage_name.starts_with("__fsim_dpi_export_")
+    const auto* const export_hook = profile.context
+            && profile.hidden_role == support::DpiHiddenImportRole::none
             && !lowering_dpi_export_hook_
         ? hir_dpi_export_hook(profile.owner_scope)
         : nullptr;
-    if (export_hook != nullptr) {
-        const auto prefix_size = systemverilog_dpi_function_prefix.size();
-        auto start = identity;
-        start.insert(prefix_size, "!x");
-        process_.operations.emplace_back(ClassStaticMethodCall {
-            allocate_register(call_width, frontend::ValueDomain::Bit2),
-            std::move(start),
+    // The call operation of one phase of the import.
+    const auto import_call = [&](const RegisterId result_register,
+                                 const DpiCallPhase phase) {
+        ClassStaticMethodCall call {
+            result_register,
+            { },
             actuals,
             actual_names,
             actual_directions,
             static_cast<std::uint32_t>(call_width),
             actual_kinds,
-        });
+        };
+        call.call_kind = StaticCallKind::dpi_import;
+        call.dpi = identity;
+        call.dpi.phase = phase;
+        return call;
+    };
+    if (export_hook != nullptr) {
+        process_.operations.emplace_back(import_call(
+            allocate_register(call_width, frontend::ValueDomain::Bit2),
+            DpiCallPhase::start));
         lowering_dpi_export_hook_ = true;
         const bool served = lower_hir_statements(export_hook->statements);
         lowering_dpi_export_hook_ = false;
         if (!served) {
             return std::nullopt;
         }
-        identity.insert(prefix_size, "!f");
     }
     auto destination = allocate_register(call_width,
         profile.result_string ? frontend::ValueDomain::Bit2
                               : profile.result_domain);
-    process_.operations.emplace_back(ClassStaticMethodCall {
-        destination,
-        std::move(identity),
-        actuals,
-        actual_names,
-        actual_directions,
-        static_cast<std::uint32_t>(call_width),
-        actual_kinds,
-    });
+    process_.operations.emplace_back(import_call(destination,
+        export_hook != nullptr ? DpiCallPhase::finish : DpiCallPhase::call));
     if (call_width != profile.result_width) {
         destination = resize_register(destination, profile.result_width,
             profile.result_signed);
@@ -24600,10 +24571,11 @@ std::optional<RegisterId> Lowerer::emit_hir_dpi_call(
 
 namespace {
 
-// The hidden declaration `name` of a unit, if it has one.
+// The hidden callable of a unit that has the export service role `role`, if
+// it has one.
 const semantic::sv::Declaration* find_dpi_hidden_declaration(
     const semantic::CompiledDesign& design, const semantic::UnitId id,
-    const std::string_view name)
+    const support::DpiExportCallableRole role)
 {
     const auto unit = design.find_unit(id);
     if (!unit || unit->systemverilog == nullptr) {
@@ -24613,7 +24585,7 @@ const semantic::sv::Declaration* find_dpi_hidden_declaration(
         const auto declaration = design.find_declaration(declaration_id);
         if (declaration && declaration->systemverilog != nullptr
             && declaration->systemverilog->callable
-            && declaration->systemverilog->name == name) {
+            && declaration->systemverilog->callable->dpi_export_role == role) {
             return declaration->systemverilog;
         }
     }
@@ -24628,12 +24600,8 @@ const semantic::sv::Declaration* Lowerer::hir_dpi_export_step_hook(
     if (specialized_hir_unit_ == nullptr) {
         return nullptr;
     }
-    // ITEM28-LEFT: the DPI export service is a name protocol end to end: the
-    // parser generates the hidden imports and hooks as text, and the runtime
-    // reads the mask and linkage out of their C identity; it needs a typed DPI
-    // call identity (runtime operation fields, codec) before the names can go.
     return find_dpi_hidden_declaration(specialized_hir_unit_->design(), unit,
-        "__fsim_dpi_export_step_hook");
+        support::DpiExportCallableRole::step_hook);
 }
 
 const semantic::sv::Declaration* Lowerer::hir_dpi_export_hook(
@@ -24651,18 +24619,14 @@ const semantic::sv::Declaration* Lowerer::hir_dpi_export_hook(
     // An instance without exports of its own serves the exports of the
     // scope its import's C code sets, so it has a hook only if some unit of
     // the design declares exports.
-    // ITEM28-LEFT: the DPI export service is a name protocol end to end: the
-    // parser generates the hidden imports and hooks as text, and the runtime
-    // reads the mask and linkage out of their C identity; it needs a typed DPI
-    // call identity (runtime operation fields, codec) before the names can go.
     const auto find_hook = [&](const semantic::UnitId id)
         -> const semantic::sv::Declaration* {
         if (const auto* const hook = find_dpi_hidden_declaration(
-                design, id, "__fsim_dpi_export_hook")) {
+                design, id, support::DpiExportCallableRole::hook)) {
             return hook;
         }
         const auto* const foreign = find_dpi_hidden_declaration(
-            design, id, "__fsim_dpi_export_hook_foreign");
+            design, id, support::DpiExportCallableRole::hook_foreign);
         if (foreign == nullptr) {
             return nullptr;
         }
@@ -24685,19 +24649,6 @@ const semantic::sv::Declaration* Lowerer::hir_dpi_export_hook(
         : nullptr;
 }
 
-namespace {
-
-// The hidden hook of a generate block that declares DPI exports (IEEE
-// 1800-2023 35.7); the parser names it so.
-// ITEM28-LEFT: the DPI export service is a name protocol end to end: the
-// parser generates the hidden imports and hooks as text, and the runtime
-// reads the mask and linkage out of their C identity; it needs a typed DPI
-// call identity (runtime operation fields, codec) before the names can go.
-constexpr std::string_view dpi_block_hook_prefix {
-    "__fsim_dpi_export_block_hook" };
-
-} // namespace
-
 bool Lowerer::hir_dpi_block_hooks_exist() const
 {
     if (!dpi_block_hooks_exist_) {
@@ -24706,7 +24657,8 @@ bool Lowerer::hir_dpi_block_hooks_exist() const
                 specialized_hir_unit_->design().systemverilog_hir.declarations(),
                 [](const semantic::sv::Declaration& declaration) {
                     return declaration.callable
-                        && declaration.name.starts_with(dpi_block_hook_prefix);
+                        && declaration.callable->dpi_export_role
+                            == support::DpiExportCallableRole::block_hook;
                 });
     }
     return *dpi_block_hooks_exist_;
@@ -24760,10 +24712,9 @@ bool Lowerer::lower_hir_dpi_export_foreign()
             auto& receiver = step->callable && step->callable->function
                 ? hir_interface_receiver_override_
                 : hir_task_receiver_override_;
-            // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
-            receiver = "@instance:" + path;
+            receiver = InterfaceReceiver::instance(path);
             const bool lowered = lower_hir_statements(step->statements);
-            receiver.reset();
+            receiver = { };
             if (!lowered) {
                 return false;
             }
@@ -24784,9 +24735,11 @@ bool Lowerer::lower_hir_dpi_block_exports_foreign()
     // lowered (see the hierarchy builder), so no retry is needed.
     const auto& design = specialized_hir_unit_->design();
     const auto& scopes = design.semantics.scopes();
-    std::set<std::string> served;
+    std::set<std::pair<std::string, std::string>> served;
     for (const auto& hook : design.systemverilog_hir.declarations()) {
-        if (!hook.callable || !hook.name.starts_with(dpi_block_hook_prefix)
+        if (!hook.callable
+            || hook.callable->dpi_export_role
+                != support::DpiExportCallableRole::block_hook
             || !hook.nested_scope || !hook.scope.valid()
             || hook.scope.value() >= scopes.size()) {
             continue;
@@ -24833,16 +24786,15 @@ bool Lowerer::lower_hir_dpi_block_exports_foreign()
                     continue;
                 }
                 const auto path = specialization.instance + "." + block.path;
-                if (!served.insert(hook.name + "@" + path).second) {
+                if (!served.emplace(hook.name, path).second) {
                     continue;
                 }
                 auto& receiver = hook.callable->function
                     ? hir_interface_receiver_override_
                     : hir_task_receiver_override_;
-                // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
-                receiver = "@instance:" + path;
+                receiver = InterfaceReceiver::instance(path);
                 const bool lowered = lower_hir_statements(hook.statements);
-                receiver.reset();
+                receiver = { };
                 if (!lowered) {
                     return false;
                 }
@@ -24862,6 +24814,10 @@ std::optional<bool> Lowerer::lower_hir_dpi_call_statement(
     const auto* declaration = hir_dpi_import(name, scope);
     if (declaration == nullptr) {
         return std::nullopt;
+    }
+    if (declaration->hidden_role == support::DpiHiddenImportRole::foreign) {
+        // The foreign arm of a DPI export service (IEEE 1800-2023 35.5.3).
+        return lower_hir_dpi_export_foreign();
     }
     // A DPI task, a void function, or a function whose value the
     // statement discards (IEEE 1800-2023 35.5.4, 13.4.1).
@@ -24922,8 +24878,7 @@ std::optional<RegisterId> Lowerer::lower_hir_user_system_call(
             }
         }
     }
-    auto identity = std::string { systemverilog_dpi_function_prefix }
-        + std::string { user_system_call_identity_prefix } + task.name
+    auto identity = task.name
         + '|' + call_scope + '|' + span.source_name.str() + '|'
         + std::to_string(span.begin.line) + '|'
         + std::to_string(span.begin.column);
@@ -25021,7 +24976,7 @@ std::optional<RegisterId> Lowerer::lower_hir_user_system_call(
     const auto destination = allocate_register(result_width,
         task.function ? frontend::ValueDomain::Logic4
                       : frontend::ValueDomain::Bit2);
-    process_.operations.emplace_back(ClassStaticMethodCall {
+    ClassStaticMethodCall user_call {
         destination,
         std::move(identity),
         std::move(actuals),
@@ -25029,7 +24984,9 @@ std::optional<RegisterId> Lowerer::lower_hir_user_system_call(
         directions,
         result_width,
         { },
-    });
+    };
+    user_call.call_kind = StaticCallKind::user_system_task;
+    process_.operations.emplace_back(std::move(user_call));
     if (!task.function) {
         // vpi_control(vpiFinish) inside calltf ends the simulation before
         // the next statement of the calling process.
@@ -25352,8 +25309,6 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_function_call(
                         auto spelling = std::string_view {
                             subtype.type_mark.spelling
                         };
-                        spelling
-                            = semantic::vhdl::without_builtin_prefix(spelling);
                         const auto separator = spelling.find_last_of(".:");
                         const auto member = simple_name_of(spelling);
                         if (!same_hir_identifier(member, "side", true)) {
@@ -25461,9 +25416,9 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_function_call(
             && expression->systemverilog != nullptr
         ? hir_interface_function_profile(expression_id, hir_process_scope_)
         : std::nullopt;
-    if (interface_callable && hir_interface_receiver_override_) {
-        interface_callable->receiver = *std::exchange(
-            hir_interface_receiver_override_, std::nullopt);
+    if (interface_callable && !hir_interface_receiver_override_.empty()) {
+        interface_callable->receiver
+            = std::exchange(hir_interface_receiver_override_, { });
     } else if (interface_callable) {
         const auto dispatch
             = hir_virtual_interface_instances(
@@ -25483,11 +25438,11 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_function_call(
             process_.operations.emplace_back(LoadStringConstant { result, { } });
             const bool dispatched = lower_hir_virtual_interface_dispatch(
                 *handle, dispatch->second, [&](const std::string& path) {
-                    // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
-                    hir_interface_receiver_override_ = "@instance:" + path;
+                    hir_interface_receiver_override_
+                        = InterfaceReceiver::instance(path);
                     const auto value
                         = lower_hir_string_function_call(expression_id);
-                    hir_interface_receiver_override_.reset();
+                    hir_interface_receiver_override_ = { };
                     if (!value) {
                         return false;
                     }
@@ -25673,7 +25628,8 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_function_call(
     const auto callable_key = std::uint64_t { 1 } << 63U
         | (static_cast<std::uint64_t>(resolution->key.value()) << 32U);
     auto callable_key_text = std::to_string(callable_key)
-        + (interface_callable ? "|receiver:" + interface_callable->receiver : "");
+        + (interface_callable ? "|receiver:" + interface_callable->receiver.key()
+                              : "");
     // Each instance of a generic package has its own objects and
     // generics (IEEE 1076-2008 4.9).
     const auto package_instance
@@ -28474,6 +28430,7 @@ bool Lowerer::lower_hir_vhdl_foreign_body(
     // VHPI object takes the formal's declared subtype (20.4.2).
     std::vector<RegisterId> actuals;
     std::vector<std::string> names;
+    std::vector<CallActualRole> roles;
     std::vector<std::uint8_t> directions;
     std::vector<std::uint8_t> kinds;
     for (std::size_t index = 0U; index < frame.formals.size(); ++index) {
@@ -28507,8 +28464,9 @@ bool Lowerer::lower_hir_vhdl_foreign_body(
         process_.operations.emplace_back(LoadStringConstant { *text, { } });
         actuals.push_back(*text);
         kinds.push_back(1U);
-        // ITEM46-LEFT: the trailing string actual of a call is marked by a reserved actual name that travels through every class hook, the VPI and VHPI call models and the class executor; a typed result flag on the call operations and the hook signatures is needed
-        names.emplace_back("@result-string");
+        roles.assign(names.size(), CallActualRole::argument);
+        roles.push_back(CallActualRole::string_result);
+        names.emplace_back();
         directions.push_back(
             static_cast<std::uint8_t>(frontend::PortDirection::Output));
     }
@@ -28528,9 +28486,7 @@ bool Lowerer::lower_hir_vhdl_foreign_body(
             execution = model.substr(second);
         }
     }
-    auto identity = std::string { systemverilog_dpi_function_prefix }
-        + std::string { vhdl_foreign_call_identity_prefix }
-        + std::string { target } + '\t' + callable.name + '\t'
+    auto identity = std::string { target } + '\t' + callable.name + '\t'
         + std::to_string(frame.declaration.value()) + '\t' + hierarchy_
         + '\t' + std::to_string(function && !string_result ? result_width : 0U)
         + std::string { execution };
@@ -28538,7 +28494,7 @@ bool Lowerer::lower_hir_vhdl_foreign_body(
         ? frame.result
         : allocate_register(1U, frontend::ValueDomain::Bit2);
     emit_debug_point(DebugPointKind::call, span);
-    process_.operations.emplace_back(ClassStaticMethodCall {
+    ClassStaticMethodCall foreign_operation {
         destination,
         std::move(identity),
         std::move(actuals),
@@ -28546,7 +28502,10 @@ bool Lowerer::lower_hir_vhdl_foreign_body(
         std::move(directions),
         result_width,
         std::move(kinds),
-    });
+    };
+    foreign_operation.call_kind = StaticCallKind::vhdl_foreign;
+    foreign_operation.actual_roles = std::move(roles);
+    process_.operations.emplace_back(std::move(foreign_operation));
     if (text) {
         process_.operations.emplace_back(CopyStringRegister {
             frame.string_result, *text });
@@ -29405,8 +29364,7 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
         emit_debug_point(DebugPointKind::frame_entry,
             hir_source_span(frame_declaration->source), frame_point_name,
             hir_callable_frames_[callable_index].declaration,
-            hir_callable_frames_[callable_index].interface_receiver.value_or(
-                std::string { }));
+            hir_callable_frames_[callable_index].interface_receiver);
     }
     if (declarations_ready && initial_frame->class_receiver) {
         cache_hir_class_container_properties(
@@ -29568,7 +29526,8 @@ bool Lowerer::lower_pending_hir_callables()
         // An interface's own task or function may write the interface's
         // signals that a modport gives the caller as inputs (IEEE
         // 1800-2017 25.7).
-        if (lowered && hir_callable_frames_[callable].interface_receiver) {
+        if (lowered
+            && !hir_callable_frames_[callable].interface_receiver.empty()) {
             authorize_readonly_signal_writes(body_begin);
         }
     }
@@ -29603,18 +29562,12 @@ void Lowerer::append_vhdl_element_constraint_key(std::string& key,
 
 void Lowerer::bind_hir_instance_parameters(HirCallableFrame& frame) const
 {
-    if (!frame.interface_receiver || frame.interface_receiver->empty()
-        || specialized_hir_unit_ == nullptr) {
+    if (frame.interface_receiver.empty() || specialized_hir_unit_ == nullptr) {
         return;
     }
-    auto receiver = std::string_view { *frame.interface_receiver };
+    const std::string_view receiver { frame.interface_receiver.text };
     const bool generated_scope_receiver
-        // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
-        = receiver.starts_with("@instance:");
-    if (generated_scope_receiver) {
-        // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
-        receiver.remove_prefix(std::string_view { "@instance:" }.size());
-    }
+        = frame.interface_receiver.is_instance_path();
     const SpecializationInfo* target = design_.find_specialization(receiver);
     const semantic::SpecializedHirUnit* callable_owner
         = specialized_hir_unit_;

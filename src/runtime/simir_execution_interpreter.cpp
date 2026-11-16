@@ -1796,9 +1796,6 @@ bool Interpreter::Impl::execute_operation(ProcessState& process,
             std::is_same_v<OperationType, ProcessStatusQuery>) {
             boundary = true;
         } else if constexpr (
-            std::is_same_v<OperationType, ProcessCompleted>) {
-            boundary = true;
-        } else if constexpr (
             std::is_same_v<OperationType, ProcessAwait>) {
             boundary = true;
         } else if constexpr (

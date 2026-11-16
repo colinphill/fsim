@@ -668,20 +668,6 @@ void Interpreter::Impl::complete_process(
         process.status = ProcessStatus::running;
         return true;
     }
-    if (const auto* query = fsim::runtime::simir::operation_get_if<ProcessCompleted>(
-            &operation)) {
-        const auto status = process_from_handle(
-            process, query->source)
-                                .status;
-        const auto completed = status == ProcessStatus::finished
-            || status == ProcessStatus::killed;
-        write_process_register(
-            process,
-            query->destination,
-            PackedLogic4::from_aval_bval(1, completed ? 1U : 0U, 0));
-        process.status = ProcessStatus::running;
-        return true;
-    }
     if (const auto* alias = fsim::runtime::simir::operation_get_if<EventAlias>(
             &operation)) {
         if (!alias_event(*alias)) {

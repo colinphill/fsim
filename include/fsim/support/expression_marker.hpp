@@ -113,6 +113,10 @@ enum class ExpressionMarker : std::uint8_t {
     sva_action_callregion,
     sva_action_sampled_on,
     sva_action_sampled_off,
+    // Placeholders of a generated property evaluation, replaced after it is
+    // parsed: the disable condition, and a guard (payload: its ordinal).
+    sva_disable,
+    sva_guard,
 
     // Constraints, randomization and constraint expressions.
     constraint_forms_begin_,

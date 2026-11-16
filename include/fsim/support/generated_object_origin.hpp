@@ -65,6 +65,10 @@ enum class GeneratedObjectOrigin : std::uint8_t {
     // of a string object.
     local_event,
     string_change,
+    // The process that drives a formal from its actual, and the one that
+    // drives an actual from its formal, of a port association.
+    port_input_adapter,
+    port_output_adapter,
 };
 
 } // namespace fsim::support

@@ -82,7 +82,7 @@ std::optional<Lowerer::HirMailboxElement> Lowerer::hir_mailbox_element(
             : std::nullopt;
         const auto alias = definition && definition->systemverilog != nullptr
             ? std::optional { definition->systemverilog->declaration }
-            : !element->target.spelling.empty()
+            : element->names_type()
                 && !semantic::sv::names_builtin_type(*element)
             ? resolver.resolve_systemverilog_named_type(
                   element->target.spelling, hir_process_scope_).unique()

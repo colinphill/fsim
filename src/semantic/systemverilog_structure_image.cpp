@@ -170,7 +170,7 @@ const TypeDefinition* systemverilog_type_definition(
          && definition->members.empty()
          && definition->form != TypeForm::enumeration
          && (definition->base.target.target.valid()
-             || !definition->base.target.spelling.empty())) {
+             || definition->base.names_type())) {
         // A typedef that names itself again ends the walk.
         visited.push_back(definition);
         const auto* next = named_definition(hir, definition->base);
@@ -249,7 +249,7 @@ std::optional<std::size_t> systemverilog_structure_image_width(
     if (definition->form == TypeForm::enumeration) {
         // An enumeration's values have its base type's width; the default
         // base is int (6.19).
-        return definition->base.target.spelling.empty()
+        return !definition->base.names_type()
                 && !definition->base.executable_width
                 && !definition->base.packed_range
             ? std::optional<std::size_t> { 32U }

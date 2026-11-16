@@ -67,6 +67,8 @@ public:
         // interface (empty for the caller's own instance or a package).
         std::uint32_t callee_declaration { };
         std::string callee_receiver;
+        // The receiver is an absolute instance path.
+        bool callee_receiver_instance { };
         // The suffix naming the lowering of the callable the frame runs
         // (`@hir-callable-<n>`), which its debug locals carry when another
         // lowering in the process took their names.

@@ -1700,10 +1700,12 @@ private:
     // expression's or a nominal type's mark), with the type it denotes
     // there: a retained declaration, or the provided type it names.
     SubtypeIndication mark_subtype(
-        const std::string_view mark, const semantic::ScopeId scope) const
+        const std::string_view mark, const semantic::ScopeId scope,
+        const bool predefined = false) const
     {
         SubtypeIndication subtype;
         subtype.type_mark.spelling = std::string { mark };
+        subtype.type_mark.builtin_declaration = predefined;
         if (const auto type = named_type(mark, scope)) {
             subtype.type_mark.target = *type;
         } else {
@@ -3900,7 +3902,8 @@ private:
             }
         }
         if (!value.nominal_type.empty()) {
-            auto subtype = mark_subtype(value.nominal_type, value.scope);
+            auto subtype = mark_subtype(
+                value.nominal_type, value.scope, value.builtin_nominal);
             return specialized_subtype(std::move(subtype));
         }
         if (value.kind != semantic::vhdl::ExpressionKind::name) {
@@ -5418,7 +5421,6 @@ private:
             return false;
         }
         auto spelling = std::string_view { name.spelling };
-        spelling = semantic::vhdl::without_builtin_prefix(spelling);
         const auto first_separator = spelling.find_first_of(".:");
         const auto last_separator = spelling.find_last_of(".:");
         const auto is_package = [](const std::string_view package) {
@@ -9469,11 +9471,7 @@ private:
             }
         }
         auto spelling = std::string_view { subtype.type_mark.spelling };
-        constexpr auto compiler_builtin = semantic::vhdl::builtin_prefix;
-        const bool compiler_owned = spelling.starts_with(compiler_builtin);
-        if (compiler_owned) {
-            spelling.remove_prefix(compiler_builtin.size());
-        }
+        const bool compiler_owned = subtype.type_mark.builtin_declaration;
         auto canonical = lowercase_ascii_copy(spelling);
         for (const auto prefix : { std::string_view { "standard." },
                  std::string_view { "std.standard." } }) {

@@ -271,10 +271,12 @@ module fork_processes;
     join_none
     #0;
     lifecycle[2:0] = handle.status();
-    lifecycle[3] = handle.completed();
+    lifecycle[3] = handle.status() == process::FINISHED
+        || handle.status() == process::KILLED;
     handle.await();
     lifecycle[6:4] = handle.status();
-    lifecycle[7] = handle.completed();
+    lifecycle[7] = handle.status() == process::FINISHED
+        || handle.status() == process::KILLED;
     fork
       begin
         killed_handle = process::self();
@@ -284,7 +286,8 @@ module fork_processes;
     #0;
     killed_handle.kill();
     lifecycle[10:8] = killed_handle.status();
-    lifecycle[11] = killed_handle.completed();
+    lifecycle[11] = killed_handle.status() == process::FINISHED
+        || killed_handle.status() == process::KILLED;
     repeat (2) begin
       fork
         #3 lifecycle[12] = 1;

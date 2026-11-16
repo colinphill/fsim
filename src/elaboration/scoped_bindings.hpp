@@ -2,6 +2,8 @@
 #pragma once
 
 
+#include "fsim/elaboration/storage_key.hpp"
+
 #include <cstdint>
 #include <iterator>
 #include <memory>
@@ -235,6 +237,40 @@ public:
         return { find(assigned_at->first), inserted };
     }
 
+    /// Objects found by declaration identity rather than by name. They share
+    /// the layering of the named bindings but never appear among them.
+    [[nodiscard]] const Value* find_storage(const StorageKey& key) const
+    {
+        for (auto* scope = this;
+            scope != nullptr;
+            scope = scope->parent_) {
+            const auto found = scope->storage_.find(key);
+            if (found != scope->storage_.end()) {
+                return &found->second;
+            }
+        }
+        return nullptr;
+    }
+
+    /// Insertion only: does nothing when an enclosing scope has the key.
+    template <typename ValueArgument>
+    bool emplace_storage(StorageKey key, ValueArgument&& value)
+    {
+        if (find_storage(key) != nullptr) {
+            return false;
+        }
+        return storage_.emplace(std::move(key),
+            std::forward<ValueArgument>(value)).second;
+    }
+
+    /// Shadows the key in this layer.
+    template <typename ValueArgument>
+    void assign_storage(StorageKey key, ValueArgument&& value)
+    {
+        storage_.insert_or_assign(std::move(key),
+            std::forward<ValueArgument>(value));
+    }
+
     /// Rebuild the former flat-map view for rare callers whose decision must
     /// retain unordered-map iteration order. Normal lookups use the overlay.
     [[nodiscard]] Storage compatibility_snapshot() const
@@ -271,6 +307,7 @@ private:
     const ScopedBindingMap* parent_ { };
     Storage local_;
     std::vector<Key> local_insertion_order_;
+    std::unordered_map<StorageKey, Value, StorageKeyHash> storage_;
 };
 
 /// A parent-linked read-only set with an owned local overlay.

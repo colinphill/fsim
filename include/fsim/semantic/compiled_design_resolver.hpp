@@ -401,8 +401,7 @@ public:
 
     /// Resolve a source-declared VHDL type first, preserving ambiguity, then
     /// an exact compiler-owned STD.STANDARD type identity from the owning
-    /// unit's predefined environment. A leading internal `@builtin:` marker
-    /// is stripped before source-name lookup. Unqualified scalar fallback
+    /// unit's predefined environment. Unqualified scalar fallback
     /// respects the context-declaration and package-STANDARD exceptions to
     /// implicit visibility. Scalar identities are transient and do not alter
     /// the persisted HIR builtin-array schema.
@@ -641,7 +640,7 @@ public:
         bool overloadable) const;
 
     /// Return whether a compiler-owned type spelling, whether retained as
-    /// `@builtin:std.env.time_record`, selected, or directly imported,
+    /// `std.env.time_record`, selected, or directly imported,
     /// denotes a visible governed package member in the selected unit's
     /// context.
     [[nodiscard]] bool vhdl_builtin_type_visible(

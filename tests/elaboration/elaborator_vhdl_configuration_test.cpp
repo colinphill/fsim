@@ -223,16 +223,11 @@ end configuration;
             "configured_top.configured_direct_child"),
         "amount",
         "6"));
-    assert(std::ranges::any_of(
-        specialization(
-            architecture_result,
-            "configured_top.configured_direct_child")
-            .parameter_identity_values,
-        [](const auto& item) {
-          return item.first == "__configuration"
-              && item.second.find("direct_leaf_configuration")
-                  != std::string::npos;
-        }));
+    assert(specialization(
+               architecture_result,
+               "configured_top.configured_direct_child")
+               .configuration_identity.find("direct_leaf_configuration")
+        != std::string::npos);
     assert(
         specialization(
             architecture_result,
@@ -344,14 +339,8 @@ end configuration;
     const auto& root =
         specialization(
             configured_result, "selected_configuration");
-    assert(std::ranges::any_of(
-        root.parameter_identity_values,
-        [](const auto& item) {
-          return item.first == "__configuration"
-              && item.second.find(
-                     "vhdl-configuration-v2")
-                  != std::string::npos;
-        }));
+    assert(root.configuration_identity.find("vhdl-configuration-v2")
+        != std::string::npos);
     assert(std::ranges::find(
         root.source_dependencies,
         "selected_configuration.vhd")

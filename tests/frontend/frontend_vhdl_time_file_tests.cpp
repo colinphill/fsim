@@ -157,8 +157,8 @@ end architecture;
       architecture->parameters.size() == 1
           && architecture->parameters.front().type.domain
               == ValueDomain::Integer
-          && architecture->parameters.front().type.nominal_type
-              == "@builtin:time"
+          && architecture->parameters.front().type.builtin_nominal
+          && architecture->parameters.front().type.nominal_type == "time"
           && architecture->parameters.front().type.packed_range
           && architecture->parameters.front().type.packed_range->left == 63
           && architecture->parameters.front().type.packed_range->right == 0

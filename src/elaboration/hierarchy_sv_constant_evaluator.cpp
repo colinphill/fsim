@@ -6440,7 +6440,7 @@ private:
         // is the array's and the inner one the element's.
         const bool nested = type.packed_dimensions.size() == 2U;
         if (!type.packed_range || type.packed_dimensions.size() > 2U
-            || type.target.spelling.empty()
+            || !type.names_type()
             || (!nested
                 && (type.target.spelling.starts_with("struct")
                     || type.target.spelling.starts_with("union")))) {
@@ -6514,7 +6514,7 @@ private:
         }
         const bool nested = type.packed_dimensions.size() == 2U;
         bool result = type.packed_range && type.packed_dimensions.size() <= 2U
-            && !type.target.spelling.empty()
+            && type.names_type()
             && (nested
                 || (!type.target.spelling.starts_with("struct")
                     && !type.target.spelling.starts_with("union")));
@@ -10836,7 +10836,7 @@ frontend::SystemVerilogScalarKind hir_systemverilog_declared_scalar_kind(
     const auto direct = scalar_kind(type);
     if (direct != ScalarKind::None || type.container_form
         || !type.packed_dimensions.empty() || type.packed_range
-        || type.target.spelling.empty() || type.implicit) {
+        || !type.names_type() || type.implicit) {
         return direct;
     }
     // A typedef names its scalar through its base (IEEE 1800-2023 6.18).

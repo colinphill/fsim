@@ -33,18 +33,12 @@ std::string lower(const std::string_view text)
     return result;
 }
 
-// The leaf of a hierarchical name.
-std::string_view leaf_of(const std::string_view name)
+// The processes that connect a port formal and its actual.
+bool is_adapter(const Process& process)
 {
-    return name.substr(name.rfind('.') == std::string_view::npos
-            ? 0U
-            : name.rfind('.') + 1U);
-}
-
-bool is_adapter(const std::string_view name)
-{
-    const auto leaf = leaf_of(name);
-    return leaf.starts_with("port_result_") || leaf.starts_with("port_actual_");
+    return process.origin == support::GeneratedObjectOrigin::port_input_adapter
+        || process.origin
+        == support::GeneratedObjectOrigin::port_output_adapter;
 }
 
 struct Site {
@@ -216,7 +210,8 @@ VitalWireSourcesResult apply_vital_wire_sources(ElaboratedDesignState& state,
             bool forwarded = true;
             for (const auto writer : writers) {
                 const auto& process = state.processes[writer];
-                if (!lower(leaf_of(process.name)).starts_with("port_actual_")
+                if (process.origin
+                        != support::GeneratedObjectOrigin::port_input_adapter
                     || process.static_sensitivity.size() != 1U
                     || process.static_sensitivity.front().signal == net
                     || process.static_sensitivity.front().signal
@@ -291,7 +286,7 @@ VitalWireSourcesResult apply_vital_wire_sources(ElaboratedDesignState& state,
         for (const auto writer : writers) {
             const auto& process = state.processes[writer];
             std::optional<std::size_t> source;
-            if (is_adapter(process.name)) {
+            if (is_adapter(process)) {
                 for (const auto& sensitivity : process.static_sensitivity) {
                     if (sensitivity.signal < state.signals.size()
                         && (source = source_of(

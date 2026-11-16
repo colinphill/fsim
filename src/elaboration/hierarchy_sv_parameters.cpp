@@ -138,7 +138,7 @@ bool systemverilog_named_type(const semantic::sv::TypeReference& type)
         = (type.builtin != support::SystemVerilogBuiltinType::none
               && type.builtin != support::SystemVerilogBuiltinType::string)
         || type.net_kind == support::SystemVerilogNetKind::wire;
-    return !type.target.spelling.empty() && !builtin;
+    return type.names_type() && !builtin;
 }
 
 bool compiled_systemverilog_string_declaration(

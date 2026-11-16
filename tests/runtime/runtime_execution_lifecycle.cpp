@@ -334,18 +334,15 @@ void test_simir_fork_process_lifecycle()
                 ValueKind::logic4, { } },
         };
         process.operations = {
-            Fork { { 14 }, ForkJoinKind::none },
+            Fork { { 11 }, ForkJoinKind::none },
             Yield { },
             ProcessStatusQuery { 1, 0 },
-            ProcessCompleted { 2, 0 },
             ProcessAwait { 0 },
             ProcessStatusQuery { 3, 0 },
-            ProcessCompleted { 4, 0 },
-            Fork { { 17 }, ForkJoinKind::none },
+            Fork { { 14 }, ForkJoinKind::none },
             Yield { },
             ProcessKill { 0 },
             ProcessStatusQuery { 5, 0 },
-            ProcessCompleted { 6, 0 },
             Halt { },
             Halt { },
             ProcessSelf { 0 },
@@ -365,13 +362,10 @@ void test_simir_fork_process_lifecycle()
                 && result.time == 2
                 && value(1)
                     == static_cast<std::uint32_t>(ProcessStatus::waiting)
-                && value(2) == 0
                 && value(3)
                     == static_cast<std::uint32_t>(ProcessStatus::finished)
-                && value(4) == 1
                 && value(5)
-                    == static_cast<std::uint32_t>(ProcessStatus::killed)
-                && value(6) == 1,
+                    == static_cast<std::uint32_t>(ProcessStatus::killed),
             "generation-safe process handles await, kill, and report lifecycle");
     }
 

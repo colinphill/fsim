@@ -18,6 +18,7 @@
 #include "fsim/frontend/token.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <functional>
 #include <limits>
 #include <map>
@@ -1523,6 +1524,85 @@ private:
     SourceSpan span_;
 };
 
+// The source of a generated property evaluation: text, and placeholders for
+// the parts that are already parsed (the disable condition, guards and
+// actions). A placeholder is a marked name token, so the substitution after
+// parsing finds what it stands for by its marker.
+class GeneratedSource {
+public:
+    struct Piece {
+        std::string text;
+        support::ExpressionMarker marker { support::ExpressionMarker::none };
+        std::size_t ordinal { };
+    };
+
+    GeneratedSource() = default;
+    GeneratedSource(std::string text) { append_text(std::move(text)); }
+    GeneratedSource(const char* text) { append_text(text); }
+
+    [[nodiscard]] static GeneratedSource placeholder(
+        const support::ExpressionMarker marker, const std::size_t ordinal)
+    {
+        GeneratedSource result;
+        result.pieces_.push_back(Piece { { }, marker, ordinal });
+        return result;
+    }
+
+    GeneratedSource& operator+=(const GeneratedSource& other)
+    {
+        for (const auto& piece : other.pieces_) {
+            if (piece.marker == support::ExpressionMarker::none) {
+                append_text(piece.text);
+            } else {
+                pieces_.push_back(piece);
+            }
+        }
+        return *this;
+    }
+
+    friend GeneratedSource operator+(
+        GeneratedSource left, const GeneratedSource& right)
+    {
+        left += right;
+        return left;
+    }
+
+    [[nodiscard]] bool empty() const noexcept { return pieces_.empty(); }
+
+    [[nodiscard]] const std::vector<Piece>& pieces() const noexcept
+    {
+        return pieces_;
+    }
+
+    // Gives each directive's process its own state names: every `stem` in
+    // the text becomes `replacement`.
+    void rename(const std::string_view stem, const std::string& replacement)
+    {
+        for (auto& piece : pieces_) {
+            for (auto at = piece.text.find(stem); at != std::string::npos;
+                 at = piece.text.find(stem, at + replacement.size())) {
+                piece.text.replace(at, stem.size(), replacement);
+            }
+        }
+    }
+
+private:
+    void append_text(std::string text)
+    {
+        if (text.empty()) {
+            return;
+        }
+        if (!pieces_.empty()
+            && pieces_.back().marker == support::ExpressionMarker::none) {
+            pieces_.back().text += text;
+            return;
+        }
+        pieces_.push_back(Piece { std::move(text), { }, { } });
+    }
+
+    std::vector<Piece> pieces_;
+};
+
 // Every directive owns one process that advances all of its attempts once
 // per clock tick. Attempts live in 64 slots, one per start tick modulo 64:
 // each automaton state is a 64-bit vector of the slots positioned there, and
@@ -1531,7 +1611,7 @@ private:
 class EvaluationBuilder {
 public:
     using TextParser
-        = std::function<std::optional<Statement>(const std::string&)>;
+        = std::function<std::optional<Statement>(const GeneratedSource&)>;
 
     struct Guard {
         Expression expression;
@@ -1582,7 +1662,7 @@ public:
         // New attempts start through a forked branch so that assertion
         // control ($assertoff, $assertkill) stops them; running attempts
         // continue (IEEE 1800-2017 20.12).
-        std::string steps = "__fsim_pnew = 0; fork __fsim_pnew = 1; join ";
+        GeneratedSource steps = "__fsim_pnew = 0; fork __fsim_pnew = 1; join ";
         if (!actions_.locals.empty()) {
             steps += "if (__fsim_pnew == 0) __fsim_po = 0; ";
         }
@@ -1603,7 +1683,7 @@ public:
         }
         // Outcomes are counted while the attempts advance and their actions
         // run afterwards: reads after the first action are not sampled.
-        std::string text = "begin int unsigned __fsim_pt, __fsim_ps, "
+        GeneratedSource text = "begin int unsigned __fsim_pt, __fsim_ps, "
                            "__fsim_pnew, "
                            "__fsim_rs, __fsim_rf, __fsim_rv; "
                            "bit [63:0] __fsim_po; "
@@ -1612,30 +1692,26 @@ public:
               "__fsim_po = 64'd1 << __fsim_ps; __fsim_rs = 0; "
               "__fsim_rf = 0; __fsim_rv = 0; ";
         if (actions_.disable) {
-            text += "if (" + placeholder_name(Placeholder::disable, 0U)
-                + ") begin ";
+            text += "if (" + placeholder(Placeholder::disable, 0U)
+                + "()) begin ";
             for (const auto& name : cleared_) {
                 text += name + " = 0; ";
             }
-            text += placeholder_name(Placeholder::action_abort, 0U)
+            text += placeholder(Placeholder::action_abort, 0U)
                 + "(); end else begin " + steps + "end ";
         } else {
             text += steps;
         }
         text += "repeat (__fsim_rv) "
-            + placeholder_name(Placeholder::action_vacuous, 0U)
+            + placeholder(Placeholder::action_vacuous, 0U)
             + "(); repeat (__fsim_rs) "
-            + placeholder_name(Placeholder::action_success, 0U)
+            + placeholder(Placeholder::action_success, 0U)
             + "(); repeat (__fsim_rf) "
-            + placeholder_name(Placeholder::action_failure, 0U) + "(); end";
+            + placeholder(Placeholder::action_failure, 0U) + "(); end";
         // Each directive's process gets its own state names.
         for (const std::string_view stem : { "__fsim_p", "__fsim_r" }) {
-            const auto replacement = actions_.name_prefix + "_"
-                + std::string { stem.substr(7U) };
-            for (auto at = text.find(stem); at != std::string::npos;
-                 at = text.find(stem, at + replacement.size())) {
-                text.replace(at, stem.size(), replacement);
-            }
+            text.rename(stem, actions_.name_prefix + "_"
+                    + std::string { stem.substr(7U) });
         }
         auto statement = parse_(text);
         if (!statement) {
@@ -1723,43 +1799,40 @@ private:
         return "__fsim_p" + std::to_string(next_name_++) + std::string { stem };
     }
 
-    std::string guard(const Expression& expression,
+    GeneratedSource guard(const Expression& expression,
         std::string slot_index = { })
     {
         const auto ordinal = guards_.size();
         guards_.push_back(
             { expression, scope_generated_name(std::move(slot_index)) });
-        return placeholder_name(Placeholder::guard, ordinal);
+        return placeholder(Placeholder::guard, ordinal) + "()";
     }
 
-    // The generated identifier of a placeholder, registered so that the
-    // substitution after parsing finds what it stands for by this table.
-    [[nodiscard]] std::string placeholder_name(
+    // The marked name token that stands for a placeholder.
+    [[nodiscard]] static GeneratedSource placeholder(
         const Placeholder kind, const std::size_t ordinal)
     {
-        std::string name;
         switch (kind) {
         case Placeholder::disable:
-            name = "__fsim_disable";
-            break;
+            return GeneratedSource::placeholder(
+                support::ExpressionMarker::sva_disable, 0U);
         case Placeholder::guard:
-            name = "__fsim_g" + std::to_string(ordinal);
-            break;
+            return GeneratedSource::placeholder(
+                support::ExpressionMarker::sva_guard, ordinal);
         case Placeholder::action_success:
-            name = "__fsim_act_success";
-            break;
+            return GeneratedSource::placeholder(
+                support::ExpressionMarker::sva_action_success, 0U);
         case Placeholder::action_failure:
-            name = "__fsim_act_failure";
-            break;
+            return GeneratedSource::placeholder(
+                support::ExpressionMarker::sva_action_failure, 0U);
         case Placeholder::action_vacuous:
-            name = "__fsim_act_vacuous";
-            break;
+            return GeneratedSource::placeholder(
+                support::ExpressionMarker::sva_action_vacuous, 0U);
         case Placeholder::action_abort:
-            name = "__fsim_act_abort";
-            break;
+            return GeneratedSource::placeholder(
+                support::ExpressionMarker::sva_action_abort, 0U);
         }
-        placeholders_.insert_or_assign(name, PlaceholderEntry { kind, ordinal });
-        return name;
+        return { };
     }
 
     [[nodiscard]] std::string scope_generated_name(std::string name) const
@@ -2205,7 +2278,7 @@ private:
 
     // Emits the steps of `node` for `start` new attempts this tick.
     bool step(const PropertyNode& node, const std::string& start,
-        std::string& out)
+        GeneratedSource& out)
     {
         switch (node.kind) {
         case PropertyKind::sequence:
@@ -2296,7 +2369,7 @@ private:
     // count to `matches` and `on_dead` reports attempts that end without a
     // match.
     bool sequence(const SequenceNode& node, const std::string& start,
-        bool first_match, Report on_match, Report on_dead, std::string& out,
+        bool first_match, Report on_match, Report on_dead, GeneratedSource& out,
         std::string* matches)
     {
         Automaton automaton;
@@ -2443,10 +2516,11 @@ private:
         }
         out += accept + " = 0; ";
         const auto for_each = [&](const std::string& mask,
-                                  const std::string& body) {
-            return "if (" + mask + " != 0) for (" + index + " = 0; " + index
-                + " < 64; " + index + "++) if (" + mask + "[" + index
-                + "]) begin " + body + "end ";
+                                  const GeneratedSource& body) {
+            return GeneratedSource { "if (" + mask + " != 0) for (" + index
+                       + " = 0; " + index + " < 64; " + index + "++) if ("
+                       + mask + "[" + index + "]) begin " }
+                + body + "end ";
         };
         for (const auto& transition : automaton.transitions) {
             if (!declared.contains(transition.from)) {
@@ -2455,7 +2529,7 @@ private:
             const bool per_slot = !transition.match_items.empty()
                 || (transition.guard
                     && expression_references_local(*transition.guard));
-            std::string effects;
+            GeneratedSource effects;
             if (per_slot) {
                 for (const auto& item : transition.match_items) {
                     if (item.target.empty() && !item.call.empty()) {
@@ -2469,7 +2543,7 @@ private:
                             effects += local == local_storage_.end()
                                 ? token.text
                                 : local->second + "[" + index + "]";
-                            effects += ' ';
+                            effects += " ";
                         }
                         effects += "; ";
                         continue;
@@ -2583,26 +2657,31 @@ private:
     // action placeholders with the actions.
     bool substitute(Expression& expression)
     {
-        if (expression.kind == ExpressionKind::Identifier) {
-            const auto found = placeholders_.find(expression.text);
-            if (found != placeholders_.end()
-                && found->second.kind == Placeholder::disable) {
-                expression = *actions_.disable;
-                return true;
+        if (expression.kind == ExpressionKind::Call
+            && expression.marker == support::ExpressionMarker::sva_disable) {
+            if (!actions_.disable) {
+                return false;
             }
-            if (found != placeholders_.end()
-                && found->second.kind == Placeholder::guard) {
-                const auto ordinal = found->second.ordinal;
-                if (ordinal >= guards_.size()) {
-                    return false;
-                }
-                expression = guards_[ordinal].expression;
-                if (!substitute_local_references(
-                        expression, guards_[ordinal].slot_index)) {
-                    return false;
-                }
-                return true;
+            expression = *actions_.disable;
+            return true;
+        }
+        if (expression.kind == ExpressionKind::Call
+            && expression.marker == support::ExpressionMarker::sva_guard) {
+            std::size_t ordinal { };
+            const auto& argument = expression.marker_argument;
+            const auto parsed = std::from_chars(argument.data(),
+                argument.data() + argument.size(), ordinal);
+            if (parsed.ec != std::errc { }
+                || parsed.ptr != argument.data() + argument.size()
+                || ordinal >= guards_.size()) {
+                return false;
             }
+            expression = guards_[ordinal].expression;
+            if (!substitute_local_references(
+                    expression, guards_[ordinal].slot_index)) {
+                return false;
+            }
+            return true;
         }
         for (auto& operand : expression.operands) {
             if (!substitute(operand)) {
@@ -2614,18 +2693,21 @@ private:
 
     bool substitute(Statement& statement)
     {
-        const auto action = statement.kind == StatementKind::TaskCall
-            ? placeholders_.find(statement.task_name)
-            : placeholders_.end();
-        if (action != placeholders_.end()
-            && action->second.kind != Placeholder::disable
-            && action->second.kind != Placeholder::guard) {
-            const auto which = action->second.kind;
-            const auto& actions = which == Placeholder::action_success
+        const auto which = statement.kind == StatementKind::TaskCall
+            ? statement.task_marker
+            : support::ExpressionMarker::none;
+        if (which == support::ExpressionMarker::sva_action_success
+            || which == support::ExpressionMarker::sva_action_failure
+            || which == support::ExpressionMarker::sva_action_vacuous
+            || which == support::ExpressionMarker::sva_action_abort) {
+            const auto& actions
+                = which == support::ExpressionMarker::sva_action_success
                 ? actions_.success
-                : which == Placeholder::action_failure ? actions_.failure
-                : which == Placeholder::action_vacuous ? actions_.vacuous
-                                                       : actions_.abort;
+                : which == support::ExpressionMarker::sva_action_failure
+                ? actions_.failure
+                : which == support::ExpressionMarker::sva_action_vacuous
+                ? actions_.vacuous
+                : actions_.abort;
             Statement replacement;
             replacement.kind = StatementKind::Block;
             replacement.span = actions_.span;
@@ -2659,14 +2741,8 @@ private:
         return true;
     }
 
-    struct PlaceholderEntry {
-        Placeholder kind { Placeholder::disable };
-        std::size_t ordinal { };
-    };
-
     const GeneralPropertyActions& actions_;
     TextParser parse_;
-    std::map<std::string, PlaceholderEntry, std::less<>> placeholders_;
     std::size_t next_name_ { };
     std::vector<Guard> guards_;
     std::map<std::string, std::string, std::less<>> local_storage_;
@@ -2690,9 +2766,26 @@ std::optional<Statement> VerilogParser::general_property_evaluation(
         return std::nullopt;
     }
     EvaluationBuilder builder { actions,
-        [this, &actions](const std::string& text) {
-            return parse_generated_statement(
-                synthetic_tokens(text, actions.span), actions.span);
+        [this, &actions](const GeneratedSource& source) {
+            std::vector<Token> tokens;
+            for (const auto& piece : source.pieces()) {
+                if (piece.marker == support::ExpressionMarker::none) {
+                    auto lexed = synthetic_tokens(piece.text, actions.span);
+                    tokens.insert(tokens.end(),
+                        std::make_move_iterator(lexed.begin()),
+                        std::make_move_iterator(lexed.end()));
+                    continue;
+                }
+                auto name = marked_name_tokens(piece.marker, actions.span);
+                if (piece.marker == support::ExpressionMarker::sva_guard) {
+                    name.front().marker_argument
+                        = std::to_string(piece.ordinal);
+                }
+                tokens.insert(tokens.end(),
+                    std::make_move_iterator(name.begin()),
+                    std::make_move_iterator(name.end()));
+            }
+            return parse_generated_statement(std::move(tokens), actions.span);
         } };
     return builder.property(*property);
 }

@@ -1871,9 +1871,10 @@ Expression VerilogParser::parse_primary_impl()
                     // denotes (IEEE 1800-2017 6.23, 6.24.1).
                     auto cast_type = expression.systemverilog_type_operand;
                     if (!cast_type && expression.operands.size() == 1U) {
+                        // The type operator names no type: the typed carrier
+                        // systemverilog_type_of holds the operand and the
+                        // spelling stays empty.
                         Type type_of;
-                        // ITEM46-LEFT: placeholder type spelling of a type(expr) operator; the typed carrier systemverilog_type_of exists but an empty spelling reads as an implicit type in frontend resolution, which needs an audit of every empty-spelling test
-                        set_systemverilog_type_name(type_of, "@type-of");
                         type_of.named_type_span = expression.span;
                         type_of.systemverilog_type_of
                             = std::make_shared<const Expression>(

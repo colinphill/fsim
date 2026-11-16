@@ -97,6 +97,7 @@ namespace fsim::app::application_detail {
         // written after `is`.  Preserve an explicit, distinct base marker
         // used by synthesized standard-library declarations.
         declared_subtype.vhdl_type_declaration.clear();
+        declared_subtype.builtin_declaration = false;
     }
     output.subtype = subtype(
         declared_subtype, input.span, scope, output.origin);

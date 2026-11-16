@@ -2,6 +2,7 @@
 #pragma once
 
 #include "fsim/semantic/model.hpp"
+#include "fsim/support/dpi_identity.hpp"
 #include "fsim/support/expression_marker.hpp"
 #include "fsim/support/rare_vector.hpp"
 #include "fsim/support/sva_marker.hpp"
@@ -823,6 +824,12 @@ struct TypeReference {
     // `type(expression)` used as a data type: the type of the expression
     // (IEEE 1800-2017 6.23), resolved in each specialization.
     std::optional<ExpressionId> type_of;
+    // Whether the reference names a type: by a written name, or by the type
+    // operator `type(...)` (which leaves the spelling empty).
+    [[nodiscard]] bool names_type() const noexcept
+    {
+        return !target.spelling.empty() || type_of.has_value();
+    }
     // The specialization a parameterized class-handle type denotes once its
     // actuals are bound (IEEE 1800-2017 8.25); set by class specialization,
     // empty in source HIR.
@@ -1278,6 +1285,10 @@ struct CallableProfile {
     // several modules may export (IEEE 1800-2023 25.7.3).
     bool extern_prototype { };
     bool extern_forkjoin { };
+    // The role of a callable the parser generates for a unit's DPI export
+    // service.
+    support::DpiExportCallableRole dpi_export_role {
+        support::DpiExportCallableRole::none };
 };
 
 struct Declaration {
@@ -2366,6 +2377,13 @@ struct DpiDeclaration {
     std::vector<SourceToken> profile_tokens;
     SourceSpanId profile_source;
     std::string linkage_name;
+    // The role of a hidden import of a unit's export service; for its
+    // argument and result imports, whether the export has a result and how
+    // each formal of the export flows.
+    support::DpiHiddenImportRole hidden_role {
+        support::DpiHiddenImportRole::none };
+    bool export_result { };
+    std::vector<support::DpiExportFlow> export_flows;
     bool validated { };
     std::optional<DpiResolvedProfile> resolved_profile;
     std::vector<SourceToken> tokens;

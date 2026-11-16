@@ -874,14 +874,8 @@ void HierarchyBuilder::validate_verilog_specify(
                     specparam_reals.insert_or_assign(
                         specparam.name, *value->real);
                 }
-                specialization_info.parameter_identity_values.emplace_back(
-                    // This list is shared with the "@aggregate:" and
-                    // "__configuration" entries of other groups; a typed
-                    // entry kind for all of them needs a SpecializationInfo
-                    // field and codec entry, so this entry waits for it.
-                    // ITEM46-LEFT: untyped key in parameter_identity_values
-                    "@specparam:" + specparam.name,
-                    value->identity);
+                specialization_info.specparam_identities.emplace_back(
+                    specparam.name, value->identity);
             }
             const auto validate_alternative = [&](const auto alternative) {
                 if (alternative) {

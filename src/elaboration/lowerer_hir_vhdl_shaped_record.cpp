@@ -83,6 +83,7 @@ Lowerer::hir_vhdl_shaped_record_profile(
     heap.index_width = 32U;
     heap.two_state_indices = true;
     heap.element_nominal_type = subtype.type_mark.spelling;
+    heap.element_builtin_nominal = subtype.type_mark.builtin_declaration;
     bool shaped { };
     for (const auto& element : definition->record_elements) {
         HirVhdlShapedMember member;

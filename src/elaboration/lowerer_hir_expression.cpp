@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/semantic/systemverilog_class_specialization.hpp"
+#include "fsim/support/process_method.hpp"
 #include "fsim/support/stack_growth.hpp"
 #include "fsim/support/active_set.hpp"
 #include "hierarchy_sv_constant_evaluator.hpp"
@@ -392,7 +393,7 @@ PackedLogic4 character_string_value(const std::string_view text)
             } else if (base.executable_width && *base.executable_width != 0U) {
                 width = static_cast<std::size_t>(*base.executable_width);
                 signed_value = base.signed_value;
-            } else if (!base.target.spelling.empty()) {
+            } else if (base.names_type()) {
                 const auto builtin_width
                     = support::systemverilog_builtin_width(base.builtin);
                 width = builtin_width != 0U ? builtin_width : 32U;
@@ -1268,18 +1269,16 @@ PackedLogic4 character_string_value(const std::string_view text)
         // This API resolves both type and subtype declarations in the exact
         // lexical scope. A declaration-only predicate misses subtype marks.
         const auto resolve_named_type = [&](
-                                            const std::string_view spelling,
+                                            const semantic::TypeReference& mark,
                                             const semantic::ScopeId owner_scope)
             -> std::optional<semantic::TypeId> {
-            constexpr auto builtin_prefix = semantic::vhdl::builtin_prefix;
-            if (spelling.empty() || spelling.starts_with(builtin_prefix)) {
+            if (mark.spelling.empty() || mark.builtin_declaration) {
                 return std::nullopt;
             }
-            return resolver.resolve_vhdl_named_type(spelling, owner_scope);
+            return resolver.resolve_vhdl_named_type(mark.spelling, owner_scope);
         };
         if (!type_id.valid()) {
-            type_id = resolve_named_type(
-                subtype.type_mark.spelling, scope)
+            type_id = resolve_named_type(subtype.type_mark, scope)
                           .value_or(semantic::TypeId { });
         }
 
@@ -1310,7 +1309,7 @@ PackedLogic4 character_string_value(const std::string_view text)
                             ? declaration->vhdl->scope
                             : scope;
                         type_id = resolve_named_type(
-                            definition->base.type_mark.spelling, type_scope)
+                            definition->base.type_mark, type_scope)
                                       .value_or(semantic::TypeId { });
                     }
                     if (!type_id.valid()) {
@@ -1396,12 +1395,10 @@ PackedLogic4 character_string_value(const std::string_view text)
             };
         }
 
-        auto spelling = std::string_view { builtin_subtype->type_mark.spelling };
-        constexpr auto builtin_prefix = semantic::vhdl::builtin_prefix;
-        const bool compiler_builtin = spelling.starts_with(builtin_prefix);
-        if (compiler_builtin) {
-            spelling.remove_prefix(builtin_prefix.size());
-        }
+        const auto spelling
+            = std::string_view { builtin_subtype->type_mark.spelling };
+        const bool compiler_builtin
+            = builtin_subtype->type_mark.builtin_declaration;
         std::string_view package;
         auto name = spelling;
         if (const auto separator = spelling.find_last_of(".:");
@@ -3323,6 +3320,8 @@ std::optional<SignalId> Lowerer::vhdl_implicit_signal_attribute(
         info.packed_members = source_info.packed_members;
         info.integer_range = source_info.integer_range;
         info.nominal_type = source_info.nominal_type;
+        info.builtin_nominal = source_info.builtin_nominal;
+        info.hir_type = source_info.hir_type;
         info.enumeration_literals = source_info.enumeration_literals;
         info.enumeration_range = source_info.enumeration_range;
     }
@@ -5185,6 +5184,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
     if (!effective && !aggregate.nominal_type.empty()) {
         semantic::vhdl::SubtypeIndication nominal;
         nominal.type_mark.spelling = aggregate.nominal_type;
+        nominal.type_mark.builtin_declaration = aggregate.builtin_nominal;
         if (const auto declared = hir_vhdl_type_of_spelling(
                 aggregate.nominal_type, aggregate.scope)) {
             nominal.type_mark.target = *declared;
@@ -7352,21 +7352,17 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
             || !subtype.constraints.empty()) {
             return false;
         }
-        constexpr auto builtin_prefix = semantic::vhdl::builtin_prefix;
         const auto resolver = hir_resolver();
-        const auto resolve_type = [&](const semantic::TypeId current,
-                                      const std::string_view spelling,
+        const auto resolve_type = [&](const semantic::TypeReference& mark,
                                       const semantic::ScopeId scope) {
-            if (current.valid() || spelling.empty()
-                || spelling.starts_with(builtin_prefix)) {
-                return current;
+            if (mark.target.valid() || mark.spelling.empty()
+                || mark.builtin_declaration) {
+                return mark.target;
             }
-            return resolver.resolve_vhdl_named_type(spelling, scope)
+            return resolver.resolve_vhdl_named_type(mark.spelling, scope)
                 .value_or(semantic::TypeId { });
         };
-        auto type_id = resolve_type(
-            subtype.type_mark.target, subtype.type_mark.spelling,
-            aggregate.scope);
+        auto type_id = resolve_type(subtype.type_mark, aggregate.scope);
         std::unordered_set<std::uint32_t> visited;
         while (type_id.valid()) {
             if (!visited.insert(type_id.value()).second) {
@@ -7388,8 +7384,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
                         && declaration->vhdl != nullptr
                     ? declaration->vhdl->scope : aggregate.scope;
                 type_id = resolve_type(
-                    row_definition.base.type_mark.target,
-                    row_definition.base.type_mark.spelling, type_scope);
+                    row_definition.base.type_mark, type_scope);
                 continue;
             }
             if (row_definition.form != semantic::vhdl::TypeForm::array) {
@@ -8544,7 +8539,7 @@ Lowerer::lower_hir_systemverilog_packed_pattern(
         auto base = type;
         // A type from another unit (a package typedef) keeps only its
         // spelling across object linking.
-        if (!base.target.target.valid() && !base.target.spelling.empty()) {
+        if (!base.target.target.valid() && base.names_type()) {
             if (const auto expression
                 = specialized_hir_unit_->find_expression(expression_id);
                 expression && expression->systemverilog != nullptr) {
@@ -11760,12 +11755,7 @@ Lowerer::hir_vhdl_concat_aggregate_context(
             index_declaration = resolution.unique();
         }
         if (!index_declaration && !index_subtype.selected) {
-            auto spelling = std::string_view { index_subtype.spelling };
-            constexpr auto builtin_prefix = semantic::vhdl::builtin_prefix;
-            const bool compiler_builtin = spelling.starts_with(builtin_prefix);
-            if (compiler_builtin) {
-                spelling.remove_prefix(builtin_prefix.size());
-            }
+            const auto spelling = std::string_view { index_subtype.spelling };
             const auto separator = spelling.find_last_of(".:");
             const auto package = separator == std::string_view::npos
                 ? std::string_view { }
@@ -11784,10 +11774,9 @@ Lowerer::hir_vhdl_concat_aggregate_context(
                 = hir_resolver()
                       .resolve_vhdl(index_subtype, index_scope);
             if (standard_index && standard_package
-                && (compiler_builtin
-                    || (!package.empty()
-                        || visible_name.status
-                            == semantic::CompiledResolutionStatus::not_found))) {
+                && (!package.empty()
+                    || visible_name.status
+                        == semantic::CompiledResolutionStatus::not_found)) {
                 // The predefined INTEGER, NATURAL, and POSITIVE index
                 // subtypes are ascending. Accept an unqualified targetless
                 // mark only when lookup in the array type's scope found no
@@ -12535,51 +12524,55 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
             process_.operations.emplace_back(ProcessSelf { value });
             return sized(value);
         }
-        // `p.status` names the query without parentheses.
-        // ITEM28-LEFT: the process queries are selected by the member's spelling
-        // (`.status`, `.completed`) of the generic member-select forms (a dotted name,
-        // a `.member` call, an `index.member` node); only the receiver is typed. A
-        // typed process-class member selection in the class resolver replaces them.
-        std::optional<RegisterId> named_receiver;
-        bool named_status { };
+        // The status of a process handle (IEEE 1800-2023 9.7): the receiver
+        // is typed as the built-in process class and the selected member is
+        // its status method. `p.status` names the query without parentheses.
+        const auto selects_status = [](const std::string_view member) {
+            return support::process_method(member)
+                == support::ProcessMethod::status;
+        };
+        std::optional<RegisterId> status_receiver;
         if (input != nullptr
-            && input->kind == semantic::sv::ExpressionKind::name
-            && (input->text.ends_with(".status")
-                || input->text.ends_with(".completed"))) {
+            && input->kind == semantic::sv::ExpressionKind::name) {
             const auto dot = input->text.rfind('.');
-            const auto receiver_name = std::string_view { input->text }.substr(
-                0U, dot);
-            const auto declaration = hir_resolver()
-                .resolve_systemverilog(
-                    receiver_name, hir_process_scope_, { }, true)
-                .unique();
-            const auto binding = declaration
-                ? hir_runtime_binding(*declaration, hir_process_scope_, true)
-                : std::nullopt;
-            if (binding && binding->width == 64U) {
-                if (binding->kind == HirRuntimeBindingKind::local
-                    && binding->local) {
-                    named_receiver = binding->local;
-                } else if (binding->signal) {
-                    named_receiver = allocate_register(64U, binding->domain);
-                    process_.operations.emplace_back(ReadSignal {
-                        *named_receiver, *binding->signal,
-                        SignalReadKind::current });
-                    record_implicit_signal_dependency(*binding->signal);
+            const auto receiver_name = dot == std::string::npos
+                ? std::string_view { }
+                : std::string_view { input->text }.substr(0U, dot);
+            if (!receiver_name.empty()
+                && selects_status(
+                    std::string_view { input->text }.substr(dot + 1U))
+                && hir_process_handle_name(receiver_name)) {
+                const auto declaration = hir_resolver()
+                    .resolve_systemverilog(
+                        receiver_name, hir_process_scope_, { }, true)
+                    .unique();
+                const auto binding = declaration
+                    ? hir_runtime_binding(
+                          *declaration, hir_process_scope_, true)
+                    : std::nullopt;
+                if (binding && binding->width == 64U) {
+                    if (binding->kind == HirRuntimeBindingKind::local
+                        && binding->local) {
+                        status_receiver = binding->local;
+                    } else if (binding->signal) {
+                        status_receiver
+                            = allocate_register(64U, binding->domain);
+                        process_.operations.emplace_back(ReadSignal {
+                            *status_receiver, *binding->signal,
+                            SignalReadKind::current });
+                        record_implicit_signal_dependency(*binding->signal);
+                    }
                 }
-                named_status = input->text.ends_with(".status");
             }
         }
-        // `job[i].status`: the query on an element of an array of process
+        // `job[i].status`: the status of an element of an array of process
         // handles.
-        // ITEM28-LEFT: the process queries are selected by the member's spelling
-        // (`.status`, `.completed`) of the generic member-select forms (a dotted name,
-        // a `.member` call, an `index.member` node); only the receiver is typed. A
-        // typed process-class member selection in the class resolver replaces them.
+        constexpr std::string_view index_member_prefix { "index." };
         if (input != nullptr
             && input->kind == semantic::sv::ExpressionKind::index
-            && (input->text == "index.status"
-                || input->text == "index.completed")
+            && input->text.starts_with(index_member_prefix)
+            && selects_status(std::string_view { input->text }.substr(
+                index_member_prefix.size()))
             && input->operands.size() == 2U
             && hir_process_handle_expression(input->operands.front())) {
             const auto container = lower_hir_static_container_value(
@@ -12594,53 +12587,29 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
                 if (!index) {
                     return std::nullopt;
                 }
-                named_receiver = allocate_register(
+                status_receiver = allocate_register(
                     64U, frontend::ValueDomain::Bit2);
                 process_.operations.emplace_back(ContainerRead {
-                    *named_receiver, container->value, *index,
+                    *status_receiver, container->value, *index,
                     container->type.signed_indices, false, false });
-                named_status = input->text == "index.status";
             }
         }
-        if (named_receiver) {
-            if (named_status) {
-                const auto value = allocate_register(
-                    32U, frontend::ValueDomain::Integer);
-                process_.operations.emplace_back(
-                    ProcessStatusQuery { value, *named_receiver });
-                return sized(value);
-            }
-            const auto value = allocate_register(
-                1U, frontend::ValueDomain::Bit2);
-            process_.operations.emplace_back(
-                ProcessCompleted { value, *named_receiver });
-            return sized(value);
-        }
-        // ITEM28-LEFT: the process queries are selected by the member's spelling
-        // (`.status`, `.completed`) of the generic member-select forms (a dotted name,
-        // a `.member` call, an `index.member` node); only the receiver is typed. A
-        // typed process-class member selection in the class resolver replaces them.
-        if (input != nullptr
+        // `p.status()` of a computed handle.
+        if (!status_receiver && input != nullptr
             && input->kind == semantic::sv::ExpressionKind::call
-            && (input->text == ".status" || input->text == ".completed")
+            && input->text.starts_with('.')
+            && selects_status(std::string_view { input->text }.substr(1U))
             && input->operands.size() == 1U
-            && hir_expression_width(input->operands.front(),
-                   hir_process_scope_) == std::optional<std::size_t> { 64U }) {
-            if (const auto receiver
-                = lower_hir_expression(input->operands.front(), 64U)) {
-                if (input->text == ".status") {
-                    const auto value = allocate_register(
-                        32U, frontend::ValueDomain::Integer);
-                    process_.operations.emplace_back(
-                        ProcessStatusQuery { value, *receiver });
-                    return sized(value);
-                }
-                const auto value = allocate_register(
-                    1U, frontend::ValueDomain::Bit2);
-                process_.operations.emplace_back(
-                    ProcessCompleted { value, *receiver });
-                return sized(value);
-            }
+            && hir_process_handle_expression(input->operands.front())) {
+            status_receiver
+                = lower_hir_expression(input->operands.front(), 64U);
+        }
+        if (status_receiver) {
+            const auto value = allocate_register(
+                32U, frontend::ValueDomain::Integer);
+            process_.operations.emplace_back(
+                ProcessStatusQuery { value, *status_receiver });
+            return sized(value);
         }
     }
     if (hir_queue_last_index_ && specialized_hir_unit_ != nullptr) {
@@ -13523,16 +13492,20 @@ Lowerer::hir_hierarchical_parameter(
                        }())) {
                 continue;
             }
-            for (const auto& [formal, identity] :
-                specialization.parameter_identity_values) {
-                // An unpacked array parameter's bit stream (6.24.3).
-                if (formal != parameter
-                    // ITEM46-LEFT: name inside parameter_identity_values, a vector of string pairs saved in the artifact; a typed form needs a struct entry with a kind and every reader
-                    && !(formal.starts_with("@aggregate:")
-                        && std::string_view { formal }.substr(11U)
-                            == parameter)) {
-                    continue;
-                }
+            // The parameter's value, else an unpacked array parameter's bit
+            // stream (6.24.3).
+            const auto named = [&](const auto& entries)
+                -> const std::pair<std::string, std::string>* {
+                const auto found = std::ranges::find(entries, parameter,
+                    &std::pair<std::string, std::string>::first);
+                return found == entries.end() ? nullptr : &*found;
+            };
+            const auto* entry = named(specialization.parameter_identity_values);
+            if (entry == nullptr) {
+                entry = named(specialization.aggregate_parameter_identities);
+            }
+            if (entry != nullptr) {
+                const auto& identity = entry->second;
                 matched_specialization = &specialization;
                 if (const auto constant
                     = decode_hir_systemverilog_constant(identity)) {
@@ -14290,7 +14263,7 @@ std::optional<SignalId> Lowerer::hir_vhdl_external_signal(
     // (IEEE 1076-2008 8.7).
     const auto& info = design_.signal_info_[*found_signal];
     if (external.operands.size() == 2U
-        && info.nominal_type.starts_with("vhdl-hir-type:")) {
+        && info.hir_type) {
         const auto subtype_expression = specialized_hir_unit_->find_expression(
             external.operands.back());
         if (subtype_expression && subtype_expression->vhdl != nullptr
@@ -14313,13 +14286,8 @@ std::optional<SignalId> Lowerer::hir_vhdl_external_signal(
                 }
                 return type;
             };
-            const auto identity = std::string_view { info.nominal_type }.substr(
-                std::string_view { "vhdl-hir-type:" }.size());
-            std::uint32_t signal_type { };
-            const auto parsed = std::from_chars(identity.data(),
-                identity.data() + identity.size(), signal_type);
+            const std::uint32_t signal_type = *info.hir_type;
             if (effective && effective->type_mark.target.valid()
-                && parsed.ec == std::errc { }
                 && root(effective->type_mark.target)
                     != root(semantic::TypeId::from_index(signal_type))) {
                 report("FSIM-ELAB-VHEXTERNAL-001",
@@ -15182,7 +15150,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 ? &*parameter->systemverilog->type
                 : nullptr;
             const bool integral_type = type != nullptr
-                && (!type->target.spelling.empty() || type->packed_range)
+                && (type->names_type() || type->packed_range)
                 && !type->container_form && type->unpacked_dimensions.empty()
                 && type->value_form != semantic::sv::TypeForm::string
                 && type->value_form != semantic::sv::TypeForm::class_handle
@@ -21662,13 +21630,13 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                     // source spelling fallback. It is needed only for
                     // physical-unit leaves because their HIR has no TypeId.
                     const bool compiler_time_identity
-                        // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
-                        = element->type_mark.spelling == "@builtin:time";
+                        = element->type_mark.builtin_declaration
+                        && element->type_mark.spelling == "time";
                     const auto integer_declarations
                         = specialized_hir_unit_->design()
                               .vhdl_type_declarations_named("integer");
-                    auto element_name = semantic::vhdl::without_builtin_prefix(
-                        element->type_mark.spelling);
+                    std::string_view element_name
+                        = element->type_mark.spelling;
                     if (const auto separator
                         = element_name.find_last_of(".:");
                         separator != std::string_view::npos) {
@@ -21750,13 +21718,17 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                             return true;
                         }
                         if (compiler_time_identity) {
-                            return source.nominal_type
+                            return source.builtin_nominal
+                                && source.nominal_type
                                 == element->type_mark.spelling;
                         }
                         if (element->type_mark.target.valid()
                             && source.scope.valid()) {
-                            const auto resolved
-                                = resolver.resolve_vhdl_named_type(
+                            // A predefined nominal type the tool supplies is
+                            // not a declaration visible from the source.
+                            const auto resolved = source.builtin_nominal
+                                ? std::optional<semantic::TypeId> { }
+                                : resolver.resolve_vhdl_named_type(
                                     source.nominal_type, source.scope);
                             return resolved
                                 && element_scalar_type.valid()
@@ -21815,8 +21787,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                         if (compiler_time_identity
                             && source.kind
                                 == semantic::vhdl::ExpressionKind::integer_literal
-                            // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
-                            && source.nominal_type == "@builtin:time"
+                            && semantic::vhdl::is_builtin_nominal(source, "time")
                             && source.nominal_type
                                 == element->type_mark.spelling) {
                             return true;
@@ -22278,11 +22249,8 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 return std::nullopt;
             }
 
-            auto spelling = std::string_view { element->type_mark.spelling };
-            constexpr auto builtin = semantic::vhdl::builtin_prefix;
-            if (spelling.starts_with(builtin)) {
-                spelling.remove_prefix(builtin.size());
-            }
+            const auto spelling
+                = std::string_view { element->type_mark.spelling };
             if (spelling != "integer" && spelling != "standard.integer"
                 && spelling != "std.standard.integer") {
                 return std::nullopt;
@@ -22443,8 +22411,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                     // expression kind but remain nominally TIME.
                     if (expression->vhdl->kind
                             == semantic::vhdl::ExpressionKind::integer_literal
-                        // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
-                        && expression->vhdl->nominal_type == "@builtin:time") {
+                        && semantic::vhdl::is_builtin_nominal(*expression->vhdl, "time")) {
                         valid = false;
                         return;
                     }
@@ -28578,8 +28545,7 @@ bool Lowerer::hir_vhdl_time_expression(
     const auto& source = *expression->vhdl;
     // A normalized physical literal carries its resolved predefined type.
     // Check that marker before a contextual subtype can obscure it.
-    // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
-    if (source.nominal_type == "@builtin:time"
+    if (semantic::vhdl::is_builtin_nominal(source, "time")
         || hir_vhdl_now_expression(value)) {
         return true;
     }
@@ -29123,7 +29089,7 @@ std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_runtime_image(
     }
     lowercase_ascii(terminal_spelling);
     const auto simple_type = [&] {
-        // Strip library/package selection and the @builtin: identity prefix.
+        // Strip library/package selection.
         const auto separator = terminal_spelling.find_last_of(".:");
         return std::string_view { terminal_spelling }.substr(
             separator == std::string::npos ? 0U : separator + 1U);
@@ -32301,7 +32267,7 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
             = [&](semantic::sv::TypeReference type,
                   const semantic::ScopeId scope) {
             if (type.target.target.valid() || type.class_identity.size() != 0U
-                || type.target.spelling.empty()) {
+                || !type.names_type()) {
                 return type;
             }
             auto resolved = hir_resolver().effective_systemverilog_type(
@@ -32717,6 +32683,12 @@ bool Lowerer::hir_process_handle_expression(
     if (source.kind == semantic::sv::ExpressionKind::call) {
         return source.marker == support::ExpressionMarker::sv_process_self;
     }
+    // An element of an array of process handles, `jobs[i]`: the array's
+    // declared type carries the process class of its elements.
+    if (source.kind == semantic::sv::ExpressionKind::index
+        && source.text == "index" && !source.operands.empty()) {
+        return hir_process_handle_expression(source.operands.front());
+    }
     const auto declaration = hir_referenced_declaration(expression_id);
     const auto record = declaration
         ? specialized_hir_unit_->find_declaration(*declaration)
@@ -32724,6 +32696,24 @@ bool Lowerer::hir_process_handle_expression(
     return record && record->systemverilog != nullptr
         && record->systemverilog->type
         && process_type(*record->systemverilog->type);
+}
+
+bool Lowerer::hir_process_handle_name(const std::string_view name) const
+{
+    // A variable whose declared type is process (IEEE 1800-2023 9.7).
+    if (specialized_hir_unit_ == nullptr) {
+        return false;
+    }
+    const auto declaration = hir_resolver()
+        .resolve_systemverilog(name, hir_process_scope_, { }, true)
+        .unique();
+    const auto record = declaration
+        ? specialized_hir_unit_->find_declaration(*declaration)
+        : std::nullopt;
+    return record && record->systemverilog != nullptr
+        && record->systemverilog->type
+        && record->systemverilog->type->standard_class
+        == support::SystemVerilogStandardClass::process;
 }
 
 std::optional<RegisterId> Lowerer::lower_hir_string_to_packed(
@@ -33382,6 +33372,7 @@ Lowerer::hir_vhdl_mixed_aggregate_target_segments(
         -> std::optional<NominalType> {
         auto type_id = subtype.type_mark.target;
         auto spelling = std::string_view { subtype.type_mark.spelling };
+        bool compiler_builtin = subtype.type_mark.builtin_declaration;
         auto builtin_type = subtype.builtin_type;
         std::unordered_set<std::uint32_t> visited;
         while (type_id.valid()
@@ -33394,6 +33385,8 @@ Lowerer::hir_vhdl_mixed_aggregate_target_segments(
             if (definition->form == TypeForm::subtype
                 || definition->form == TypeForm::alias) {
                 spelling = definition->base.type_mark.spelling;
+                compiler_builtin
+                    = definition->base.type_mark.builtin_declaration;
                 if (builtin_type == BuiltinType::none) {
                     builtin_type = definition->base.builtin_type;
                 }
@@ -33433,11 +33426,6 @@ Lowerer::hir_vhdl_mixed_aggregate_target_segments(
             == BuiltinType::ieee_std_logic_1164_std_ulogic_vector) {
             return NominalType { { }, "ieee.std_logic_1164.std_ulogic_vector",
                 TypeForm::array, nullptr };
-        }
-        constexpr auto builtin_prefix = semantic::vhdl::builtin_prefix;
-        const bool compiler_builtin = spelling.starts_with(builtin_prefix);
-        if (compiler_builtin) {
-            spelling.remove_prefix(builtin_prefix.size());
         }
         std::string_view package;
         std::string_view name = spelling;
@@ -33893,7 +33881,6 @@ bool Lowerer::lower_hir_vhdl_aggregate_copy_out(
             element.executable_width = 1U;
             return std::optional { element };
         };
-        array_spelling = semantic::vhdl::without_builtin_prefix(array_spelling);
         array_spelling = simple_name_of(array_spelling);
         if (same_vhdl_identifier(array_spelling, "std_logic_vector")
             || same_vhdl_identifier(array_spelling, "signed")
@@ -35116,8 +35103,7 @@ std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_real_to_string(
         if (unit_source != nullptr
             && unit_source->kind
                 == semantic::vhdl::ExpressionKind::integer_literal
-            // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
-            && unit_source->nominal_type == "@builtin:time"
+            && semantic::vhdl::is_builtin_nominal(*unit_source, "time")
             && unit_source->folded && unit_source->referenced_name
             && !unit_source->referenced_name->selected
             && unit_source->referenced_name->overloads.empty()) {

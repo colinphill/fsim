@@ -59,6 +59,8 @@ struct ContainerType {
   std::optional<std::uint64_t> maximum_elements;
   std::vector<ContainerDimension> dimensions;
   std::string element_nominal_type;
+  // `element_nominal_type` names a predefined VHDL type the tool supplies.
+  bool element_builtin_nominal{};
   // The SystemVerilog enumeration, structure or union an element profile
   // names (semantic::sv::nominal_type_index); unset for every other profile.
   std::optional<std::uint32_t> element_nominal_type_id;

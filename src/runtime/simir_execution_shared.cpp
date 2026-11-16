@@ -160,7 +160,6 @@ namespace fsim::runtime::simir {
         || (disable_fork && (disable_fork->site || disable_fork->deferred_reports))
         || operation_holds<ProcessSelf>(operation)
         || operation_holds<ProcessStatusQuery>(operation)
-        || operation_holds<ProcessCompleted>(operation)
         || operation_holds<ProcessResume>(operation)
         || operation_holds<ProcessGetRandState>(operation)
         || operation_holds<ProcessSetRandState>(operation)

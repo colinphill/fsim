@@ -35,7 +35,7 @@ runtime::SystemVerilogClassPropertyDescriptor class_property_descriptor(
       ? Builtin::none
       : property.type.builtin != Builtin::none
       ? property.type.builtin
-      : !property.type.target.spelling.empty()
+      : property.type.names_type()
       ? Builtin::none
       : property.type.value_form == semantic::sv::TypeForm::string
       ? Builtin::string

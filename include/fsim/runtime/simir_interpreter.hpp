@@ -131,8 +131,8 @@ public:
     using ClassContainerWatchedHook
         = std::function<bool(std::uint64_t, std::string_view)>;
     // Process, receiver, method identity, lowered randomize() step, actuals,
-    // string actuals, actual names, directions, inline constraints, virtual
-    // dispatch, and `randomize(null)` (ClassMethodCall).
+    // string actuals, actual names, actual roles, directions, inline
+    // constraints, virtual dispatch, and `randomize(null)` (ClassMethodCall).
     using ClassMethodCallContextHook = std::function<PackedLogic4(
         ProcessId,
         std::uint64_t,
@@ -141,6 +141,7 @@ public:
         std::vector<PackedLogic4>&,
         std::vector<std::string>&,
         std::span<const std::string>,
+        std::span<const CallActualRole>,
         std::span<const std::uint8_t>,
         std::span<const SystemVerilogConstraintTemplate>,
         bool,
@@ -157,6 +158,7 @@ public:
         std::vector<PackedLogic4>&,
         std::vector<std::string>&,
         std::span<const std::string>,
+        std::span<const CallActualRole>,
         std::span<const std::uint8_t>,
         std::string_view)>;
     using DpiFunctionCallHook = simir::DpiFunctionCallHook;

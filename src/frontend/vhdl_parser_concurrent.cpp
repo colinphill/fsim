@@ -447,7 +447,8 @@ GenerateRegion VhdlParser::parse_vhdl_static_block(
             in.target = formal;
             in.value = actual;
             in.span = connection.span;
-            in.label = "fsim__formal_conversion_" + formal.text + "$in";
+            in.label = "fsim__formal_effective_" + formal.text;
+            in.formal_conversion = support::VhdlFormalConversion::effective;
             result.then_body.concurrent_statements.push_back(std::move(in));
             Statement out;
             out.kind = StatementKind::Assignment;
@@ -457,6 +458,7 @@ GenerateRegion VhdlParser::parse_vhdl_static_block(
                 { formal }, actual.span };
             out.span = connection.span;
             out.label = "fsim__formal_conversion_" + formal.text;
+            out.formal_conversion = support::VhdlFormalConversion::driving;
             result.then_body.concurrent_statements.push_back(std::move(out));
             continue;
           }
@@ -470,6 +472,7 @@ GenerateRegion VhdlParser::parse_vhdl_static_block(
             { formal }, group.operands[index].span };
         out.span = connection.span;
         out.label = "fsim__formal_conversion_" + formal.text;
+        out.formal_conversion = support::VhdlFormalConversion::driving;
         result.then_body.concurrent_statements.push_back(std::move(out));
       }
     }
@@ -1545,8 +1548,9 @@ void VhdlParser::rewrite_vhdl_formal_conversions(DesignUnit& unit,
           actual_conversion = actual.text;
           actual_name = actual.operands.front();
         }
-        const auto implicit = "fsim__formal_conversion_" + instance.name + "_"
+        const auto implicit_suffix = instance.name + "_"
             + std::to_string(counter++);
+        const auto implicit = "fsim__formal_conversion_" + implicit_suffix;
         SignalDeclaration signal;
         signal.name = implicit;
         signal.type = port->type;
@@ -1597,7 +1601,8 @@ void VhdlParser::rewrite_vhdl_formal_conversions(DesignUnit& unit,
               ? Expression { ExpressionKind::Call, *actual_conversion, { actual_name }, span }
               : actual_name;
           in.span = span;
-          in.label = implicit + "$in";
+          in.label = "fsim__formal_effective_" + implicit_suffix;
+          in.formal_conversion = support::VhdlFormalConversion::effective;
           unit.concurrent_statements.push_back(std::move(in));
         }
         Statement out;
@@ -1607,6 +1612,7 @@ void VhdlParser::rewrite_vhdl_formal_conversions(DesignUnit& unit,
         out.value = Expression { ExpressionKind::Call, conversion, { implicit_name }, span };
         out.span = span;
         out.label = implicit;
+        out.formal_conversion = support::VhdlFormalConversion::driving;
         unit.concurrent_statements.push_back(std::move(out));
       }
     }

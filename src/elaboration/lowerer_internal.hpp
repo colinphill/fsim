@@ -7,6 +7,7 @@
 #include "virtual_interface_definition.hpp"
 #include "systemverilog_template_bindings.hpp"
 #include "vhdl_lowering_index.hpp"
+#include "fsim/support/dpi_identity.hpp"
 #include "fsim/support/active_set.hpp"
 #include "fsim/elaboration/coverage_hir_points.hpp"
 #include "fsim/frontend/parser.hpp"
@@ -477,6 +478,50 @@ struct HirCallableBodyRecording {
 
 class Lowerer;
 
+// The instance a call of an interface or module-instance callable runs on:
+// a port or handle name written in the calling scope, or the absolute path
+// of an instance already resolved.
+struct InterfaceReceiver {
+    enum class Kind : std::uint8_t { none, name, instance_path };
+
+    Kind kind { };
+    std::string text;
+
+    [[nodiscard]] static InterfaceReceiver named(std::string_view name)
+    {
+        return name.empty()
+            ? InterfaceReceiver { }
+            : InterfaceReceiver { Kind::name, std::string { name } };
+    }
+    [[nodiscard]] static InterfaceReceiver instance(std::string path)
+    {
+        return path.empty()
+            ? InterfaceReceiver { }
+            : InterfaceReceiver { Kind::instance_path, std::move(path) };
+    }
+    [[nodiscard]] bool empty() const noexcept { return kind == Kind::none; }
+    [[nodiscard]] bool is_instance_path() const noexcept
+    {
+        return kind == Kind::instance_path;
+    }
+    // The instance path the receiver designates when it is written in the
+    // scope `hierarchy`.
+    [[nodiscard]] std::string path_from(std::string_view hierarchy) const
+    {
+        return kind == Kind::instance_path
+            ? text
+            : std::string { hierarchy } + "." + text;
+    }
+    // A string that tells receivers apart in frame keys.
+    [[nodiscard]] std::string key() const
+    {
+        return std::to_string(static_cast<unsigned>(kind)) + ":"
+            + std::to_string(text.size()) + ":" + text;
+    }
+    [[nodiscard]] friend bool operator==(const InterfaceReceiver&,
+        const InterfaceReceiver&) = default;
+};
+
 // Thrown where lowering on a thread of the parallel lowering stage would
 // write the shared design (objects, generated processes, in-place records,
 // the builder's package object memos): the work item is discarded and
@@ -875,7 +920,7 @@ public:
     // the instance that owns it as the call profiles do (empty for this
     // instance's own callable or a package's).
     void record_vpi_callee(bool statement, std::uint32_t id,
-        semantic::DeclarationId declaration, std::string_view receiver,
+        semantic::DeclarationId declaration, const InterfaceReceiver& receiver,
         semantic::OriginId dpi = { });
 
     // The subtype of an object whose declared subtype leaves index ranges
@@ -2148,8 +2193,10 @@ private:
         const frontend::SourceSpan& span);
     [[nodiscard]] bool hir_process_handle_expression(
         semantic::ExpressionId expression) const;
-    // `p.status()` (true) or `p.completed()` (false) of a process handle.
-    [[nodiscard]] std::optional<bool> hir_process_status_query(
+    // Whether `name` resolves to a variable of the built-in process class.
+    [[nodiscard]] bool hir_process_handle_name(std::string_view name) const;
+    // Whether the expression is `p.status()` of a process handle.
+    [[nodiscard]] bool hir_process_status_query(
         semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<std::int64_t> hir_vhdl_subtype_name_bound(
         semantic::ExpressionId expression, std::size_t depth) const;
@@ -2161,7 +2208,7 @@ private:
     hir_systemverilog_parameter_member(semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<std::pair<semantic::DeclarationId,
         std::vector<std::pair<std::uint64_t, std::string>>>>
-    hir_virtual_interface_instances(std::string_view receiver,
+    hir_virtual_interface_instances(const InterfaceReceiver& receiver,
         semantic::ScopeId scope = { }) const;
     // Tests a virtual interface `handle` against each instance of its
     // interface type (IEEE 1800-2017 25.9) and emits the matching
@@ -2178,7 +2225,7 @@ private:
     std::optional<HirInitializerContext> hir_initializer_context_;
     // The instance an interface function call runs on, while a call through
     // a virtual interface handle is lowered once per instance.
-    std::optional<std::string> hir_interface_receiver_override_;
+    InterfaceReceiver hir_interface_receiver_override_;
     [[nodiscard]] std::optional<semantic::ExpressionId>
     hir_parameter_type_expression(semantic::DeclarationId declaration) const;
     [[nodiscard]] std::optional<HirSystemVerilogConstant>
@@ -4763,7 +4810,8 @@ private:
     // 25.7.3): one (declaration, instance path) per exporting module.
     struct HirForkjoinBodies {
         bool forkjoin { };
-        std::vector<std::pair<semantic::DeclarationId, std::string>> bodies;
+        std::vector<std::pair<semantic::DeclarationId, InterfaceReceiver>>
+            bodies;
         // The interface instance the call goes through and the task name:
         // the scopes a disable of the task names (25.7.4).
         std::uint64_t handle { };
@@ -4773,7 +4821,7 @@ private:
         semantic::DeclarationId declaration;
         std::string identity;
         std::optional<semantic::ExpressionId> receiver;
-        std::optional<std::string> interface_receiver;
+        InterfaceReceiver interface_receiver;
         std::vector<HirClassMethodActual> actuals;
         bool static_method { };
         bool automatic { true };
@@ -5078,7 +5126,7 @@ private:
         std::string_view hierarchy);
     struct HirInterfaceFunctionProfile {
         semantic::DeclarationId declaration;
-        std::string receiver;
+        InterfaceReceiver receiver;
         // The lexical scope the receiver name is written in.
         semantic::ScopeId scope;
     };
@@ -5226,9 +5274,19 @@ private:
         // A task or void function: the destination is a placeholder.
         bool result_void { };
         bool task { };
-        // The C signature the foreign service calls through: argument
-        // codes, `:`, the result code, and `@c` for a context import.
-        std::string signature;
+        // The C signature the foreign service calls through: the codes of
+        // the formals (comma separated), the code of the result, and whether
+        // the import is a context import.
+        std::string arguments;
+        std::uint8_t result_code { };
+        bool context { };
+        // The role of a hidden import of a unit's export service, and, for
+        // its argument and result imports, the export's result and the flow
+        // of each formal.
+        support::DpiHiddenImportRole hidden_role {
+            support::DpiHiddenImportRole::none };
+        bool export_result { };
+        std::vector<support::DpiExportFlow> export_flows;
     };
     // The DPI import a call names, in the unit or its compilation unit.
     [[nodiscard]] const semantic::sv::DpiDeclaration* hir_dpi_import(
@@ -5266,7 +5324,7 @@ private:
     [[nodiscard]] bool hir_dpi_block_hooks_exist() const;
     mutable std::optional<bool> dpi_block_hooks_exist_;
     // The instance the first task-call statement lowered next runs in.
-    std::optional<std::string> hir_task_receiver_override_;
+    InterfaceReceiver hir_task_receiver_override_;
     [[nodiscard]] std::optional<RegisterId> emit_hir_dpi_call(
         const HirDpiFunctionProfile& profile,
         const frontend::SourceSpan& span,
@@ -5965,7 +6023,7 @@ private:
         const frontend::SourceSpan& span,
         std::string_view callee = { },
         semantic::DeclarationId callee_declaration = { },
-        std::string_view callee_receiver = { });
+        const InterfaceReceiver& callee_receiver = { });
     [[nodiscard]] std::string debug_scope_name() const;
     /// debug_scope_name() interned; the last result is reused when the
     /// recomputed text is unchanged, which skips the intern table.
@@ -6161,7 +6219,7 @@ private:
     const std::unordered_map<std::string, std::string>*
         systemverilog_interface_exports_ { };
     [[nodiscard]] const semantic::SpecializedHirUnit* hir_callee_unit(
-        std::string_view receiver) const;
+        const InterfaceReceiver& receiver) const;
     // Records the read of `signal` into `destination` by the body of a
     // callable that another instance defines (`u1.peek()`, run in the
     // calling process) as a hierarchical read of that instance, so that SDF
@@ -6253,7 +6311,7 @@ private:
         // The parameterized class specialization a class method body runs
         // in; its parameters are bound in generic_bindings.
         std::optional<std::uint32_t> class_specialization;
-        std::optional<std::string> interface_receiver;
+        InterfaceReceiver interface_receiver;
         // The private variables of the protected object a method frame
         // runs on; part of the frame key.
         std::vector<HirVhdlProtectedMember> vhdl_protected_members;
@@ -6827,7 +6885,8 @@ private:
     // `g[1].h[2].x` as a hierarchical name when every index is constant.
     // A task or function of a module instance named by a hierarchical
     // receiver (`u.t`): its declaration and the instance path.
-    [[nodiscard]] std::optional<std::pair<semantic::DeclarationId, std::string>>
+    [[nodiscard]] std::optional<
+        std::pair<semantic::DeclarationId, InterfaceReceiver>>
     hir_instance_callable(std::string_view receiver, std::string_view member,
         bool function) const;
     // An interface subroutine prototype called through `receiver` whose
@@ -6837,7 +6896,8 @@ private:
     // For an `extern forkjoin task` (25.7.3) `forkjoin` is set when given:
     // it receives every exporting module instance's body, and the result is
     // the prototype itself (no exporter is a run-time error of the call).
-    [[nodiscard]] std::optional<std::pair<semantic::DeclarationId, std::string>>
+    [[nodiscard]] std::optional<
+        std::pair<semantic::DeclarationId, InterfaceReceiver>>
     hir_exported_interface_callable(std::string_view receiver,
         semantic::DeclarationId declaration, bool function,
         HirForkjoinBodies* forkjoin = nullptr) const;
@@ -6848,10 +6908,6 @@ private:
     // `m1.a.t` names subroutine prototype `t` of the interface that module
     // instance `m1`'s interface port `a` connects to (IEEE 1800-2023
     // 25.7.4): the prototype, found through the elaborated port.
-    // The module instance path of an exporting body's receiver
-    // (`@instance:top.m1` names `top.m1`).
-    [[nodiscard]] static std::string_view hir_forkjoin_module_path(
-        std::string_view receiver) noexcept;
     [[nodiscard]] std::optional<semantic::DeclarationId>
     hir_interface_port_prototype(std::string_view receiver,
         std::string_view member, bool function) const;

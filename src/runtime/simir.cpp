@@ -969,7 +969,9 @@ bool operation_list_detail::ShareAccess::share_impl(
                         || left.source != right->source
                         || left.callee_declaration
                             != right->callee_declaration
-                        || left.callee_receiver != right->callee_receiver) {
+                        || left.callee_receiver != right->callee_receiver
+                        || left.callee_receiver_instance
+                            != right->callee_receiver_instance) {
                         debug_overrides.push_back(
                             { static_cast<InstructionIndex>(index), *right });
                     } else if (left.scope != right->scope) {

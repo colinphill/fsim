@@ -2275,7 +2275,6 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         SharedBodyOperationScan handle_operations { [](const Operation& operation) {
             return operation_holds<ProcessSelf>(operation)
                 || operation_holds<ProcessStatusQuery>(operation)
-                || operation_holds<ProcessCompleted>(operation)
                 || operation_holds<ProcessAwait>(operation)
                 || operation_holds<ProcessKill>(operation)
                 || operation_holds<ProcessSuspend>(operation)

@@ -114,6 +114,7 @@ std::optional<std::int64_t> VhdlHirBuilder::static_integer(
     output.source = span;
     output.origin = expression_origin;
     output.nominal_type = value.nominal_type;
+    output.builtin_nominal = value.builtin_nominal;
     output.user_attribute_value = value.vhdl_user_attribute_value;
     if (value.kind == frontend::ExpressionKind::Call
         && value.marker == support::ExpressionMarker::vhdl_external
@@ -921,7 +922,9 @@ void VhdlHirBuilder::add_disconnection_specifications(
     const auto spelling = !type.vhdl_type_declaration.empty()
         ? type.vhdl_type_declaration
         : (!type.named_type.empty() ? type.named_type : type.spelling);
-    auto target = find_type(scope, spelling);
+    // A predefined type the tool supplies is not a declaration visible here.
+    auto target = type.builtin_declaration ? semantic::TypeId { }
+                                           : find_type(scope, spelling);
     // An expanded name such as `work.pkg.t` (IEEE 1076-2008 8.3) denotes
     // `t` without making it directly visible: resolve the selected spelling.
     if (!target.valid() && !type.named_type.empty()
@@ -931,10 +934,11 @@ void VhdlHirBuilder::add_disconnection_specifications(
             return { selected, source(type_span), type.named_type };
         }
     }
-    if (!target.valid() && !type.nominal_type.empty()) {
+    if (!target.valid() && !type.nominal_type.empty()
+        && !type.builtin_nominal) {
         target = find_type(scope, type.nominal_type);
     }
-    return { target, source(type_span), spelling };
+    return { target, source(type_span), spelling, type.builtin_declaration };
 }
 
 [[nodiscard]] vh::RangeConstraint VhdlHirBuilder::concrete_range(
@@ -1527,8 +1531,10 @@ predefined_subtype_attribute(
                 = ambiguous_source_type || candidate_ambiguous;
             return found;
         };
-        auto resolved = source_type(spelling);
-        if (!resolved.valid() && !type.nominal_type.empty()) {
+        auto resolved = type.builtin_declaration
+            ? semantic::TypeId { } : source_type(spelling);
+        if (!resolved.valid() && !type.nominal_type.empty()
+            && !type.builtin_nominal) {
             resolved = source_type(type.nominal_type);
         }
         if (!resolved.valid() && !ambiguous_source_type) {

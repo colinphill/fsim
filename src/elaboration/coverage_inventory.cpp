@@ -413,11 +413,12 @@ ElaboratedDesign::attach_code_coverage_inventory(
     try {
         std::vector<CoverageInventoryOwner> owners;
         owners.reserve(specializations_.size());
+        std::vector<std::vector<std::pair<std::string, std::string>>>
+            parameter_storage;
+        parameter_storage.reserve(specializations_.size());
         for (const auto& specialization : specializations_) {
-            const auto& parameters
-                = specialization.parameter_identity_values.empty()
-                ? specialization.parameter_values
-                : specialization.parameter_identity_values;
+            const auto& parameters = parameter_storage.emplace_back(
+                coverage_parameter_identities(specialization));
             owners.push_back(CoverageInventoryOwner {
                 specialization.id, specialization.instance,
                 specialization.language, specialization.source,

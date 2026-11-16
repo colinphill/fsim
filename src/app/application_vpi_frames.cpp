@@ -63,6 +63,7 @@ std::vector<VpiFrameModel::Occurrence> VpiFrameModel::apply(
         started.callee = point.callee;
         started.callee_declaration = point.callee_declaration;
         started.callee_receiver = point.callee_receiver;
+        started.callee_receiver_instance = point.callee_receiver_instance;
         if (const auto suffix = started.callee.find('@');
             suffix != std::string::npos) {
             started.lowering = started.callee.substr(suffix);

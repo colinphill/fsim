@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "class_expression_resolution_internal.hpp"
+#include "fsim/support/process_method.hpp"
 #include <array>
 
 #include <algorithm>
@@ -665,8 +666,8 @@ void Resolver::retain_task_profile(
           && !property.property->declaration.type.systemverilog_container;
     };
     // The call on `receiver` sets the mode of `target`: a random property
-    // or constraint block by canonical identity, or `@object` for every one
-    // of the object.
+    // or constraint block by canonical identity, or no target (an empty
+    // payload) for every one of the object.
     const auto mode_call = [&](Expression receiver, const std::string& target) {
       expression.operands.front() = std::move(receiver);
       mark_expression(expression,
@@ -738,8 +739,7 @@ void Resolver::retain_task_profile(
       const auto receiver_type = resolve_expression(receiver, scope);
       if (receiver_type && class_identity(*receiver_type)
           && !receiver_type->systemverilog_container) {
-        // ITEM46-LEFT: payload of the @builtin-rand-mode: and @builtin-constraint-mode: identities; converts with that family
-        return mode_call(std::move(receiver), "@object");
+        return mode_call(std::move(receiver), std::string { });
       }
     }
     if (built_in_mode
@@ -778,8 +778,7 @@ void Resolver::retain_task_profile(
       if (whole_type && class_identity(*whole_type)
           && !whole_type->systemverilog_container
           && expression.operands.size() == 2U) {
-        // ITEM46-LEFT: payload of the @builtin-rand-mode: and @builtin-constraint-mode: identities; converts with that family
-        return mode_call(std::move(whole), "@object");
+        return mode_call(std::move(whole), std::string { });
       }
       std::optional<Expression> receiver;
       std::string member;
@@ -1801,13 +1800,48 @@ std::optional<Type> Resolver::resolve_expression(
           SystemVerilogScalarKind::Chandle);
     }
     // `p.status` and `p.status()` of a process handle are its state
-    // enumeration, not the handle (IEEE 1800-2017 9.7).
-    const auto process_status = [](const Expression& operand) {
-      return (operand.kind == ExpressionKind::Identifier
-                 || operand.kind == ExpressionKind::Call
-                 || operand.kind == ExpressionKind::Index)
-          && (operand.text.ends_with(".status")
-              || operand.text.ends_with("::status"));
+    // enumeration, not the handle (IEEE 1800-2023 9.7): a receiver of the
+    // built-in process class selecting its status method.
+    const auto process_typed = [&](const Type* type) {
+      if (type == nullptr) {
+        return false;
+      }
+      const auto& element = type->systemverilog_container
+              && !type->systemverilog_container->element_types.empty()
+          ? type->systemverilog_container->element_types.front()
+          : *type;
+      return visible_standard_class(element, scope)
+          == support::SystemVerilogStandardClass::process;
+    };
+    const auto process_receiver = [&](const Expression& receiver) {
+      return receiver.marker == support::ExpressionMarker::sv_process_self
+          || (receiver.kind == ExpressionKind::Identifier
+              && process_typed(scope.objects.find(receiver.text)));
+    };
+    const auto selects_status = [](const std::string_view member) {
+      return support::process_method(member)
+          == support::ProcessMethod::status;
+    };
+    const auto process_status = [&](const Expression& operand) {
+      constexpr std::string_view index_member_prefix{"index."};
+      if (operand.kind == ExpressionKind::Identifier) {
+        const auto dot = operand.text.rfind('.');
+        return dot != std::string::npos
+            && selects_status(std::string_view{operand.text}.substr(dot + 1U))
+            && process_typed(scope.objects.find(
+                std::string_view{operand.text}.substr(0U, dot)));
+      }
+      if (operand.kind == ExpressionKind::Call
+          && operand.text.starts_with('.') && operand.operands.size() == 1U) {
+        return selects_status(std::string_view{operand.text}.substr(1U))
+            && process_receiver(operand.operands.front());
+      }
+      return operand.kind == ExpressionKind::Index
+          && operand.text.starts_with(index_member_prefix)
+          && !operand.operands.empty()
+          && selects_status(std::string_view{operand.text}.substr(
+              index_member_prefix.size()))
+          && process_receiver(operand.operands.front());
     };
     if (process_status(expression.operands[0])) {
       left = systemverilog_builtin_type(

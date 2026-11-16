@@ -883,6 +883,7 @@ template <typename Input>
     profile.return_type = result_type;
     profile.lifetime = callable_lifetime;
     profile.extern_prototype = input.extern_prototype;
+    profile.dpi_export_role = input.dpi_export_role;
     for (const auto& argument : input.arguments) {
         profile.formals.push_back(add_function_argument(
             argument, function_scope, declaration_origin));
@@ -952,6 +953,7 @@ template <typename Input>
     profile.lifetime = callable_lifetime;
     profile.extern_prototype = input.extern_prototype;
     profile.extern_forkjoin = input.extern_forkjoin;
+    profile.dpi_export_role = input.dpi_export_role;
     for (const auto& argument : input.arguments) {
         profile.formals.push_back(add_task_argument(
             argument, task_scope, declaration_origin));
@@ -1699,6 +1701,9 @@ template <typename Input>
     output.profile_tokens = source_tokens(input.profile_tokens);
     output.profile_source = source(input.profile_span);
     output.linkage_name = input.linkage_name;
+    output.hidden_role = input.hidden_role;
+    output.export_result = input.export_result;
+    output.export_flows = input.export_flows;
     output.validated = input.validated;
     if (input.resolved_profile) {
         sv::DpiResolvedProfile profile;

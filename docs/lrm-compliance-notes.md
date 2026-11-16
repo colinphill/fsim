@@ -1316,9 +1316,10 @@ gives fsim's result in each case checked.
   keeps its existing meaning.
 - A modport may name an import or export callable declared later in the
   interface; the parser resolves the pending names at `endinterface`.
-- `process::self()`, `status()`, `completed` and the `process::state`
-  constants (`FINISHED`, `RUNNING`, `WAITING`, `SUSPENDED`, `KILLED`) lower
-  in module processes.
+- `process::self()`, `status()` and the `process::state` constants
+  (`FINISHED`, `RUNNING`, `WAITING`, `SUSPENDED`, `KILLED`) lower in module
+  processes. The process class has only the methods 9.7 declares: a
+  `completed` member is an error.
 - A queue slice `q[a:b]` is copied element by element into the target
   queue; string queues support `push_back`, `push_front`, `pop_front` and
   `pop_back`.
@@ -1361,8 +1362,9 @@ gives fsim's result in each case checked.
 - A typed constructor call accepts named arguments
   (`C#(8)::new(.start(2))`, 8.8).
 - `process::self().srandom(7)` and other process methods apply to a
-  computed receiver (a call or an indexed handle), and `p.status` and
-  `p.completed` work in name form (9.7). `x.y.constraint_mode(0)` and
+  computed receiver (`process::self()` or an indexed handle), and
+  `p.status` works in name form (9.7). A process method applies only to a
+  receiver whose type is the process class. `x.y.constraint_mode(0)` and
   `rand_mode` called as statements are expression statements.
 - A net-typed input port that is not connected starts at `z`, or at its
   pull value under `` `unconnected_drive `` (23.3.3).

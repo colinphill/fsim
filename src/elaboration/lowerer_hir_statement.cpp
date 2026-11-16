@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "lowerer_internal.hpp"
+#include "fsim/support/process_method.hpp"
 #include "fsim/support/stack_growth.hpp"
 #include "hierarchy_sv_type_layout_internal.hpp"
 #include "hir_output_conversion.hpp"
@@ -4593,13 +4594,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
             process_.operations.emplace_back(ProcessSelf { destination });
             return destination;
         }
-        // ITEM28-LEFT: the process queries are selected by the member's spelling
-        // (`.status`, `.completed`) of the generic member-select forms (a dotted name,
-        // a `.member` call, an `index.member` node); only the receiver is typed. A
-        // typed process-class member selection in the class resolver replaces them.
-        if ((input.text != ".status"
-                && input.text != ".completed")
-            || input.operands.size() != 1U) {
+        // `p.status()` of a process handle (IEEE 1800-2023 9.7).
+        if (!hir_process_status_query(expression_id)) {
             return std::nullopt;
         }
         const auto receiver_expression
@@ -4619,16 +4615,9 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 hir_source_span(input.source));
             return std::nullopt;
         }
-        if (input.text == ".status") {
-            const auto destination = allocate_register(
-                32U, frontend::ValueDomain::Integer);
-            process_.operations.emplace_back(ProcessStatusQuery {
-                destination, *receiver });
-            return destination;
-        }
         const auto destination = allocate_register(
-            1U, frontend::ValueDomain::Bit2);
-        process_.operations.emplace_back(ProcessCompleted {
+            32U, frontend::ValueDomain::Integer);
+        process_.operations.emplace_back(ProcessStatusQuery {
             destination, *receiver });
         return destination;
     };
@@ -4642,8 +4631,11 @@ bool Lowerer::lower_hir_statement_unsuspended(
         }
         const auto& input = *expression->systemverilog;
         if (input.kind != semantic::sv::ExpressionKind::call
-            || input.text != ".get_randstate"
-            || input.operands.size() != 1U) {
+            || !input.text.starts_with('.')
+            || support::process_method(std::string_view { input.text }.substr(1U))
+                != support::ProcessMethod::get_randstate
+            || input.operands.size() != 1U
+            || !hir_process_handle_expression(input.operands.front())) {
             return std::nullopt;
         }
         const auto receiver_expression
@@ -5506,7 +5498,6 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 };
                 const auto builtin_array_element = [this](std::string_view name)
                     -> std::optional<semantic::vhdl::SubtypeIndication> {
-                    name = semantic::vhdl::without_builtin_prefix(name);
                     name = simple_name_of(name);
                     semantic::vhdl::SubtypeIndication element;
                     const auto set = [&](const std::string_view scalar,
@@ -17275,7 +17266,6 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     auto spelling = std::string_view {
                         selector_array_base_subtype->type_mark.spelling
                     };
-                    spelling = semantic::vhdl::without_builtin_prefix(spelling);
                     const auto declarations_are_from_standard_package = [&](
                         const auto name,
                         const std::string_view library,
@@ -17700,13 +17690,6 @@ bool Lowerer::lower_hir_statement_unsuspended(
                                 const auto exact_standard_type_spelling
                                     = [&](std::string_view spelling,
                                           const std::string_view type_name) {
-                                          constexpr auto builtin_prefix
-                                              = semantic::vhdl::builtin_prefix;
-                                          if (spelling.starts_with(
-                                                  builtin_prefix)) {
-                                              spelling.remove_prefix(
-                                                  builtin_prefix.size());
-                                          }
                                           const auto standard_name
                                               = std::string { "standard." }
                                               + std::string { type_name };
@@ -18766,7 +18749,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     }
                     return self(self, definition.base);
                 }
-                if (reference.target.spelling.empty()) {
+                if (!reference.names_type()) {
                     return nullptr;
                 }
                 const auto declaration_id
@@ -20992,11 +20975,9 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         };
                         auto type_id = prefix_subtype->type_mark.target;
                         if (!type_id.valid()) {
-                            auto type_name = std::string_view {
+                            const auto type_name = std::string_view {
                                 prefix_subtype->type_mark.spelling
                             };
-                            type_name = semantic::vhdl::without_builtin_prefix(
-                                type_name);
                             if (!type_name.empty()) {
                                 type_id = hir_resolver()
                                               .resolve_vhdl_named_type(type_name, prefix_scope)
@@ -21209,9 +21190,6 @@ bool Lowerer::lower_hir_statement_unsuspended(
                                                         ? index_subtype.canonical
                                                         : index_subtype.spelling
                                                     };
-                                                index = semantic::vhdl::
-                                                    without_builtin_prefix(
-                                                        index);
                                                 const auto separator
                                                     = index.find_last_of(".:");
                                                 const auto qualifier
@@ -23396,15 +23374,6 @@ bool Lowerer::lower_hir_statement_unsuspended(
                            *user_task, arguments, span)
                     .has_value();
             }
-            // ITEM28-LEFT: the DPI export service is a name protocol end to end: the
-            // parser generates the hidden imports and hooks as text, and the runtime
-            // reads the mask and linkage out of their C identity; it needs a typed DPI
-            // call identity (runtime operation fields, codec) before the names can go.
-            if (input.task.spelling == "__fsim_dpi_export_foreign") {
-                // The foreign arm of a DPI export service (IEEE 1800-2023
-                // 35.5.3).
-                return lower_hir_dpi_export_foreign();
-            }
             if (input.task_marker == support::ExpressionMarker::none
                 && input.task_call_kind != semantic::sv::CallKind::system) {
                 if (const auto lowered = lower_hir_dpi_call_statement(
@@ -23432,26 +23401,31 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     input, hir_process_scope_)) {
                 return lower_hir_synchronization_statement(input);
             }
+            // A process control method of a named handle (IEEE 1800-2023
+            // 9.7): a variable of the process class selecting one of its
+            // methods.
             const auto process_method_separator
                 = input.task.spelling.rfind('.');
-            const auto process_method
-                = process_method_separator == std::string::npos
+            const auto receiver_name = process_method_separator
+                    == std::string::npos
                 ? std::string_view { }
                 : std::string_view { input.task.spelling }.substr(
-                      process_method_separator);
-            const auto process_method_no_argument
-                = process_method == ".await"
-                || process_method == ".kill"
-                || process_method == ".suspend"
-                || process_method == ".resume";
-            const auto process_method_one_argument
-                = process_method == ".set_randstate"
-                || process_method == ".srandom";
-            if (process_method_no_argument
-                || process_method_one_argument) {
-                const auto receiver_name = std::string_view {
-                    input.task.spelling
-                }.substr(0U, process_method_separator);
+                      0U, process_method_separator);
+            const auto process_method = receiver_name.empty()
+                ? std::nullopt
+                : support::process_method(
+                      std::string_view { input.task.spelling }.substr(
+                          process_method_separator + 1U));
+            const auto process_method_one_argument = process_method
+                && (*process_method == support::ProcessMethod::set_randstate
+                    || *process_method == support::ProcessMethod::srandom);
+            const auto process_method_no_argument = process_method
+                && (*process_method == support::ProcessMethod::await
+                    || *process_method == support::ProcessMethod::kill
+                    || *process_method == support::ProcessMethod::suspend
+                    || *process_method == support::ProcessMethod::resume);
+            if ((process_method_no_argument || process_method_one_argument)
+                && hir_process_handle_name(receiver_name)) {
                 auto receiver = lower_named_packed(receiver_name);
                 if (!receiver || register_width(*receiver) != 64U
                     || input.task_arguments.size()
@@ -23466,18 +23440,23 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         span);
                     return true;
                 }
-                if (process_method == ".await") {
+                switch (*process_method) {
+                case support::ProcessMethod::await:
                     process_.operations.emplace_back(
                         ProcessAwait { *receiver });
-                } else if (process_method == ".kill") {
+                    break;
+                case support::ProcessMethod::kill:
                     lower_hir_process_kill(*receiver);
-                } else if (process_method == ".suspend") {
+                    break;
+                case support::ProcessMethod::suspend:
                     process_.operations.emplace_back(
                         ProcessSuspend { *receiver });
-                } else if (process_method == ".resume") {
+                    break;
+                case support::ProcessMethod::resume:
                     process_.operations.emplace_back(
                         ProcessResume { *receiver });
-                } else if (process_method == ".set_randstate") {
+                    break;
+                case support::ProcessMethod::set_randstate: {
                     const auto state = lower_hir_string_expression(
                         *input.task_arguments.front().actual);
                     if (!state) {
@@ -23485,7 +23464,9 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     }
                     process_.operations.emplace_back(
                         ProcessSetRandState { *receiver, *state });
-                } else {
+                    break;
+                }
+                case support::ProcessMethod::srandom: {
                     const auto seed_expression
                         = *input.task_arguments.front().actual;
                     auto seed = lower_hir_expression(
@@ -23501,6 +23482,11 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     }
                     process_.operations.emplace_back(
                         ProcessSrandom { *receiver, *seed });
+                    break;
+                }
+                case support::ProcessMethod::status:
+                case support::ProcessMethod::get_randstate:
+                    break;
                 }
                 return true;
             }
@@ -25998,25 +25984,21 @@ bool Lowerer::lower_hir_statement_unsuspended(
             // 1800-2017 9.7).
             {
                 const auto& method_call = *call->systemverilog;
-                const auto method = std::string_view { method_call.text };
-                const bool one_argument = method == ".srandom";
-                const bool no_argument = method == ".kill"
-                    || method == ".await" || method == ".suspend"
-                    || method == ".resume";
-                const auto receiver_expression = !method_call.operands.empty()
-                    ? specialized_hir_unit_->find_expression(
-                          method_call.operands.front())
+                const auto method = method_call.text.starts_with('.')
+                    ? support::process_method(
+                          std::string_view { method_call.text }.substr(1U))
                     : std::nullopt;
-                if ((one_argument || no_argument) && receiver_expression
-                    && receiver_expression->systemverilog != nullptr
-                    && (receiver_expression->systemverilog->kind
-                            == semantic::sv::ExpressionKind::call
-                        || (receiver_expression->systemverilog->kind
-                                == semantic::sv::ExpressionKind::index
-                            && hir_expression_width(
-                                   method_call.operands.front(),
-                                   hir_process_scope_)
-                                == std::optional<std::size_t> { 64U }))
+                const bool one_argument
+                    = method == support::ProcessMethod::srandom;
+                const bool no_argument = method
+                    && (*method == support::ProcessMethod::kill
+                        || *method == support::ProcessMethod::await
+                        || *method == support::ProcessMethod::suspend
+                        || *method == support::ProcessMethod::resume);
+                if ((one_argument || no_argument)
+                    && !method_call.operands.empty()
+                    && hir_process_handle_expression(
+                        method_call.operands.front())
                     && method_call.operands.size()
                         == (one_argument ? 2U : 1U)) {
                     const auto receiver = lower_hir_expression(
@@ -26024,18 +26006,23 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     if (!receiver || register_width(*receiver) != 64U) {
                         return false;
                     }
-                    if (method == ".kill") {
+                    switch (*method) {
+                    case support::ProcessMethod::kill:
                         lower_hir_process_kill(*receiver);
-                    } else if (method == ".await") {
+                        break;
+                    case support::ProcessMethod::await:
                         process_.operations.emplace_back(
                             ProcessAwait { *receiver });
-                    } else if (method == ".suspend") {
+                        break;
+                    case support::ProcessMethod::suspend:
                         process_.operations.emplace_back(
                             ProcessSuspend { *receiver });
-                    } else if (method == ".resume") {
+                        break;
+                    case support::ProcessMethod::resume:
                         process_.operations.emplace_back(
                             ProcessResume { *receiver });
-                    } else {
+                        break;
+                    case support::ProcessMethod::srandom: {
                         auto seed = lower_hir_expression(
                             method_call.operands[1], 32U);
                         if (!seed) {
@@ -26047,6 +26034,12 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         }
                         process_.operations.emplace_back(
                             ProcessSrandom { *receiver, *seed });
+                        break;
+                    }
+                    case support::ProcessMethod::status:
+                    case support::ProcessMethod::get_randstate:
+                    case support::ProcessMethod::set_randstate:
+                        break;
                     }
                     return true;
                 }
@@ -28256,14 +28249,10 @@ std::string Lowerer::hir_instance_path() const
     }
     const auto& receiver
         = hir_callable_frames_[*active_hir_callable_].interface_receiver;
-    if (!receiver) {
+    if (receiver.empty()) {
         return hierarchy_;
     }
-    // ITEM46-LEFT: interface_receiver is one string, either a port or handle name or an absolute instance path, used by about eighty sites in the lowerer frames and profiles; a typed receiver (name plus absolute flag) must replace the string in all of them together
-    constexpr std::string_view instance_prefix { "@instance:" };
-    return receiver->starts_with(instance_prefix)
-        ? receiver->substr(instance_prefix.size())
-        : hierarchy_ + "." + *receiver;
+    return receiver.path_from(hierarchy_);
 }
 
 std::string Lowerer::hir_scope_hierarchy() const

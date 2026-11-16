@@ -178,7 +178,7 @@ module process_handles;
     join_none
     #0;
     status_value = handle.status();
-    completed = handle.completed();
+    completed = handle.status() == process::FINISHED;
     handle.await();
     handle.kill();
     handle.suspend();
@@ -215,7 +215,6 @@ endmodule
     };
     assert(has_operation(static_cast<ProcessSelf*>(nullptr)));
     assert(has_operation(static_cast<ProcessStatusQuery*>(nullptr)));
-    assert(has_operation(static_cast<ProcessCompleted*>(nullptr)));
     assert(has_operation(static_cast<ProcessAwait*>(nullptr)));
     assert(has_operation(static_cast<ProcessKill*>(nullptr)));
     assert(has_operation(static_cast<ProcessSuspend*>(nullptr)));

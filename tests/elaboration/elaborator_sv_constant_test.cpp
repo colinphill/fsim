@@ -781,11 +781,11 @@ endmodule
         parameter_identity(*wide_child, "VALUE")
         != parameter_identity(*alternate_wide_child, "VALUE"));
     const auto wide_specparam = std::ranges::find_if(
-        top->parameter_identity_values,
+        top->specparam_identities,
         [](const auto& value) {
-            return value.first == "@specparam:WIDE_PATH";
+            return value.first == "WIDE_PATH";
         });
-    assert(wide_specparam != top->parameter_identity_values.end());
+    assert(wide_specparam != top->specparam_identities.end());
     assert(wide_specparam->second.starts_with("svconst-v3:b=0:w=128:"));
     assert(
         wide_specparam->second.ends_with(

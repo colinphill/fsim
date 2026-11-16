@@ -63,21 +63,15 @@ bool below(const std::string_view name, const std::string_view instance)
         && name[instance.size()] == '.';
 }
 
-std::string_view leaf_of(const std::string_view name)
-{
-    const auto dot = name.rfind('.');
-    return dot == std::string_view::npos ? name : name.substr(dot + 1U);
-}
-
 // A port connection process: the elaborator's adapter between a port formal
-// and its actual (`port_actual_N` drives a formal from its actual,
-// `port_result_N` an actual from its formal) and the bidirectional
+// and its actual (an input adapter drives a formal from its actual, an
+// output adapter an actual from its formal) and the bidirectional
 // connection of an inout formal to a select or concatenation of its actual
 // (`$inout_N`).
 bool is_connection(const Process& process)
 {
-    const auto leaf = leaf_of(process.name);
-    return leaf.starts_with("port_actual_") || leaf.starts_with("port_result_")
+    return process.origin == support::GeneratedObjectOrigin::port_input_adapter
+        || process.origin == support::GeneratedObjectOrigin::port_output_adapter
         || process.origin == support::GeneratedObjectOrigin::inout_adapter;
 }
 
@@ -1859,6 +1853,7 @@ std::size_t apply_sdf_device_gate_delays(ElaboratedDesignState& state,
                     continue;
                 }
                 const auto rest = name.substr(primitive.full_name.size());
+                // ITEM46-LEFT: gate driver processes are named after the instance label plus a slot suffix and matched by that name; a typed form needs the primitive instance and driver slot on the statement, the HIR statement and the process record
                 if (!(rest.empty() || rest == "$one" || rest.starts_with("$output"))) {
                     continue;
                 }

@@ -1559,6 +1559,7 @@ void HierarchyBuilder::record_verilog_primitives(
             // notif without a delay splits into `$one`.
             // A tranif's turn-on and turn-off delays are on its control's
             // driver (`$control`).
+            // ITEM46-LEFT: gate driver processes are named after the instance label plus a slot suffix and matched by that name; a typed form needs the primitive instance and driver slot on the statement, the HIR statement and the process record
             for (const auto& suffix : { std::string {}, std::string { "$one" },
                      std::string { "$control" } }) {
                 const auto found = delayed_drivers.find(driver_name + suffix);
@@ -1568,6 +1569,7 @@ void HierarchyBuilder::record_verilog_primitives(
                 }
             }
             for (std::size_t output = 0U;; ++output) {
+                // ITEM46-LEFT: gate driver processes are named after the instance label plus a slot suffix and matched by that name; a typed form needs the primitive instance and driver slot on the statement, the HIR statement and the process record
                 const auto found = delayed_drivers.find(
                     driver_name + "$output" + std::to_string(output));
                 if (found == delayed_drivers.end()) {

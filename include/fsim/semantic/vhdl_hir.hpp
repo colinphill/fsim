@@ -4,6 +4,7 @@
 #include "fsim/semantic/model.hpp"
 #include "fsim/support/expression_marker.hpp"
 #include "fsim/support/rare_vector.hpp"
+#include "fsim/support/vhdl_formal_conversion.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
 
 #include <algorithm>
@@ -476,6 +477,9 @@ struct Expression {
     std::vector<std::string> argument_names;
     std::vector<AggregateAssociation> associations;
     std::string nominal_type;
+    // `nominal_type` names a predefined type the tool supplies (frontend
+    // Type::builtin_nominal).
+    bool builtin_nominal { };
     std::optional<std::string> decoded_string;
     // An operator symbol written as a function call (`"not"(s)`).
     bool operator_symbol_call { };
@@ -586,6 +590,11 @@ struct Statement {
     ScopeId scope;
     StatementKind kind { StatementKind::null_statement };
     std::string label;
+    // Whether the front end made the statement for a port association with
+    // a conversion function.
+    support::VhdlFormalConversion formal_conversion {
+        support::VhdlFormalConversion::none
+    };
     SourceSpanId source;
     OriginId origin;
     std::optional<ExpressionId> target;
@@ -1264,17 +1273,12 @@ struct Unit {
             &AggregateAssociation::positional);
 }
 
-/// Spelling prefix of a compiler-supplied (built-in) declaration name.
-// ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
-inline constexpr std::string_view builtin_prefix = "@builtin:";
-
-/// `spelling` without a leading builtin_prefix.
-[[nodiscard]] constexpr std::string_view without_builtin_prefix(
-    const std::string_view spelling) noexcept
+/// Whether `expression` has the predefined nominal type `name` the tool
+/// supplies (a plain lower-case name such as "time" or "integer").
+[[nodiscard]] inline bool is_builtin_nominal(
+    const Expression& expression, const std::string_view name) noexcept
 {
-    return spelling.starts_with(builtin_prefix)
-        ? spelling.substr(builtin_prefix.size())
-        : spelling;
+    return expression.builtin_nominal && expression.nominal_type == name;
 }
 
 /// Whether `unit` is a unit of the VHDL package `library.name` (basic

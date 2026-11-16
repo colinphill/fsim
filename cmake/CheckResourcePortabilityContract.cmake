@@ -4286,7 +4286,7 @@ foreach(FSIM_VHDL_2019_DATA_TIME_POLICY IN ITEMS
     "std.env.time_to_seconds"
     "std.env.seconds_to_time"
     "std.env.to_string"
-    "@builtin:time"
+    "builtin_nominal"
     "localtime_s"
     "localtime_r"
     "utc_epoch_from_calendar"

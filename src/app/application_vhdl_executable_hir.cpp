@@ -166,6 +166,7 @@ class VhdlExecutableBuilder final {
       output.source = expression_source;
       output.origin = expression_origin;
       output.nominal_type = input.nominal_type;
+      output.builtin_nominal = input.builtin_nominal;
       output.user_attribute_value = input.vhdl_user_attribute_value;
       if (input.kind == frontend::ExpressionKind::Call
           && input.marker == support::ExpressionMarker::vhdl_external
@@ -361,6 +362,11 @@ class VhdlExecutableBuilder final {
     const auto spelling = !input.vhdl_type_declaration.empty()
         ? input.vhdl_type_declaration
         : (!input.named_type.empty() ? input.named_type : input.spelling);
+    if (input.builtin_declaration) {
+      // A predefined type the tool supplies is not a declaration visible
+      // from any scope.
+      return {semantic::TypeId {}, source(fallback), spelling, true};
+    }
     semantic::TypeId target;
     auto visible_scope = std::optional<semantic::ScopeId>{scope};
     while (visible_scope && !target.valid()) {
@@ -580,6 +586,7 @@ class VhdlExecutableBuilder final {
     output.scope = enclosing_scope;
     output.kind = statement_kind(input);
     output.label = input.label;
+    output.formal_conversion = input.formal_conversion;
     output.source = statement_source;
     output.origin = statement_origin;
     auto child_scope = enclosing_scope;

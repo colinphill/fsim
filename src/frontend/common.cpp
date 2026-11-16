@@ -707,8 +707,7 @@ bool vhdl_array_type(const Type& type) {
 
 bool vhdl_physical_type(const Type& type) {
     return type.vhdl_physical.has_value()
-        // ITEM46-LEFT: the prefix marks a compiler-supplied VHDL type name in nominal_type and type-mark spellings, read back through without_builtin_prefix by about sixty consumers; a typed form needs a builtin flag on every type mark and nominal type plus their codecs
-        || type.nominal_type == "@builtin:time";
+        || (type.builtin_nominal && type.nominal_type == "time");
 }
 
 bool vhdl_floating_type(const Type& type) {
