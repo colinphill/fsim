@@ -32334,6 +32334,19 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
             }
             return result + ")";
         };
+        // A typedef name denotes the type the typedef declares, which has the
+        // typedef's own name (20.6.1 c, f).
+        const auto hir_typedef_type = [](const semantic::sv::Declaration&
+                                             typedef_declaration) {
+            if (!typedef_declaration.declared_type) {
+                return *typedef_declaration.type;
+            }
+            semantic::sv::TypeReference type;
+            type.target.target = *typedef_declaration.declared_type;
+            type.target.spelling = typedef_declaration.name;
+            type.named = true;
+            return type;
+        };
         // A package-qualified type name resolves to the type it denotes.
         const auto hir_typename_resolved
             = [&](semantic::sv::TypeReference type,
@@ -32368,8 +32381,10 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
                 == semantic::sv::DeclarationForm::typedef_declaration
             && declaration->systemverilog->type
             && !(text = hir_systemverilog_type_name(*specialized_hir_unit_,
-                     hir_typename_resolved(*declaration->systemverilog->type,
-                         operand_source.scope), 0U, &class_names))
+                     hir_typename_resolved(
+                         hir_typedef_type(*declaration->systemverilog),
+                         operand_source.scope),
+                     0U, &class_names))
                     .empty()) {
             // A type name is replaced by the type it denotes (20.6.1 a).
         } else if (operand_source.kind == semantic::sv::ExpressionKind::name

@@ -2137,6 +2137,7 @@ tests/fixtures/compliance/sv_typedef_nonintegral_cast_batch56.sv
 tests/fixtures/compliance/sv_typedef_real_declarations.sv
 tests/fixtures/compliance/sv_typedef_string_declarations.sv
 tests/fixtures/compliance/sv_typeless_mailbox.sv
+tests/fixtures/compliance/sv_typename_type_parameter.sv
 tests/fixtures/compliance/sv_unnamed_block_import_batch58.sv
 tests/fixtures/compliance/sv_upward_generated_scope_callable_batch58_20261013.sv
 tests/fixtures/compliance/sv_values_and_assertion_items.sv
