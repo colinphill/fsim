@@ -431,6 +431,12 @@ public:
     [[nodiscard]] std::optional<sv::TypeReference>
     effective_systemverilog_type(
         const sv::TypeReference&, ScopeId use_scope) const;
+    /// effective_systemverilog_type() that keeps a typedef which renames
+    /// another type as itself instead of the renamed type (IEEE 1800-2023
+    /// 6.18), for the typedef chains of VPI typespecs (37.25).
+    [[nodiscard]] std::optional<sv::TypeReference>
+    named_systemverilog_type(
+        const sv::TypeReference&, ScopeId use_scope) const;
 
     /// `X::name` where type parameter X is bound to a class: the typedef
     /// that class declares, to be resolved under the returned frame (IEEE
@@ -717,6 +723,8 @@ public:
         std::string_view name) const;
 
 private:
+    [[nodiscard]] std::optional<sv::TypeReference> systemverilog_type(
+        const sv::TypeReference&, ScopeId use_scope, bool keep_renaming) const;
     [[nodiscard]] std::optional<bool> vhdl_array_shapes_match(
         const vhdl::SubtypeIndication& left, ScopeId left_scope,
         const vhdl::SubtypeIndication& right, ScopeId right_scope,

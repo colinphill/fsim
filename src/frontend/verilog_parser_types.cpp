@@ -747,9 +747,17 @@ void VerilogParser::parse_typedef(
                 // shape it copies, for the VPI typespec chain (IEEE
                 // 1800-2023 37.25 details 1, 8).
                 auto over = std::move(type.named_type);
+                const auto over_span = type.named_type_span;
+                const auto over_order = type.systemverilog_source_order;
                 type = aliased->type;
                 if (!type.systemverilog_packed_dimensions.empty()) {
                     type.systemverilog_packed_over = std::move(over);
+                } else {
+                    // The typedef renames the aggregate (6.18): it keeps
+                    // the name it selects.
+                    type.named_type = std::move(over);
+                    type.named_type_span = over_span;
+                    type.systemverilog_source_order = over_order;
                 }
             }
         }

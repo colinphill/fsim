@@ -3905,6 +3905,20 @@ std::optional<sv::TypeReference>
 CompiledDesignResolver::effective_systemverilog_type(
     const sv::TypeReference& input, ScopeId use_scope) const
 {
+    return systemverilog_type(input, use_scope, false);
+}
+
+std::optional<sv::TypeReference>
+CompiledDesignResolver::named_systemverilog_type(
+    const sv::TypeReference& input, ScopeId use_scope) const
+{
+    return systemverilog_type(input, use_scope, true);
+}
+
+std::optional<sv::TypeReference>
+CompiledDesignResolver::systemverilog_type(const sv::TypeReference& input,
+    ScopeId use_scope, const bool keep_renaming) const
+{
     if (design_ == nullptr) {
         return std::nullopt;
     }
@@ -3941,6 +3955,16 @@ CompiledDesignResolver::effective_systemverilog_type(
         }
         const auto nominal_type = systemverilog_declared_type(
             *design_, effective_, record);
+        const auto definition = nominal_type
+            ? find_type(*design_, effective_, *nominal_type)
+            : std::nullopt;
+        // A typedef that renames a type denotes the renamed type (6.18).
+        if (!keep_renaming
+            && record.form != sv::DeclarationForm::type_parameter
+            && definition && definition->systemverilog != nullptr
+            && definition->systemverilog->form == sv::TypeForm::alias) {
+            return effective_systemverilog_type(*result, record.scope);
+        }
         if (record.form != sv::DeclarationForm::type_parameter
             && nominal_type) {
             result->target.target = *nominal_type;
@@ -4123,7 +4147,17 @@ CompiledDesignResolver::effective_systemverilog_type(
                     }
                     const auto nominal_type = systemverilog_declared_type(
                         *design_, effective_, record);
-                    if (nominal_type) {
+                    // A typedef that renames a type is that type (6.18):
+                    // the resolved base keeps its own identity.
+                    const auto definition = nominal_type
+                        ? find_type(*design_, effective_, *nominal_type)
+                        : std::nullopt;
+                    const bool renaming = !keep_renaming && declared
+                        && definition
+                        && definition->systemverilog != nullptr
+                        && definition->systemverilog->form
+                            == sv::TypeForm::alias;
+                    if (nominal_type && !renaming) {
                         candidate.target.target
                             = *nominal_type;
                         candidate.target.source = nominal_target.source;

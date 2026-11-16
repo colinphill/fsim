@@ -488,6 +488,28 @@ void SystemVerilogHirBuilder::apply_named_type_dimensions(
     output.id = type_id;
     output.declaration = id;
     output.form = systemverilog_type_form(input.type);
+    // A typedef that names another type with nothing of its own (no
+    // literals, dimensions or class) renames that type (IEEE 1800-2023
+    // 6.18, 6.22.1 a); a type parameter's alias stays bound per
+    // specialization.
+    const auto& written = input.type;
+    const auto* renamed = base.target.target.valid()
+        ? hir_.find_type(base.target.target)
+        : nullptr;
+    if (input.declaration_kind
+            == frontend::TypeDeclarationKind::SystemVerilogTypedef
+        && !written.named_type.empty() && input.enum_literals.empty()
+        && !written.systemverilog_container
+        && written.systemverilog_packed_over.empty()
+        && written.systemverilog_named_type_dimensions.empty()
+        && written.systemverilog_packed_dimensions.empty()
+        && written.systemverilog_class_declaration.empty()
+        && !written.systemverilog_virtual_interface
+        && written.systemverilog_interface_type.empty()
+        && (renamed == nullptr
+            || renamed->form != sv::TypeForm::type_parameter)) {
+        output.form = sv::TypeForm::alias;
+    }
     output.name = input.name;
     output.base = base;
     output.resolution_function = input.systemverilog_resolution_function;

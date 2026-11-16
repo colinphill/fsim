@@ -1084,7 +1084,7 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
         // unbound name or a type parameter.
         if (record == nullptr || record->form == Form::type_parameter) {
             if (auto effective
-                = resolver.effective_systemverilog_type(input, use_scope);
+                = resolver.named_systemverilog_type(input, use_scope);
                 effective && *effective != input) {
                 // The named type packed dimensions were composed over is
                 // part of the use, not of what the lookup returns.

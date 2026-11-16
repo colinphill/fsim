@@ -2132,6 +2132,7 @@ tests/fixtures/compliance/sv_type_and_class_forms.sv
 tests/fixtures/compliance/sv_type_owner_context_specializations_batch57.sv
 tests/fixtures/compliance/sv_typed_packed_pattern_context_batch59.sv
 tests/fixtures/compliance/sv_typed_packed_pattern_edges_batch59.sv
+tests/fixtures/compliance/sv_typedef_alias.sv
 tests/fixtures/compliance/sv_typedef_nonintegral_cast_batch56.sv
 tests/fixtures/compliance/sv_typedef_real_declarations.sv
 tests/fixtures/compliance/sv_typedef_string_declarations.sv
