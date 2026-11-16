@@ -39,6 +39,12 @@ struct SystemVerilogTypeDescriptor {
         std::optional<std::int64_t> right;
         // A dynamic, queue or associative dimension has no bounds.
         std::string container;
+        // An associative dimension's index type, described, unless the
+        // index is a wildcard (IEEE 1800-2023 7.8.1).
+        std::vector<SystemVerilogTypeDescriptor> index;
+        bool wildcard_index { };
+        // The form of a dynamic, queue or associative dimension.
+        std::optional<sv::TypeForm> form;
     };
 
     Kind kind { Kind::other };

@@ -59,6 +59,9 @@ enum class MailboxElementKind : std::uint8_t {
     // singular message, kept with its type; only MailboxCreate names it,
     // and the puts and gets name each message's own kind.
     dynamic,
+    // An unpacked array, structure or union (15.4: a mailbox holds data of
+    // any type): one whole container value per message.
+    container,
 };
 
 /// Construct a typed mailbox. A zero capacity selects the bounded unbounded
@@ -84,6 +87,8 @@ struct MailboxPut {
     // The message's type (an equivalence class, IEEE 1800-2023 6.22.2) on
     // a typeless mailbox; zero on a parameterized one.
     std::uint64_t message_type { };
+    // A container message's value.
+    ContainerRegisterId container_source { };
 };
 
 /// Get or peek one typed value. Packed messages use `destination`; string
@@ -101,6 +106,8 @@ struct MailboxGet {
     // The receiving variable's type (an equivalence class, 6.22.2) on a
     // typeless mailbox; zero on a parameterized one.
     std::uint64_t message_type { };
+    // Where a container message is received.
+    ContainerRegisterId container_destination { };
 };
 
 struct MailboxNum {

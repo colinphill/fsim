@@ -93,7 +93,7 @@ foreach(FSIM_TOKEN IN ITEMS
     "fsim-code-coverage-foundation-v3"
     "format 8, portable schema 16, compiled-HIR bundle 13"
     "format 2, runtime ABI 1, SystemC ABI 4"
-    "runtime 133"
+    "runtime 134"
     "C++ SDK consumers must"
     "VhdlBindingIndication"
     "DesignIR 7"

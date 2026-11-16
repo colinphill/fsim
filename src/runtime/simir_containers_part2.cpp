@@ -4,6 +4,7 @@
 #include "simir_container_ops.hpp"
 #include "fsim/runtime/simir_interpreter.hpp"
 
+#include <functional>
 #include <stdexcept>
 
 
@@ -65,9 +66,10 @@ class CapturedStringElementAccess final : public ContainerRegisterAccess {
 public:
     CapturedStringElementAccess(std::vector<ContainerValue>& containers,
         const std::vector<PackedLogic4>& indices,
-        const std::vector<std::string>& texts, const std::string& value)
+        const std::vector<std::string>& texts, const std::string& value,
+        std::function<void(std::string_view)> warning)
         : containers_ { containers }, indices_ { indices }, texts_ { texts },
-          value_ { value }
+          value_ { value }, warning_ { std::move(warning) }
     {
     }
 
@@ -100,12 +102,17 @@ public:
     {
         return 0U;
     }
+    void warn(const std::string_view message) override
+    {
+        warning_(message);
+    }
 
 private:
     std::vector<ContainerValue>& containers_;
     const std::vector<PackedLogic4>& indices_;
     const std::vector<std::string>& texts_;
     const std::string& value_;
+    std::function<void(std::string_view)> warning_;
 };
 
 } // namespace
@@ -149,6 +156,18 @@ void Interpreter::Impl::write_object_string_element(
     }
 }
 
+void Interpreter::Impl::warn_process(
+    const ProcessId process, const std::string_view message)
+{
+    if (report_hook) {
+        report_hook(process,
+            std::string { message } + "; process '"
+                + std::string { processes.program_view(process).name() } + "'",
+            AssertionSeverity::warning, SourceLocation { }, current_time(),
+            current_delta());
+    }
+}
+
 void Interpreter::Impl::write_container_object_string_element_value(
     const WriteContainerObjectString& operation, const ProcessId driver,
     const InstructionIndex instruction, const StringElementCapture& capture,
@@ -164,8 +183,10 @@ void Interpreter::Impl::write_container_object_string_element_value(
     auto indices = capture.indices;
     const auto packed_register = static_cast<RegisterId>(indices.size());
     indices.push_back(capture.packed);
-    CapturedStringElementAccess access {
-        containers, indices, capture.texts, capture.value };
+    CapturedStringElementAccess access { containers, indices, capture.texts,
+        capture.value, [&](const std::string_view message) {
+            warn_process(driver, message);
+        } };
     // Register k of the captured indices is level k's; its key is string
     // register k + 1.
     const auto text_register = [](const std::size_t level) {
@@ -360,6 +381,10 @@ void Interpreter::Impl::write_container_object_path_value(
             container_error(
                 process, instruction,
                 "container path writes require an integral key");
+        }
+        if (associative_index_invalid(target.type, index)) {
+            warn_process(process, associative_invalid_write_warning);
+            return;
         }
         const auto key = associative_key(
             process, instruction, target.type, index);

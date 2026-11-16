@@ -690,7 +690,9 @@ inline constexpr bool static_kernel_class_container_operation
     || std::is_same_v<T, ClassPropertyContainerWrite>
     || std::is_same_v<T, ClassMethodCall>
     || std::is_same_v<T, ClassStaticMethodCall>
-    || std::is_same_v<T, ScopeRandomize>;
+    || std::is_same_v<T, ScopeRandomize>
+    // A container message moves through the host's mailbox tables (15.4).
+    || std::is_same_v<T, MailboxPut> || std::is_same_v<T, MailboxGet>;
 
 /// Calls `visit(id)` for each container register a with-clause names (an
 /// inline_container_register node, bind_inline_constraint_containers).
@@ -770,6 +772,14 @@ inline void static_kernel_container_operands(
             visit(op.destination);
         } else if constexpr (std::is_same_v<T, ClassPropertyContainerWrite>) {
             visit(op.source);
+        } else if constexpr (std::is_same_v<T, MailboxPut>) {
+            if (op.element_kind == MailboxElementKind::container) {
+                visit(op.container_source);
+            }
+        } else if constexpr (std::is_same_v<T, MailboxGet>) {
+            if (op.element_kind == MailboxElementKind::container) {
+                visit(op.container_destination);
+            }
         } else if constexpr (std::is_same_v<T, ClassMethodCall>) {
             static_kernel_inline_constraint_containers(
                 op.inline_constraints, visit);

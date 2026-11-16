@@ -1163,6 +1163,19 @@ void Interpreter::Impl::StaticKernel::synchronization_deliver(
     }
 }
 
+void Interpreter::Impl::StaticKernel::synchronization_deliver(
+    const ProcessId process, const ContainerRegisterId destination,
+    const ContainerValue& value)
+{
+    if (synchronization_live(process)) {
+        Thread::DeliveredResult result;
+        result.container_destination = destination;
+        result.container = value;
+        threads_[synchronization_waits_.at(process).thread].delivered.push_back(
+            std::move(result));
+    }
+}
+
 bool Interpreter::Impl::StaticKernel::synchronization_wake(const ProcessId process)
 {
     const auto found = synchronization_waits_.find(process);
@@ -1294,6 +1307,25 @@ struct Interpreter::Impl::StaticKernel::MemberSynchronizationClient final
     void write_string(const StringRegisterId id, std::string value) override
     {
         string(id) = std::move(value);
+    }
+    [[nodiscard]] ContainerValue read_container(
+        const ContainerRegisterId id) override
+    {
+        const auto& state = kernel.members_[member];
+        if (!state.dynamic_container(id)) {
+            kernel.fail(member, pc, "invalid container register ID");
+        }
+        return *state.dynamic_containers[id];
+    }
+    void write_container(const ContainerRegisterId id,
+        ContainerValue value) override
+    {
+        auto& state = kernel.members_[member];
+        if (!state.dynamic_container(id)) {
+            kernel.fail(member, pc, "invalid container register ID");
+        }
+        state.dynamic_containers[id]
+            = std::make_shared<ContainerValue>(std::move(value));
     }
     [[noreturn]] void fail(const std::string_view message) override
     {
@@ -3161,6 +3193,10 @@ struct Interpreter::Impl::StaticKernel::MemberContainerAccess final
     [[nodiscard]] std::uint32_t next_random() override
     {
         return kernel.next_member_random(member);
+    }
+    void warn(const std::string_view message) override
+    {
+        kernel.warn(member, message);
     }
     StaticKernel& kernel;
     std::uint32_t member;
@@ -5800,6 +5836,13 @@ void Interpreter::Impl::StaticKernel::run_thread(const std::uint32_t index)
                     "invalid string register ID");
             }
             member.strings[*result.string_destination] = std::move(result.text);
+        } else if (result.container_destination) {
+            if (!member.dynamic_container(*result.container_destination)) {
+                fail(member_index, threads_[index].pc,
+                    "invalid container register ID");
+            }
+            member.dynamic_containers[*result.container_destination]
+                = std::make_shared<ContainerValue>(std::move(result.container));
         }
     }
     auto pc = threads_[index].pc;

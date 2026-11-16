@@ -292,7 +292,9 @@ template <typename ProcessTable>
                 const MailboxElementKind kind,
                 const std::uint32_t width) {
                 return (kind == MailboxElementKind::packed && width != 0U)
-                    || (kind == MailboxElementKind::string && width == 0U);
+                    || ((kind == MailboxElementKind::string
+                            || kind == MailboxElementKind::container)
+                        && width == 0U);
             };
             visit_operation(
                 [&](const auto& item) {
@@ -319,6 +321,10 @@ template <typename ProcessTable>
                                     < process_template.register_count)
                             && (item.element_kind == MailboxElementKind::packed
                                 ? item.source < process_template.register_count
+                                : item.element_kind
+                                        == MailboxElementKind::container
+                                ? item.container_source
+                                    < process_template.container_register_count
                                 : item.string_source
                                     < process_template.string_register_count);
                         error = "MailboxPut has invalid typed registers or shape";
@@ -334,6 +340,10 @@ template <typename ProcessTable>
                             && (item.element_kind == MailboxElementKind::packed
                                 ? item.destination
                                     < process_template.register_count
+                                : item.element_kind
+                                        == MailboxElementKind::container
+                                ? item.container_destination
+                                    < process_template.container_register_count
                                 : item.string_destination
                                     < process_template.string_register_count);
                         error = "MailboxGet has invalid typed registers or shape";

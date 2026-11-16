@@ -1933,7 +1933,8 @@ ProcessId Interpreter::Impl::add_process_program_impl(
         const auto& operation = registered.operations()[instruction];
         const auto valid_mailbox_kind = [](const MailboxElementKind kind) {
             return kind == MailboxElementKind::packed
-                || kind == MailboxElementKind::string;
+                || kind == MailboxElementKind::string
+                || kind == MailboxElementKind::container;
         };
         const auto valid_mailbox_shape = [&](
             const MailboxElementKind kind,
@@ -1961,6 +1962,9 @@ ProcessId Interpreter::Impl::add_process_program_impl(
                     && *put->result >= registered.register_count())
                 || (put->element_kind == MailboxElementKind::packed
                     ? put->source >= registered.register_count()
+                    : put->element_kind == MailboxElementKind::container
+                    ? put->container_source
+                        >= registered.container_register_count()
                     : put->string_source >= registered.string_register_count())) {
                 throw std::invalid_argument {
                     "SimIR MailboxPut has invalid typed registers or shape"
@@ -1973,6 +1977,9 @@ ProcessId Interpreter::Impl::add_process_program_impl(
                     && *get->result >= registered.register_count())
                 || (get->element_kind == MailboxElementKind::packed
                     ? get->destination >= registered.register_count()
+                    : get->element_kind == MailboxElementKind::container
+                    ? get->container_destination
+                        >= registered.container_register_count()
                     : get->string_destination
                         >= registered.string_register_count())) {
                 throw std::invalid_argument {

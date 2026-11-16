@@ -1257,8 +1257,9 @@ void test_simir_containers()
             && associative.read_debug_local(0, 1)
                 == value(32, 1)
             && associative.read_debug_local(0, 2)
-                == value(8, 0),
-        "size, exists, and missing reads have deterministic results");
+                == PackedLogic4(8, Logic4::x),
+        "size, exists, and missing reads have deterministic results "
+        "(a missing 4-state entry reads x, IEEE 1800-2023 7.8.6, Table 7-1)");
     require(
         associative.read_debug_local(0, 3)
                 == value(8, 0xff)

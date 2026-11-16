@@ -643,6 +643,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
         // The dynamic event handle this process waits on, if any.
         std::optional<std::uint64_t> pending_dynamic_event;
         std::optional<StringRegisterId> pending_mailbox_string_result;
+        std::optional<ContainerRegisterId> pending_mailbox_container_result;
         std::optional<ProcessId> fork_parent;
         // The process's thread_start point was raised (probe builds).
         bool thread_announced { };
@@ -989,6 +990,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
         // A typeless mailbox's reader: its variable's type and kind.
         std::uint64_t message_type { };
         bool string { };
+        ContainerRegisterId container_destination { };
+        bool container { };
     };
 
     struct SampledHistoryKey {
@@ -1053,6 +1056,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
         // A typeless mailbox's message: its type and kind.
         std::uint64_t message_type { };
         bool string { };
+        ContainerValue container_value;
+        bool container { };
     };
 
     // A message of a typeless mailbox (IEEE 1800-2023 15.4.5): its value
@@ -1062,6 +1067,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
         bool string { };
         PackedLogic4 value;
         std::string string_value;
+        bool container { };
+        ContainerValue container_value;
     };
 
     struct MailboxState {
@@ -1076,6 +1083,10 @@ struct Interpreter::Impl : SchedulerBatchTask {
         std::deque<MailboxWriter> writers;
         // The messages of a typeless mailbox, in FIFO order.
         std::deque<MailboxMessage> messages;
+        // A container mailbox's messages, and the storage of every
+        // container message the mailbox holds.
+        std::deque<ContainerValue> container_entries;
+        std::size_t container_bytes { };
     };
 
     struct SemaphoreWaiter {
@@ -2580,6 +2591,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
     /// closed static kernel's own time step while it runs one ahead of the
     /// scheduler (its first delta). The time host services stamp.
     [[nodiscard]] SimulationTick current_time() const noexcept;
+    /// A run-time warning of process `process`, naming it; the run goes on.
+    void warn_process(ProcessId process, std::string_view message);
     [[nodiscard]] std::uint64_t current_delta() const noexcept;
     void static_kernel_enqueue_hosted(ProcessId id,
         StaticKernelHostedWake wake, SimulationTick time = 0U,
@@ -3749,6 +3762,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
         struct Wait {
             std::optional<RegisterId> mailbox_result;
             std::optional<StringRegisterId> mailbox_string_result;
+            std::optional<ContainerRegisterId> mailbox_container_result;
             std::optional<std::uint64_t> dynamic_event;
         };
         virtual ~SynchronizationClient() = default;
@@ -3757,6 +3771,10 @@ struct Interpreter::Impl : SchedulerBatchTask {
         [[nodiscard]] virtual std::string read_string(StringRegisterId id) = 0;
         virtual void write(RegisterId id, PackedLogic4 value) = 0;
         virtual void write_string(StringRegisterId id, std::string value) = 0;
+        [[nodiscard]] virtual ContainerValue read_container(
+            ContainerRegisterId id) = 0;
+        virtual void write_container(
+            ContainerRegisterId id, ContainerValue value) = 0;
         [[noreturn]] virtual void fail(std::string_view message) = 0;
         [[nodiscard]] virtual SimulationTick now() const = 0;
         // The operation blocks until a wake (synchronization_wake).
@@ -3784,6 +3802,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
         const PackedLogic4& value);
     void synchronization_deliver(ProcessId id, StringRegisterId destination,
         const std::string& value);
+    void synchronization_deliver(ProcessId id, ContainerRegisterId destination,
+        const ContainerValue& value);
     bool synchronization_wake(ProcessId id);
     // A dynamic-event waiter resumes if it still waits on `handle`.
     void synchronization_event_wake(ProcessId id, std::uint64_t handle);

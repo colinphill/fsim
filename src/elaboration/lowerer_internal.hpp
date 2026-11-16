@@ -2119,6 +2119,11 @@ private:
         std::uint32_t member_offset = 0U);
     [[nodiscard]] std::optional<semantic::DeclarationId>
     hir_target_declaration(semantic::ExpressionId expression) const;
+    // The source of the first assignment to `declaration` among `children`
+    // and the statements they hold, if one assigns it.
+    [[nodiscard]] std::optional<semantic::SourceSpanId> hir_statements_assign(
+        semantic::DeclarationId declaration,
+        std::span<const semantic::StatementId> children) const;
     // A local the process or callable being lowered holds with automatic
     // lifetime: declared `automatic`, or a local or formal of an automatic
     // task, function or method not declared `static` (IEEE 1800-2023 6.21,
@@ -3452,6 +3457,9 @@ private:
         // A typeless mailbox (IEEE 1800-2023 15.4.9): each message has its
         // own type (hir_typeless_mailbox_message).
         bool dynamic { };
+        // An unpacked array, structure or union element: one container
+        // value per message (15.4).
+        std::optional<runtime::simir::ContainerType> container { };
     };
     // A message put into or taken from a typeless mailbox: its kind, width
     // and the identity of its type's equivalence class (6.22.2).
@@ -3459,10 +3467,15 @@ private:
         bool string { };
         std::uint32_t width { };
         std::uint64_t type { };
+        std::optional<runtime::simir::ContainerType> container { };
     };
     [[nodiscard]] std::optional<HirMailboxMessage>
     hir_typeless_mailbox_message(semantic::ExpressionId message,
         const frontend::SourceSpan& span);
+    [[nodiscard]] bool lower_hir_mailbox_copy_out(
+        semantic::ExpressionId target, RegisterId value);
+    [[nodiscard]] std::optional<std::uint32_t> hir_mailbox_stream_width(
+        const std::optional<runtime::simir::ContainerType>& container) const;
     [[nodiscard]] std::optional<HirMailboxElement> hir_mailbox_element(
         const semantic::sv::TypeReference* mailbox_type,
         std::string_view message, const frontend::SourceSpan& span);
@@ -6297,6 +6310,10 @@ private:
     // The scope of the process being lowered, where the scope paths of its
     // debug locals start.
     semantic::ScopeId hir_debug_root_scope_ { };
+    // The expression that re-reads an update statement's own target (the
+    // first operand of its normalized binary value) while the update is
+    // lowered; its container read is an allocating read (7.8.7).
+    std::optional<semantic::ExpressionId> hir_update_target_read_;
     // The debugger name ordinal of each unnamed scope that declares
     // something, computed on first use.
     mutable std::optional<std::unordered_map<std::uint32_t, std::uint32_t>>

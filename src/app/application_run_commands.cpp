@@ -826,9 +826,13 @@ int run_built_project(
             if (flush_reports) {
                 (void)std::fflush(stdout);
             }
-            output << source.path << ':' << source.line << ':'
-                   << source.column << ": "
-                   << report_severity_name(severity)
+            // A report with no source (a run-time warning of the
+            // simulator) names no location.
+            if (!source.path.empty()) {
+                output << source.path << ':' << source.line << ':'
+                       << source.column << ": ";
+            }
+            output << report_severity_name(severity)
                    << "[FSIM-HDL-REPORT]: " << message << '\n';
             if (flush_reports) {
                 output.flush();

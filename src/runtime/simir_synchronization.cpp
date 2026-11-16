@@ -37,7 +37,14 @@ constexpr std::size_t maximum_synchronization_objects = 1U << 20U;
 [[nodiscard]] bool valid_mailbox_element_kind(
     const MailboxElementKind kind) noexcept {
   return kind == MailboxElementKind::packed
-      || kind == MailboxElementKind::string;
+      || kind == MailboxElementKind::string
+      || kind == MailboxElementKind::container;
+}
+
+// The storage a container message is charged while a mailbox holds it.
+[[nodiscard]] std::size_t mailbox_container_bytes(
+    const ContainerValue& value) {
+  return container_value_storage_bytes(value);
 }
 
 [[nodiscard]] std::size_t mailbox_entry_storage_bytes(
@@ -76,6 +83,14 @@ struct Interpreter::Impl::ProcessSynchronizationClient final
   void write_string(const StringRegisterId id, std::string value) override {
     impl.write_process_string_register(process, id, std::move(value));
   }
+  [[nodiscard]] ContainerValue read_container(
+      const ContainerRegisterId id) override {
+    return impl.read_container_register(process, id);
+  }
+  void write_container(const ContainerRegisterId id,
+      ContainerValue value) override {
+    impl.get_container_register(process, id) = std::move(value);
+  }
   [[noreturn]] void fail(const std::string_view message) override {
     process.pc = instruction;
     impl.fail(process, std::string{message});
@@ -90,6 +105,10 @@ struct Interpreter::Impl::ProcessSynchronizationClient final
     if (wait.mailbox_string_result) {
       process.cold().pending_mailbox_string_result
           = wait.mailbox_string_result;
+    }
+    if (wait.mailbox_container_result) {
+      process.cold().pending_mailbox_container_result
+          = wait.mailbox_container_result;
     }
     if (wait.dynamic_event) {
       process.cold().pending_dynamic_event = wait.dynamic_event;
@@ -156,7 +175,7 @@ Interpreter::synchronization_object(const std::uint64_t handle) const {
     for (const auto& message : mailbox.messages) {
       if (message.string) {
         object.string_values.push_back(message.string_value);
-      } else {
+      } else if (!message.container) {
         object.messages.push_back(message.value);
       }
     }
@@ -214,6 +233,21 @@ void Interpreter::Impl::synchronization_deliver(const ProcessId id,
   }
   if (target.cold().pending_mailbox_string_result == destination) {
     target.cold().pending_mailbox_string_result.reset();
+  }
+}
+
+void Interpreter::Impl::synchronization_deliver(const ProcessId id,
+    const ContainerRegisterId destination, const ContainerValue& value) {
+  if (static_kernel && static_kernel->synchronization_thread(id)) {
+    static_kernel->synchronization_deliver(id, destination, value);
+    return;
+  }
+  auto& target = get_process(id);
+  if (!target.halted) {
+    get_container_register(target, destination) = value;
+  }
+  if (target.cold().pending_mailbox_container_result == destination) {
+    target.cold().pending_mailbox_container_result.reset();
   }
 }
 
@@ -295,7 +329,16 @@ Interpreter::Impl::run_typeless_mailbox_put(SynchronizationClient& client,
   MailboxMessage message;
   message.type = put.message_type;
   message.string = put.element_kind == MailboxElementKind::string;
-  if (message.string) {
+  message.container = put.element_kind == MailboxElementKind::container;
+  if (message.container) {
+    message.container_value = client.read_container(put.container_source);
+    if (mailbox_container_bytes(message.container_value)
+        > maximum_container_storage_bytes
+            - std::min(mailbox.container_bytes,
+                maximum_container_storage_bytes)) {
+      client.fail("mailbox message storage exceeds the bounded storage limit");
+    }
+  } else if (message.string) {
     message.string_value = client.read_string(put.string_source);
     if (message.string_value.size() > maximum_string_bytes
         || message.string_value.size() > maximum_container_storage_bytes
@@ -323,7 +366,8 @@ Interpreter::Impl::run_typeless_mailbox_put(SynchronizationClient& client,
       return Result::completed;
     }
     mailbox.writers.push_back({ client.self(), std::move(message.value),
-        std::move(message.string_value), message.type, message.string });
+        std::move(message.string_value), message.type, message.string,
+        std::move(message.container_value), message.container });
     client.wait({});
     return Result::waiting;
   }
@@ -344,6 +388,9 @@ Interpreter::Impl::run_typeless_mailbox_put(SynchronizationClient& client,
     if (message.string) {
       synchronization_deliver(
           reader.process, reader.string_destination, message.string_value);
+    } else if (message.container) {
+      synchronization_deliver(reader.process, reader.container_destination,
+          message.container_value);
     } else {
       synchronization_deliver(reader.process, reader.destination,
           message.value);
@@ -356,6 +403,9 @@ Interpreter::Impl::run_typeless_mailbox_put(SynchronizationClient& client,
   }
   if (!consumed) {
     mailbox.string_bytes += message.string_value.size();
+    mailbox.container_bytes += message.container
+        ? mailbox_container_bytes(message.container_value)
+        : 0U;
     mailbox.messages.push_back(std::move(message));
   }
   write_result(true);
@@ -372,6 +422,7 @@ Interpreter::Impl::run_typeless_mailbox_get(SynchronizationClient& client,
     client.fail("typeless mailbox get has no message type");
   }
   const bool string = get.element_kind == MailboxElementKind::string;
+  const bool container = get.element_kind == MailboxElementKind::container;
   if (!mailbox.messages.empty()) {
     auto& front = mailbox.messages.front();
     if (front.type != get.message_type) {
@@ -385,11 +436,16 @@ Interpreter::Impl::run_typeless_mailbox_get(SynchronizationClient& client,
     }
     if (string) {
       client.write_string(get.string_destination, front.string_value);
+    } else if (container) {
+      client.write_container(get.container_destination, front.container_value);
     } else {
       client.write(get.destination, front.value);
     }
     if (!get.peek) {
       mailbox.string_bytes -= front.string_value.size();
+      mailbox.container_bytes -= front.container
+          ? mailbox_container_bytes(front.container_value)
+          : 0U;
       mailbox.messages.pop_front();
       while (!mailbox.writers.empty()) {
         auto writer = std::move(mailbox.writers.front());
@@ -398,8 +454,12 @@ Interpreter::Impl::run_typeless_mailbox_get(SynchronizationClient& client,
           continue;
         }
         mailbox.string_bytes += writer.string_value.size();
+        mailbox.container_bytes += writer.container
+            ? mailbox_container_bytes(writer.container_value)
+            : 0U;
         mailbox.messages.push_back({ writer.message_type, writer.string,
-            std::move(writer.value), std::move(writer.string_value) });
+            std::move(writer.value), std::move(writer.string_value),
+            writer.container, std::move(writer.container_value) });
         break;
       }
     }
@@ -415,11 +475,14 @@ Interpreter::Impl::run_typeless_mailbox_get(SynchronizationClient& client,
   SynchronizationClient::Wait wait;
   if (string) {
     wait.mailbox_string_result = get.string_destination;
+  } else if (container) {
+    wait.mailbox_container_result = get.container_destination;
   } else {
     wait.mailbox_result = get.destination;
   }
   mailbox.readers.push_back({ client.self(), get.destination,
-      get.string_destination, get.peek, get.message_type, string });
+      get.string_destination, get.peek, get.message_type, string,
+      get.container_destination, container });
   client.wait(wait);
   return Result::waiting;
 }
@@ -509,7 +572,7 @@ Interpreter::Impl::SynchronizationResult Interpreter::Impl::run_synchronization(
     mailboxes.push_back(
         MailboxState{create->element_kind, create->element_width,
                      requested == 0 ? maximum : requested,
-                     {}, {}, 0U, {}, {}, {}});
+                     {}, {}, 0U, {}, {}, {}, {}, 0U});
     const auto handle = mailbox_handle_tag | mailboxes.size();
     client.write(create->destination,
         PackedLogic4::from_aval_bval(64, handle, 0));
@@ -538,41 +601,55 @@ Interpreter::Impl::SynchronizationResult Interpreter::Impl::run_synchronization(
         || put->element_width != mailbox.element_width) {
       client.fail("mailbox put operation has the wrong element type");
     }
+    const auto kind = mailbox.element_kind;
     PackedLogic4 packed_value;
     std::string string_value;
-    if (mailbox.element_kind == MailboxElementKind::packed) {
+    ContainerValue container_value;
+    if (kind == MailboxElementKind::packed) {
       packed_value = client.read(put->source, put->element_width);
       if (packed_value.width() != put->element_width) {
         client.fail("mailbox put value has the wrong element width");
       }
-    } else {
+    } else if (kind == MailboxElementKind::string) {
       string_value = read_string_register(put->string_source);
       if (string_value.size() > maximum_container_storage_bytes
               - std::min(mailbox.string_bytes,
                   maximum_container_storage_bytes)) {
         client.fail("mailbox string storage exceeds the bounded storage limit");
       }
+    } else {
+      container_value = client.read_container(put->container_source);
+      if (mailbox_container_bytes(container_value)
+          > maximum_container_storage_bytes
+              - std::min(mailbox.container_bytes,
+                  maximum_container_storage_bytes)) {
+        client.fail("mailbox message storage exceeds the bounded storage limit");
+      }
     }
-    // Hand a put value to the waiting readers in order; a get consumes it,
-    // a peek leaves it for the next reader or the mailbox queue.
-    const auto deliver = [&](const auto& delivered, auto& entries,
-                             const bool string) {
+    const auto entry_count = kind == MailboxElementKind::string
+        ? mailbox.string_entries.size()
+        : kind == MailboxElementKind::container
+        ? mailbox.container_entries.size()
+        : mailbox.entries.size();
+    const auto available = mailbox.writers.empty()
+        && (!mailbox.readers.empty()
+            || entry_count < mailbox.capacity);
+    if (available) {
+      // Hand the value to the waiting readers in order; a get consumes it,
+      // a peek leaves it for the next reader or the mailbox queue.
       bool consumed{};
       while (!mailbox.readers.empty()) {
         const auto reader = mailbox.readers.front();
         mailbox.readers.pop_front();
-        if (string) {
-          if constexpr (std::is_same_v<std::decay_t<decltype(delivered)>,
-                            std::string>) {
-            synchronization_deliver(
-                reader.process, reader.string_destination, delivered);
-          }
+        if (kind == MailboxElementKind::string) {
+          synchronization_deliver(
+              reader.process, reader.string_destination, string_value);
+        } else if (kind == MailboxElementKind::container) {
+          synchronization_deliver(
+              reader.process, reader.container_destination, container_value);
         } else {
-          if constexpr (!std::is_same_v<std::decay_t<decltype(delivered)>,
-                            std::string>) {
-            synchronization_deliver(
-                reader.process, reader.destination, delivered);
-          }
+          synchronization_deliver(
+              reader.process, reader.destination, packed_value);
         }
         if (synchronization_halted(reader.process)) {
           continue;
@@ -584,24 +661,15 @@ Interpreter::Impl::SynchronizationResult Interpreter::Impl::run_synchronization(
         }
       }
       if (!consumed) {
-        if constexpr (std::is_same_v<std::decay_t<decltype(delivered)>,
-                          std::string>) {
-          mailbox.string_bytes += delivered.size();
+        if (kind == MailboxElementKind::string) {
+          mailbox.string_bytes += string_value.size();
+          mailbox.string_entries.push_back(std::move(string_value));
+        } else if (kind == MailboxElementKind::container) {
+          mailbox.container_bytes += mailbox_container_bytes(container_value);
+          mailbox.container_entries.push_back(std::move(container_value));
+        } else {
+          mailbox.entries.push_back(std::move(packed_value));
         }
-        entries.push_back(delivered);
-      }
-    };
-    const auto entry_count = mailbox.element_kind == MailboxElementKind::string
-        ? mailbox.string_entries.size()
-        : mailbox.entries.size();
-    const auto available = mailbox.writers.empty()
-        && (!mailbox.readers.empty()
-            || entry_count < mailbox.capacity);
-    if (available) {
-      if (mailbox.element_kind == MailboxElementKind::string) {
-        deliver(string_value, mailbox.string_entries, true);
-      } else {
-        deliver(packed_value, mailbox.entries, false);
       }
       if (put->result) write_bool(*put->result, true);
       return Result::completed;
@@ -612,7 +680,8 @@ Interpreter::Impl::SynchronizationResult Interpreter::Impl::run_synchronization(
     }
     mailbox.writers.push_back({
         client.self(), std::move(packed_value), std::move(string_value),
-        0U, false });
+        0U, false, std::move(container_value),
+        kind == MailboxElementKind::container });
     client.wait({});
     return Result::waiting;
   }
@@ -624,20 +693,30 @@ Interpreter::Impl::SynchronizationResult Interpreter::Impl::run_synchronization(
         || get->element_width != mailbox.element_width) {
       client.fail("mailbox get operation has the wrong element type");
     }
-    const auto entry_count = mailbox.element_kind == MailboxElementKind::string
+    const auto kind = mailbox.element_kind;
+    const auto entry_count = kind == MailboxElementKind::string
         ? mailbox.string_entries.size()
+        : kind == MailboxElementKind::container
+        ? mailbox.container_entries.size()
         : mailbox.entries.size();
     if (entry_count != 0U) {
-      if (mailbox.element_kind == MailboxElementKind::string) {
+      if (kind == MailboxElementKind::string) {
         client.write_string(
             get->string_destination, mailbox.string_entries.front());
+      } else if (kind == MailboxElementKind::container) {
+        client.write_container(
+            get->container_destination, mailbox.container_entries.front());
       } else {
         client.write(get->destination, mailbox.entries.front());
       }
       if (!get->peek) {
-        if (mailbox.element_kind == MailboxElementKind::string) {
+        if (kind == MailboxElementKind::string) {
           mailbox.string_bytes -= mailbox.string_entries.front().size();
           mailbox.string_entries.pop_front();
+        } else if (kind == MailboxElementKind::container) {
+          mailbox.container_bytes
+              -= mailbox_container_bytes(mailbox.container_entries.front());
+          mailbox.container_entries.pop_front();
         } else {
           mailbox.entries.pop_front();
         }
@@ -645,10 +724,15 @@ Interpreter::Impl::SynchronizationResult Interpreter::Impl::run_synchronization(
           auto writer = std::move(mailbox.writers.front());
           mailbox.writers.pop_front();
           if (!synchronization_wake(writer.process)) continue;
-          if (mailbox.element_kind == MailboxElementKind::string) {
+          if (kind == MailboxElementKind::string) {
             mailbox.string_bytes += writer.string_value.size();
             mailbox.string_entries.push_back(
                 std::move(writer.string_value));
+          } else if (kind == MailboxElementKind::container) {
+            mailbox.container_bytes
+                += mailbox_container_bytes(writer.container_value);
+            mailbox.container_entries.push_back(
+                std::move(writer.container_value));
           } else {
             mailbox.entries.push_back(std::move(writer.value));
           }
@@ -663,14 +747,17 @@ Interpreter::Impl::SynchronizationResult Interpreter::Impl::run_synchronization(
       return Result::completed;
     }
     SynchronizationClient::Wait wait;
-    if (mailbox.element_kind == MailboxElementKind::string) {
+    if (kind == MailboxElementKind::string) {
       wait.mailbox_string_result = get->string_destination;
+    } else if (kind == MailboxElementKind::container) {
+      wait.mailbox_container_result = get->container_destination;
     } else {
       wait.mailbox_result = get->destination;
     }
     mailbox.readers.push_back(
         {client.self(), get->destination, get->string_destination,
-            get->peek, 0U, false});
+            get->peek, 0U, false, get->container_destination,
+            kind == MailboxElementKind::container});
     client.wait(wait);
     return Result::waiting;
   }

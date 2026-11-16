@@ -787,6 +787,7 @@ void Interpreter::Impl::snapshot_callable_context(ProcessState& process)
     capture_escaping_callable_contexts(process);
     std::set<RegisterId> wake_result_ids;
     std::set<StringRegisterId> wake_string_result_ids;
+    std::set<ContainerRegisterId> wake_container_result_ids;
     if (const auto* const dynamic_wait
         = process.cold().dynamic_wait_state_if_present()) {
         if (dynamic_wait->wait_order_result) {
@@ -804,6 +805,10 @@ void Interpreter::Impl::snapshot_callable_context(ProcessState& process)
         wake_string_result_ids.insert(
             *process.cold().pending_mailbox_string_result);
     }
+    if (process.cold().pending_mailbox_container_result) {
+        wake_container_result_ids.insert(
+            *process.cold().pending_mailbox_container_result);
+    }
     if (process.halted) {
         process.cold().callable_registers_suspended
             = !process.cold().escaping_callable_contexts.empty();
@@ -814,7 +819,8 @@ void Interpreter::Impl::snapshot_callable_context(ProcessState& process)
             = !process.cold().escaping_callable_contexts.empty();
         if (!process.cold().callable_registers_suspended
             || (wake_result_ids.empty()
-                && wake_string_result_ids.empty())) {
+                && wake_string_result_ids.empty()
+                && wake_container_result_ids.empty())) {
             return;
         }
     }
@@ -859,6 +865,8 @@ void Interpreter::Impl::snapshot_callable_context(ProcessState& process)
     packed_ids.insert(wake_result_ids.begin(), wake_result_ids.end());
     string_ids.insert(
         wake_string_result_ids.begin(), wake_string_result_ids.end());
+    container_ids.insert(
+        wake_container_result_ids.begin(), wake_container_result_ids.end());
     auto snapshot = std::make_unique<ProcessState::CallableFrameState>();
     auto& context = *snapshot;
     context.packed_ids.assign(packed_ids.begin(), packed_ids.end());

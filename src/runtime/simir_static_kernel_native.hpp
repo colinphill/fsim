@@ -390,6 +390,9 @@ struct StaticKernelNativeHelpers {
     /// nonzero when the frame's status now holds the reference's error.
     std::uint32_t (*dyn_grow)(StaticKernelNativeFrame*, std::uint32_t at,
         StaticKernelDynamicContainer* container, std::uint64_t needed) { };
+    /// `fsim_sk_dyn_warn`: the warning of a completed KOp::dyn, `reason`
+    /// dyn_fail_first plus a DynFailure that dyn_warning holds.
+    void (*dyn_warn)(StaticKernelNativeFrame*, std::uint32_t at, std::uint32_t reason) { };
     /// `fsim_sk_dyn_reshape`: the sparse array `target` takes the layout
     /// and capacity of `source` (a whole copy's storage; the elements are
     /// copied by generated code). Nonzero when the memory is not available

@@ -606,6 +606,8 @@ public:
         const PackedLogic4& value);
     void synchronization_deliver(ProcessId process, StringRegisterId destination,
         const std::string& value);
+    void synchronization_deliver(ProcessId process,
+        ContainerRegisterId destination, const ContainerValue& value);
     bool synchronization_wake(ProcessId process);
     /// A dynamic-event trigger: the thread resumes if it still waits on
     /// `handle`.
@@ -1839,6 +1841,10 @@ private:
     static std::uint32_t native_dyn_grow(StaticKernelNativeFrame* frame,
         std::uint32_t at, StaticKernelDynamicContainer* container,
         std::uint64_t needed);
+    /// fsim_sk_dyn_warn: the warning of a completed KOp::dyn
+    /// (`reason` - dyn_fail_first is a DynFailure that dyn_warning holds).
+    static void native_dyn_warn(StaticKernelNativeFrame* frame, std::uint32_t at,
+        std::uint32_t reason);
     /// fsim_sk_dyn_reshape: a sparse array's storage for a whole copy.
     static std::uint32_t native_dyn_reshape(StaticKernelNativeFrame* frame,
         std::uint32_t at, StaticKernelDynamicContainer* target,
@@ -2325,6 +2331,8 @@ private:
     void apply_input(Input& input, PackedLogic4 value, bool event = false);
     [[noreturn]] void fail(std::uint32_t member, InstructionIndex instruction,
         const std::string& message) const;
+    /// A run-time warning of member `member`'s process; the run continues.
+    void warn(std::uint32_t member, std::string_view message) const;
     /// Makes room for a call at `depth` on a compiled body's call stack
     /// (the capacity-growth helper of generated code).
     void grow_call_stack(static_kernel_detail::NativeCallStack& stack,
@@ -2691,6 +2699,8 @@ private:
             std::optional<StringRegisterId> string_destination;
             PackedLogic4 value;
             std::string text;
+            std::optional<ContainerRegisterId> container_destination;
+            ContainerValue container;
         };
         std::vector<DeliveredResult> delivered;
         /// Compiled members: the call stack saved while the thread is

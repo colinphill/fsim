@@ -1435,24 +1435,43 @@ endmodule
             .to_msb_string()
         == "0010");
 
-    const auto invalid_systemverilog_loops =
+    // A SystemVerilog for-loop variable is an ordinary variable the body
+    // may assign (IEEE 1800-2023 12.7.1); only a VHDL loop parameter is a
+    // constant (FSIM-ELAB-074).
+    const auto assigned_systemverilog_loops =
         fsim::frontend::parse_text(
-            "invalid_procedural_loops.sv",
+            "assigned_procedural_loops.sv",
             R"(
-module invalid_procedural_loops;
+module assigned_procedural_loops;
+  int passes;
   initial begin
-    for (int lane = 0; lane < 1; lane++) lane = 2;
+    for (int lane = 0; lane < 8; lane++) begin
+      lane = lane + 2;
+      passes = passes + 1;
+    end
   end
 endmodule
 )",
             fsim::frontend::Language::SystemVerilog2017);
-    assert(invalid_systemverilog_loops.ok());
-    const auto rejected_systemverilog_loops =
+    assert(assigned_systemverilog_loops.ok());
+    const auto elaborated_assigned_loops =
         compile_and_elaborate(
-            invalid_systemverilog_loops.design,
-            "sv:work.invalid_procedural_loops");
-    assert(!rejected_systemverilog_loops.ok());
-    assert(has_diagnostic(rejected_systemverilog_loops, "FSIM-ELAB-074"));
+            assigned_systemverilog_loops.design,
+            "sv:work.assigned_procedural_loops");
+    assert(elaborated_assigned_loops.ok());
+    assert(!has_diagnostic(elaborated_assigned_loops, "FSIM-ELAB-074"));
+    auto assigned_loop_interpreter =
+        elaborated_assigned_loops.design->create_interpreter();
+    assert(
+        assigned_loop_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    const auto assigned_loop_passes =
+        elaborated_assigned_loops.design->find_signal("passes");
+    assert(assigned_loop_passes);
+    assert(
+        assigned_loop_interpreter->signal_value(*assigned_loop_passes)
+            .to_msb_string()
+        == std::string(30U, '0') + "11");
 
     const auto repeat_statements =
         fsim::frontend::parse_text(

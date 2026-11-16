@@ -616,7 +616,28 @@ enum class DynFailure : std::uint32_t {
     stream_short,
     stream_wide,
     stream_partial,
+    // Warnings, not failures (dyn_warning): the operation completed. A read
+    // of a nonexistent associative-array entry, or with an index holding x
+    // or z bits, returned the nonexistent-entry value; a write with such an
+    // index was ignored (IEEE 1800-2023 7.8.6).
+    missing_entry,
+    invalid_read_index,
+    invalid_write_index,
 };
+
+/// KInst::imm_b of a DynOp::assoc_read: the read of an update's own target,
+/// which allocates a missing entry before referring to it (IEEE 1800-2023
+/// 7.8.7): no missing_entry warning.
+inline constexpr std::uint64_t dyn_read_allocating = 1U;
+
+/// True for the DynFailure values that are warnings of a completed
+/// operation.
+[[nodiscard]] constexpr bool dyn_warning(const DynFailure failure) noexcept
+{
+    return failure == DynFailure::missing_entry
+        || failure == DynFailure::invalid_read_index
+        || failure == DynFailure::invalid_write_index;
+}
 
 /// The native fail reason of the first DynFailure (native_fail_message).
 inline constexpr std::uint32_t dyn_fail_first = 32U;

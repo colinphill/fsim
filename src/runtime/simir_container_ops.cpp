@@ -626,22 +626,41 @@ void execute_container_operation(
                 process, instruction, source.type,
                 access.read_string(operation.index));
             const auto at = lower_string_key(source, key);
-            access.write(operation.destination, at < source.string_keys.size()
-                    && source.string_keys[at] == key
+            const bool present = at < source.string_keys.size()
+                && source.string_keys[at] == key;
+            access.write(operation.destination, present
                 ? source.elements[at]
                 : source.associative_default.value_or(
                     default_container_element(source.type)));
+            // A missing key reads the `default:` value without a warning,
+            // else the nonexistent-entry value with one (7.8.6).
+            if (!present && !source.associative_default
+                && !operation.allocating) {
+                access.warn(associative_missing_entry_warning);
+            }
+            return;
+        }
+        const auto& index = access.read(operation.index);
+        if (associative_index_invalid(source.type, index)) {
+            access.write(operation.destination,
+                source.associative_default.value_or(
+                    default_container_element(source.type)));
+            if (!source.associative_default) {
+                access.warn(associative_invalid_read_warning);
+            }
             return;
         }
         const auto key = associative_key(
-            process, instruction, source.type,
-            access.read(operation.index));
+            process, instruction, source.type, index);
         const auto at = lower_key(source, key);
-        access.write(operation.destination,
-            at < source.keys.size() && key_equal(source.keys[at], key)
+        const bool present = at < source.keys.size() && key_equal(source.keys[at], key);
+        access.write(operation.destination, present
             ? source.elements[at]
             : source.associative_default.value_or(
                     default_container_element(source.type)));
+        if (!present && !source.associative_default && !operation.allocating) {
+            access.warn(associative_missing_entry_warning);
+        }
         return;
     }
     if (source.type.fixed) {
@@ -747,6 +766,11 @@ void execute_container_operation(
                     iterator_at(target.elements, at), source);
             }
             validate_container_value(target);
+            return;
+        }
+        // A write with an index holding x or z bits is ignored (7.8.6).
+        if (associative_index_invalid(target.type, access.read(operation.index))) {
+            access.warn(associative_invalid_write_warning);
             return;
         }
         const auto key = associative_key(
@@ -909,19 +933,35 @@ void execute_container_operation(
                 process, instruction, source.type,
                 access.read_string(operation.index));
             const auto at = lower_string_key(source, key);
-            access.string(operation.destination) = at < source.string_keys.size()
-                    && source.string_keys[at] == key
+            const bool present = at < source.string_keys.size()
+                && source.string_keys[at] == key;
+            access.string(operation.destination) = present
                 ? source.string_elements[at]
                 : source.associative_default_text.value_or(std::string { });
+            if (!present && !source.associative_default_text) {
+                access.warn(associative_missing_entry_warning);
+            }
+            return;
+        }
+        const auto& index = access.read(operation.index);
+        if (associative_index_invalid(source.type, index)) {
+            access.string(operation.destination)
+                = source.associative_default_text.value_or(std::string { });
+            if (!source.associative_default_text) {
+                access.warn(associative_invalid_read_warning);
+            }
             return;
         }
         const auto key = associative_key(
-            process, instruction, source.type,
-            access.read(operation.index));
+            process, instruction, source.type, index);
         const auto at = lower_key(source, key);
-        access.string(operation.destination) = at < source.keys.size() && key_equal(source.keys[at], key)
+        const bool present = at < source.keys.size() && key_equal(source.keys[at], key);
+        access.string(operation.destination) = present
             ? source.string_elements[at]
             : source.associative_default_text.value_or(std::string { });
+        if (!present && !source.associative_default_text) {
+            access.warn(associative_missing_entry_warning);
+        }
         return;
     }
     // Reading an invalid index yields the empty string (IEEE 1800-2017
@@ -1065,6 +1105,10 @@ void execute_container_operation(
                     iterator_at(target.string_elements, at), source);
             }
             validate_container_value(target);
+            return;
+        }
+        if (associative_index_invalid(target.type, access.read(operation.index))) {
+            access.warn(associative_invalid_write_warning);
             return;
         }
         const auto key = associative_key(

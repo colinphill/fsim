@@ -640,7 +640,7 @@ namespace codec_detail {
         } else if constexpr (
             std::same_as<T, runtime::simir::MailboxElementKind>) {
             return value >= runtime::simir::MailboxElementKind::packed
-                && value <= runtime::simir::MailboxElementKind::dynamic;
+                && value <= runtime::simir::MailboxElementKind::container;
         } else if constexpr (
             std::same_as<T, runtime::CodeCoverageMetric>) {
             return value >= runtime::CodeCoverageMetric::Statement

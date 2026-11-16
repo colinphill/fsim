@@ -20,7 +20,7 @@ static_assert(fsim::library::kFormatVersion == 8);
 static_assert(fsim::library::kPortableSchemaVersion == 16);
 static_assert(fsim::library::kCompiledHirSchemaVersion == 13);
 static_assert(fsim::artifact::kDesignFormatVersion == 18);
-static_assert(fsim::app::kRuntimeStateSchema == 133);
+static_assert(fsim::app::kRuntimeStateSchema == 134);
 static_assert(fsim::app::kSemanticStateSchema == 9);
 static_assert(fsim::app::kDesignIrStateSchema == 18);
 static_assert(fsim::app::kCompiledHirBundleSchema == 13);

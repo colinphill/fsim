@@ -1956,6 +1956,7 @@ tests/fixtures/compliance/sv_array_equality_bounds_20261013.sv
 tests/fixtures/compliance/sv_array_query_class_handles_batch57.sv
 tests/fixtures/compliance/sv_array_query_typedef_dimensions_batch57.sv
 tests/fixtures/compliance/sv_array_sizes_and_methods.sv
+tests/fixtures/compliance/sv_associative_invalid_index.sv
 tests/fixtures/compliance/sv_automatic_fork_activation_lifetime_batch59.sv
 tests/fixtures/compliance/sv_automatic_fork_frame_batch59.sv
 tests/fixtures/compliance/sv_automatic_fork_join_reuse_batch96.sv
@@ -2036,6 +2037,7 @@ tests/fixtures/compliance/sv_expression_widths.sv
 tests/fixtures/compliance/sv_extern_forkjoin_ab4.sv
 tests/fixtures/compliance/sv_extern_forkjoin_disable_ac4.sv
 tests/fixtures/compliance/sv_final_procedure_termination.sv
+tests/fixtures/compliance/sv_for_assigns_loop_variable.sv
 tests/fixtures/compliance/sv_force_switches_and_strengths.sv
 tests/fixtures/compliance/sv_function_statements.sv
 tests/fixtures/compliance/sv_gate_array_parameter_bounds_batch89.sv
@@ -2071,6 +2073,7 @@ tests/fixtures/compliance/sv_language_details_batch53.sv
 tests/fixtures/compliance/sv_language_details_batch54.sv
 tests/fixtures/compliance/sv_local_queue_output_index_20261013.sv
 tests/fixtures/compliance/sv_macro_continued_comments_batch56.sv
+tests/fixtures/compliance/sv_mailbox_unpacked_messages.sv
 tests/fixtures/compliance/sv_modport_export_batch89.sv
 tests/fixtures/compliance/sv_module_items.sv
 tests/fixtures/compliance/sv_multiclock_sequence_batch96_20261025.sv

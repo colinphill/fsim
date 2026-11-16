@@ -607,7 +607,9 @@ void Interpreter::Impl::StaticKernel::execute_body(
                 : nullptr;
             const auto failure = static_kernel_detail::execute_dyn(inst, header,
                 other, registers, strings);
-            if (failure != static_kernel_detail::DynFailure::none) {
+            if (static_kernel_detail::dyn_warning(failure)) {
+                warn(member_index, static_kernel_detail::dyn_fail_message(failure));
+            } else if (failure != static_kernel_detail::DynFailure::none) {
                 fail_at(at, static_kernel_detail::dyn_fail_message(failure));
             }
             break;
@@ -2994,6 +2996,7 @@ void Interpreter::Impl::StaticKernel::set_instruction_helpers(
     helpers.sva_ensure = &StaticKernel::native_sva_ensure;
     helpers.sva_grow = &StaticKernel::native_sva_grow;
     helpers.dyn_grow = &StaticKernel::native_dyn_grow;
+    helpers.dyn_warn = &StaticKernel::native_dyn_warn;
     helpers.dyn_reshape = &StaticKernel::native_dyn_reshape;
     helpers.str_nba = &StaticKernel::native_str_nba;
     helpers.str_reserve = [](StaticKernelNativeFrame* frame, const std::uint32_t at,

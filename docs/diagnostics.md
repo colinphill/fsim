@@ -2003,7 +2003,7 @@ scheduler.
 | `FSIM-ELAB-071` | error | A sequential VHDL for-loop initial bound is not locally static. |
 | `FSIM-ELAB-072` | error | A sequential VHDL for-loop final bound is not locally static. |
 | `FSIM-ELAB-073` | error | A sequential SystemVerilog loop exceeds the bounded one-million-iteration elaboration limit (a VHDL for-loop too long to unroll runs at run time). |
-| `FSIM-ELAB-074` | error | A sequential for-loop body assigns its VHDL implicit constant or statically substituted SystemVerilog index. |
+| `FSIM-ELAB-074` | error | A sequential VHDL for-loop body assigns its loop parameter, which is a constant (IEEE 1076-2019 10.10). |
 | `FSIM-ELAB-075` | error | A runtime Verilog/SystemVerilog repeat count is not a supported integral value. |
 | `FSIM-ELAB-077` | error | A VHDL while condition is not scalar Boolean. |
 | `FSIM-ELAB-078` | error | Loop-control HIR reached elaboration without an enclosing loop. |

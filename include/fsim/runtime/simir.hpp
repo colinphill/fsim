@@ -432,6 +432,11 @@ struct ContainerRead {
     bool signed_index { true };
     bool linear_index { };
     bool string_index { };
+    // The read of an update's own target (`a[k]++`, `a[k] += v`): a missing
+    // associative-array entry is allocated before it is referred to (IEEE
+    // 1800-2023 7.8.7), so it reads the nonexistent-entry value without the
+    // 7.8.6 warning.
+    bool allocating { };
 };
 struct ContainerWrite {
     ContainerRegisterId target { };

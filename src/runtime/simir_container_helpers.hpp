@@ -360,6 +360,18 @@ inline void require_same_type(
     }
 }
 
+// True when an integral associative-array index holds x or z bits, so a
+// read or write with it is invalid (7.8.6); an index of another width is
+// still the error associative_key reports.
+[[nodiscard]] inline bool associative_index_invalid(
+    const ContainerType& type, const PackedLogic4& value)
+{
+    return !type.string_indices && value.width() == type.index_width
+        && (value.is_logic9()
+            || std::ranges::any_of(
+                value.bval_words(), [](const auto word) { return word != 0; }));
+}
+
 [[nodiscard]] inline PackedLogic4 associative_key(
     const ProcessId process,
     const InstructionIndex instruction,
@@ -504,6 +516,10 @@ public:
     [[nodiscard]] std::uint32_t next_random() override
     {
         return Impl::next_random(process_);
+    }
+    void warn(const std::string_view message) override
+    {
+        impl_.warn_process(process_.id, message);
     }
 
 private:

@@ -4152,6 +4152,71 @@ bool Lowerer::hir_automatic_local(
         && hir_callable_frames_[*active_hir_callable_].type.automatic;
 }
 
+std::optional<semantic::SourceSpanId> Lowerer::hir_statements_assign(
+    const semantic::DeclarationId declaration,
+    const std::span<const semantic::StatementId> children) const
+{
+    for (const auto child_id : children) {
+        const auto child = specialized_hir_unit_->find_statement(
+            child_id);
+        if (!child) {
+            continue;
+        }
+        std::optional<semantic::ExpressionId> child_target;
+        semantic::SourceSpanId child_source;
+        std::span<const semantic::StatementId> child_statements;
+        std::span<const semantic::StatementId> child_else_statements;
+        if (child->systemverilog != nullptr) {
+            const auto& input = *child->systemverilog;
+            if (input.kind
+                == semantic::sv::StatementKind::assignment) {
+                child_target = input.target;
+            }
+            child_source = input.source;
+            child_statements = input.statements;
+            child_else_statements = input.else_statements;
+        } else {
+            const auto& input = *child->vhdl;
+            if (input.kind
+                == semantic::vhdl::StatementKind::variable_assignment) {
+                child_target = input.target;
+            }
+            child_source = input.source;
+            child_statements = input.statements;
+            child_else_statements = input.else_statements;
+        }
+        if (child_target
+            && hir_target_declaration(*child_target)
+                == declaration) {
+            return child_source;
+        }
+        if (const auto nested = hir_statements_assign(declaration, child_statements)) {
+            return nested;
+        }
+        if (const auto nested = hir_statements_assign(declaration, child_else_statements)) {
+            return nested;
+        }
+        if (child->systemverilog != nullptr) {
+            for (const auto& alternative :
+                child->systemverilog->case_alternatives) {
+                if (const auto nested
+                    = hir_statements_assign(declaration, alternative.statements)) {
+                    return nested;
+                }
+            }
+        } else {
+            for (const auto& alternative :
+                child->vhdl->alternatives) {
+                if (const auto nested
+                    = hir_statements_assign(declaration, alternative.statements)) {
+                    return nested;
+                }
+            }
+        }
+    }
+    return std::nullopt;
+}
+
 bool Lowerer::lower_hir_statement_unsuspended(
     const semantic::StatementId statement_id)
 {
@@ -7173,6 +7238,27 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     != semantic::sv::UpdateKind::none
             ? hir_systemverilog_scalar_kind(*target)
             : frontend::SystemVerilogScalarKind::None;
+        // An update's re-read of its own target (`a[k]++`, `a[k] += v`)
+        // allocates a missing associative-array entry before referring to it
+        // (IEEE 1800-2023 7.8.7).
+        struct UpdateReadScope {
+            std::optional<semantic::ExpressionId>& current;
+            std::optional<semantic::ExpressionId> saved;
+            ~UpdateReadScope() { current = saved; }
+        } update_read_scope { hir_update_target_read_, hir_update_target_read_ };
+        if (statement->systemverilog != nullptr
+            && statement->systemverilog->update_kind
+                != semantic::sv::UpdateKind::none) {
+            const auto normalized_update
+                = specialized_hir_unit_->find_expression(*value);
+            if (normalized_update && normalized_update->systemverilog != nullptr
+                && normalized_update->systemverilog->kind
+                    == semantic::sv::ExpressionKind::binary
+                && normalized_update->systemverilog->operands.size() == 2U) {
+                hir_update_target_read_
+                    = normalized_update->systemverilog->operands.front();
+            }
+        }
         if (statement->systemverilog != nullptr
             && statement->systemverilog->update_kind
                 != semantic::sv::UpdateKind::none
@@ -20345,11 +20431,35 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 }
             }
         }
+        // The variable a SystemVerilog for statement declares: the one its
+        // loop-variable expression names, among the loop's declarations.
+        const auto systemverilog_loop_parameter
+            = [&]() -> std::optional<semantic::DeclarationId> {
+            if (statement->systemverilog == nullptr
+                || !statement->systemverilog->loop_variable_declared
+                || !statement->systemverilog->target) {
+                return std::nullopt;
+            }
+            const auto named
+                = hir_target_declaration(*statement->systemverilog->target);
+            return named && std::ranges::find(declarations, *named) != declarations.end()
+                ? named
+                : std::nullopt;
+        };
         const bool runtime_systemverilog_loop = [&] {
             if (statement->systemverilog == nullptr) {
                 return false;
             }
             const auto& loop_statement = *statement->systemverilog;
+            // A body that assigns the loop variable runs the loop at run
+            // time, the variable a real variable (IEEE 1800-2023 12.7.1).
+            if (!loop_statement.loop_repeat
+                && !loop_statement.loop_variable.empty()) {
+                if (const auto parameter = systemverilog_loop_parameter();
+                    parameter && hir_statements_assign(*parameter, statements)) {
+                    return true;
+                }
+            }
             return !static_loop_iterations
                 && (loop_statement.loop_runtime || long_static_for
                     || (loop_statement.loop_repeat
@@ -20414,20 +20524,13 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         restore_scope();
                         return true;
                     }
-                    const auto parameter = std::ranges::find_if(
-                        declarations,
-                        [&](const semantic::DeclarationId declaration_id) {
-                            const auto declaration = specialized_hir_unit_
-                                ->find_declaration(declaration_id);
-                            return declaration
-                                && declaration->systemverilog != nullptr
-                                && declaration->systemverilog->name
-                                    == loop_statement.loop_variable;
-                        });
-                    if (parameter == declarations.end()) {
+                    // A one-dimensional foreach declares exactly its index
+                    // variable (IEEE 1800-2023 12.7.3).
+                    if (declarations.size() != 1U) {
                         restore_scope();
                         return false;
                     }
+                    const auto parameter = declarations.begin();
                     const auto binding = hir_runtime_binding(
                         *parameter, hir_process_scope_, false);
                     if (!binding
@@ -21327,23 +21430,14 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 : std::nullopt;
             vhdl_first_static = initial;
             vhdl_last_static = limit;
-            const auto parameter = std::ranges::find_if(
-                declarations,
-                [&](const semantic::DeclarationId declaration_id) {
-                    const auto declaration
-                        = specialized_hir_unit_->find_declaration(
-                            declaration_id);
-                    return declaration
-                        && declaration->vhdl != nullptr
-                        && declaration->vhdl->name
-                        == loop_statement.loop_variable;
-                });
-            if (parameter == declarations.end()) {
+            // A for loop declares exactly its parameter (IEEE 1076-2019
+            // 10.10).
+            if (declarations.size() != 1U) {
                 restore_scope();
                 return false;
             }
-            loop_declaration = *parameter;
-            vhdl_loop_declaration = *parameter;
+            loop_declaration = declarations.front();
+            vhdl_loop_declaration = declarations.front();
         } else if (statement->systemverilog != nullptr
             && statement->systemverilog->loop_variable_declared
             && !statement->systemverilog->loop_variable.empty()) {
@@ -21351,100 +21445,23 @@ bool Lowerer::lower_hir_statement_unsuspended(
             // this loop's declaration list. A predeclared index remains in
             // its enclosing process or callable frame.
             loop_variable = statement->systemverilog->loop_variable;
-            const auto parameter = std::ranges::find_if(
-                declarations,
-                [&](const semantic::DeclarationId declaration_id) {
-                    const auto declaration
-                        = specialized_hir_unit_->find_declaration(
-                            declaration_id);
-                    return declaration
-                        && declaration->systemverilog != nullptr
-                        && declaration->systemverilog->name
-                        == loop_variable;
-                });
-            if (parameter == declarations.end()) {
+            const auto parameter = systemverilog_loop_parameter();
+            if (!parameter) {
                 restore_scope();
                 return false;
             }
             loop_declaration = *parameter;
         }
-        const auto assignment_to_parameter
-            = [&](auto&& self,
-                  const std::span<const semantic::StatementId> children)
-            -> std::optional<semantic::SourceSpanId> {
-            for (const auto child_id : children) {
-                const auto child = specialized_hir_unit_->find_statement(
-                    child_id);
-                if (!child) {
-                    continue;
-                }
-                std::optional<semantic::ExpressionId> child_target;
-                semantic::SourceSpanId child_source;
-                std::span<const semantic::StatementId> child_statements;
-                std::span<const semantic::StatementId> child_else_statements;
-                if (child->systemverilog != nullptr) {
-                    const auto& input = *child->systemverilog;
-                    if (input.kind
-                        == semantic::sv::StatementKind::assignment) {
-                        child_target = input.target;
-                    }
-                    child_source = input.source;
-                    child_statements = input.statements;
-                    child_else_statements = input.else_statements;
-                } else {
-                    const auto& input = *child->vhdl;
-                    if (input.kind
-                        == semantic::vhdl::StatementKind::variable_assignment) {
-                        child_target = input.target;
-                    }
-                    child_source = input.source;
-                    child_statements = input.statements;
-                    child_else_statements = input.else_statements;
-                }
-                if (child_target
-                    && hir_target_declaration(*child_target)
-                        == loop_declaration) {
-                    return child_source;
-                }
-                if (const auto nested = self(self, child_statements)) {
-                    return nested;
-                }
-                if (const auto nested = self(self, child_else_statements)) {
-                    return nested;
-                }
-                if (child->systemverilog != nullptr) {
-                    for (const auto& alternative :
-                        child->systemverilog->case_alternatives) {
-                        if (const auto nested
-                            = self(self, alternative.statements)) {
-                            return nested;
-                        }
-                    }
-                } else {
-                    for (const auto& alternative :
-                        child->vhdl->alternatives) {
-                        if (const auto nested
-                            = self(self, alternative.statements)) {
-                            return nested;
-                        }
-                    }
-                }
-            }
-            return std::nullopt;
-        };
-        if (loop_declaration) {
+        // A VHDL loop parameter is a constant (IEEE 1076-2019 10.10); a
+        // SystemVerilog body that assigns its loop variable runs at run time.
+        if (vhdl_loop_declaration) {
             if (const auto illegal_assignment
-                = assignment_to_parameter(
-                    assignment_to_parameter, statements)) {
+                = hir_statements_assign(*vhdl_loop_declaration, statements)) {
                 report(
                     "FSIM-ELAB-074",
-                    vhdl_loop_declaration
-                        ? "a sequential VHDL for-loop body cannot assign its "
-                          "implicit loop constant '"
-                            + std::string { loop_variable } + "'"
-                        : "a sequential SystemVerilog for-loop body cannot "
-                          "assign its statically substituted index '"
-                            + std::string { loop_variable } + "'",
+                    "a sequential VHDL for-loop body cannot assign its "
+                    "implicit loop constant '"
+                        + std::string { loop_variable } + "'",
                     hir_source_span(*illegal_assignment));
                 restore_scope();
                 return true;

@@ -601,6 +601,8 @@ interp.mailbox	string_bytes	P	mailbox contents and blocked processes (ids)
 interp.mailbox	readers	P	mailbox contents and blocked processes (ids)
 interp.mailbox	writers	P	mailbox contents and blocked processes (ids)
 interp.mailbox	messages	P	mailbox contents and blocked processes (ids)
+interp.mailbox	container_entries	P	mailbox contents and blocked processes (ids)
+interp.mailbox	container_bytes	P	mailbox contents and blocked processes (ids)
 interp.semaphore	keys	P	key count and waiters (ids)
 interp.semaphore	waiters	P	key count and waiters (ids)
 interp.dynamic_event	waiters	P	event waiters and last trigger time
@@ -669,6 +671,7 @@ process.cold	callable_registers_suspended	P	process cold state
 process.cold	pending_mailbox_result	P	process cold state
 process.cold	pending_dynamic_event	P	process cold state
 process.cold	pending_mailbox_string_result	P	process cold state
+process.cold	pending_mailbox_container_result	P	process cold state
 process.cold	fork_parent	P	process cold state
 process.cold	thread_announced	P	process cold state
 process.cold	fork_site	P	process cold state

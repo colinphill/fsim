@@ -254,6 +254,7 @@ void cold_io(RunStateArchive& ar, Impl::ProcessColdState& cold, Tables& tables)
     FSIM_RS_IO("process.cold", pending_mailbox_result, ar, cold);
     FSIM_RS_IO("process.cold", pending_dynamic_event, ar, cold);
     FSIM_RS_IO("process.cold", pending_mailbox_string_result, ar, cold);
+    FSIM_RS_IO("process.cold", pending_mailbox_container_result, ar, cold);
     FSIM_RS_IO("process.cold", fork_parent, ar, cold);
     FSIM_RS_IO("process.cold", thread_announced, ar, cold);
     FSIM_RS_IO("process.cold", fork_site, ar, cold);

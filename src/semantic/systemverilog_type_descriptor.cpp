@@ -58,6 +58,9 @@ namespace {
             bound(unit, range.left, range.left_expression),
             bound(unit, range.right, range.right_expression),
             { },
+            { },
+            false,
+            std::nullopt,
         };
     }
 
@@ -84,7 +87,8 @@ namespace {
         result.bits = bits;
         if (bits > 1U) {
             result.packed.push_back({
-                static_cast<std::int64_t>(bits - 1U), 0, { } });
+                static_cast<std::int64_t>(bits - 1U), 0, { }, { }, false,
+                std::nullopt });
         }
         return result;
     }
@@ -388,9 +392,22 @@ std::optional<SystemVerilogTypeDescriptor> describe_systemverilog_type(
             if (!element) {
                 return std::nullopt;
             }
-            element->unpacked.insert(element->unpacked.begin(),
-                SystemVerilogTypeDescriptor::Dimension {
-                    std::nullopt, std::nullopt, container });
+            SystemVerilogTypeDescriptor::Dimension dimension {
+                std::nullopt, std::nullopt, container, { }, false,
+                resolved.container_form };
+            if (*resolved.container_form == sv::TypeForm::associative_array) {
+                dimension.wildcard_index = !resolved.associative_index;
+                if (resolved.associative_index_metadata) {
+                    if (auto index = describe_systemverilog_type(unit,
+                            sv::type_reference_from_associative_index_metadata(
+                                *resolved.associative_index_metadata),
+                            scope)) {
+                        dimension.index.push_back(std::move(*index));
+                    }
+                }
+            }
+            element->unpacked.insert(
+                element->unpacked.begin(), std::move(dimension));
             return element;
         }
     }

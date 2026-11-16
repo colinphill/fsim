@@ -36,6 +36,10 @@ using StandardClass = support::SystemVerilogStandardClass;
 [[nodiscard]] bool mailbox_string_element(
     const semantic::sv::TypeReference& type)
 {
+    // An unpacked array of strings is an array (7.4).
+    if (type.container_form || !type.unpacked_dimensions.empty()) {
+        return false;
+    }
     if (type.value_form == semantic::sv::TypeForm::string) {
         return true;
     }
@@ -43,6 +47,51 @@ using StandardClass = support::SystemVerilogStandardClass;
 }
 
 } // namespace
+
+
+// The bit-stream width of a message of an unpacked type carried as its bit
+// stream: a structure whose every member is a packed or scalar leaf (not a
+// union, 7.3), which a static or an automatic variable converts to and
+// from in one layout (first member most significant). Any other unpacked
+// type, arrays among them, is carried as a container value.
+std::optional<std::uint32_t> Lowerer::hir_mailbox_stream_width(
+    const std::optional<runtime::simir::ContainerType>& container) const
+{
+    const auto leaves = container && container->aggregate_value
+        ? hir_aggregate_packed_leaves(*container)
+        : std::nullopt;
+    if (!leaves) {
+        return std::nullopt;
+    }
+    std::uint64_t width { };
+    for (const auto& leaf : *leaves) {
+        width += leaf.width;
+    }
+    return width != 0U && width <= std::numeric_limits<std::uint32_t>::max()
+        ? std::optional { static_cast<std::uint32_t>(width) }
+        : std::nullopt;
+}
+
+// Store a message carried as its bit stream into `target`. A target of an
+// unpacked structure type held as a container value (an automatic
+// variable or formal) takes the stream's leaves, first member most
+// significant, as a static variable of that type holds them.
+bool Lowerer::lower_hir_mailbox_copy_out(
+    const semantic::ExpressionId target, const RegisterId value)
+{
+    if (const auto binding = hir_container_object_binding(target);
+        binding && binding->local && binding->type != nullptr
+        && binding->type->aggregate_value) {
+        const auto unpacked = unpack_hir_aggregate_value(value, *binding->type);
+        if (!unpacked) {
+            return false;
+        }
+        process_.operations.emplace_back(
+            CopyContainerRegister { *binding->local, *unpacked });
+        return true;
+    }
+    return lower_hir_packed_copy_out(target, value);
+}
 
 std::optional<Lowerer::HirMailboxElement> Lowerer::hir_mailbox_element(
     const semantic::sv::TypeReference* mailbox_type,
@@ -54,6 +103,7 @@ std::optional<Lowerer::HirMailboxElement> Lowerer::hir_mailbox_element(
         return HirMailboxElement { false, 0U, true };
     }
     const auto* element = mailbox_element_type(mailbox_type);
+    std::optional<semantic::sv::TypeReference> named_element;
     const auto resolver = hir_resolver();
     // A typedef's bounds use the names visible where it is declared (a
     // class's local parameters).
@@ -81,6 +131,16 @@ std::optional<Lowerer::HirMailboxElement> Lowerer::hir_mailbox_element(
             && declaration->systemverilog->type) {
             element = &*declaration->systemverilog->type;
             element_scope = declaration->systemverilog->scope;
+            // The typedef's own type, as a variable declared with the
+            // typedef name has it (6.18): an unpacked structure or union
+            // is the type the typedef declares, not its body's.
+            if (declaration->systemverilog->declared_type) {
+                named_element = *element;
+                named_element->target.target
+                    = *declaration->systemverilog->declared_type;
+                named_element->target.spelling = declaration->systemverilog->name;
+                element = &*named_element;
+            }
         }
     } else if (element != nullptr) {
         // A typedef type actual (`mailbox #(C::t)`).
@@ -108,6 +168,40 @@ std::optional<Lowerer::HirMailboxElement> Lowerer::hir_mailbox_element(
     if (effective_element && mailbox_string_element(*effective_element)) {
         return HirMailboxElement { true, 0U };
     }
+    // An unpacked array, structure or union element (IEEE 1800-2023 15.4:
+    // a mailbox holds data of any type): a fixed-size one of known width
+    // is carried as its bit stream (11.4.14), any other as one container
+    // value per message.
+    if (element) {
+        using Kind = semantic::SystemVerilogTypeDescriptor::Kind;
+        // The type a class type parameter stands for in this
+        // specialization (8.25).
+        const auto described = semantic::describe_systemverilog_type(
+            *specialized_hir_unit_,
+            effective_element ? *effective_element : *element, element_scope);
+        if (described
+            && (!described->unpacked.empty()
+                || ((described->kind == Kind::structure
+                        || described->kind == Kind::union_type)
+                    && !described->packed_aggregate))) {
+            // The element type as written, as a variable declared with it
+            // has it.
+            auto container = hir_systemverilog_container_type(*element);
+            if (!container && effective_element) {
+                container = hir_systemverilog_container_type(*effective_element);
+            }
+            if (const auto bits = hir_mailbox_stream_width(container)) {
+                return HirMailboxElement { false, *bits };
+            }
+            if (!container) {
+                report("FSIM-ELAB-SVSYNC-002", std::string { message }, span);
+                return std::nullopt;
+            }
+            HirMailboxElement result { false, 0U, false };
+            result.container = *container;
+            return result;
+        }
+    }
     // A typedef element (`mailbox #(my_t)`) has its aliased type's width.
     auto width = element
         ? hir_systemverilog_type_width(*element, element_scope)
@@ -115,72 +209,6 @@ std::optional<Lowerer::HirMailboxElement> Lowerer::hir_mailbox_element(
     if (!width && effective_element) {
         width = hir_systemverilog_type_width(
             *effective_element, element_scope);
-    }
-    // A fixed-size unpacked element is carried as its bit stream (IEEE
-    // 1800-2017 11.4.14).
-    if (!width && element) {
-        if (const auto described = semantic::describe_systemverilog_type(
-                *specialized_hir_unit_, *element, element_scope);
-            described && described->bits && *described->bits != 0U) {
-            std::uint64_t bits = *described->bits;
-            for (const auto& dimension : described->unpacked) {
-                if (!dimension.container.empty() || !dimension.left
-                    || !dimension.right) {
-                    bits = 0U;
-                    break;
-                }
-                bits *= static_cast<std::uint64_t>(std::llabs(
-                            *dimension.left - *dimension.right))
-                    + 1U;
-            }
-            if (bits != 0U) {
-                width = static_cast<std::size_t>(bits);
-            }
-        }
-    }
-    // Unpacked bounds written with class local parameters (`int t[2**W]`)
-    // fold as constant expressions.
-    if (!width && element && !element->unpacked_dimensions.empty()
-        && !element->container_form) {
-        auto packed = *element;
-        packed.unpacked_dimensions.clear();
-        auto bits = hir_systemverilog_type_width(packed, element_scope)
-                        .value_or(0U);
-        for (const auto& dimension : element->unpacked_dimensions) {
-            const auto bound = [&](const std::optional<std::int64_t> value,
-                                   const std::optional<semantic::ExpressionId> expression) {
-                return value ? value
-                    : expression ? hir_constant_integer(*expression)
-                    : std::nullopt;
-            };
-            const auto left = bound(dimension.left, dimension.left_expression);
-            const auto right = bound(dimension.right, dimension.right_expression);
-            if (!left || !right) {
-                bits = 0U;
-                break;
-            }
-            bits *= static_cast<std::size_t>(std::llabs(*left - *right)) + 1U;
-        }
-        if (bits != 0U) {
-            width = bits;
-        }
-    }
-    // Bounds written with class parameters fold in the active class frame.
-    if (!width && element) {
-        if (const auto container = hir_systemverilog_container_type(*element);
-            container && container->fixed
-            && container->element_kind
-                == runtime::simir::ContainerElementKind::Packed) {
-            std::uint64_t bits = container->element_width;
-            for (const auto& [left, right] : container->dimensions) {
-                bits *= static_cast<std::uint64_t>(std::llabs(
-                            static_cast<std::int64_t>(left) - right))
-                    + 1U;
-            }
-            if (bits != 0U) {
-                width = static_cast<std::size_t>(bits);
-            }
-        }
     }
     if (!effective_element || !width || *width == 0U
         || *width > std::numeric_limits<std::uint32_t>::max()) {
@@ -244,124 +272,238 @@ Lowerer::hir_typeless_mailbox_message(const semantic::ExpressionId message,
               *specialized_hir_unit_, *declared, hir_process_scope_)
         : semantic::describe_systemverilog_expression_type(
               *specialized_hir_unit_, message);
+    // The equivalence class of a message's element type (6.22.2): a
+    // string; a packed integral type by its total width, signedness and 2-
+    // or 4-state values; an enumeration, a class and an unpacked structure
+    // or union only by itself; realtime is real. `element_type` is the
+    // element's type reference where known (a class specialization).
+    const auto element_identity = [&](const semantic::SystemVerilogTypeDescriptor& element,
+                                      const std::optional<semantic::sv::TypeReference>& element_type)
+        -> std::optional<std::string> {
+        if (element.kind == Kind::string) {
+            return std::string { "string" };
+        }
+        if ((element.kind == Kind::structure || element.kind == Kind::union_type)
+            && !element.packed_aggregate) {
+            if (!element.nominal) {
+                return std::nullopt;
+            }
+            return "aggregate:" + std::to_string(element.nominal->value());
+        }
+        std::string identity;
+        switch (element.kind) {
+
+        case Kind::integer_atom:
+        case Kind::integer_vector:
+            break;
+        case Kind::structure:
+        case Kind::union_type:
+            if (!element.packed_aggregate) {
+                return std::nullopt;
+            }
+            break;
+        case Kind::real:
+        case Kind::realtime:
+            identity = "real";
+            break;
+        case Kind::shortreal:
+            identity = "shortreal";
+            break;
+        case Kind::chandle:
+            identity = "chandle";
+            break;
+        case Kind::enumeration:
+        case Kind::class_handle: {
+            // An enumeration is its enumeration type, however a typedef names
+            // it; a class type is its class and, for a parameterized class, the
+            // specialization its parameter values select (6.22.1, 8.25).
+            const auto wanted = element.kind == Kind::enumeration
+                ? semantic::sv::TypeForm::enumeration
+                : semantic::sv::TypeForm::class_handle;
+            std::optional<semantic::TypeId> nominal;
+            std::vector<semantic::TypeId> visited;
+            for (auto current = element.nominal.value_or(semantic::TypeId { });
+                current.valid()
+                && std::ranges::find(visited, current) == visited.end();) {
+                visited.push_back(current);
+                const auto type = specialized_hir_unit_->find_type(current);
+                if (!type || type->systemverilog == nullptr) {
+                    break;
+                }
+                if (type->systemverilog->form == wanted) {
+                    nominal = current;
+                    break;
+                }
+                if (type->systemverilog->form != semantic::sv::TypeForm::alias) {
+                    break;
+                }
+                current = type->systemverilog->base.target.target;
+            }
+            std::optional<std::uint32_t> specialization;
+            if (element.kind == Kind::class_handle && element_type) {
+                const auto expression
+                    = specialized_hir_unit_->find_expression(message);
+                const auto source = expression && expression->systemverilog
+                    ? expression->systemverilog->source
+                    : semantic::SourceSpanId { };
+                specialization
+                    = hir_instance_class_specialization(*element_type, source);
+                if (!specialization) {
+                    const auto effective
+                        = hir_resolver().effective_systemverilog_type(
+                            *element_type, hir_process_scope_);
+                    if (effective && !effective->class_identity.empty()) {
+                        specialization = class_specializations().specialize(
+                            *effective, hir_running_class_specialization(),
+                            source);
+                    }
+                }
+            }
+            if (specialization) {
+                identity = "class:" + std::to_string(*specialization);
+            } else if (nominal) {
+                identity = (element.kind == Kind::enumeration ? "enum:"
+                                                                 : "class-type:")
+                    + std::to_string(nominal->value());
+            } else {
+                return std::nullopt;
+            }
+            break;
+        }
+        case Kind::string:
+        case Kind::event:
+        case Kind::interface:
+        case Kind::other:
+            return std::nullopt;
+        }
+        // A class or chandle value is the 64-bit handle.
+        const auto width = element.kind == Kind::class_handle
+                || element.kind == Kind::chandle
+            ? std::optional<std::uint64_t> { 64U }
+            : element.total_bits();
+        if (!width || *width == 0U
+            || *width > std::numeric_limits<std::uint32_t>::max()) {
+            return std::nullopt;
+        }
+        if (identity.empty()) {
+            identity = "packed:" + std::to_string(*width)
+                + (element.is_signed ? ":signed" : ":unsigned")
+                + (element.four_state ? ":4" : ":2");
+        }
+        return identity;
+    };
     const auto refuse = [&]() -> std::optional<HirMailboxMessage> {
         report("FSIM-ELAB-SVSYNC-002",
-            "a typeless mailbox message must be a string or a singular "
-            "value of a known type (IEEE 1800-2023 15.4.9)",
+            "a typeless mailbox message must have a type of known "
+            "equivalence (IEEE 1800-2023 6.22.2, 15.4.9)",
             span);
         return std::nullopt;
     };
-    if (!described || !described->unpacked.empty()) {
+    if (!described) {
         return refuse();
+    }
+    // An unpacked array, structure or union is one container message
+    // (15.4): a fixed-size array is equivalent to another of equivalent
+    // elements and equal size, a dynamic array, queue or associative array
+    // to one of the same kind with equivalent index and element types
+    // (6.22.2 d, e).
+    const bool unpacked_message = !described->unpacked.empty()
+        || ((described->kind == Kind::structure
+                || described->kind == Kind::union_type)
+            && !described->packed_aggregate);
+    if (unpacked_message) {
+        const auto message_type = declared
+            ? declared
+            : semantic::systemverilog_type_reference(*described);
+        const auto container = message_type
+            ? hir_systemverilog_container_type(*message_type)
+            : std::nullopt;
+        // The element's type reference: the message type without its
+        // unpacked dimensions.
+        std::optional<semantic::sv::TypeReference> element_type;
+        if (message_type) {
+            auto current = hir_resolver()
+                               .effective_systemverilog_type(
+                                   *message_type, hir_process_scope_)
+                               .value_or(*message_type);
+            for (std::size_t depth { }; depth < 16U; ++depth) {
+                if (current.container_form
+                    && current.container_element_types.size() == 1U) {
+                    current = current.container_element_types.front();
+                } else if (!current.unpacked_dimensions.empty()) {
+                    current.unpacked_dimensions.clear();
+                    break;
+                } else {
+                    break;
+                }
+                current = hir_resolver()
+                              .effective_systemverilog_type(
+                                  current, hir_process_scope_)
+                              .value_or(current);
+            }
+            element_type = current;
+        }
+        std::string identity { "unpacked" };
+        using Form = semantic::sv::TypeForm;
+        for (const auto& dimension : described->unpacked) {
+            if (!dimension.form) {
+                if (!dimension.left || !dimension.right) {
+                    return refuse();
+                }
+                identity += ":fixed:"
+                    + std::to_string(std::llabs(*dimension.left - *dimension.right) + 1);
+            } else if (*dimension.form == Form::dynamic_array) {
+                identity += ":dynamic";
+            } else if (*dimension.form == Form::queue) {
+                identity += ":queue";
+            } else if (*dimension.form != Form::associative_array) {
+                return refuse();
+            } else if (dimension.wildcard_index) {
+                identity += ":associative[*]";
+            } else if (!dimension.index.empty()) {
+                const auto index
+                    = element_identity(dimension.index.front(), std::nullopt);
+                if (!index) {
+                    return refuse();
+                }
+                identity += ":associative[" + *index + "]";
+            } else {
+                return refuse();
+            }
+        }
+        auto element = *described;
+        element.unpacked.clear();
+        const auto leaf = element_identity(element, element_type);
+        if (!leaf) {
+            return refuse();
+        }
+        identity += ":" + *leaf;
+        if (const auto bits = hir_mailbox_stream_width(container)) {
+            return HirMailboxMessage { false, *bits,
+                support::Xxh64::digest(identity) | 1U };
+        }
+        if (!container) {
+            return refuse();
+        }
+        HirMailboxMessage result { false, 0U,
+            support::Xxh64::digest(identity) | 1U };
+        result.container = *container;
+        return result;
     }
     if (described->kind == Kind::string) {
         return HirMailboxMessage { true, 0U,
             support::Xxh64::digest("string") | 1U };
     }
-    // The type's equivalence class (6.22.2): a packed integral type by its
-    // total width, signedness and 2- or 4-state values; an enumeration or a
-    // class only by itself; realtime is real.
-    std::string identity;
-    switch (described->kind) {
-    case Kind::integer_atom:
-    case Kind::integer_vector:
-        break;
-    case Kind::structure:
-    case Kind::union_type:
-        if (!described->packed_aggregate) {
-            return refuse();
-        }
-        break;
-    case Kind::real:
-    case Kind::realtime:
-        identity = "real";
-        break;
-    case Kind::shortreal:
-        identity = "shortreal";
-        break;
-    case Kind::chandle:
-        identity = "chandle";
-        break;
-    case Kind::enumeration:
-    case Kind::class_handle: {
-        // An enumeration is its enumeration type, however a typedef names
-        // it; a class type is its class and, for a parameterized class, the
-        // specialization its parameter values select (6.22.1, 8.25).
-        const auto wanted = described->kind == Kind::enumeration
-            ? semantic::sv::TypeForm::enumeration
-            : semantic::sv::TypeForm::class_handle;
-        std::optional<semantic::TypeId> nominal;
-        std::vector<semantic::TypeId> visited;
-        for (auto current = described->nominal.value_or(semantic::TypeId { });
-            current.valid()
-            && std::ranges::find(visited, current) == visited.end();) {
-            visited.push_back(current);
-            const auto type = specialized_hir_unit_->find_type(current);
-            if (!type || type->systemverilog == nullptr) {
-                break;
-            }
-            if (type->systemverilog->form == wanted) {
-                nominal = current;
-                break;
-            }
-            if (type->systemverilog->form != semantic::sv::TypeForm::alias) {
-                break;
-            }
-            current = type->systemverilog->base.target.target;
-        }
-        std::optional<std::uint32_t> specialization;
-        if (described->kind == Kind::class_handle && declared) {
-            const auto expression
-                = specialized_hir_unit_->find_expression(message);
-            const auto source = expression && expression->systemverilog
-                ? expression->systemverilog->source
-                : semantic::SourceSpanId { };
-            specialization
-                = hir_instance_class_specialization(*declared, source);
-            if (!specialization) {
-                const auto effective
-                    = hir_resolver().effective_systemverilog_type(
-                        *declared, hir_process_scope_);
-                if (effective && !effective->class_identity.empty()) {
-                    specialization = class_specializations().specialize(
-                        *effective, hir_running_class_specialization(),
-                        source);
-                }
-            }
-        }
-        if (specialization) {
-            identity = "class:" + std::to_string(*specialization);
-        } else if (nominal) {
-            identity = (described->kind == Kind::enumeration ? "enum:"
-                                                             : "class-type:")
-                + std::to_string(nominal->value());
-        } else {
-            return refuse();
-        }
-        break;
-    }
-    case Kind::string:
-    case Kind::event:
-    case Kind::interface:
-    case Kind::other:
+    const auto identity = element_identity(*described, declared);
+    if (!identity) {
         return refuse();
     }
-    // A class or chandle value is the 64-bit handle.
     const auto width = described->kind == Kind::class_handle
             || described->kind == Kind::chandle
         ? std::optional<std::uint64_t> { 64U }
         : described->total_bits();
-    if (!width || *width == 0U
-        || *width > std::numeric_limits<std::uint32_t>::max()) {
-        return refuse();
-    }
-    if (identity.empty()) {
-        identity = "packed:" + std::to_string(*width)
-            + (described->is_signed ? ":signed" : ":unsigned")
-            + (described->four_state ? ":4" : ":2");
-    }
     return HirMailboxMessage { false, static_cast<std::uint32_t>(*width),
-        support::Xxh64::digest(identity) | 1U };
+        support::Xxh64::digest(*identity) | 1U };
 }
 
 std::optional<Lowerer::HirSynchronizationTaskProfile>
@@ -519,6 +661,7 @@ bool Lowerer::lower_hir_synchronization_statement(
         }
         bool string_element = mailbox_element->string;
         auto width = mailbox_element->width;
+        auto container = mailbox_element->container;
         if ((profile->method != "put" && profile->method != "get"
                 && profile->method != "peek")
             || statement.task_arguments.size() != 1U) {
@@ -541,6 +684,31 @@ bool Lowerer::lower_hir_synchronization_statement(
             string_element = message->string;
             width = message->width;
             message_type = message->type;
+            container = message->container;
+        }
+        if (container) {
+            if (profile->method == "put") {
+                const auto value
+                    = lower_hir_static_container_actual(argument, *container);
+                if (!value) {
+                    return false;
+                }
+                MailboxPut put {
+                    receiver, 0U, 0U, std::nullopt,
+                    MailboxElementKind::container, { }, message_type,
+                };
+                put.container_source = *value;
+                process_.operations.emplace_back(std::move(put));
+                return true;
+            }
+            const auto value = allocate_container_register(*container);
+            MailboxGet get {
+                receiver, 0U, 0U, std::nullopt, profile->method == "peek",
+                MailboxElementKind::container, { }, message_type,
+            };
+            get.container_destination = value;
+            process_.operations.emplace_back(std::move(get));
+            return lower_hir_container_copy_out(argument, value);
         }
         if (profile->method == "put") {
             if (string_element) {
@@ -587,7 +755,7 @@ bool Lowerer::lower_hir_synchronization_statement(
             std::nullopt, profile->method == "peek",
             MailboxElementKind::packed, { }, message_type,
         });
-        return lower_hir_packed_copy_out(argument, value);
+        return lower_hir_mailbox_copy_out(argument, value);
     }
 
     if ((profile->method != "put" && profile->method != "get")
@@ -683,9 +851,10 @@ Lowerer::lower_hir_synchronization_expression(
             process_.operations.emplace_back(MailboxCreate {
                 destination, *count,
                 width,
-                mailbox_element->dynamic ? MailboxElementKind::dynamic
-                    : string_element     ? MailboxElementKind::string
-                                         : MailboxElementKind::packed });
+                mailbox_element->dynamic      ? MailboxElementKind::dynamic
+                    : mailbox_element->container ? MailboxElementKind::container
+                    : string_element          ? MailboxElementKind::string
+                                              : MailboxElementKind::packed });
         } else {
             process_.operations.emplace_back(
                 SemaphoreCreate { destination, *count });
@@ -765,6 +934,7 @@ Lowerer::lower_hir_synchronization_expression(
         }
         bool string_element = mailbox_element->string;
         auto element_width = mailbox_element->width;
+        auto container = mailbox_element->container;
         // A typeless mailbox's message has the argument's own type.
         std::uint64_t message_type { };
         if (mailbox_element->dynamic && argument_count == 1U) {
@@ -776,12 +946,34 @@ Lowerer::lower_hir_synchronization_expression(
             string_element = message->string;
             element_width = message->width;
             message_type = message->type;
+            container = message->container;
         }
         if (method == "num" && argument_count == 0U) {
             const auto destination = result();
             process_.operations.emplace_back(
                 MailboxNum { destination, *receiver });
             return { true, true, resize_result(destination) };
+        }
+        if ((method == "put" || method == "try_put")
+            && argument_count == 1U && container) {
+            const auto value = lower_hir_static_container_actual(
+                source.operands[1], *container);
+            if (!value) {
+                return { true, false, std::nullopt };
+            }
+            std::optional<RegisterId> destination;
+            if (method == "try_put") {
+                destination = result();
+            }
+            MailboxPut put {
+                *receiver, 0U, 0U, destination,
+                MailboxElementKind::container, { }, message_type,
+            };
+            put.container_source = *value;
+            process_.operations.emplace_back(std::move(put));
+            return { true, true,
+                destination ? std::optional { resize_result(*destination) }
+                            : std::nullopt };
         }
         if ((method == "put" || method == "try_put")
             && argument_count == 1U) {
@@ -827,6 +1019,39 @@ Lowerer::lower_hir_synchronization_expression(
         }
         const bool get = method == "get" || method == "try_get";
         const bool peek = method == "peek" || method == "try_peek";
+        if ((get || peek) && argument_count == 1U && container) {
+            const auto value = allocate_container_register(*container);
+            std::optional<RegisterId> success;
+            if (method.starts_with("try_")) {
+                success = result();
+            }
+            MailboxGet operation {
+                *receiver, 0U, 0U, success, peek,
+                MailboxElementKind::container, { }, message_type,
+            };
+            operation.container_destination = value;
+            process_.operations.emplace_back(std::move(operation));
+            if (success) {
+                const auto condition = mailbox_result_truth(*success);
+                const auto branch = process_.operations.size();
+                process_.operations.emplace_back(Branch {
+                    condition, 0U, 0U, UnknownBranchPolicy::error });
+                const auto copy_out = static_cast<InstructionIndex>(
+                    process_.operations.size());
+                if (!lower_hir_container_copy_out(source.operands[1], value)) {
+                    return { true, false, std::nullopt };
+                }
+                const auto end = static_cast<InstructionIndex>(
+                    process_.operations.size());
+                process_.operations[branch] = Branch {
+                    condition, copy_out, end, UnknownBranchPolicy::error };
+                return { true, true, resize_result(*success) };
+            }
+            if (!lower_hir_container_copy_out(source.operands[1], value)) {
+                return { true, false, std::nullopt };
+            }
+            return { true, true, std::nullopt };
+        }
         if ((get || peek) && argument_count == 1U) {
             if (string_element) {
                 const auto value = allocate_string_register();
@@ -883,7 +1108,7 @@ Lowerer::lower_hir_synchronization_expression(
                     condition, 0U, 0U, UnknownBranchPolicy::error });
                 const auto copy_out = static_cast<InstructionIndex>(
                     process_.operations.size());
-                if (!lower_hir_packed_copy_out(
+                if (!lower_hir_mailbox_copy_out(
                         source.operands[1], value)) {
                     return { true, false, std::nullopt };
                 }
@@ -891,7 +1116,7 @@ Lowerer::lower_hir_synchronization_expression(
                     process_.operations.size());
                 process_.operations[branch] = Branch {
                     condition, copy_out, end, UnknownBranchPolicy::error };
-            } else if (!lower_hir_packed_copy_out(
+            } else if (!lower_hir_mailbox_copy_out(
                            source.operands[1], value)) {
                 return { true, false, std::nullopt };
             }

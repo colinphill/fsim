@@ -609,10 +609,9 @@ StaticKernelDynamicContainer make_dynamic_header(const ContainerType& type)
         header.flags = (type.queue ? queue_flag : 0U) | dynamic_text_flag;
     }
     if (type.associative) {
-        // A missing key reads the default element, all zero
-        // (default_container_element), until a `default:` is set.
-        header.fill_a = 0U;
-        header.fill_b = 0U;
+        // A missing key reads the element type's nonexistent-entry value
+        // (fill; IEEE 1800-2023 Table 7-1, default_container_element) until
+        // a `default:` is set.
         header.flags |= dynamic_associative_flag
             | (type.signed_indices ? dynamic_signed_keys_flag : 0U);
         header.key_width = type.index_width;
@@ -1157,6 +1156,12 @@ const char* dyn_fail_message(const DynFailure failure) noexcept
         return "static kernel queue or dynamic array could not grow";
     case DynFailure::key_unknown:
         return "associative-array index must be a known integral value";
+    case DynFailure::missing_entry:
+        return associative_missing_entry_warning;
+    case DynFailure::invalid_read_index:
+        return associative_invalid_read_warning;
+    case DynFailure::invalid_write_index:
+        return associative_invalid_write_warning;
     case DynFailure::assoc_budget:
         return "associative array exceeds the per-container owning-storage budget";
     case DynFailure::fixed_unknown:
@@ -1255,17 +1260,22 @@ DynFailure execute_text_key_dyn(const KInst& inst, StaticKernelDynamicContainer&
     const auto at = lower_text_key(container, key_register);
     const bool present
         = at < container.size && text_of(text_key_slot(container, at)) == key_register;
+    // A missing key reads the `default:` value without a warning, else the
+    // nonexistent-entry value with one (7.8.6).
+    const auto missing = present || (container.flags & dynamic_default_flag) != 0U
+            || (op == DynOp::assoc_read && (inst.imm_b & dyn_read_allocating) != 0U)
+        ? DynFailure::none
+        : DynFailure::missing_entry;
     switch (op) {
     case DynOp::assoc_read:
         registers[inst.d] = present ? dynamic_element(container, at)
                                     : Word { container.fill_a, container.fill_b };
-        return DynFailure::none;
+        return missing;
     case DynOp::text_read:
-        // A missing key reads the `default:` text, else the empty string.
         strings[inst.offset] = present
             ? std::string { text_of(dynamic_element(container, at)) }
             : std::string { default_text(container) };
-        return DynFailure::none;
+        return missing;
     case DynOp::exists:
         registers[inst.d] = { present ? 1U : 0U, 0U };
         return DynFailure::none;
@@ -1304,19 +1314,28 @@ DynFailure execute_text_dyn(const KInst& inst, StaticKernelDynamicContainer& con
     if (associative && (op == DynOp::text_read || op == DynOp::text_write)) {
         const auto key_word = registers[inst.y];
         const auto width = container.key_width;
+        const bool user_default = (container.flags & dynamic_default_flag) != 0U;
         if ((key_word.b & kernel_word::mask(width)) != 0U) {
-            return DynFailure::key_unknown;
+            // An index holding x or z bits: a read returns the `default:`
+            // text or the empty string, a write is ignored (7.8.6).
+            if (op == DynOp::text_write) {
+                return DynFailure::invalid_write_index;
+            }
+            strings[inst.offset] = std::string { default_text(container) };
+            return user_default ? DynFailure::none : DynFailure::invalid_read_index;
         }
         const auto key = order_key(key_word.a & kernel_word::mask(width), width,
             signed_keys(container));
         const auto at = lower_key(container, key);
         const bool present = at < container.size && container.keys[at] == key;
         if (op == DynOp::text_read) {
-            // A missing key reads the `default:` text, else the empty string.
+            // A missing key reads the `default:` text without a warning,
+            // else the empty string with one (7.8.6).
             strings[inst.offset] = present
                 ? std::string { text_of(dynamic_element(container, at)) }
                 : std::string { default_text(container) };
-            return DynFailure::none;
+            return present || user_default ? DynFailure::none
+                                           : DynFailure::missing_entry;
         }
         if (!present) {
             if (container.size >= container.limit) {
@@ -1702,7 +1721,19 @@ DynFailure execute_dyn(const KInst& inst, StaticKernelDynamicContainer& containe
         case DynOp::exists: {
             const auto key_word = registers[inst.y];
             const auto width = container.key_width;
+            const bool user_default = (container.flags & dynamic_default_flag) != 0U;
             if ((key_word.b & kernel_word::mask(width)) != 0U) {
+                // An index holding x or z bits: a read returns the
+                // nonexistent-entry value, a write is ignored, each with a
+                // warning; a `default:` read has none (7.8.6).
+                if (op == DynOp::assoc_read) {
+                    registers[inst.d] = { container.fill_a, container.fill_b };
+                    return user_default ? DynFailure::none
+                                        : DynFailure::invalid_read_index;
+                }
+                if (op == DynOp::assoc_write) {
+                    return DynFailure::invalid_write_index;
+                }
                 return DynFailure::key_unknown;
             }
             if (op == DynOp::assoc_write && two_state
@@ -1717,6 +1748,10 @@ DynFailure execute_dyn(const KInst& inst, StaticKernelDynamicContainer& containe
             case DynOp::assoc_read:
                 registers[inst.d] = present ? dynamic_element(container, at)
                                             : Word { container.fill_a, container.fill_b };
+                if (!present && !user_default
+                    && (inst.imm_b & dyn_read_allocating) == 0U) {
+                    return DynFailure::missing_entry;
+                }
                 break;
             case DynOp::exists:
                 registers[inst.d] = { present ? 1U : 0U, 0U };
@@ -1964,6 +1999,10 @@ public:
     [[nodiscard]] std::uint32_t next_random() override
     {
         throw std::logic_error { "static kernel bit stream draws no random number" };
+    }
+    void warn(std::string_view) override
+    {
+        throw std::logic_error { "static kernel bit stream reads no associative entry" };
     }
 
 private:

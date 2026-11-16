@@ -2281,6 +2281,7 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                 set(DynOp::assoc_read, container);
                 inst.d = narrow(op.destination);
                 key(container, op.index, op.string_index, op.linear_index, "dyn_read");
+                inst.imm_b = op.allocating ? static_kernel_detail::dyn_read_allocating : 0U;
                 return true;
             }
             if (op.string_index) {

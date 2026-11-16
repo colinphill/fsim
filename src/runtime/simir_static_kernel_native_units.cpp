@@ -1003,6 +1003,22 @@ std::uint32_t Interpreter::Impl::StaticKernel::native_dyn_grow(
     }
 }
 
+void Interpreter::Impl::StaticKernel::native_dyn_warn(
+    StaticKernelNativeFrame* frame, const std::uint32_t /*at*/,
+    const std::uint32_t reason)
+{
+    auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
+    try {
+        kernel.warn(frame->member,
+            static_kernel_detail::dyn_fail_message(
+                static_cast<static_kernel_detail::DynFailure>(
+                    reason - static_kernel_detail::dyn_fail_first)));
+    } catch (...) {
+        kernel.scratch().native_exception = std::current_exception();
+        frame->status = 1U;
+    }
+}
+
 std::uint32_t Interpreter::Impl::StaticKernel::native_dyn_reshape(
     StaticKernelNativeFrame* frame, const std::uint32_t at,
     StaticKernelDynamicContainer* target, const StaticKernelDynamicContainer* source)

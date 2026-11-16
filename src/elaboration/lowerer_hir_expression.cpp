@@ -18239,6 +18239,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 container->type.signed_indices,
                 false,
                 container->type.string_indices,
+                hir_update_target_read_ == expression_id,
             });
         }
         result = expected_width != 0U
@@ -18417,6 +18418,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                         || element->type->signed_indices,
                     element->indices.size() > 1U,
                     element->type->string_indices,
+                    hir_update_target_read_ == expression_id,
                 });
             }
             if (!element->local) {

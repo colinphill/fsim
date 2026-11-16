@@ -8825,13 +8825,40 @@ private:
                 signed_keys);
         };
         const auto fill = [&]() { return dyn_pair(header, dyn_fill); };
+        // A read or write index without x or z bits (7.8.6), and its order
+        // key (meaningful only when known).
+        const auto checked_key = [&]() {
+            const auto index = load_register(inst.y);
+            auto* known = builder_.CreateICmpEQ(
+                builder_.CreateAnd(index.b, constant(key_mask)), constant(0U));
+            return std::pair { known,
+                dyn_order_key(builder_.CreateAnd(index.a, constant(key_mask)), width,
+                    signed_keys) };
+        };
+        // The warnings of a read: an index holding x or z bits or a missing
+        // key reads the `default:` value without one, else the
+        // nonexistent-entry value with one (7.8.6).
+        const auto warn_read = [&](llvm::Value* known, llvm::Value* present) {
+            auto* plain = builder_.CreateNot(dyn_user_default(header));
+            dyn_warn_when(builder_.CreateAnd(plain, builder_.CreateNot(known)), at,
+                DynFailure::invalid_read_index);
+            // An update's allocating read has no missing-entry warning
+            // (7.8.7).
+            if (op == DynOp::assoc_read
+                && (inst.imm_b & detail::dyn_read_allocating) != 0U) {
+                return;
+            }
+            dyn_warn_when(builder_.CreateAnd(plain,
+                              builder_.CreateAnd(known, builder_.CreateNot(present))),
+                at, DynFailure::missing_entry);
+        };
         switch (op) {
         case DynOp::text_read: {
-            // A missing key reads the `default:` text (the fill slot, empty
-            // until one is set).
-            auto* key = order_key();
+            // A missing key or an invalid index reads the `default:` text
+            // (the fill slot, empty until one is set).
+            const auto [known, key] = checked_key();
             auto* position = dyn_lower_key(header, key);
-            auto* present = dyn_key_present(header, position, key);
+            auto* present = builder_.CreateAnd(known, dyn_key_present(header, position, key));
             auto* slot = builder_.CreateSelect(present, dyn_element_address(header, position),
                 dyn_address(header, dyn_fill));
             auto* target = str_object(dyn_header(inst.z), inst.offset);
@@ -8841,10 +8868,14 @@ private:
             str_reserve(target, size, at);
             str_copy_bytes(str_data(target), builder_.CreateLoad(ptr_, slot), size);
             str_set_size(target, size);
+            warn_read(known, present);
             break;
         }
         case DynOp::text_write: {
-            auto* key = order_key();
+            // A write with an index holding x or z bits is ignored (7.8.6).
+            const auto [known, key] = checked_key();
+            dyn_warn_when(builder_.CreateNot(known), at, DynFailure::invalid_write_index);
+            auto* writing = dyn_when(known);
             auto* position = dyn_lower_key(header, key);
             auto* present = dyn_key_present(header, position, key);
             auto* insert = dyn_when(builder_.CreateNot(present));
@@ -8867,6 +8898,7 @@ private:
             dyn_end(insert);
             text_from_register(dyn_element_address(header, position), dyn_header(inst.z),
                 inst.offset, at);
+            dyn_end(writing);
             break;
         }
         case DynOp::text_default: {
@@ -8878,23 +8910,29 @@ private:
                 flags);
             break;
         }
-        case DynOp::assoc_read:
         case DynOp::exists: {
             auto* key = order_key();
             auto* position = dyn_lower_key(header, key);
             auto* present = dyn_key_present(header, position, key);
-            if (op == DynOp::exists) {
-                store_register(inst.d, { builder_.CreateZExt(present, i64_), constant(0U) });
-                break;
-            }
+            store_register(inst.d, { builder_.CreateZExt(present, i64_), constant(0U) });
+            break;
+        }
+        case DynOp::assoc_read: {
+            const auto [known, key] = checked_key();
+            auto* position = dyn_lower_key(header, key);
+            auto* present = builder_.CreateAnd(known, dyn_key_present(header, position, key));
             store_register(inst.d, dyn_choose(present,
                 [&] { return dyn_load_element(header, position); }, fill()));
+            warn_read(known, present);
             break;
         }
         case DynOp::assoc_write: {
+            // A write with an index holding x or z bits is ignored (7.8.6).
+            const auto [known, key] = checked_key();
+            dyn_warn_when(builder_.CreateNot(known), at, DynFailure::invalid_write_index);
+            auto* writing = dyn_when(known);
             const auto source = load_register(inst.x);
             dyn_check_value(header, source, at, DynFailure::write_mismatch);
-            auto* key = order_key();
             auto* position = dyn_lower_key(header, key);
             auto* present = dyn_key_present(header, position, key);
             auto* overwrite = dyn_when(present);
@@ -8915,6 +8953,7 @@ private:
             dyn_store_element(header, position, source);
             dyn_store(header, dyn_size, builder_.CreateAdd(size, constant(1U)));
             dyn_end(insert);
+            dyn_end(writing);
             break;
         }
         case DynOp::assoc_delete: {
@@ -9131,6 +9170,31 @@ private:
     {
         builder_.CreateBr(join);
         builder_.SetInsertPoint(join);
+    }
+
+    /// The warning `warning` (a DynFailure that dyn_warning holds) of a
+    /// completed KOp::dyn when `condition` holds: fsim_sk_dyn_warn.
+    void dyn_warn_when(llvm::Value* condition, const std::uint32_t at,
+        const detail::DynFailure warning)
+    {
+        auto* warned = dyn_when(condition);
+        auto* type = llvm::FunctionType::get(
+            llvm::Type::getVoidTy(context_), { ptr_, i32_, i32_ }, false);
+        builder_.CreateCall(type, helper_symbol("fsim_sk_dyn_warn", type),
+            { frame_, llvm::ConstantInt::get(i32_, at),
+                llvm::ConstantInt::get(i32_,
+                    detail::dyn_fail_first + static_cast<std::uint32_t>(warning)) });
+        check_status();
+        dyn_end(warned);
+    }
+
+    /// True when the associative array has a `default:` value (7.9.11).
+    [[nodiscard]] llvm::Value* dyn_user_default(llvm::Value* header)
+    {
+        return builder_.CreateICmpNE(
+            builder_.CreateAnd(builder_.CreateLoad(i32_, dyn_address(header, dyn_flags)),
+                llvm::ConstantInt::get(i32_, dyn_default_flag)),
+            llvm::ConstantInt::get(i32_, 0U));
     }
 
     /// A write's value check: a two-state element takes no unknown bits.
@@ -10615,6 +10679,14 @@ private:
             store_register(inst.d, dyn_choose(present,
                 [&] { return dyn_load_element(header, position); },
                 dyn_pair(header, dyn_fill)));
+            // A missing key reads the `default:` value without a warning,
+            // else the nonexistent-entry value with one (7.8.6); an
+            // update's allocating read has none (7.8.7).
+            if ((inst.imm_b & detail::dyn_read_allocating) == 0U) {
+                dyn_warn_when(builder_.CreateNot(builder_.CreateOr(present,
+                                  dyn_user_default(header))),
+                    at, DynFailure::missing_entry);
+            }
             break;
         case DynOp::text_read:
             // A missing key reads the `default:` text (empty until set).
@@ -10622,6 +10694,9 @@ private:
                                  dyn_element_address(header, position),
                                  dyn_address(header, dyn_fill)),
                 file, inst.offset, at);
+            dyn_warn_when(builder_.CreateNot(builder_.CreateOr(present,
+                              dyn_user_default(header))),
+                at, DynFailure::missing_entry);
             break;
         case DynOp::exists:
             store_register(inst.d, { builder_.CreateZExt(present, i64_), constant(0U) });
@@ -21197,6 +21272,7 @@ private:
         add("fsim_sk_sva_report_grow", helpers.sva_report_grow);
         add("fsim_sk_dyn_grow", helpers.dyn_grow);
         add("fsim_sk_dyn_reshape", helpers.dyn_reshape);
+        add("fsim_sk_dyn_warn", helpers.dyn_warn);
         add("fsim_sk_str_reserve", helpers.str_reserve);
         add("fsim_sk_str_nba", helpers.str_nba);
         add("fsim_sk_dyn_text_reserve", helpers.dyn_text_reserve);

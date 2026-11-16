@@ -2419,6 +2419,12 @@ void Interpreter::Impl::write_container_object_element_value(
                 "direct associative object element writes require an "
                 "integral key");
         }
+        // A write with an index holding x or z bits is ignored (IEEE
+        // 1800-2023 7.8.6).
+        if (associative_index_invalid(target.type, index)) {
+            warn_process(process, associative_invalid_write_warning);
+            return;
+        }
         auto replacement = target;
         const auto key = associative_key(
             process, instruction, replacement.type, index);
@@ -2710,7 +2716,13 @@ void Interpreter::Impl::write_container_object_dynamic_part_element_value(
 PackedLogic4 default_container_element(
     const ContainerType& type)
 {
-    return PackedLogic4(type.element_width, Logic4::zero);
+    // The value read from a nonexistent entry (IEEE 1800-2023 Table 7-1):
+    // 'x for a 4-state integral element, '0 for a 2-state one (an
+    // enumeration's base type decides), 0.0 for a real.
+    const bool zero = type.two_state
+        || type.element_kind == ContainerElementKind::Scalar;
+    return PackedLogic4(
+        type.element_width, zero ? Logic4::zero : Logic4::x);
 }
 
 void resize_container_value(

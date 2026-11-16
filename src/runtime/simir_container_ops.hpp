@@ -13,6 +13,18 @@ namespace fsim::runtime::simir {
 /// The register file the register-only container operations run against.
 /// The reference interpreter and the static kernel each implement it over
 /// their own storage, so both execute the same operation code.
+// The warnings of associative-array reads and writes (IEEE 1800-2023
+// 7.8.6); the static kernel reports the same text (dyn_fail_message).
+inline constexpr const char* associative_missing_entry_warning
+    = "read of a nonexistent associative-array entry returns the element "
+      "type's nonexistent-entry value (IEEE 1800-2023 7.8.6)";
+inline constexpr const char* associative_invalid_read_warning
+    = "associative-array read with an index holding x or z bits returns "
+      "the element type's nonexistent-entry value (IEEE 1800-2023 7.8.6)";
+inline constexpr const char* associative_invalid_write_warning
+    = "associative-array write with an index holding x or z bits is "
+      "ignored (IEEE 1800-2023 7.8.6)";
+
 class ContainerRegisterAccess {
 public:
     virtual ~ContainerRegisterAccess() = default;
@@ -42,6 +54,9 @@ public:
     /// The next draw of the executing process's random stream (the
     /// OrderContainer shuffle).
     [[nodiscard]] virtual std::uint32_t next_random() = 0;
+
+    /// A run-time warning of the executing process; the operation goes on.
+    virtual void warn(std::string_view message) = 0;
 };
 
 // Register-only SystemVerilog container operations. Each runs the

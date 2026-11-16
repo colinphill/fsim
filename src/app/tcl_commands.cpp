@@ -450,9 +450,11 @@ namespace fsim::app::tcl_detail {
                 const runtime::simir::SourceLocation& source,
                 const runtime::SimulationTick,
                 const std::uint64_t) {
-                context.output << source.path << ':' << source.line << ':'
-                               << source.column << ": "
-                               << assertion_severity_name(severity)
+                if (!source.path.empty()) {
+                    context.output << source.path << ':' << source.line << ':'
+                                   << source.column << ": ";
+                }
+                context.output << assertion_severity_name(severity)
                                << "[FSIM-HDL-REPORT]: " << message << '\n';
                 diagnostic::SourceSpan span;
                 span.path = source.path;

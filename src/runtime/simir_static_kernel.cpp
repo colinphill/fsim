@@ -3130,6 +3130,20 @@ void Interpreter::Impl::StaticKernel::fail(const std::uint32_t member,
         members_[member].original_instruction(instruction), message };
 }
 
+void Interpreter::Impl::StaticKernel::warn(const std::uint32_t member,
+    const std::string_view message) const
+{
+    if (impl_.report_hook) {
+        impl_.report_hook(members_[member].process,
+            std::string { message } + "; process '"
+                + std::string {
+                    impl_.processes.program_view(members_[member].process).name() }
+                + "'",
+            AssertionSeverity::warning, SourceLocation { }, kernel_now(),
+            kernel_delta());
+    }
+}
+
 void Interpreter::Impl::StaticKernel::fail_unsettled(
     const std::uint32_t member) const
 {
