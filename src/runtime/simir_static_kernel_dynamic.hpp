@@ -19,6 +19,16 @@
 
 namespace fsim::runtime::simir::static_kernel_detail {
 
+/// StaticKernelDynamicContainer::flags beyond two-state (bit 0) and queue
+/// (bit 1).
+inline constexpr std::uint32_t dynamic_associative_flag = 4U;
+inline constexpr std::uint32_t dynamic_default_flag = 8U;
+inline constexpr std::uint32_t dynamic_signed_keys_flag = 16U;
+inline constexpr std::uint32_t dynamic_sparse_flag = 32U;
+inline constexpr std::uint32_t dynamic_dense_flag = 64U;
+/// Scalar (real) elements, which start at zero.
+inline constexpr std::uint32_t dynamic_scalar_flag = 128U;
+
 /// Whether the kernel holds a container register of this type in a
 /// StaticKernelDynamicContainer: a queue or dynamic array of packed or
 /// scalar elements of at most 64 bits.
@@ -47,6 +57,12 @@ inline void set_dynamic_element(StaticKernelDynamicContainer& container,
     container.data[2U * slot] = value.a;
     container.data[2U * slot + 1U] = value.b;
 }
+
+/// The sparse array `target` takes the storage layout (dense image or
+/// stored elements) and capacity of `source`, of its type, for a whole
+/// copy; its elements are not copied. Throws std::bad_alloc.
+void reshape_dynamic(StaticKernelDynamicContainer& target,
+    const StaticKernelDynamicContainer& source);
 
 /// The reference's value of the container (type `type`).
 [[nodiscard]] ContainerValue dynamic_value(

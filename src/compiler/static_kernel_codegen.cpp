@@ -5451,7 +5451,9 @@ private:
                 if (detail::dyn_reads_source(op)) {
                     reads.push_back(inst.x);
                 }
-                if (detail::dyn_reads_index(op)) {
+                // A traversal also writes its key register y, which stays in
+                // memory (pinned below); a missing key leaves it unchanged.
+                if (detail::dyn_reads_index(op) || detail::dyn_writes_index(op)) {
                     reads.push_back(inst.y);
                 }
                 writes = detail::dyn_writes_destination(op);
@@ -5551,6 +5553,9 @@ private:
                 for (std::uint32_t slot = 0U; slot < inst.z; ++slot) {
                     pin(inst.y + slot);
                 }
+            } else if (inst.op == KOp::dyn
+                && detail::dyn_writes_index(static_cast<detail::DynOp>(inst.sub))) {
+                pin(inst.y);
             } else if (inst.op == KOp::branch) {
                 leader[std::min(inst.y, size)] = 1U;
                 leader[std::min(inst.z, size)] = 1U;
@@ -7112,6 +7117,546 @@ private:
     static constexpr std::uint64_t dyn_fill = 48U;
     static constexpr std::uint64_t dyn_empty = 64U;
     static constexpr std::uint64_t dyn_flags = 84U;
+    static constexpr std::uint64_t dyn_keys = 88U;
+    static_assert(offsetof(runtime::simir::StaticKernelDynamicContainer, data) == dyn_data);
+    static_assert(offsetof(runtime::simir::StaticKernelDynamicContainer, size) == dyn_size);
+    static_assert(offsetof(runtime::simir::StaticKernelDynamicContainer, capacity)
+        == dyn_capacity);
+    static_assert(offsetof(runtime::simir::StaticKernelDynamicContainer, head) == dyn_head);
+    static_assert(offsetof(runtime::simir::StaticKernelDynamicContainer, maximum)
+        == dyn_maximum);
+    static_assert(offsetof(runtime::simir::StaticKernelDynamicContainer, limit) == dyn_limit);
+    static_assert(offsetof(runtime::simir::StaticKernelDynamicContainer, fill_a) == dyn_fill);
+    static_assert(offsetof(runtime::simir::StaticKernelDynamicContainer, empty_a)
+        == dyn_empty);
+    static_assert(offsetof(runtime::simir::StaticKernelDynamicContainer, flags) == dyn_flags);
+    static_assert(offsetof(runtime::simir::StaticKernelDynamicContainer, keys) == dyn_keys);
+    /// StaticKernelDynamicContainer::flags: a `default:` is set
+    /// (dynamic_default_flag).
+    static constexpr std::uint64_t dyn_default_flag = 8U;
+
+    /// Key `ordinal`'s address in an associative array's sorted keys.
+    [[nodiscard]] llvm::Value* dyn_key_address(llvm::Value* header, llvm::Value* ordinal)
+    {
+        auto* keys = builder_.CreateLoad(ptr_, dyn_address(header, dyn_keys));
+        return builder_.CreateInBoundsGEP(i64_, keys, ordinal);
+    }
+
+    /// The order key of the index value `bits` (`width` bits; signed:
+    /// sign extended, its sign bit flipped), as the runtime keeps keys.
+    [[nodiscard]] llvm::Value* dyn_order_key(llvm::Value* bits, const std::uint32_t width,
+        const bool is_signed)
+    {
+        if (!is_signed) {
+            return bits;
+        }
+        return builder_.CreateXor(sign_extend(bits, width),
+            constant(std::uint64_t { 1 } << 63U));
+    }
+
+    [[nodiscard]] llvm::Value* dyn_key_value(llvm::Value* key, const std::uint32_t width,
+        const bool is_signed)
+    {
+        auto* value = is_signed
+            ? builder_.CreateXor(key, constant(std::uint64_t { 1 } << 63U)) : key;
+        return width >= 64U ? value
+                            : builder_.CreateAnd(value,
+                                  constant((std::uint64_t { 1 } << width) - 1U));
+    }
+
+    /// The position of the first key not below `key` (an inline binary
+    /// search over the sorted keys).
+    [[nodiscard]] llvm::Value* dyn_lower_key(llvm::Value* header, llvm::Value* key)
+    {
+        auto* before = builder_.GetInsertBlock();
+        auto* size = dyn_load(header, dyn_size);
+        auto* head = llvm::BasicBlock::Create(context_, "dyn_search", &function_);
+        auto* step = llvm::BasicBlock::Create(context_, "dyn_probe", &function_);
+        auto* latch = llvm::BasicBlock::Create(context_, "dyn_narrow", &function_);
+        auto* done = llvm::BasicBlock::Create(context_, "dyn_found", &function_);
+        builder_.CreateBr(head);
+        builder_.SetInsertPoint(head);
+        llvm::BranchInst::Create(head, latch);
+        auto* low = loop_phi(i64_, constant(0U), before, latch);
+        auto* high = loop_phi(i64_, size, before, latch);
+        builder_.CreateCondBr(builder_.CreateICmpULT(low, high), step, done);
+        builder_.SetInsertPoint(step);
+        auto* middle = builder_.CreateAdd(low,
+            builder_.CreateLShr(builder_.CreateSub(high, low), constant(1U)));
+        auto* below = builder_.CreateICmpULT(
+            builder_.CreateLoad(i64_, dyn_key_address(header, middle)), key);
+        auto* next_low = builder_.CreateSelect(below,
+            builder_.CreateAdd(middle, constant(1U)), low);
+        auto* next_high = builder_.CreateSelect(below, high, middle);
+        builder_.CreateBr(latch);
+        close_loop_phi(low, next_low);
+        close_loop_phi(high, next_high);
+        builder_.SetInsertPoint(done);
+        return low;
+    }
+
+    /// Whether position `at` (<= size) holds `key`; the key is loaded only
+    /// below the size.
+    [[nodiscard]] llvm::Value* dyn_key_present(llvm::Value* header, llvm::Value* at,
+        llvm::Value* key)
+    {
+        auto* before = builder_.GetInsertBlock();
+        auto* inside = llvm::BasicBlock::Create(context_, "dyn_key", &function_);
+        auto* join = llvm::BasicBlock::Create(context_, "dyn_keyed", &function_);
+        builder_.CreateCondBr(builder_.CreateICmpULT(at, dyn_load(header, dyn_size)),
+            inside, join);
+        builder_.SetInsertPoint(inside);
+        auto* equal = builder_.CreateICmpEQ(
+            builder_.CreateLoad(i64_, dyn_key_address(header, at)), key);
+        auto* compared = builder_.GetInsertBlock();
+        builder_.CreateBr(join);
+        builder_.SetInsertPoint(join);
+        auto* present = builder_.CreatePHI(llvm::Type::getInt1Ty(context_), 2U);
+        present->addIncoming(llvm::ConstantInt::getFalse(context_), before);
+        present->addIncoming(equal, compared);
+        return present;
+    }
+
+    /// A Pair chosen by `condition`: `when_true` is built (and its loads
+    /// made) only when the condition holds.
+    template <typename Build>
+    [[nodiscard]] Pair dyn_choose(llvm::Value* condition, Build&& when_true,
+        const Pair when_false)
+    {
+        auto* before = builder_.GetInsertBlock();
+        auto* taken = llvm::BasicBlock::Create(context_, "dyn_take", &function_);
+        auto* join = llvm::BasicBlock::Create(context_, "dyn_taken", &function_);
+        builder_.CreateCondBr(condition, taken, join);
+        builder_.SetInsertPoint(taken);
+        const Pair value = when_true();
+        auto* built = builder_.GetInsertBlock();
+        builder_.CreateBr(join);
+        builder_.SetInsertPoint(join);
+        auto* a = builder_.CreatePHI(i64_, 2U);
+        a->addIncoming(when_false.a, before);
+        a->addIncoming(value.a, built);
+        auto* b = builder_.CreatePHI(i64_, 2U);
+        b->addIncoming(when_false.b, before);
+        b->addIncoming(value.b, built);
+        return { a, b };
+    }
+
+    static constexpr std::uint64_t dyn_threshold = 104U;
+    static_assert(offsetof(runtime::simir::StaticKernelDynamicContainer, threshold)
+        == dyn_threshold);
+    /// StaticKernelDynamicContainer::flags: a sparse array's dense image
+    /// (dynamic_dense_flag).
+    static constexpr std::uint64_t dyn_dense_flag = 64U;
+
+    [[nodiscard]] llvm::Value* dyn_flag_set(llvm::Value* header, const std::uint64_t flag)
+    {
+        return builder_.CreateICmpNE(
+            builder_.CreateAnd(builder_.CreateLoad(i32_, dyn_address(header, dyn_flags)),
+                llvm::ConstantInt::get(i32_, flag)),
+            llvm::ConstantInt::get(i32_, 0U));
+    }
+
+    /// The `width`-bit field at bit `position` of the plane at `plane`
+    /// (words); `straddles` when the field may cross a word boundary.
+    [[nodiscard]] llvm::Value* dyn_plane_load(llvm::Value* plane, llvm::Value* position,
+        const std::uint32_t width)
+    {
+        auto* word = builder_.CreateLShr(position, constant(6U));
+        auto* shift = builder_.CreateAnd(position, constant(63U));
+        auto* low = builder_.CreateLShr(
+            builder_.CreateLoad(i64_, builder_.CreateInBoundsGEP(i64_, plane, word)), shift);
+        llvm::Value* bits = low;
+        if (64U % width != 0U) {
+            auto* crosses = builder_.CreateICmpUGT(builder_.CreateAdd(shift, constant(width)),
+                constant(64U));
+            const auto high = dyn_choose(crosses, [&] {
+                auto* next = builder_.CreateLoad(i64_, builder_.CreateInBoundsGEP(i64_, plane,
+                    builder_.CreateAdd(word, constant(1U))));
+                return Pair { builder_.CreateShl(next, builder_.CreateSub(constant(64U), shift)),
+                    constant(0U) };
+            }, { constant(0U), constant(0U) });
+            bits = builder_.CreateOr(low, high.a);
+        }
+        return width >= 64U ? bits
+                            : builder_.CreateAnd(bits,
+                                  constant((std::uint64_t { 1 } << width) - 1U));
+    }
+
+    void dyn_plane_store(llvm::Value* plane, llvm::Value* position, const std::uint32_t width,
+        llvm::Value* value)
+    {
+        const auto mask = width >= 64U ? ~std::uint64_t { 0 }
+                                       : (std::uint64_t { 1 } << width) - 1U;
+        auto* bits = builder_.CreateAnd(value, constant(mask));
+        auto* word = builder_.CreateLShr(position, constant(6U));
+        auto* shift = builder_.CreateAnd(position, constant(63U));
+        auto* address = builder_.CreateInBoundsGEP(i64_, plane, word);
+        auto* old = builder_.CreateLoad(i64_, address);
+        builder_.CreateStore(
+            builder_.CreateOr(builder_.CreateAnd(old,
+                                  builder_.CreateNot(builder_.CreateShl(constant(mask), shift))),
+                builder_.CreateShl(bits, shift)),
+            address);
+        if (64U % width != 0U) {
+            auto* crosses = builder_.CreateICmpUGT(builder_.CreateAdd(shift, constant(width)),
+                constant(64U));
+            auto* spill = dyn_when(crosses);
+            auto* next_address = builder_.CreateInBoundsGEP(i64_, plane,
+                builder_.CreateAdd(word, constant(1U)));
+            auto* back = builder_.CreateSub(constant(64U), shift);
+            auto* high_mask = builder_.CreateLShr(constant(mask), back);
+            builder_.CreateStore(
+                builder_.CreateOr(builder_.CreateAnd(builder_.CreateLoad(i64_, next_address),
+                                      builder_.CreateNot(high_mask)),
+                    builder_.CreateLShr(bits, back)),
+                next_address);
+            dyn_end(spill);
+        }
+    }
+
+    /// KOp::dyn on a sparse fixed array (imm_a dyn_layout_sparse): element
+    /// reads and writes and whole copies, in either layout.
+    void emit_dyn_sparse(const KInst& inst, const std::uint32_t at, llvm::Value* header)
+    {
+        using detail::DynFailure;
+        using detail::DynOp;
+        const auto op = static_cast<DynOp>(inst.sub);
+        const auto element_width = inst.offset;
+        if (op == DynOp::copy) {
+            auto* other = dyn_header(inst.z);
+            auto* distinct = dyn_when(builder_.CreateICmpNE(other, header));
+            auto* type = llvm::FunctionType::get(i32_, { ptr_, i32_, ptr_, ptr_ }, false);
+            builder_.CreateCall(type, helper_symbol("fsim_sk_dyn_reshape", type),
+                { frame_, llvm::ConstantInt::get(i32_, at), header, other });
+            check_status();
+            auto* dense = dyn_flag_set(other, dyn_dense_flag);
+            auto* image = dyn_when(dense);
+            auto* words = builder_.CreateShl(dyn_load(other, dyn_capacity), constant(1U));
+            auto* source_data = builder_.CreateLoad(ptr_, dyn_address(other, dyn_data));
+            auto* target_data = builder_.CreateLoad(ptr_, dyn_address(header, dyn_data));
+            dyn_loop(constant(0U), words, false, [&](llvm::Value* word) {
+                builder_.CreateStore(
+                    builder_.CreateLoad(i64_, builder_.CreateInBoundsGEP(i64_, source_data, word)),
+                    builder_.CreateInBoundsGEP(i64_, target_data, word));
+            });
+            dyn_end(image);
+            auto* stored = dyn_when(builder_.CreateNot(dense));
+            auto* count = dyn_load(other, dyn_size);
+            dyn_loop(constant(0U), count, false, [&](llvm::Value* ordinal) {
+                dyn_store_element(header, ordinal, dyn_load_element(other, ordinal));
+                builder_.CreateStore(builder_.CreateLoad(i64_, dyn_key_address(other, ordinal)),
+                    dyn_key_address(header, ordinal));
+            });
+            dyn_store(header, dyn_size, count);
+            dyn_end(stored);
+            // The background (a `default:` value) goes with the elements.
+            dyn_store(header, dyn_fill, dyn_load(other, dyn_fill));
+            dyn_store(header, dyn_fill + 8U, dyn_load(other, dyn_fill + 8U));
+            auto* flags = dyn_address(header, dyn_flags);
+            auto* default_bit = llvm::ConstantInt::get(i32_, dyn_default_flag);
+            builder_.CreateStore(
+                builder_.CreateOr(builder_.CreateAnd(builder_.CreateLoad(i32_, flags),
+                                      builder_.CreateNot(default_bit)),
+                    builder_.CreateAnd(builder_.CreateLoad(i32_, dyn_address(other, dyn_flags)),
+                        default_bit)),
+                flags);
+            dyn_end(distinct);
+            return;
+        }
+        if (op != DynOp::read && op != DynOp::write) {
+            throw std::logic_error("static kernel sparse array operation has no inline form");
+        }
+        const bool writing = op == DynOp::write;
+        const auto width = inst.width;
+        const auto index = load_register(inst.y);
+        const auto index_mask = width >= 64U ? ~std::uint64_t { 0 }
+                                             : (std::uint64_t { 1 } << width) - 1U;
+        auto* known = builder_.CreateICmpEQ(builder_.CreateAnd(index.b, constant(index_mask)),
+            constant(0U));
+        auto* value = sign_extend(index.a, width);
+        auto* count = dyn_load(header, dyn_maximum);
+        llvm::Value* ordinal = nullptr;
+        llvm::Value* valid = nullptr;
+        if ((inst.imm_a & detail::dyn_layout_linear) != 0U) {
+            auto* nonnegative = builder_.CreateICmpSGE(value, constant(0U));
+            auto* inside = builder_.CreateICmpULT(value, count);
+            ordinal = value;
+            if (writing) {
+                dyn_check(known, at, DynFailure::linear_unknown);
+                dyn_check(nonnegative, at, DynFailure::linear_negative);
+                dyn_check(inside, at, DynFailure::linear_range);
+            } else {
+                valid = builder_.CreateAnd(known, builder_.CreateAnd(nonnegative, inside));
+            }
+        } else {
+            const auto left = static_cast<std::int32_t>(static_cast<std::uint32_t>(inst.imm_b));
+            const auto right
+                = static_cast<std::int32_t>(static_cast<std::uint32_t>(inst.imm_b >> 32U));
+            const auto signed_constant = [&](const std::int64_t number) {
+                return constant(static_cast<std::uint64_t>(number));
+            };
+            auto* in_range = builder_.CreateAnd(
+                builder_.CreateICmpSGE(value, signed_constant(std::min(left, right))),
+                builder_.CreateICmpSLE(value, signed_constant(std::max(left, right))));
+            ordinal = left >= right ? builder_.CreateSub(signed_constant(left), value)
+                                    : builder_.CreateSub(value, signed_constant(left));
+            auto* below_count = builder_.CreateICmpULT(ordinal, count);
+            if (writing) {
+                auto* fits = builder_.CreateAnd(known,
+                    builder_.CreateAnd(
+                        builder_.CreateICmpSGE(value,
+                            signed_constant(std::numeric_limits<std::int32_t>::min())),
+                        builder_.CreateICmpSLE(value,
+                            signed_constant(std::numeric_limits<std::int32_t>::max()))));
+                dyn_check(fits, at, DynFailure::fixed_unknown);
+                dyn_check(in_range, at, DynFailure::fixed_range);
+                dyn_check(below_count, at, DynFailure::linear_range);
+            } else {
+                valid = builder_.CreateAnd(known, builder_.CreateAnd(in_range, below_count));
+            }
+        }
+        const auto dense_element = [&] {
+            auto* data = builder_.CreateLoad(ptr_, dyn_address(header, dyn_data));
+            auto* unknown = builder_.CreateInBoundsGEP(i64_, data, dyn_load(header, dyn_capacity));
+            auto* position = builder_.CreateMul(ordinal, constant(element_width));
+            return Pair { dyn_plane_load(data, position, element_width),
+                dyn_plane_load(unknown, position, element_width) };
+        };
+        if (!writing) {
+            const auto empty = dyn_pair(header, dyn_empty);
+            store_register(inst.d, dyn_choose(valid, [&] {
+                auto* dense = dyn_flag_set(header, dyn_dense_flag);
+                return dyn_choose(dense, dense_element, [&] {
+                    auto* position = dyn_lower_key(header, ordinal);
+                    auto* present = dyn_key_present(header, position, ordinal);
+                    return dyn_choose(present,
+                        [&] { return dyn_load_element(header, position); },
+                        dyn_pair(header, dyn_fill));
+                }());
+            }, empty));
+            return;
+        }
+        const auto source = load_register(inst.x);
+        dyn_check_value(header, source, at, DynFailure::write_mismatch);
+        // The dense image once enough elements are stored, else room for one
+        // more (the only runtime call).
+        {
+            auto* size = dyn_load(header, dyn_size);
+            auto* needs = builder_.CreateAnd(builder_.CreateNot(dyn_flag_set(header, dyn_dense_flag)),
+                builder_.CreateOr(builder_.CreateICmpUGE(size, dyn_load(header, dyn_threshold)),
+                    builder_.CreateICmpUGE(size, dyn_load(header, dyn_capacity))));
+            auto* grow = dyn_when(needs);
+            auto* type = llvm::FunctionType::get(i32_, { ptr_, i32_, ptr_, i64_ }, false);
+            builder_.CreateCall(type, helper_symbol("fsim_sk_dyn_grow", type),
+                { frame_, llvm::ConstantInt::get(i32_, at), header,
+                    builder_.CreateAdd(size, constant(1U)) });
+            check_status();
+            dyn_end(grow);
+        }
+        auto* dense = dyn_flag_set(header, dyn_dense_flag);
+        auto* image = dyn_when(dense);
+        {
+            auto* data = builder_.CreateLoad(ptr_, dyn_address(header, dyn_data));
+            auto* unknown = builder_.CreateInBoundsGEP(i64_, data, dyn_load(header, dyn_capacity));
+            auto* position = builder_.CreateMul(ordinal, constant(element_width));
+            dyn_plane_store(data, position, element_width, source.a);
+            dyn_plane_store(unknown, position, element_width, source.b);
+        }
+        dyn_end(image);
+        auto* stored = dyn_when(builder_.CreateNot(dense));
+        {
+            const auto mask = element_width >= 64U ? ~std::uint64_t { 0 }
+                                                   : (std::uint64_t { 1 } << element_width) - 1U;
+            const auto fill = dyn_pair(header, dyn_fill);
+            auto* background = builder_.CreateAnd(
+                builder_.CreateICmpEQ(builder_.CreateAnd(source.a, constant(mask)),
+                    builder_.CreateAnd(fill.a, constant(mask))),
+                builder_.CreateICmpEQ(builder_.CreateAnd(source.b, constant(mask)),
+                    builder_.CreateAnd(fill.b, constant(mask))));
+            auto* size = dyn_load(header, dyn_size);
+            auto* position = dyn_lower_key(header, ordinal);
+            auto* present = dyn_key_present(header, position, ordinal);
+            // A background element is not stored (write_sparse_element).
+            auto* removing = dyn_when(builder_.CreateAnd(background, present));
+            auto* last = builder_.CreateSub(size, constant(1U));
+            dyn_loop(position, last, false, [&](llvm::Value* index_at) {
+                auto* above = builder_.CreateAdd(index_at, constant(1U));
+                builder_.CreateStore(builder_.CreateLoad(i64_, dyn_key_address(header, above)),
+                    dyn_key_address(header, index_at));
+                dyn_store_element(header, index_at, dyn_load_element(header, above));
+            });
+            dyn_store(header, dyn_size, last);
+            dyn_end(removing);
+            auto* overwrite = dyn_when(builder_.CreateAnd(builder_.CreateNot(background), present));
+            dyn_store_element(header, position, source);
+            dyn_end(overwrite);
+            auto* inserting = dyn_when(builder_.CreateAnd(builder_.CreateNot(background),
+                builder_.CreateNot(present)));
+            dyn_check(builder_.CreateICmpULT(size, dyn_load(header, dyn_limit)), at,
+                DynFailure::sparse_budget);
+            dyn_loop(position, size, true, [&](llvm::Value* index_at) {
+                auto* above = builder_.CreateAdd(index_at, constant(1U));
+                builder_.CreateStore(builder_.CreateLoad(i64_, dyn_key_address(header, index_at)),
+                    dyn_key_address(header, above));
+                dyn_store_element(header, above, dyn_load_element(header, index_at));
+            });
+            builder_.CreateStore(ordinal, dyn_key_address(header, position));
+            dyn_store_element(header, position, source);
+            dyn_store(header, dyn_size, builder_.CreateAdd(size, constant(1U)));
+            dyn_end(inserting);
+        }
+        dyn_end(stored);
+    }
+
+    /// KOp::dyn on an associative array with integral keys (imm_a bit 0).
+    void emit_dyn_associative(const KInst& inst, const std::uint32_t at,
+        llvm::Value* header)
+    {
+        using detail::DynFailure;
+        using detail::DynOp;
+        const auto op = static_cast<DynOp>(inst.sub);
+        const bool signed_keys = (inst.imm_a & 2U) != 0U;
+        const auto width = inst.width;
+        const auto key_mask = width >= 64U ? ~std::uint64_t { 0 }
+                                           : (std::uint64_t { 1 } << width) - 1U;
+        // The key operand as an order key, after the reference's check that
+        // it is known.
+        const auto order_key = [&]() {
+            const auto index = load_register(inst.y);
+            dyn_check(builder_.CreateICmpEQ(builder_.CreateAnd(index.b, constant(key_mask)),
+                          constant(0U)),
+                at, DynFailure::key_unknown);
+            return dyn_order_key(builder_.CreateAnd(index.a, constant(key_mask)), width,
+                signed_keys);
+        };
+        const auto fill = [&]() { return dyn_pair(header, dyn_fill); };
+        switch (op) {
+        case DynOp::assoc_read:
+        case DynOp::exists: {
+            auto* key = order_key();
+            auto* position = dyn_lower_key(header, key);
+            auto* present = dyn_key_present(header, position, key);
+            if (op == DynOp::exists) {
+                store_register(inst.d, { builder_.CreateZExt(present, i64_), constant(0U) });
+                break;
+            }
+            store_register(inst.d, dyn_choose(present,
+                [&] { return dyn_load_element(header, position); }, fill()));
+            break;
+        }
+        case DynOp::assoc_write: {
+            const auto source = load_register(inst.x);
+            dyn_check_value(header, source, at, DynFailure::write_mismatch);
+            auto* key = order_key();
+            auto* position = dyn_lower_key(header, key);
+            auto* present = dyn_key_present(header, position, key);
+            auto* overwrite = dyn_when(present);
+            dyn_store_element(header, position, source);
+            dyn_end(overwrite);
+            auto* insert = dyn_when(builder_.CreateNot(present));
+            auto* size = dyn_load(header, dyn_size);
+            dyn_check(builder_.CreateICmpULT(size, dyn_load(header, dyn_limit)), at,
+                DynFailure::assoc_budget);
+            dyn_reserve(header, builder_.CreateAdd(size, constant(1U)), at);
+            dyn_loop(position, size, true, [&](llvm::Value* ordinal) {
+                auto* above = builder_.CreateAdd(ordinal, constant(1U));
+                builder_.CreateStore(builder_.CreateLoad(i64_, dyn_key_address(header, ordinal)),
+                    dyn_key_address(header, above));
+                dyn_store_element(header, above, dyn_load_element(header, ordinal));
+            });
+            builder_.CreateStore(key, dyn_key_address(header, position));
+            dyn_store_element(header, position, source);
+            dyn_store(header, dyn_size, builder_.CreateAdd(size, constant(1U)));
+            dyn_end(insert);
+            break;
+        }
+        case DynOp::assoc_delete: {
+            auto* key = order_key();
+            auto* position = dyn_lower_key(header, key);
+            auto* present = dyn_key_present(header, position, key);
+            auto* removing = dyn_when(present);
+            auto* last = builder_.CreateSub(dyn_load(header, dyn_size), constant(1U));
+            dyn_loop(position, last, false, [&](llvm::Value* ordinal) {
+                auto* above = builder_.CreateAdd(ordinal, constant(1U));
+                builder_.CreateStore(builder_.CreateLoad(i64_, dyn_key_address(header, above)),
+                    dyn_key_address(header, ordinal));
+                dyn_store_element(header, ordinal, dyn_load_element(header, above));
+            });
+            dyn_store(header, dyn_size, last);
+            dyn_end(removing);
+            break;
+        }
+        case DynOp::assoc_default: {
+            const auto source = load_register(inst.x);
+            dyn_check_value(header, source, at, DynFailure::write_mismatch);
+            dyn_store(header, dyn_fill, source.a);
+            dyn_store(header, dyn_fill + 8U, source.b);
+            auto* flags = dyn_address(header, dyn_flags);
+            builder_.CreateStore(builder_.CreateOr(builder_.CreateLoad(i32_, flags),
+                                     llvm::ConstantInt::get(i32_, dyn_default_flag)),
+                flags);
+            break;
+        }
+        case DynOp::first:
+        case DynOp::last:
+        case DynOp::next:
+        case DynOp::prev: {
+            // An empty array selects nothing and reads no key; the key
+            // register changes only when a key is selected (7.9.4 - 7.9.7).
+            const auto old_key = load_register(inst.y);
+            auto* size = dyn_load(header, dyn_size);
+            auto* before = builder_.GetInsertBlock();
+            auto* searching = llvm::BasicBlock::Create(context_, "dyn_walk", &function_);
+            auto* join = llvm::BasicBlock::Create(context_, "dyn_walked", &function_);
+            builder_.CreateCondBr(builder_.CreateICmpNE(size, constant(0U)), searching, join);
+            builder_.SetInsertPoint(searching);
+            llvm::Value* selected = nullptr;
+            llvm::Value* chosen = nullptr;
+            if (op == DynOp::first) {
+                selected = llvm::ConstantInt::getTrue(context_);
+                chosen = constant(0U);
+            } else if (op == DynOp::last) {
+                selected = llvm::ConstantInt::getTrue(context_);
+                chosen = builder_.CreateSub(size, constant(1U));
+            } else {
+                auto* key = order_key();
+                auto* position = dyn_lower_key(header, key);
+                if (op == DynOp::next) {
+                    auto* present = dyn_key_present(header, position, key);
+                    chosen = builder_.CreateSelect(present,
+                        builder_.CreateAdd(position, constant(1U)), position);
+                    selected = builder_.CreateICmpULT(chosen, size);
+                } else {
+                    selected = builder_.CreateICmpNE(position, constant(0U));
+                    chosen = builder_.CreateSub(position, constant(1U));
+                }
+            }
+            const auto picked = dyn_choose(selected, [&] {
+                return Pair { dyn_key_value(builder_.CreateLoad(i64_,
+                                              dyn_key_address(header, chosen)),
+                                  width, signed_keys),
+                    constant(0U) };
+            }, old_key);
+            auto* walked = builder_.GetInsertBlock();
+            builder_.CreateBr(join);
+            builder_.SetInsertPoint(join);
+            auto* found = builder_.CreatePHI(llvm::Type::getInt1Ty(context_), 2U);
+            found->addIncoming(llvm::ConstantInt::getFalse(context_), before);
+            found->addIncoming(selected, walked);
+            auto* key_a = builder_.CreatePHI(i64_, 2U);
+            key_a->addIncoming(old_key.a, before);
+            key_a->addIncoming(picked.a, walked);
+            auto* key_b = builder_.CreatePHI(i64_, 2U);
+            key_b->addIncoming(old_key.b, before);
+            key_b->addIncoming(picked.b, walked);
+            store_register(inst.y, { key_a, key_b });
+            store_register(inst.d, { builder_.CreateZExt(found, i64_), constant(0U) });
+            break;
+        }
+        default:
+            throw std::logic_error("static kernel associative operation has no inline form");
+        }
+    }
 
     [[nodiscard]] llvm::Value* dyn_header(const std::uint32_t binding_index)
     {
@@ -7283,6 +7828,15 @@ private:
         const auto op = static_cast<DynOp>(inst.sub);
         const bool is_signed = (inst.flags & detail::flag_signed) != 0U;
         auto* header = dyn_header(inst.aux);
+        if ((inst.imm_a & detail::dyn_layout_sparse) != 0U) {
+            emit_dyn_sparse(inst, at, header);
+            return;
+        }
+        if ((inst.imm_a & detail::dyn_layout_associative) != 0U && op != DynOp::size
+            && op != DynOp::delete_all && op != DynOp::copy) {
+            emit_dyn_associative(inst, at, header);
+            return;
+        }
         const Pair index = detail::dyn_reads_index(op) ? load_register(inst.y) : zero_pair();
         const Pair source = detail::dyn_reads_source(op) ? load_register(inst.x) : zero_pair();
         auto* known = builder_.CreateICmpEQ(index.b, constant(0U));
@@ -7476,11 +8030,39 @@ private:
             dyn_reserve(header, count, at);
             dyn_loop(constant(0U), count, false, [&](llvm::Value* ordinal) {
                 dyn_store_element(header, ordinal, dyn_load_element(other, ordinal));
+                if ((inst.imm_a & 1U) != 0U) {
+                    builder_.CreateStore(
+                        builder_.CreateLoad(i64_, dyn_key_address(other, ordinal)),
+                        dyn_key_address(header, ordinal));
+                }
             });
+            if ((inst.imm_a & 1U) != 0U) {
+                // The `default:` value goes with the elements.
+                dyn_store(header, dyn_fill, dyn_load(other, dyn_fill));
+                dyn_store(header, dyn_fill + 8U, dyn_load(other, dyn_fill + 8U));
+                auto* flags = dyn_address(header, dyn_flags);
+                auto* other_flags = builder_.CreateLoad(i32_, dyn_address(other, dyn_flags));
+                auto* default_bit = llvm::ConstantInt::get(i32_, dyn_default_flag);
+                builder_.CreateStore(
+                    builder_.CreateOr(builder_.CreateAnd(builder_.CreateLoad(i32_, flags),
+                                          builder_.CreateNot(default_bit)),
+                        builder_.CreateAnd(other_flags, default_bit)),
+                    flags);
+            }
             dyn_store(header, dyn_size, count);
             dyn_end(distinct);
             break;
         }
+        case DynOp::assoc_read:
+        case DynOp::assoc_write:
+        case DynOp::assoc_default:
+        case DynOp::assoc_delete:
+        case DynOp::exists:
+        case DynOp::first:
+        case DynOp::last:
+        case DynOp::next:
+        case DynOp::prev:
+            throw std::logic_error("static kernel associative operation on another container");
         }
     }
 
@@ -17785,6 +18367,7 @@ private:
         add("fsim_sk_sva_verify_outcome", helpers.sva_verify_outcome);
         add("fsim_sk_sva_report_grow", helpers.sva_report_grow);
         add("fsim_sk_dyn_grow", helpers.dyn_grow);
+        add("fsim_sk_dyn_reshape", helpers.dyn_reshape);
 #if defined(__MINGW32__)
         add("___chkstk_ms", &___chkstk_ms);
 #endif

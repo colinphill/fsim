@@ -1822,6 +1822,10 @@ private:
     static std::uint32_t native_dyn_grow(StaticKernelNativeFrame* frame,
         std::uint32_t at, StaticKernelDynamicContainer* container,
         std::uint64_t needed);
+    /// fsim_sk_dyn_reshape: a sparse array's storage for a whole copy.
+    static std::uint32_t native_dyn_reshape(StaticKernelNativeFrame* frame,
+        std::uint32_t at, StaticKernelDynamicContainer* target,
+        const StaticKernelDynamicContainer* source);
     static void native_sva_grow(StaticKernelNativeFrame* frame,
         std::uint32_t at, std::uint32_t region, std::uint64_t needed);
     static void native_sva_post(StaticKernelNativeFrame* frame, std::uint32_t at);

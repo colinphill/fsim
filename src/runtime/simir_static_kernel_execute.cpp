@@ -2899,6 +2899,7 @@ void Interpreter::Impl::StaticKernel::set_instruction_helpers(
     helpers.sva_ensure = &StaticKernel::native_sva_ensure;
     helpers.sva_grow = &StaticKernel::native_sva_grow;
     helpers.dyn_grow = &StaticKernel::native_dyn_grow;
+    helpers.dyn_reshape = &StaticKernel::native_dyn_reshape;
     helpers.sva_post = &StaticKernel::native_sva_post;
     helpers.sva_filter = &StaticKernel::native_sva_filter;
     helpers.sva_check = &StaticKernel::native_sva_check;

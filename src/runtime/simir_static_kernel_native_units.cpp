@@ -994,6 +994,21 @@ std::uint32_t Interpreter::Impl::StaticKernel::native_dyn_grow(
     }
 }
 
+std::uint32_t Interpreter::Impl::StaticKernel::native_dyn_reshape(
+    StaticKernelNativeFrame* frame, const std::uint32_t at,
+    StaticKernelDynamicContainer* target, const StaticKernelDynamicContainer* source)
+{
+    try {
+        static_kernel_detail::reshape_dynamic(*target, *source);
+        return 0U;
+    } catch (const std::bad_alloc&) {
+        native_fail(frame, at, static_kernel_detail::dyn_fail_first
+                + static_cast<std::uint32_t>(
+                    static_kernel_detail::DynFailure::out_of_memory));
+        return 1U;
+    }
+}
+
 void Interpreter::Impl::StaticKernel::native_fail(
     StaticKernelNativeFrame* frame, const std::uint32_t at,
     const std::uint32_t reason)
@@ -2153,6 +2168,7 @@ std::size_t Interpreter::Impl::StaticKernel::forward_partition_stores(
     const std::vector<Operation> no_operations;
     std::vector<std::uint32_t> use;
     std::optional<std::uint32_t> def;
+    std::optional<std::uint32_t> also;
     std::vector<std::uint32_t> next;
     bool branching = false;
     const auto size = program.code.size();
@@ -2228,9 +2244,12 @@ std::size_t Interpreter::Impl::StaticKernel::forward_partition_stores(
             break;
         }
         kinst_flow(inst, static_cast<std::uint32_t>(at), program, no_operations,
-            0U, use, def, next);
+            0U, use, def, also, next);
         if (def) {
             forget_register(*def);
+        }
+        if (also) {
+            forget_register(*also);
         }
     }
     forget_all();
@@ -2674,7 +2693,7 @@ void Interpreter::Impl::StaticKernel::concatenate_members(CompiledBody& program,
                 if (dyn_reads_source(op)) {
                     reg(inst.x);
                 }
-                if (dyn_reads_index(op)) {
+                if (dyn_reads_index(op) || dyn_writes_index(op)) {
                     reg(inst.y);
                 }
                 break;

@@ -105,10 +105,27 @@ struct StaticKernelDynamicContainer {
     std::uint64_t empty_a { };
     std::uint64_t empty_b { };
     std::uint32_t element_width { };
-    /// Bit 0: two-state elements; bit 1: a queue.
+    /// Bit 0: two-state elements; bit 1: a queue; bit 2: an associative
+    /// array with integral keys; bit 3: its `default:` is set (fill); bit
+    /// 4: its index type is signed.
     std::uint32_t flags { };
+    /// An associative array's keys, sorted, paired with the elements
+    /// (head 0); each key is its index value as an unsigned 64-bit order
+    /// key (a signed index type's value sign extended, its sign bit
+    /// flipped).
+    std::uint64_t* keys { };
+    /// An associative array's index width (IEEE 1800-2023 7.8.4).
+    std::uint32_t key_width { };
+    std::uint32_t reserved { };
+    /// A sparse fixed array (bit 5) keeps its stored elements' ordinals in
+    /// `keys` and the elements in `data` (head 0) until a write finds at
+    /// least `threshold` stored; it then holds the dense bit-plane image
+    /// instead (bit 6): `capacity` value words, then as many unknown words,
+    /// element i at bit i * element_width (ContainerValue::compact_planes).
+    /// `maximum` is its element count.
+    std::uint64_t threshold { };
 };
-static_assert(sizeof(StaticKernelDynamicContainer) == 88U);
+static_assert(sizeof(StaticKernelDynamicContainer) == 112U);
 
 /// The round's assignments in program order; generated code appends while
 /// count < capacity and calls the effect helper otherwise.
@@ -347,6 +364,13 @@ struct StaticKernelNativeHelpers {
     /// nonzero when the frame's status now holds the reference's error.
     std::uint32_t (*dyn_grow)(StaticKernelNativeFrame*, std::uint32_t at,
         StaticKernelDynamicContainer* container, std::uint64_t needed) { };
+    /// `fsim_sk_dyn_reshape`: the sparse array `target` takes the layout
+    /// and capacity of `source` (a whole copy's storage; the elements are
+    /// copied by generated code). Nonzero when the memory is not available
+    /// (the failure is reported).
+    std::uint32_t (*dyn_reshape)(StaticKernelNativeFrame*, std::uint32_t at,
+        StaticKernelDynamicContainer* target,
+        const StaticKernelDynamicContainer* source) { };
     /// Wide-register instructions by kind (`fsim_sk_wide_<op>`): instruction
     /// `at` with the caller's register file, where wide values live, and the
     /// narrow operand words x, y and z; `out` receives a narrow result and

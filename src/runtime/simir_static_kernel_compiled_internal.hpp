@@ -523,14 +523,18 @@ inline void operation_registers(const Operation& operation,
     return resolved;
 }
 
-/// Registers a compiled instruction reads and writes, and its successors.
+/// Registers a compiled instruction reads and writes, and its successors:
+/// `def` the register it writes, `also` a second one (a traversal's key,
+/// which it also reads: a missing key leaves it unchanged).
 inline void kinst_flow(const KInst& inst, const std::uint32_t at,
     const CompiledBody& body, const std::vector<Operation>& operations,
     const std::uint32_t stop, std::vector<std::uint32_t>& use,
-    std::optional<std::uint32_t>& def, std::vector<std::uint32_t>& next)
+    std::optional<std::uint32_t>& def, std::optional<std::uint32_t>& also,
+    std::vector<std::uint32_t>& next)
 {
     use.clear();
     def.reset();
+    also.reset();
     next.clear();
     const auto size = static_cast<std::uint32_t>(body.code.size());
     std::vector<RegisterId> reads;
@@ -638,11 +642,14 @@ inline void kinst_flow(const KInst& inst, const std::uint32_t at,
         if (dyn_reads_source(op)) {
             use.push_back(inst.x);
         }
-        if (dyn_reads_index(op)) {
+        if (dyn_reads_index(op) || dyn_writes_index(op)) {
             use.push_back(inst.y);
         }
         if (dyn_writes_destination(op)) {
             def = inst.d;
+        }
+        if (dyn_writes_index(op)) {
+            also = inst.y;
         }
         fall();
         break;

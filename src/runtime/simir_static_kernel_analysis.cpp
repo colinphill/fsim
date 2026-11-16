@@ -551,6 +551,7 @@ void Interpreter::Impl::StaticKernel::track_unknowns(CompiledBody& body,
     std::vector<std::uint8_t> tracked(count, 0U);
     std::vector<std::uint32_t> use;
     std::optional<std::uint32_t> def;
+    std::optional<std::uint32_t> also;
     std::vector<std::uint32_t> next;
     const auto narrow = [&](const std::uint32_t reg) {
         return reg < count && body.register_widths[reg] != 0U
@@ -585,7 +586,7 @@ void Interpreter::Impl::StaticKernel::track_unknowns(CompiledBody& body,
         for (std::uint32_t at = 0U; at < size; ++at) {
             const auto& inst = body.code[at];
             kinst_flow(inst, at, body, member.operations(), member.body_end, use,
-                def, next);
+                def, also, next);
             if (!def || !narrow(*def) || tracked[*def] != 0U) {
                 continue;
             }
@@ -668,11 +669,12 @@ void Interpreter::Impl::StaticKernel::track_unknowns(CompiledBody& body,
     body.u_mode.assign(size, 0U);
     for (std::uint32_t at = 0U; at < size; ++at) {
         const auto& inst = body.code[at];
-        kinst_flow(inst, at, body, member.operations(), member.body_end, use, def,
+        kinst_flow(inst, at, body, member.operations(), member.body_end, use, def, also,
             next);
         const bool reads_tracked = std::ranges::any_of(use,
             [&](const std::uint32_t reg) { return reg < count && tracked[reg] != 0U; });
-        const bool writes_tracked = def && *def < count && tracked[*def] != 0U;
+        const bool writes_tracked = (def && *def < count && tracked[*def] != 0U)
+            || (also && *also < count && tracked[*also] != 0U);
         std::uint8_t mode = 0U;
         switch (inst.op) {
         case KOp::load_slot9:
@@ -841,6 +843,7 @@ const char* Interpreter::Impl::StaticKernel::collapse_impurity(const Member& mem
     std::vector<const KInst*> definition(registers, nullptr);
     std::vector<std::uint32_t> use;
     std::optional<std::uint32_t> def;
+    std::optional<std::uint32_t> also;
     std::vector<std::uint32_t> next;
     std::vector<std::uint32_t> first_use(size, no_slot);
     std::vector<std::uint32_t> use_count(size, 0U);
@@ -912,7 +915,7 @@ const char* Interpreter::Impl::StaticKernel::collapse_impurity(const Member& mem
         if (inst.op == KOp::call || inst.op == KOp::ret) {
             return nullptr;
         }
-        kinst_flow(inst, at, body, member.operations(), member.body_end, use, def,
+        kinst_flow(inst, at, body, member.operations(), member.body_end, use, def, also,
             next);
         first_use[at] = static_cast<std::uint32_t>(uses.size());
         for (const auto reg : use) {
@@ -922,6 +925,10 @@ const char* Interpreter::Impl::StaticKernel::collapse_impurity(const Member& mem
             uses.push_back(reg);
         }
         use_count[at] = static_cast<std::uint32_t>(use.size());
+        if (also) {
+            // One definition per instruction.
+            return "operation";
+        }
         if (def) {
             if (*def >= registers) {
                 return "register";
@@ -1001,7 +1008,7 @@ const char* Interpreter::Impl::StaticKernel::collapse_impurity(const Member& mem
                 ? leave : node(contexts[context].caller, target);
         } else {
             kinst_flow(inst, at, body, member.operations(), member.body_end, use,
-                def, next);
+                def, also, next);
             if (next.empty()) {
                 out[0] = leave;
             }
@@ -1630,11 +1637,12 @@ const char* Interpreter::Impl::StaticKernel::prove_collapse_ranges(const Member&
     int failed_op = -1;
     std::vector<std::uint32_t> use;
     std::optional<std::uint32_t> def;
+    std::optional<std::uint32_t> also;
     std::vector<std::uint32_t> next;
     const auto definer = [&](const std::uint32_t reg, const std::uint32_t before) {
         for (auto index = before; index-- > 0U;) {
-            kinst_flow(code[index], index, body, operations, member.body_end, use, def, next);
-            if (def == reg) {
+            kinst_flow(code[index], index, body, operations, member.body_end, use, def, also, next);
+            if (def == reg || also == reg) {
                 return static_cast<int>(code[index].op);
             }
         }
@@ -2111,9 +2119,12 @@ const char* Interpreter::Impl::StaticKernel::prove_collapse_ranges(const Member&
             clear(inst.d, chunks(inst.width));
             return true;
         default:
-            kinst_flow(inst, at, body, operations, member.body_end, use, def, next);
+            kinst_flow(inst, at, body, operations, member.body_end, use, def, also, next);
             if (def) {
                 clear(*def, 1U);
+            }
+            if (also) {
+                clear(*also, 1U);
             }
             return !checked;
         }
@@ -2227,7 +2238,7 @@ const char* Interpreter::Impl::StaticKernel::prove_collapse_ranges(const Member&
             }
         }
         if (known) {
-            kinst_flow(inst, at, body, operations, member.body_end, use, def, next);
+            kinst_flow(inst, at, body, operations, member.body_end, use, def, also, next);
             if (def && *def < registers && std::ranges::find(use, *def) != use.end()) {
                 aliased = *def;
                 before = values[*def];
@@ -2244,7 +2255,7 @@ const char* Interpreter::Impl::StaticKernel::prove_collapse_ranges(const Member&
             values[inst.d] = { };
             return true;
         }
-        kinst_flow(inst, at, body, operations, member.body_end, use, def, next);
+        kinst_flow(inst, at, body, operations, member.body_end, use, def, also, next);
         if (!def || *def >= registers || values[*def].kind != Kind::unknown) {
             return true;
         }
@@ -2524,9 +2535,12 @@ const char* Interpreter::Impl::StaticKernel::prove_collapse_ranges(const Member&
         // every run.
         std::vector<std::uint8_t> defined(registers, 0U);
         for (std::uint32_t index = 0U; index < size; ++index) {
-            kinst_flow(code[index], index, body, operations, member.body_end, use, def, next);
+            kinst_flow(code[index], index, body, operations, member.body_end, use, def, also, next);
             if (def && *def < registers) {
                 defined[*def] = 1U;
+            }
+            if (also && *also < registers) {
+                defined[*also] = 1U;
             }
             switch (code[index].op) {
             case KOp::wide_load:
@@ -2598,11 +2612,14 @@ std::string Interpreter::Impl::StaticKernel::collapse_census_detail(
     const auto size = static_cast<std::uint32_t>(code.size());
     std::vector<std::uint32_t> use;
     std::optional<std::uint32_t> def;
+    std::optional<std::uint32_t> also;
     std::vector<std::uint32_t> next;
     std::vector<std::uint32_t> defines(size, no_slot);
     for (std::uint32_t index = 0U; index < size; ++index) {
         kinst_flow(code[index], index, body, member.operations(), member.body_end,
-            use, def, next);
+            use, def, also, next);
+        // A census: an instruction's second definition (a traversal's key)
+        // is not named.
         defines[index] = def.value_or(no_slot);
     }
     // The nearest earlier definition of reg (an approximation across
@@ -2633,7 +2650,7 @@ std::string Interpreter::Impl::StaticKernel::collapse_census_detail(
         if (inst.op == KOp::constant) {
             text += '=' + std::to_string(inst.imm_a);
         }
-        kinst_flow(inst, index, body, member.operations(), member.body_end, use, def,
+        kinst_flow(inst, index, body, member.operations(), member.body_end, use, def, also,
             next);
         const auto operands = use;
         if (operands.empty() || depth == 0U) {

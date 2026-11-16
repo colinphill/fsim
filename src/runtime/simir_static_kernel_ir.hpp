@@ -343,6 +343,23 @@ enum class DynOp : std::uint8_t {
     pop_back,
     /// CopyContainerRegister: container aux = container z.
     copy,
+    /// The associative operations (integral keys; key in y):
+    /// ContainerRead: d = element y, or the default when y is missing.
+    assoc_read,
+    /// ContainerWrite: element y = x, inserted when missing.
+    assoc_write,
+    /// ContainerWrite of the `default:` value (7.9.11): fill = x.
+    assoc_default,
+    /// DeleteContainer with an index: removes key y when present.
+    assoc_delete,
+    /// ContainerExists: d (32 bits) = whether key y is present.
+    exists,
+    /// TraverseContainer: d (32 bits) = whether a key was selected, which
+    /// is written to y (7.9.4 - 7.9.7); next and prev read y first.
+    first,
+    last,
+    next,
+    prev,
 };
 
 /// The failure codes of KOp::dyn (native fail reasons from
@@ -358,29 +375,56 @@ enum class DynFailure : std::uint32_t {
     write_mismatch,
     queue_write_mismatch,
     out_of_memory,
+    key_unknown,
+    assoc_budget,
+    fixed_unknown,
+    fixed_range,
+    linear_unknown,
+    linear_negative,
+    linear_range,
+    sparse_budget,
 };
 
 /// The native fail reason of the first DynFailure (native_fail_message).
 inline constexpr std::uint32_t dyn_fail_first = 32U;
+
+/// KInst::imm_a of KOp::dyn: generated code's layout choice.
+inline constexpr std::uint64_t dyn_layout_associative = 1U;
+inline constexpr std::uint64_t dyn_layout_signed_keys = 2U;
+inline constexpr std::uint64_t dyn_layout_sparse = 4U;
+/// A sparse array's index is a linear ordinal (a multidimensional array).
+inline constexpr std::uint64_t dyn_layout_linear = 8U;
 
 /// The registers a KOp::dyn operation reads (y the index, x the source)
 /// and writes (d).
 [[nodiscard]] inline bool dyn_reads_index(const DynOp op) noexcept
 {
     return op == DynOp::read || op == DynOp::write || op == DynOp::delete_at
-        || op == DynOp::insert;
+        || op == DynOp::insert || op == DynOp::assoc_read || op == DynOp::assoc_write
+        || op == DynOp::assoc_delete || op == DynOp::exists || op == DynOp::next
+        || op == DynOp::prev;
 }
 
 [[nodiscard]] inline bool dyn_reads_source(const DynOp op) noexcept
 {
     return op == DynOp::write || op == DynOp::resize || op == DynOp::push_back
-        || op == DynOp::push_front || op == DynOp::insert;
+        || op == DynOp::push_front || op == DynOp::insert || op == DynOp::assoc_write
+        || op == DynOp::assoc_default;
 }
 
 [[nodiscard]] inline bool dyn_writes_destination(const DynOp op) noexcept
 {
     return op == DynOp::read || op == DynOp::size || op == DynOp::pop_front
-        || op == DynOp::pop_back;
+        || op == DynOp::pop_back || op == DynOp::assoc_read || op == DynOp::exists
+        || op == DynOp::first || op == DynOp::last || op == DynOp::next
+        || op == DynOp::prev;
+}
+
+/// A traversal also writes the selected key to its index register y.
+[[nodiscard]] inline bool dyn_writes_index(const DynOp op) noexcept
+{
+    return op == DynOp::first || op == DynOp::last || op == DynOp::next
+        || op == DynOp::prev;
 }
 
 /// KOp::wide_alu operation families (KInst::offset).

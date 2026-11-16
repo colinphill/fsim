@@ -116,7 +116,9 @@ bool Interpreter::Impl::StaticKernel::native_dynamic_containers(
                 || std::is_same_v<T, ContainerSize> || std::is_same_v<T, ResizeContainer>
                 || std::is_same_v<T, DeleteContainer> || std::is_same_v<T, PushContainer>
                 || std::is_same_v<T, PopContainer>
-                || std::is_same_v<T, CopyContainerRegister>;
+                || std::is_same_v<T, CopyContainerRegister>
+                || std::is_same_v<T, ContainerExists>
+                || std::is_same_v<T, TraverseContainer>;
         }, operation);
         if (!native) {
             return false;
@@ -1780,8 +1782,11 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                             containers_[container_of_register[op.target]]
                                 .type.element_width));
                     }
-                } else if constexpr (std::is_same_v<T, ContainerSize>) {
-                    // size() is an int (IEEE 1800-2023 7.5.2, 7.10.2.1).
+                } else if constexpr (std::is_same_v<T, ContainerSize>
+                    || std::is_same_v<T, ContainerExists>
+                    || std::is_same_v<T, TraverseContainer>) {
+                    // size(), num(), exists() and the traversals return an
+                    // int (IEEE 1800-2023 7.5.2, 7.9.1 - 7.9.7, 7.10.2.1).
                     define(op.destination, 32U);
                 }
             }, member.operations()[pc]);
@@ -1934,12 +1939,48 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             inst.z = no_container;
             inst.offset = static_cast<std::uint32_t>(
                 containers_[container].type.element_width);
+            // Generated code's layout choice (dyn_layout_*).
+            const auto& type = containers_[container].type;
+            inst.imm_a = (type.associative ? static_kernel_detail::dyn_layout_associative : 0U)
+                | (type.associative && type.signed_indices
+                        ? static_kernel_detail::dyn_layout_signed_keys : 0U)
+                | (type.sparse ? static_kernel_detail::dyn_layout_sparse : 0U);
+        };
+        const auto sparse = [&](const std::uint32_t container) {
+            return containers_[container].type.sparse;
+        };
+        // A sparse array's index: a linear ordinal, or the declared range
+        // (left in imm_b's low half).
+        const auto sparse_index = [&](const std::uint32_t container,
+                                      const RegisterId index, const bool linear) {
+            const auto& type = containers_[container].type;
+            inst.y = narrow(index);
+            inst.width = w(index);
+            if (linear) {
+                inst.imm_a |= static_kernel_detail::dyn_layout_linear;
+            }
+            inst.imm_b = std::uint64_t { static_cast<std::uint32_t>(type.index_left) }
+                | (std::uint64_t { static_cast<std::uint32_t>(type.index_right) } << 32U);
         };
         const auto element_width = [&](const std::uint32_t container) {
             return static_cast<std::uint32_t>(containers_[container].type.element_width);
         };
         const auto queue = [&](const std::uint32_t container) {
             return containers_[container].type.queue;
+        };
+        const auto associative = [&](const std::uint32_t container) {
+            return containers_[container].type.associative;
+        };
+        // An associative array's key operand: an integral value of the
+        // index type's width (associative_key's check).
+        const auto key = [&](const std::uint32_t container, const RegisterId index,
+                             const bool string_index, const char* reason) {
+            if (string_index
+                || w(index) != containers_[container].type.index_width) {
+                throw reject(reason);
+            }
+            inst.y = narrow(index);
+            inst.width = w(index);
         };
         if constexpr (std::is_same_v<T, ContainerRead>) {
             const auto container = dyn_container(op.source);
@@ -1948,6 +1989,18 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             }
             if (op.string_index || w(op.destination) != element_width(container)) {
                 throw reject("dyn_read");
+            }
+            if (associative(container)) {
+                set(DynOp::assoc_read, container);
+                inst.d = narrow(op.destination);
+                key(container, op.index, op.string_index || op.linear_index, "dyn_read");
+                return true;
+            }
+            if (sparse(container)) {
+                set(DynOp::read, container);
+                inst.d = narrow(op.destination);
+                sparse_index(container, op.index, op.linear_index);
+                return true;
             }
             set(DynOp::read, container);
             inst.d = narrow(op.destination);
@@ -1960,9 +2013,28 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             if (container == no_container) {
                 return false;
             }
-            if (op.string_index || op.associative_default
-                || w(op.source) != element_width(container)) {
+            if (op.string_index || w(op.source) != element_width(container)) {
                 throw reject("dyn_write");
+            }
+            if (associative(container)) {
+                if (op.associative_default) {
+                    set(DynOp::assoc_default, container);
+                    inst.x = narrow(op.source);
+                    return true;
+                }
+                set(DynOp::assoc_write, container);
+                inst.x = narrow(op.source);
+                key(container, op.index, op.linear_index, "dyn_write");
+                return true;
+            }
+            if (op.associative_default) {
+                throw reject("dyn_write");
+            }
+            if (sparse(container)) {
+                set(DynOp::write, container);
+                inst.x = narrow(op.source);
+                sparse_index(container, op.index, op.linear_index);
+                return true;
             }
             set(DynOp::write, container);
             inst.x = narrow(op.source);
@@ -1975,6 +2047,9 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             if (container == no_container) {
                 return false;
             }
+            if (sparse(container)) {
+                throw reject("dyn_size");
+            }
             set(DynOp::size, container);
             inst.d = narrow(op.destination);
             return true;
@@ -1983,7 +2058,8 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             if (container == no_container) {
                 return false;
             }
-            if (queue(container) && !op.allow_queue) {
+            if ((queue(container) && !op.allow_queue) || associative(container)
+                || sparse(container)) {
                 throw reject("dyn_resize");
             }
             set(DynOp::resize, container);
@@ -2007,6 +2083,15 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             if (container == no_container) {
                 return false;
             }
+            if (sparse(container)) {
+                // delete() of a static array is the reference's error.
+                throw reject("dyn_delete");
+            }
+            if (op.index && associative(container)) {
+                set(DynOp::assoc_delete, container);
+                key(container, *op.index, op.string_index, "dyn_delete");
+                return true;
+            }
             if (op.index) {
                 // delete(index) of a dynamic array is the reference's error.
                 if (!queue(container) || op.string_index) {
@@ -2024,7 +2109,8 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             if (container == no_container) {
                 return false;
             }
-            if (!queue(container) || w(op.source) != element_width(container)) {
+            if (!queue(container) || associative(container)
+                || w(op.source) != element_width(container)) {
                 throw reject("dyn_push");
             }
             set(op.index ? DynOp::insert
@@ -2041,7 +2127,8 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             if (container == no_container) {
                 return false;
             }
-            if (!queue(container) || w(op.destination) != element_width(container)) {
+            if (!queue(container) || associative(container)
+                || w(op.destination) != element_width(container)) {
                 throw reject("dyn_pop");
             }
             set(op.front ? DynOp::pop_front : DynOp::pop_back, container);
@@ -2059,6 +2146,37 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             }
             set(DynOp::copy, container);
             inst.z = source;
+            return true;
+        } else if constexpr (std::is_same_v<T, ContainerExists>) {
+            const auto container = dyn_container(op.source);
+            if (container == no_container) {
+                return false;
+            }
+            if (!associative(container) || w(op.destination) != 32U) {
+                throw reject("dyn_exists");
+            }
+            set(DynOp::exists, container);
+            inst.d = narrow(op.destination);
+            key(container, op.index, op.string_index, "dyn_exists");
+            return true;
+        } else if constexpr (std::is_same_v<T, TraverseContainer>) {
+            const auto container = dyn_container(op.source);
+            if (container == no_container) {
+                return false;
+            }
+            if (!associative(container) || w(op.destination) != 32U) {
+                throw reject("dyn_traverse");
+            }
+            set(op.traversal == ContainerTraversal::first ? DynOp::first
+                    : op.traversal == ContainerTraversal::last ? DynOp::last
+                    : op.traversal == ContainerTraversal::next ? DynOp::next
+                                                               : DynOp::prev,
+                container);
+            inst.d = narrow(op.destination);
+            key(container, op.index, op.string_index, "dyn_traverse");
+            if (inst.d == inst.y) {
+                throw reject("dyn_traverse");
+            }
             return true;
         } else {
             return false;
@@ -5045,9 +5163,12 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                 || std::is_same_v<T, ResizeContainer>
                 || std::is_same_v<T, DeleteContainer>
                 || std::is_same_v<T, PushContainer>
-                || std::is_same_v<T, PopContainer>) {
-                // Only a kernel queue or dynamic array (IEEE 1800-2023 7.5,
-                // 7.10; native_dynamic_containers admitted the member).
+                || std::is_same_v<T, PopContainer>
+                || std::is_same_v<T, ContainerExists>
+                || std::is_same_v<T, TraverseContainer>) {
+                // Only a kernel queue, dynamic array or associative array
+                // (IEEE 1800-2023 7.5, 7.8 - 7.10; native_dynamic_containers
+                // admitted the member).
                 if (!emit_dyn(inst, op)) {
                     throw reject(unsupported_operation_reason<T>());
                 }
