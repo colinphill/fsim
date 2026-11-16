@@ -1,0 +1,15 @@
+#c top.mem size 16777216
+#c last mem[16777215] top.mem[16777215] type 48 size 8 value 165
+#c down[1] down[1] top.down[1] type 620 size 32 value -7
+#c two[-3][1000] two[-3][1000] top.two[-3][1000] type 48 size 12 value -99
+#c same word 1, out of range 1
+#c put 42 reads 42
+#c top.mem word 0 mem[0]
+#c top.mem word 1 mem[1]
+#c top.mem walked 16777216 words, sum 210
+#c top.down word 0 down[0]
+#c top.down word 1 down[1]
+#c top.down walked 16777216 words, sum -7
+#c t=2 cb top.mem[7]=9
+#c t=2 cb top.down[2]=11
+#c t=4 mem[12345678]=42 mem[8]=77 down[16000000]=0 two[-2][3]=x

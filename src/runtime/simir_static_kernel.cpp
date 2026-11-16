@@ -6690,6 +6690,40 @@ bool Interpreter::Impl::StaticKernel::write_owned_container_object(
     return true;
 }
 
+std::optional<PackedLogic4>
+Interpreter::Impl::StaticKernel::owned_container_element(
+    const ContainerObjectId object, const std::size_t ordinal) const
+{
+    if (object >= container_of_object_.size()
+        || container_of_object_[object] == no_container) {
+        return std::nullopt;
+    }
+    const auto& container = containers_[container_of_object_[object]];
+    if (container.storage != StaticKernelContainerStorage::elements
+        || ordinal >= container.count) {
+        return std::nullopt;
+    }
+    return container_element(container, ordinal);
+}
+
+bool Interpreter::Impl::StaticKernel::write_owned_container_element(
+    const ContainerObjectId object, const std::size_t ordinal,
+    const PackedLogic4& value)
+{
+    if (object >= container_of_object_.size()
+        || container_of_object_[object] == no_container) {
+        return false;
+    }
+    auto& container = containers_[container_of_object_[object]];
+    if (container.storage != StaticKernelContainerStorage::elements
+        || ordinal >= container.count) {
+        return false;
+    }
+    // As write_owned_container_object: element storage notifies no reader.
+    write_container_element(container, ordinal, value, 0U, 0U);
+    return true;
+}
+
 void Interpreter::Impl::StaticKernel::place_elements(
     Container& container, const ContainerValue& initial)
 {
@@ -13210,6 +13244,26 @@ std::optional<ContainerValue> Interpreter::kernel_container_object_value(
         return std::nullopt;
     }
     return value;
+}
+
+std::optional<PackedLogic4> Interpreter::kernel_container_object_element(
+    const ContainerObjectId object, const std::size_t ordinal) const
+{
+    auto& impl = *impl_;
+    if (!impl.static_kernel || !impl.started) {
+        return std::nullopt;
+    }
+    const auto& target = impl.get_container_object(object);
+    if (target.slice_alias
+        || (object < impl.container_aggregate_signal_aliases.size()
+            && impl.container_aggregate_signal_aliases[object])
+        || (object < impl.container_signal_aliases.size()
+            && impl.container_signal_aliases[object])
+        || std::ranges::any_of(impl.container_element_signal_aliases.at(object),
+            [](const auto& alias) { return alias.has_value(); })) {
+        return std::nullopt;
+    }
+    return impl.static_kernel->owned_container_element(object, ordinal);
 }
 
 void Interpreter::note_external_signal_write(const SignalId signal)

@@ -72,6 +72,64 @@ fsim_vpi_handle_v1 Simulation::vpi_declared_object(
         : found->second;
 }
 
+std::optional<std::size_t> Simulation::vpi_on_demand_memory(
+    const fsim_vpi_handle_v1 memory) const
+{
+    const auto found = impl_->vpi_on_demand_memories.find(memory);
+    return found == impl_->vpi_on_demand_memories.end()
+        ? std::nullopt
+        : std::optional<std::size_t> { found->second.count };
+}
+
+std::optional<std::size_t> Simulation::vpi_on_demand_word_ordinal(
+    const fsim_vpi_handle_v1 memory, const std::string_view name) const
+{
+    const auto found = impl_->vpi_on_demand_memories.find(memory);
+    return found == impl_->vpi_on_demand_memories.end()
+        ? std::nullopt
+        : systemverilog_vpi_memory_word_ordinal(found->second.type, name);
+}
+
+std::string Simulation::vpi_on_demand_word_name(
+    const fsim_vpi_handle_v1 memory, const std::size_t ordinal) const
+{
+    return systemverilog_vpi_memory_word_name(
+        impl_->vpi_on_demand_memories.at(memory).type, ordinal);
+}
+
+bool Simulation::vpi_on_demand_word_published(
+    const fsim_vpi_handle_v1 memory, const std::size_t ordinal) const
+{
+    std::scoped_lock bridge_lock { impl_->vpi_bridge_mutex };
+    const auto deferred = impl_->vpi_deferred_children.find(memory);
+    // Once every word of the memory exists its deferred entry is gone.
+    return deferred == impl_->vpi_deferred_children.end()
+        || !deferred->second.memory
+        || deferred->second.memory->created.contains(ordinal);
+}
+
+runtime::SystemVerilogVpiStoredValue Simulation::vpi_on_demand_word_value(
+    const fsim_vpi_handle_v1 memory, const std::size_t ordinal)
+{
+    return impl_->vpi_fixed_word_value(
+        impl_->vpi_on_demand_memories.at(memory).container, ordinal);
+}
+
+runtime::SystemVerilogVpiValueError Simulation::deposit_vpi_on_demand_word(
+    const fsim_vpi_handle_v1 memory, const std::size_t ordinal,
+    const runtime::SystemVerilogVpiStoredValue& value)
+{
+    std::scoped_lock bridge_lock { impl_->vpi_bridge_mutex };
+    try {
+        return impl_->deposit_vpi_fixed_word(
+            impl_->vpi_on_demand_memories.at(memory).container, ordinal,
+            value);
+    } catch (...) {
+        // As a deposit through the word's own object.
+        return runtime::SystemVerilogVpiValueError::ResourceLimit;
+    }
+}
+
 std::vector<std::pair<fsim_vpi_handle_v1, runtime::simir::ProcessId>>
 Simulation::vpi_driver_objects(const fsim_vpi_handle_v1 object)
 {

@@ -686,6 +686,12 @@ public:
     /// the caller takes container_object_value_snapshot().
     [[nodiscard]] std::optional<ContainerValue> kernel_container_object_value(
         ContainerObjectId object) const;
+    /// One element of such a container, as kernel_container_object_value
+    /// would hold it, without reading the others; nullopt when the kernel
+    /// does not hold it in its own element storage, and the caller takes
+    /// container_object_element_snapshot().
+    [[nodiscard]] std::optional<PackedLogic4> kernel_container_object_element(
+        ContainerObjectId object, std::size_t ordinal) const;
     /// A mailbox or semaphore by the handle a variable holds; nullopt for a
     /// value that names neither.
     [[nodiscard]] std::optional<SynchronizationObject> synchronization_object(
@@ -721,6 +727,15 @@ public:
     /// Return a container snapshot without pinning aliased signals.
     [[nodiscard]] ContainerValue container_object_value_snapshot(
         ContainerObjectId object) const;
+    /// One element of a container object as container_object_value_snapshot
+    /// would hold it, without copying the others: the bits of a packed or
+    /// scalar element, or the text of a string element.
+    struct ContainerElementSnapshot {
+        PackedLogic4 packed;
+        std::string text;
+    };
+    [[nodiscard]] ContainerElementSnapshot container_object_element_snapshot(
+        ContainerObjectId object, std::size_t ordinal) const;
     void deposit_container_object(
         ContainerObjectId object, ContainerValue value);
     void deposit_container_object_element(

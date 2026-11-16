@@ -737,6 +737,14 @@ public:
         ContainerObjectId object, ContainerValue& value) const;
     bool write_owned_container_object(
         ContainerObjectId object, const ContainerValue& value);
+    /// One element of a container the kernel holds in element storage;
+    /// none for any other container.
+    [[nodiscard]] std::optional<PackedLogic4> owned_container_element(
+        ContainerObjectId object, std::size_t ordinal) const;
+    /// Write one element of a container the kernel holds in element
+    /// storage; false for any other container.
+    bool write_owned_container_element(
+        ContainerObjectId object, std::size_t ordinal, const PackedLogic4& value);
     /// The thread member a debugger process id names: the member itself, or
     /// the member whose fork created the child with that id (children get the
     /// ids the reference evaluator would give them, in a debugger plan).
@@ -3265,6 +3273,10 @@ private:
         decltype(CompiledBody::registers) registers;
         NativeContainerValues containers;
         std::vector<std::string> strings;
+        /// The string variables the body writes in place (StrOp::
+        /// write_object), with their values at the start: the replay starts
+        /// from these and must leave the values the compiled run left.
+        std::vector<std::pair<StringObjectId, std::string>> string_objects;
         decltype(CompiledBody::wide_registers) wide;
         /// The random stream the thread draws from (KOp::random) and the
         /// system seed ($random): the replay draws again from these.

@@ -5339,17 +5339,6 @@ bool Lowerer::hir_expression_signed(
             return type->signed_elements;
         }
     }
-    // String compare and icompare return a signed int (6.16.8).
-    if (const auto call = specialized_hir_unit_->find_expression(expression_id);
-        call && call->systemverilog != nullptr
-        && call->systemverilog->kind == semantic::sv::ExpressionKind::call
-        && (call->systemverilog->text == ".compare"
-            || call->systemverilog->text == ".icompare")
-        && call->systemverilog->operands.size() == 2U
-        && hir_expression_is_string(
-            call->systemverilog->operands.front(), hir_process_scope_)) {
-        return true;
-    }
     if (const auto method = hir_systemverilog_enumeration_method(
             expression_id)) {
         return method->method == "num" || (method->method != "name"
@@ -5467,6 +5456,23 @@ bool Lowerer::hir_expression_signed(
             && (expression->systemverilog->text == "$signed"
                 || expression->systemverilog->text == "$unsigned")) {
             return expression->systemverilog->text == "$signed";
+        }
+        // String compare and icompare return a signed int (6.16.8), atoi,
+        // atohex, atooct and atobin an integer (6.16.9).
+        if (const auto* const call = expression->systemverilog;
+            call != nullptr
+            && call->kind == semantic::sv::ExpressionKind::call
+            && (((call->text == ".compare"
+                     || call->text == ".icompare")
+                    && call->operands.size() == 2U)
+                || ((call->text == ".atoi"
+                        || call->text == ".atohex"
+                        || call->text == ".atooct"
+                        || call->text == ".atobin")
+                    && call->operands.size() == 1U))
+            && hir_expression_is_string(
+                call->operands.front(), hir_process_scope_)) {
+            return true;
         }
         if (expression->vhdl != nullptr
             && hir_vhdl_simulator_api(*expression->vhdl)

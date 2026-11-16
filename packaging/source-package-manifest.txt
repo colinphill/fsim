@@ -2101,9 +2101,11 @@ tests/fixtures/compliance/sv_static_callable_storage.sv
 tests/fixtures/compliance/sv_static_interface_storage.sv
 tests/fixtures/compliance/sv_static_sparse_arrays.sv
 tests/fixtures/compliance/sv_std_class_names.sv
+tests/fixtures/compliance/sv_stream_unpack_resize.sv
 tests/fixtures/compliance/sv_streaming_builtin_slice_batch57.sv
 tests/fixtures/compliance/sv_streaming_unpack.sv
 tests/fixtures/compliance/sv_string_containers.sv
+tests/fixtures/compliance/sv_string_conversion_signed.sv
 tests/fixtures/compliance/sv_string_methods_and_updates.sv
 tests/fixtures/compliance/sv_sva_clock_declaration_forms.sv
 tests/fixtures/compliance/sv_sva_recursive_properties.sv
@@ -2752,6 +2754,9 @@ tests/fixtures/foreign/foreign_vpi_gate_split_alias.sv
 tests/fixtures/foreign/foreign_vpi_gate_split_nine.expected
 tests/fixtures/foreign/foreign_vpi_gate_split_nine.expected.license
 tests/fixtures/foreign/foreign_vpi_gate_split_nine.sv
+tests/fixtures/foreign/foreign_vpi_huge_memory.expected
+tests/fixtures/foreign/foreign_vpi_huge_memory.expected.license
+tests/fixtures/foreign/foreign_vpi_huge_memory.sv
 tests/fixtures/foreign/foreign_vpi_imm_assert.expected
 tests/fixtures/foreign/foreign_vpi_imm_assert.expected.license
 tests/fixtures/foreign/foreign_vpi_imm_assert.sv
@@ -4356,6 +4361,7 @@ tests/runtime/foreign_vpi_gate_arrays_plugin.c
 tests/runtime/foreign_vpi_gate_split_plugin.c
 tests/runtime/foreign_vpi_gate_split_wide_plugin.c
 tests/runtime/foreign_vpi_hier_event_plugin.c
+tests/runtime/foreign_vpi_huge_memory_plugin.c
 tests/runtime/foreign_vpi_imm_assert_plugin.c
 tests/runtime/foreign_vpi_interactive_plugin.c
 tests/runtime/foreign_vpi_interface_tf_plugin.c

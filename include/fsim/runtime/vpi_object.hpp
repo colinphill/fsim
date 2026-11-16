@@ -588,12 +588,25 @@ public:
     /// children or a state snapshot calls the materializer once, which
     /// creates all of them. Until then the parent reports them in its live
     /// child count.
+    /// Children `on_demand` are created one at a time by the named
+    /// materializer; a state snapshot holds only those that exist.
     [[nodiscard]] SystemVerilogVpiObjectError defer_children(
-        fsim_vpi_handle_v1 parent, std::uint32_t count);
+        fsim_vpi_handle_v1 parent, std::uint32_t count,
+        bool on_demand = false);
     void set_child_materializer(
         std::function<void(fsim_vpi_handle_v1)> materializer);
-    /// Create every deferred child now.
-    void materialize_all() const;
+    /// A lookup of the deferred child `name` (relative to the parent's
+    /// name: `[5]`, or `[5].x` beneath one) first asks this materializer,
+    /// which may create just that child and returns whether it answered for
+    /// the parent; when it does not, every deferred child is created.
+    void set_named_child_materializer(
+        std::function<bool(fsim_vpi_handle_v1, std::string_view)> materializer);
+    /// One deferred child of `parent` was created on its own (see
+    /// set_named_child_materializer).
+    void claim_deferred_child(fsim_vpi_handle_v1 parent);
+    /// Create every deferred child now; children on demand only when
+    /// `on_demand`.
+    void materialize_all(bool on_demand = true) const;
 
 private:
     struct Record {
@@ -623,6 +636,8 @@ private:
         // The identity of an object with no full name (one in an unnamed
         // scope): its parent's identity and its ordinal; empty otherwise.
         std::string state_key { };
+        // Its deferred children are created on demand (defer_children).
+        bool on_demand_children { };
     };
     struct IteratorRecord {
         std::uint16_t epoch { };
@@ -650,12 +665,16 @@ private:
     [[nodiscard]] SystemVerilogVpiIteratorResult create_iterator_locked(
         std::vector<fsim_vpi_handle_v1> objects);
     void materialize(fsim_vpi_handle_v1 parent) const;
+    /// Ask the named materializer for the child `name` of `parent`.
+    [[nodiscard]] bool materialize_named(
+        fsim_vpi_handle_v1 parent, std::string_view name) const;
     [[nodiscard]] std::optional<SystemVerilogVpiStoredValue> visible_value(
         const Record& record, fsim_vpi_handle_v1 handle,
         bool stored = false) const;
     /// The deferred parent whose children would contain `full_name`.
+    /// `prefix` receives the length of the owner's name in `full_name`.
     [[nodiscard]] fsim_vpi_handle_v1 deferred_owner(
-        std::string_view full_name) const;
+        std::string_view full_name, std::size_t* prefix = nullptr) const;
 
     std::uint64_t simulation_identity_ { };
     std::uint32_t registry_identity_ { };
@@ -677,6 +696,8 @@ private:
         value_state_observers_;
     mutable std::recursive_mutex materialize_mutex_;
     std::function<void(fsim_vpi_handle_v1)> materializer_;
+    std::function<bool(fsim_vpi_handle_v1, std::string_view)>
+        named_materializer_;
     SystemVerilogVpiLiveValueSource live_source_;
     std::function<void(fsim_vpi_handle_v1)> watch_hook_;
     mutable std::uint64_t deferred_parents_ { };

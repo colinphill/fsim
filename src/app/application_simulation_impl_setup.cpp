@@ -2220,6 +2220,15 @@ Simulation::Impl::Impl(
         vpi_container_categories
             = std::move(published_vpi.container_categories);
         vpi_deferred_children = std::move(published_vpi.deferred);
+        for (const auto& [parent, children] : vpi_deferred_children) {
+            if (children.memory) {
+                vpi_fixed_word_counts.emplace(
+                    children.memory->container, children.memory->word_count);
+                vpi_on_demand_memories.emplace(parent,
+                    VpiOnDemandMemory { children.memory->container,
+                        children.memory->type, children.memory->word_count });
+            }
+        }
         for (const auto& [signal, drivers] : vpi_driver_bindings) {
             for (const auto& driver : drivers) {
                 vpi_driver_handles.emplace(
@@ -2229,6 +2238,11 @@ Simulation::Impl::Impl(
         vpi_registry->set_child_materializer(
             [this](const fsim_vpi_handle_v1 parent) {
                 materialize_vpi_children(parent);
+            });
+        vpi_registry->set_named_child_materializer(
+            [this](const fsim_vpi_handle_v1 parent,
+                const std::string_view name) {
+                return materialize_vpi_word(parent, name);
             });
         if (vpi_runtime_updates_enabled) {
             vpi_registry->set_live_value_source(

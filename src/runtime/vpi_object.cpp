@@ -957,6 +957,7 @@ SystemVerilogVpiObjectResult SystemVerilogVpiObjectRegistry::create(
         record.live = true;
         record.live_children = 0;
         record.pending_children = 0;
+        record.on_demand_children = false;
         record.children.clear();
         record.ordinal = ordinal;
         record.parent = descriptor.parent;
@@ -997,6 +998,7 @@ SystemVerilogVpiObjectResult SystemVerilogVpiObjectRegistry::create(
             std::move(descriptor.name_prefix),
             anonymous,
             std::move(state_key),
+            false,
         });
     }
 
@@ -1124,7 +1126,9 @@ std::string SystemVerilogVpiObjectRegistry::state_key(
 SystemVerilogVpiObjectLookupResult SystemVerilogVpiObjectRegistry::find(
     const std::string_view full_name) const
 {
-    if (const auto owner = deferred_owner(full_name); owner != 0U) {
+    std::size_t prefix { };
+    if (const auto owner = deferred_owner(full_name, &prefix); owner != 0U
+        && !materialize_named(owner, full_name.substr(prefix))) {
         materialize(owner);
     }
     std::scoped_lock lock { mutex_ };
@@ -1177,7 +1181,9 @@ SystemVerilogVpiObjectRegistry::find_child(
                 return { { }, SystemVerilogVpiObjectError::NotFound };
             }
         }
-        materialize(parent);
+        if (!materialize_named(parent, normalized)) {
+            materialize(parent);
+        }
     }
 }
 
@@ -1929,7 +1935,7 @@ SystemVerilogVpiObjectRegistry::reset_values()
 SystemVerilogVpiObjectStateSnapshot
 SystemVerilogVpiObjectRegistry::snapshot_values() const
 {
-    materialize_all();
+    materialize_all(false);
     SystemVerilogVpiObjectStateSnapshot snapshot;
     // Live values are asked of the simulation with the lock released (the
     // kernel may publish changes through notify_live_value while it
@@ -1999,7 +2005,12 @@ SystemVerilogVpiObjectRegistry::restore_values(
         std::optional<SystemVerilogVpiStoredValue> forced_value;
     };
 
-    materialize_all();
+    materialize_all(false);
+    // The objects created on demand that the snapshot holds are created
+    // now; the others hold no state of their own.
+    for (const auto& state : snapshot.objects) {
+        (void)find(state.full_name);
+    }
     SystemVerilogVpiObjectStateRestoreResult result;
     std::unique_lock lock { mutex_ };
     if (!valid()) {
@@ -2016,15 +2027,32 @@ SystemVerilogVpiObjectRegistry::restore_values(
     std::unordered_set<std::string> names;
     std::unordered_set<fsim_vpi_handle_v1> handles;
     try {
+        // An object created on demand need not be in the snapshot; every
+        // other one must.
+        const auto optional = [this](const Record& record) {
+            std::uint32_t parent { };
+            return record.parent != 0U
+                && resolve_object(record.parent, parent)
+                    == SystemVerilogVpiObjectError::None
+                && records_[parent].on_demand_children;
+        };
         const auto restorable_objects = std::ranges::count_if(
             records_, [](const Record& record) {
                 return record.live && record.type.has_value();
             });
+        const auto required_objects = std::ranges::count_if(
+            records_, [&](const Record& record) {
+                return record.live && record.type.has_value()
+                    && !optional(record);
+            });
         if (snapshot.objects.size()
-            != static_cast<std::size_t>(restorable_objects)) {
+                > static_cast<std::size_t>(restorable_objects)
+            || snapshot.objects.size()
+                < static_cast<std::size_t>(required_objects)) {
             result.error = SystemVerilogVpiObjectStateError::InvalidState;
             return result;
         }
+        std::size_t required_matched { };
         pending.reserve(snapshot.objects.size());
         result.handles.reserve(snapshot.objects.size());
         names.reserve(snapshot.objects.size());
@@ -2062,10 +2090,18 @@ SystemVerilogVpiObjectRegistry::restore_values(
                 result.error = SystemVerilogVpiObjectStateError::TypeMismatch;
                 return result;
             }
+            if (!optional(record)) {
+                ++required_matched;
+            }
             pending.push_back(
                 { slot, found->second, state.value, state.forced_value });
             result.handles.push_back(
                 { state.source_handle, found->second });
+        }
+        if (required_matched != static_cast<std::size_t>(required_objects)) {
+            result.handles.clear();
+            result.error = SystemVerilogVpiObjectStateError::InvalidState;
+            return result;
         }
     } catch (...) {
         result.handles.clear();
@@ -2337,7 +2373,8 @@ SystemVerilogVpiObjectRegistry::iterate_relationship(
 }
 
 SystemVerilogVpiObjectError SystemVerilogVpiObjectRegistry::defer_children(
-    const fsim_vpi_handle_v1 parent, const std::uint32_t count)
+    const fsim_vpi_handle_v1 parent, const std::uint32_t count,
+    const bool on_demand)
 {
     std::scoped_lock lock { mutex_ };
     if (!valid()) {
@@ -2357,6 +2394,7 @@ SystemVerilogVpiObjectError SystemVerilogVpiObjectRegistry::defer_children(
         ++deferred_parents_;
     }
     record.pending_children += count;
+    record.on_demand_children = record.on_demand_children || on_demand;
     return SystemVerilogVpiObjectError::None;
 }
 
@@ -2388,7 +2426,45 @@ void SystemVerilogVpiObjectRegistry::materialize(
     materializer_(parent);
 }
 
-void SystemVerilogVpiObjectRegistry::materialize_all() const
+void SystemVerilogVpiObjectRegistry::set_named_child_materializer(
+    std::function<bool(fsim_vpi_handle_v1, std::string_view)> materializer)
+{
+    std::scoped_lock guard { materialize_mutex_ };
+    named_materializer_ = std::move(materializer);
+}
+
+bool SystemVerilogVpiObjectRegistry::materialize_named(
+    const fsim_vpi_handle_v1 parent, const std::string_view name) const
+{
+    std::scoped_lock guard { materialize_mutex_ };
+    {
+        std::scoped_lock lock { mutex_ };
+        std::uint32_t slot { };
+        if (!named_materializer_ || deferred_parents_ == 0U
+            || resolve_object(parent, slot) != SystemVerilogVpiObjectError::None
+            || records_[slot].pending_children == 0U) {
+            return false;
+        }
+    }
+    return named_materializer_(parent, name);
+}
+
+void SystemVerilogVpiObjectRegistry::claim_deferred_child(
+    const fsim_vpi_handle_v1 parent)
+{
+    std::scoped_lock lock { mutex_ };
+    std::uint32_t slot { };
+    if (resolve_object(parent, slot) != SystemVerilogVpiObjectError::None
+        || records_[slot].pending_children == 0U) {
+        return;
+    }
+    if (--records_[slot].pending_children == 0U) {
+        --deferred_parents_;
+    }
+}
+
+void SystemVerilogVpiObjectRegistry::materialize_all(
+    const bool on_demand) const
 {
     std::vector<fsim_vpi_handle_v1> parents;
     {
@@ -2398,7 +2474,8 @@ void SystemVerilogVpiObjectRegistry::materialize_all() const
         }
         for (std::uint32_t slot = 0; slot < records_.size(); ++slot) {
             const auto& record = records_[slot];
-            if (record.live && record.pending_children != 0U) {
+            if (record.live && record.pending_children != 0U
+                && (on_demand || !record.on_demand_children)) {
                 parents.push_back(encode_object(slot, record.epoch));
             }
         }
@@ -2409,7 +2486,7 @@ void SystemVerilogVpiObjectRegistry::materialize_all() const
 }
 
 fsim_vpi_handle_v1 SystemVerilogVpiObjectRegistry::deferred_owner(
-    const std::string_view full_name) const
+    const std::string_view full_name, std::size_t* const prefix) const
 {
     std::scoped_lock lock { mutex_ };
     if (deferred_parents_ == 0U) {
@@ -2444,6 +2521,9 @@ fsim_vpi_handle_v1 SystemVerilogVpiObjectRegistry::deferred_owner(
         }
         const auto& record = records_[slot];
         if (record.pending_children != 0U) {
+            if (prefix != nullptr) {
+                *prefix = split;
+            }
             return found->second;
         }
         if (record.kind != SystemVerilogVpiObjectKind::GenerateScopeArray

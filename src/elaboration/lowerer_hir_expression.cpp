@@ -17946,10 +17946,15 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             method.argument = *argument;
         }
         process_.operations.emplace_back(method);
-        // compare and icompare return a signed int (IEEE 1800-2017 6.16.8).
+        // compare and icompare return a signed int (IEEE 1800-2017 6.16.8),
+        // atoi, atohex, atooct and atobin an integer (6.16.9).
         const bool signed_result
             = method.operation == StringMethodOperator::compare
-            || method.operation == StringMethodOperator::icompare;
+            || method.operation == StringMethodOperator::icompare
+            || method.operation == StringMethodOperator::atoi
+            || method.operation == StringMethodOperator::atohex
+            || method.operation == StringMethodOperator::atooct
+            || method.operation == StringMethodOperator::atobin;
         result = expected_width != 0U
                 && expected_width != method_width
             ? std::optional { resize_register(

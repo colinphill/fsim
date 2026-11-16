@@ -13,7 +13,6 @@ namespace fsim::runtime {
 namespace {
 
     constexpr std::size_t maximum_nodes = 65'536;
-    constexpr std::size_t maximum_elements = 65'536;
     constexpr std::size_t maximum_name_size = 4096;
 
     bool checked_add(
@@ -225,24 +224,15 @@ namespace {
                     return SystemVerilogVpiDescriptorError::ArithmeticOverflow;
                 }
                 const auto range_size = distance + 1U;
-                if ((descriptor.kind
-                            == SystemVerilogVpiDescriptorKind::UnpackedArray
-                        && range_size > maximum_elements)
-                    || !checked_multiply(
+                if (!checked_multiply(
                         count, static_cast<std::size_t>(range_size), count)) {
                     return SystemVerilogVpiDescriptorError::ElementLimit;
                 }
             }
-            if ((descriptor.kind
-                        == SystemVerilogVpiDescriptorKind::UnpackedArray
-                    && count > maximum_elements)
-                || !checked_multiply(
+            if (!checked_multiply(
                     element.fixed_element_count,
                     count,
                     layout.fixed_element_count)
-                || (descriptor.kind
-                        == SystemVerilogVpiDescriptorKind::UnpackedArray
-                    && layout.fixed_element_count > maximum_elements)
                 || !checked_multiply(
                     element.fixed_bits, count, layout.fixed_bits)) {
                 return SystemVerilogVpiDescriptorError::ElementLimit;
@@ -264,8 +254,7 @@ namespace {
                 || !descriptor.member_names.empty()
                 || !descriptor.enum_literals.empty()
                 || (descriptor.maximum_size
-                    && (*descriptor.maximum_size == 0U
-                        || *descriptor.maximum_size > maximum_elements))) {
+                    && *descriptor.maximum_size == 0U)) {
                 return SystemVerilogVpiDescriptorError::InvalidShape;
             }
             SystemVerilogVpiDescriptorLayout element;
@@ -292,8 +281,7 @@ namespace {
                 || !descriptor.member_names.empty()
                 || !descriptor.enum_literals.empty()
                 || (descriptor.maximum_size
-                    && (*descriptor.maximum_size == 0U
-                        || *descriptor.maximum_size > maximum_elements))) {
+                    && *descriptor.maximum_size == 0U)) {
                 return SystemVerilogVpiDescriptorError::InvalidShape;
             }
             for (const auto& child_descriptor : descriptor.children) {

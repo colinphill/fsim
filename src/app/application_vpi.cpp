@@ -4753,16 +4753,21 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         if (const auto first_alias = container_element_aliases.lower_bound(
                 { container, std::size_t { } });
             type.fixed && word_count != 0U
-            && word_count <= std::numeric_limits<std::uint32_t>::max()
             && (first_alias == container_element_aliases.end()
                 || first_alias->first.first != container)) {
             result.container_scalar_kinds.emplace(container, type.scalar_kind);
             result.container_categories.emplace(container, category);
+            // Each word is created on its first access; the memory counts
+            // them all (vpiSize), saturating at the 32-bit count.
             result.deferred[memory].memory = SystemVerilogVpiDeferredMemory {
                 container, path, type, std::move(word_type), net_array,
-                type.scalar_kind, category };
-            if (result.registry->defer_children(
-                    memory, static_cast<std::uint32_t>(word_count))
+                type.scalar_kind, category,
+                result.registry->reserve_ordinals(word_count),
+                static_cast<std::size_t>(word_count), { } };
+            if (result.registry->defer_children(memory,
+                    static_cast<std::uint32_t>(std::min<std::uint64_t>(
+                        word_count, std::numeric_limits<std::uint32_t>::max())),
+                    true)
                 != runtime::SystemVerilogVpiObjectError::None) {
                 throw std::logic_error {
                     "failed to defer the words of VPI memory '" + path + "'"
@@ -5919,6 +5924,86 @@ fsim_vpi_handle_v1 create_systemverilog_vpi_live_word(
     return create_checked(registry, std::move(word), identity);
 }
 
+std::string systemverilog_vpi_memory_word_name(
+    const runtime::simir::ContainerType& type, const std::size_t ordinal)
+{
+    return memory_word_name(type, ordinal);
+}
+
+std::optional<std::size_t> systemverilog_vpi_memory_word_ordinal(
+    const runtime::simir::ContainerType& type, const std::string_view name)
+{
+    if (!type.fixed || type.dimensions.empty()) {
+        return std::nullopt;
+    }
+    std::size_t at { };
+    std::size_t ordinal { };
+    for (const auto& [left, right] : type.dimensions) {
+        if (at >= name.size() || name[at] != '[') {
+            return std::nullopt;
+        }
+        ++at;
+        const bool negative = at < name.size() && name[at] == '-';
+        if (negative) {
+            ++at;
+        }
+        const auto digits = at;
+        std::int64_t magnitude { };
+        while (at < name.size() && name[at] >= '0' && name[at] <= '9') {
+            if (at - digits >= 11U) {
+                return std::nullopt;
+            }
+            magnitude = magnitude * 10 + (name[at] - '0');
+            ++at;
+        }
+        if (at == digits || at >= name.size() || name[at] != ']') {
+            return std::nullopt;
+        }
+        ++at;
+        const auto index = negative ? -magnitude : magnitude;
+        const auto low = std::min<std::int64_t>(left, right);
+        const auto high = std::max<std::int64_t>(left, right);
+        if (index < low || index > high) {
+            return std::nullopt;
+        }
+        const auto position = static_cast<std::size_t>(
+            left >= right ? std::int64_t { left } - index
+                          : index - std::int64_t { left });
+        ordinal = ordinal * static_cast<std::size_t>(high - low + 1)
+            + position;
+    }
+    if (at < name.size() && name[at] != '.' && name[at] != '[') {
+        return std::nullopt;
+    }
+    if (memory_word_name(type, ordinal) != name.substr(0, at)) {
+        return std::nullopt;
+    }
+    return ordinal;
+}
+
+fsim_vpi_handle_v1 create_systemverilog_vpi_memory_word(
+    runtime::SystemVerilogVpiObjectRegistry& registry,
+    const SystemVerilogVpiDeferredMemory& memory,
+    const fsim_vpi_handle_v1 parent, const std::size_t ordinal)
+{
+    runtime::SystemVerilogVpiObjectDescriptor word;
+    word.kind = memory.net_array ? runtime::SystemVerilogVpiObjectKind::Net
+                                 : runtime::SystemVerilogVpiObjectKind::Variable;
+    word.parent = parent;
+    word.name = memory_word_name(memory.type, ordinal);
+    word.type = memory.word_type;
+    word.ordinal = memory.first_ordinal + ordinal;
+    auto word_path = memory.path + word.name;
+    const auto handle = create_checked(registry, std::move(word), word_path);
+    if (registry.bind_live_value(handle)
+        != runtime::SystemVerilogVpiValueError::None) {
+        throw std::logic_error {
+            "failed to bind live VPI memory word '" + word_path + "'"
+        };
+    }
+    return handle;
+}
+
 SystemVerilogVpiMaterializedChildren materialize_systemverilog_vpi_children(
     runtime::SystemVerilogVpiObjectRegistry& registry,
     const BuiltProject& project,
@@ -5933,23 +6018,12 @@ SystemVerilogVpiMaterializedChildren materialize_systemverilog_vpi_children(
         const auto count = runtime::simir::container_element_count(value);
         result.words.reserve(static_cast<std::size_t>(count));
         for (std::size_t ordinal = 0; ordinal < count; ++ordinal) {
-            runtime::SystemVerilogVpiObjectDescriptor word;
-            word.kind = memory->net_array
-                ? runtime::SystemVerilogVpiObjectKind::Net
-                : runtime::SystemVerilogVpiObjectKind::Variable;
-            word.parent = parent;
-            word.name = memory_word_name(memory->type, ordinal);
-            word.type = memory->word_type;
-            auto word_path = memory->path + word.name;
-            const auto handle
-                = create_checked(registry, std::move(word), word_path);
-            if (registry.bind_live_value(handle)
-                != runtime::SystemVerilogVpiValueError::None) {
-                throw std::logic_error {
-                    "failed to bind live VPI memory word '" + word_path + "'"
-                };
+            if (memory->created.contains(ordinal)) {
+                continue;
             }
-            result.words.emplace_back(handle, ordinal);
+            result.words.emplace_back(create_systemverilog_vpi_memory_word(
+                                          registry, *memory, parent, ordinal),
+                ordinal);
         }
     }
     for (const auto& process : deferred.processes) {
@@ -5999,15 +6073,20 @@ runtime::SystemVerilogVpiStoredValue systemverilog_vpi_signal_value(
         if (category == runtime::SystemVerilogVpiValueCategory::Bit2
             || category == runtime::SystemVerilogVpiValueCategory::Integer2) {
             runtime::PackedBit2 bits { value.width() };
-            for (std::size_t index = 0; index < value.width(); ++index) {
-                const auto bit = value.get(index);
-                if (bit != runtime::Logic4::zero
-                    && bit != runtime::Logic4::one) {
+            const auto aval = value.aval_words();
+            const auto bval = value.bval_words();
+            const auto words = bits.words();
+            const auto tail = value.width() % 64U;
+            for (std::size_t word = 0; word < words.size(); ++word) {
+                const auto mask = word + 1U == words.size() && tail != 0U
+                    ? (std::uint64_t { 1 } << tail) - 1U
+                    : ~std::uint64_t { };
+                if ((bval[word] & mask) != 0U) {
                     throw std::logic_error {
                         "two-state VPI value contains an unknown bit"
                     };
                 }
-                bits.set(index, bit == runtime::Logic4::one);
+                words[word] = aval[word] & mask;
             }
             runtime::SystemVerilogVpiStoredValue result;
             result.payload = std::move(bits);

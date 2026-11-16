@@ -5442,6 +5442,29 @@ ContainerValue Interpreter::container_object_value_snapshot(
     return impl_->read_container_object_value(object);
 }
 
+Interpreter::ContainerElementSnapshot
+Interpreter::container_object_element_snapshot(
+    const ContainerObjectId object, const std::size_t ordinal) const
+{
+    impl_->prepare_container_value_observation(object);
+    ContainerElementSnapshot result;
+    if (impl_->static_kernel) {
+        if (auto element = impl_->static_kernel->owned_container_element(
+                object, ordinal)) {
+            result.packed = std::move(*element);
+            return result;
+        }
+    }
+    impl_->observe_static_kernel_container(object);
+    const auto& value = impl_->read_container_object_value(object);
+    if (value.type.element_kind == ContainerElementKind::String) {
+        result.text = container_string_element(value, ordinal);
+    } else {
+        result.packed = container_packed_element(value, ordinal);
+    }
+    return result;
+}
+
 void Interpreter::deposit_container_object(
     const ContainerObjectId object,
     ContainerValue value)
@@ -5535,11 +5558,45 @@ void Interpreter::deposit_container_object_element(
         }
         return;
     }
+    // A container that only its own storage holds (no signal bridges it and
+    // no reference to its value is out) takes the element alone.
+    if (!target.slice_alias
+        && !(object < impl_->container_signal_aliases.size()
+            && impl_->container_signal_aliases[object])
+        && !(object < impl_->container_aggregate_signal_aliases.size()
+            && impl_->container_aggregate_signal_aliases[object])
+        && impl_->container_value_reference_exposed[object] == 0U
+        && impl_->exposed_container_value_references.empty()) {
+        auto current = impl_->static_kernel
+            ? impl_->static_kernel->owned_container_element(object, ordinal)
+            : std::nullopt;
+        const bool owned = current.has_value();
+        if (!owned) {
+            current = container_packed_element(target.initial_value, ordinal);
+        }
+        if (*current == value) {
+            return;
+        }
+        impl_->invalidate_container_aggregate_extract(object);
+        if (owned) {
+            (void)impl_->static_kernel->write_owned_container_element(
+                object, ordinal, value);
+        }
+        set_container_packed_element(
+            target.initial_value, ordinal, std::move(value));
+        impl_->publish_container_object_change(
+            object, { });
+        return;
+    }
+    // Otherwise the whole container takes the write, through the signals
+    // that bridge it as any foreign write of the container.
     impl_->observe_static_kernel_container(object);
     auto replacement = impl_->read_container_object_value(object);
+    if (container_packed_element(replacement, ordinal) == value) {
+        return;
+    }
     set_container_packed_element(replacement, ordinal, std::move(value));
-    impl_->write_container_object_value(object, replacement);
-    impl_->deposit_static_kernel_container(object);
+    deposit_container_object(object, std::move(replacement));
 }
 
 PackedLogic4 Interpreter::driver_value(

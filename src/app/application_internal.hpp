@@ -138,6 +138,12 @@ struct SystemVerilogVpiDeferredMemory {
     bool net_array { };
     runtime::SystemVerilogScalarKind scalar_kind { };
     runtime::SystemVerilogVpiValueCategory category { };
+    // The place reserved for the first word; word n takes the place after
+    // n others, so the words keep index order whenever they are created.
+    std::uint64_t first_ordinal { };
+    std::size_t word_count { };
+    // The words created on their own, by ordinal.
+    std::unordered_set<std::size_t> created;
 };
 
 struct SystemVerilogVpiDeferredProcess {
@@ -240,6 +246,24 @@ struct SystemVerilogVpiPublishedDesign {
 // 37.17. Empty for any other container.
 [[nodiscard]] std::vector<std::string> systemverilog_vpi_associative_word_names(
     const runtime::simir::ContainerValue& value);
+
+// The ordinal of the word of a fixed memory that `name` begins with: its
+// canonical selections (`[5]`, `[1][-2]`) and nothing, or a member or bit
+// select after them; none when the name selects no word.
+[[nodiscard]] std::optional<std::size_t> systemverilog_vpi_memory_word_ordinal(
+    const runtime::simir::ContainerType& type, std::string_view name);
+
+// The name of the word of a fixed memory at `ordinal`: its selections
+// (`[5]`, `[1][-2]`).
+[[nodiscard]] std::string systemverilog_vpi_memory_word_name(
+    const runtime::simir::ContainerType& type, std::size_t ordinal);
+
+// Create the word of a deferred memory at `ordinal`, bound to its live
+// value.
+[[nodiscard]] fsim_vpi_handle_v1 create_systemverilog_vpi_memory_word(
+    runtime::SystemVerilogVpiObjectRegistry& registry,
+    const SystemVerilogVpiDeferredMemory& memory, fsim_vpi_handle_v1 parent,
+    std::size_t ordinal);
 
 // Create the deferred children of `parent` with their current values: the
 // words first, then the processes, then the drivers, the order the design

@@ -1363,6 +1363,17 @@ fsim_add_foreign_conformance_test(
   vpi-memory-words-debug vpi foreign_vpi_memory_words.sv
   foreign_vpi_memory_words.expected "" fsim_foreign_vpi_memory_words_plugin
   0 OFF "" DEBUG_COMMANDS foreign_vpi_memory_words_debug.tcl)
+# Words of memories with millions of words by index, by name and by
+# iteration, put and watched (IEEE 1800-2023 37.17, 38.34, 38.36.1).
+add_library(fsim_foreign_vpi_huge_memory_plugin SHARED
+  foreign_vpi_huge_memory_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_huge_memory_plugin)
+target_link_libraries(fsim_foreign_vpi_huge_memory_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_huge_memory_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-huge-memory vpi foreign_vpi_huge_memory.sv
+  foreign_vpi_huge_memory.expected "" fsim_foreign_vpi_huge_memory_plugin)
 # Library binding of a configured design (IEEE 1800-2023 33.7).
 add_library(fsim_foreign_vpi_config_plugin SHARED
   foreign_vpi_config_plugin.c)

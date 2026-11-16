@@ -1405,6 +1405,8 @@ sim.impl	generated_class_index_published	D	artifact products and caches
 sim.impl	class_type_specializations	D	artifact products and caches
 sim.impl	class_specialization_recipes	P	saved by the app.class_specializations section, which makes the specializations again before the class heap and static sections are read
 sim.impl	class_instance_parameter_cache	D	artifact products and caches
+sim.impl	vpi_fixed_word_counts	D	VPI memory word counts, built at setup; not saved
+sim.impl	vpi_on_demand_memories	D	VPI memories whose words are made on demand, built at setup; not saved
 sim.impl	vpi_runtime_updates_enabled	P	lifecycle flags (SystemC refuses save)
 sim.impl	class_heap	P+ids	application run state (S6)
 sim.impl	class_constraint_property_types	D	artifact products and caches
@@ -1596,6 +1598,7 @@ sim.impl	interactive_scope	P	the interactive scope ($scope, vpiSetInteractiveSco
 sim.impl	scope_design	D	the VPI design of the scope tasks, rebuilt from the artifact
 foreign.vpi_host	companion	Cfg	companion hand-off
 foreign.vpi_host	startup_phase	Cfg	companion hand-off
+foreign.vpi_live	next_word_serial_	D	VPI handle tables and model caches, rebuilt on demand; not saved
 foreign.vpi_live	simulation_	Cfg	loaded modules and registrations from the same command line (identity-checked at restart)
 foreign.vpi_live	registry_	Cfg	loaded modules and registrations from the same command line (identity-checked at restart)
 foreign.vpi_live	print_	Cfg	loaded modules and registrations from the same command line (identity-checked at restart)
@@ -1939,3 +1942,5 @@ sim.impl	uvm_singleton_variable_signals	D	cache of the signals that hold the lib
 sim.impl	assertion_control_task_hook	Cfg	observers and hooks installed by the embedder (the VPI service binds it for the Table 20-8 control-task callbacks)
 foreign.vpi_live	system_value_sites_built_	D	VPI handle tables and model caches, rebuilt on demand; not saved
 foreign.vpi_live	system_value_sites_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	word_span_index_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	word_spans_	D	VPI handle tables and model caches, rebuilt on demand; not saved

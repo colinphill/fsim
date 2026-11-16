@@ -5960,6 +5960,18 @@ std::optional<std::uint32_t> Interpreter::Impl::StaticKernel::run_behavioral_com
         verify_before->registers = body.registers;
         verify_before->containers = native_container_values(member);
         verify_before->strings = member.strings;
+        for (const auto& inst : body.code) {
+            if (inst.op == KOp::str
+                && static_cast<static_kernel_detail::StrOp>(inst.sub)
+                    == static_kernel_detail::StrOp::write_object) {
+                const auto id = static_cast<StringObjectId>(inst.imm_a);
+                if (std::ranges::none_of(verify_before->string_objects,
+                        [&](const auto& entry) { return entry.first == id; })) {
+                    verify_before->string_objects.emplace_back(
+                        id, impl_.string_object_storage(id));
+                }
+            }
+        }
         verify_before->random = *random_state_table()[member_index];
         verify_before->system_seed = impl_.system_random_seed;
         if (body.call_stack_base != 0U) {
@@ -6531,6 +6543,14 @@ void Interpreter::Impl::StaticKernel::verify_thread_activation(
     const ReferenceContainerScope reference_containers { member, before.containers };
     // The replay's string registers: the activation's at the start.
     const ReferenceStringScope reference_strings { member, before.strings };
+    // The string variables the compiled run wrote in place: the replay's
+    // start from their values before it.
+    std::vector<std::string> compiled_string_objects;
+    compiled_string_objects.reserve(before.string_objects.size());
+    for (const auto& [id, value] : before.string_objects) {
+        auto& storage = impl_.string_object_storage(id);
+        compiled_string_objects.push_back(std::exchange(storage, value));
+    }
     // The replay draws the compiled run's random numbers again.
     auto* const random_stream = random_state_table()[member_index];
     const auto compiled_random = *random_stream;
@@ -6815,6 +6835,16 @@ void Interpreter::Impl::StaticKernel::verify_thread_activation(
     }
     if (mismatch.empty()) {
         mismatch = reference_strings.mismatch();
+    }
+    for (std::size_t index = 0U; index < before.string_objects.size(); ++index) {
+        auto& storage = impl_.string_object_storage(before.string_objects[index].first);
+        if (mismatch.empty() && storage != compiled_string_objects[index]) {
+            mismatch = "string variable "
+                + std::to_string(before.string_objects[index].first) + " compiled \""
+                + compiled_string_objects[index] + "\" reference \"" + storage + "\"";
+        }
+        // The compiled run's value stands.
+        storage = std::move(compiled_string_objects[index]);
     }
     // Self-test of this check: FSIM_KERNEL_VERIFY_INJECT=thread reports the
     // first verified activation as a mismatch.

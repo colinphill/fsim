@@ -173,6 +173,10 @@ enum class Tag : std::uint64_t {
     // object so that its name and operation leaves have values (37.33,
     // 37.34, 37.38).
     bound_item = 62,
+    // A word of a fixed memory whose words get no object of their own until
+    // one is needed (IEEE 1800-2023 37.17): the memory's span of serials
+    // and the word's ordinal in it.
+    word = 63,
 };
 constexpr std::uint64_t serial_mask = (std::uint64_t { 1 } << 48U) - 1U;
 
@@ -626,10 +630,18 @@ struct Value {
 [[nodiscard]] PackedLogic4 resized(const PackedLogic4& value,
     const std::size_t width, const bool sign_extend)
 {
-    PackedLogic4 result { width, Logic4::zero };
     const auto fill = sign_extend && value.width() != 0U
         ? value.get(value.width() - 1U)
         : Logic4::zero;
+    if (!value.is_logic9() && width != 0U && value.width() != 0U) {
+        if (width <= value.width()) {
+            return value.extract_bits(0U, width);
+        }
+        PackedLogic4 result { width, fill };
+        result.insert_bits(value, 0U);
+        return result;
+    }
+    PackedLogic4 result { width, Logic4::zero };
     for (std::size_t bit = 0U; bit < width; ++bit) {
         result.set(bit, bit < value.width() ? value.get(bit) : fill);
     }
@@ -638,6 +650,10 @@ struct Value {
 
 [[nodiscard]] bool known(const PackedLogic4& value)
 {
+    if (!value.is_logic9()) {
+        return std::ranges::all_of(value.bval_words(),
+            [](const std::uint64_t word) { return word == 0U; });
+    }
     for (std::size_t bit = 0U; bit < value.width(); ++bit) {
         const auto state = value.get(bit);
         if (state != Logic4::zero && state != Logic4::one) {
@@ -1016,9 +1032,12 @@ struct Value {
     Value value;
     value.is_signed = is_signed;
     if (const auto* bits = std::get_if<runtime::PackedBit2>(&stored.payload)) {
-        value.bits = PackedLogic4 { bits->width(), Logic4::zero };
-        for (std::size_t bit = 0U; bit < bits->width(); ++bit) {
-            value.bits.set(bit, bits->get(bit) ? Logic4::one : Logic4::zero);
+        if (bits->width() == 0U) {
+            value.bits = PackedLogic4 { 0U, Logic4::zero };
+        } else {
+            const std::vector<std::uint64_t> unknown(bits->words().size(), 0U);
+            value.bits = PackedLogic4::from_word_planes(
+                bits->width(), bits->words(), unknown);
         }
     } else if (const auto* logic
         = std::get_if<PackedLogic4>(&stored.payload)) {
@@ -3737,6 +3756,27 @@ private:
         const fsim_vpi_service_request_v1& request,
         fsim_vpi_service_result_v1& result)
     {
+        // A word without an object of its own answers its value, a deposit
+        // and its properties; any other routine is given the word's own
+        // object, made now.
+        if (const auto word = word_of(request.handle)) {
+            const bool answered = request.flags == 0U
+                && (routine == Routine::GetValue || routine == Routine::PutValue
+                    || routine == Routine::GetProperty
+                    || routine == Routine::GetProperty64
+                    || routine == Routine::GetStringProperty
+                    || routine == Routine::CompareObjects
+                    || routine == Routine::FreeObject
+                    || routine == Routine::ReleaseHandle);
+            if (!answered) {
+                auto published = request;
+                published.handle = publish_word(*word);
+                if (published.handle == 0U) {
+                    return FSIM_VPI_STATUS_NOT_FOUND;
+                }
+                return route(routine, published, result);
+            }
+        }
         // The array value routines reach the service as an extension
         // operation of vpi_get_value and vpi_put_value.
         constexpr std::uint32_t value_array_operation = 1U;
@@ -3867,7 +3907,10 @@ private:
             return succeed(result, 0U, 1U);
         case Routine::CompareObjects:
             return succeed(result, 0U,
-                resolve(request.handle) == resolve(request.user_data) ? 1U : 0U);
+                word_identity(resolve(request.handle))
+                        == word_identity(resolve(request.user_data))
+                    ? 1U
+                    : 0U);
         case Routine::GetUserData: {
             const auto found = user_data_.find(request.handle);
             return succeed(result, 0U, 0U,
@@ -3981,6 +4024,29 @@ private:
         // The reference object vpi_iterate was given (IEEE 1800-2023
         // 38.23); 0 for a NULL reference.
         fsim_vpi_handle_v1 reference { };
+        // The words of an on-demand memory, made as the scan reaches them:
+        // its span, then `cursor` counts up to `words`, the ordinal running
+        // down when `descending`.
+        std::optional<std::size_t> span;
+        std::size_t words { };
+        bool descending { };
+    };
+    // The serials of the words of an on-demand memory: from `base` on, one
+    // a word. `model` is one word with an object of its own, whose
+    // properties every word of the memory shares.
+    struct WordSpan {
+        fsim_vpi_handle_v1 memory { };
+        std::uint64_t base { };
+        std::size_t count { };
+        fsim_vpi_handle_v1 model { };
+        // The model's type: whether its value is signed, and whether it is
+        // a string.
+        bool is_signed { };
+        bool string { };
+    };
+    struct WordRef {
+        std::size_t span { };
+        std::size_t ordinal { };
     };
     // A bit-select or part-select of a vector (IEEE 1800-2023 37.18):
     // `width` bits of the parent starting `offset` bits above its LSB.
@@ -9291,6 +9357,15 @@ private:
     [[nodiscard]] fsim_vpi_handle_v1 memory_word(
         const fsim_vpi_handle_v1 memory, const std::string& selections) const
     {
+        if (simulation_.vpi_on_demand_memory(memory)) {
+            const auto ordinal
+                = simulation_.vpi_on_demand_word_ordinal(memory, selections);
+            return ordinal
+                    && simulation_.vpi_on_demand_word_name(memory, *ordinal)
+                        == selections
+                ? word_handle(memory, *ordinal)
+                : fsim_vpi_handle_v1 { };
+        }
         const auto found = registry_.find_child(memory, selections);
         return found && found.value ? found.value->handle : 0U;
     }
@@ -9930,6 +10005,11 @@ private:
             } else {
                 argument.omitted = name == "-";
                 argument.value.bits = PackedLogic4 { 1U, Logic4::x };
+            }
+            // An argument stands for its object, so a word it names has
+            // one of its own.
+            if (const auto word = word_of(argument.object)) {
+                argument.object = publish_word(*word);
             }
             site.arguments.push_back(std::move(argument));
         }
@@ -14987,6 +15067,16 @@ private:
         }
         auto stored = std::make_unique<Callback>();
         stored->data = *data;
+        // A word without an object of its own gets one: the callback is
+        // that object's (IEEE 1800-2023 38.36).
+        if (const auto word = word_of(internal(data->obj))) {
+            const auto published = publish_word(*word);
+            if (published == 0U) {
+                return FSIM_VPI_STATUS_NOT_FOUND;
+            }
+            stored->data.obj = reinterpret_cast<vpiHandle>(
+                static_cast<std::uintptr_t>(published));
+        }
         // Simulation action callbacks take no time (IEEE 1800-2023
         // 38.36.3); a caller may leave the field uninitialized.
         const auto action_reason = data->reason == cbEndOfCompile
@@ -15036,7 +15126,7 @@ private:
             stored->has_value = true;
         }
         const auto serial = ++next_callback_;
-        const auto object = canonical_object(internal(data->obj));
+        const auto object = canonical_object(internal(stored->data.obj));
         std::optional<runtime::SystemVerilogVpiCallbackKind> kind;
         std::optional<runtime::SystemVerilogVpiTimeValue> delay;
         fsim_vpi_handle_v1 watched = object;
@@ -15751,9 +15841,176 @@ private:
             reinterpret_cast<std::uintptr_t>(handle));
     }
 
+    // --- words of on-demand memories (IEEE 1800-2023 37.17) -------------
+
+    // The word a handle without an object of its own stands for.
+    [[nodiscard]] std::optional<WordRef> word_of(
+        const fsim_vpi_handle_v1 handle) const
+    {
+        if (!owned(handle) || tag_of(handle) != Tag::word) {
+            return std::nullopt;
+        }
+        const auto serial = serial_of(handle);
+        const auto after = std::ranges::upper_bound(
+            word_spans_, serial, { }, &WordSpan::base);
+        if (after == word_spans_.begin()) {
+            return std::nullopt;
+        }
+        const auto span = static_cast<std::size_t>(
+            std::prev(after) - word_spans_.begin());
+        const auto ordinal = serial - word_spans_[span].base;
+        if (ordinal >= word_spans_[span].count) {
+            return std::nullopt;
+        }
+        return WordRef { span, static_cast<std::size_t>(ordinal) };
+    }
+
+    // The span of serials of an on-demand memory's words, given on first
+    // use; none when the serials are spent.
+    [[nodiscard]] std::optional<std::size_t> word_span(
+        const fsim_vpi_handle_v1 memory) const
+    {
+        if (const auto found = word_span_index_.find(memory);
+            found != word_span_index_.end()) {
+            return found->second;
+        }
+        const auto count = simulation_.vpi_on_demand_memory(memory);
+        if (!count || *count > serial_mask - next_word_serial_) {
+            return std::nullopt;
+        }
+        word_spans_.push_back({ memory, next_word_serial_, *count, 0U });
+        next_word_serial_ += *count;
+        word_span_index_.emplace(memory, word_spans_.size() - 1U);
+        return word_spans_.size() - 1U;
+    }
+
+    // The word's own object, made now if it has none.
+    [[nodiscard]] fsim_vpi_handle_v1 publish_word(const WordRef& word) const
+    {
+        const auto memory = word_spans_[word.span].memory;
+        const auto found = registry_.find_child(memory,
+            simulation_.vpi_on_demand_word_name(memory, word.ordinal));
+        return found && found.value ? found.value->handle : 0U;
+    }
+
+    // The handle of the word of an on-demand memory at `ordinal`: its own
+    // object when it has one, otherwise one that stands for it.
+    [[nodiscard]] fsim_vpi_handle_v1 word_handle(
+        const fsim_vpi_handle_v1 memory, const std::size_t ordinal) const
+    {
+        const auto span = word_span(memory);
+        if (!span || simulation_.vpi_on_demand_word_published(memory, ordinal)) {
+            const auto found = registry_.find_child(memory,
+                simulation_.vpi_on_demand_word_name(memory, ordinal));
+            return found && found.value ? found.value->handle : 0U;
+        }
+        return tagged(Tag::word, word_spans_[*span].base + ordinal);
+    }
+
+    // The word whose object gives the properties every word of the span
+    // shares: the first word, made on first use.
+    [[nodiscard]] fsim_vpi_handle_v1 word_model(const std::size_t span) const
+    {
+        auto& entry = word_spans_[span];
+        if (entry.model == 0U) {
+            entry.model = publish_word({ span, 0U });
+            const auto type = registry_.type_info(entry.model);
+            entry.is_signed = type && type.value && type.value->is_signed;
+            entry.string = !type || !type.value
+                || type.value->category
+                    == runtime::SystemVerilogVpiValueCategory::String;
+        }
+        return entry.model;
+    }
+
+    // Whether the word still has no object of its own and shares its
+    // model's properties: a string word's size follows its value, so it
+    // takes its own object.
+    [[nodiscard]] bool word_value_shared(const WordRef& word) const
+    {
+        const auto& span = word_spans_[word.span];
+        if (simulation_.vpi_on_demand_word_published(span.memory, word.ordinal)) {
+            return false;
+        }
+        return word_model(word.span) != 0U && !span.string;
+    }
+
+    // The object information of a word: its own object's, or its model's
+    // with the word's handle, place and names.
+    [[nodiscard]] std::optional<runtime::SystemVerilogVpiObjectInfo> word_info(
+        const WordRef& word) const
+    {
+        const auto& span = word_spans_[word.span];
+        if (simulation_.vpi_on_demand_word_published(span.memory, word.ordinal)) {
+            return info(publish_word(word));
+        }
+        auto found = registry_.lookup(word_model(word.span));
+        if (!found) {
+            return std::nullopt;
+        }
+        auto object = std::move(*found.value);
+        const auto model_name
+            = simulation_.vpi_on_demand_word_name(span.memory, 0U);
+        const auto own_name
+            = simulation_.vpi_on_demand_word_name(span.memory, word.ordinal);
+        for (auto* const text : { &object.name, &object.full_name }) {
+            if (text->ends_with(model_name)) {
+                text->resize(text->size() - model_name.size());
+                text->append(own_name);
+            }
+        }
+        object.handle = tagged(Tag::word, span.base + word.ordinal);
+        object.ordinal += word.ordinal;
+        return object;
+    }
+
+    // The object a handle is the same as for vpi_compare_objects: a word's
+    // own object once it has one.
+    [[nodiscard]] fsim_vpi_handle_v1 word_identity(
+        const fsim_vpi_handle_v1 handle) const
+    {
+        const auto word = word_of(handle);
+        if (!word
+            || !simulation_.vpi_on_demand_word_published(
+                word_spans_[word->span].memory, word->ordinal)) {
+            return handle;
+        }
+        return publish_word(*word);
+    }
+
+    // The word of an on-demand memory a full name names (`top.mem[5]`),
+    // or 0.
+    [[nodiscard]] fsim_vpi_handle_v1 on_demand_word_named(
+        const std::string& full) const
+    {
+        for (auto open = full.rfind('['); open != std::string::npos && open != 0U;
+             open = full.rfind('[', open - 1U)) {
+            const auto prefix = registry_.find(full.substr(0U, open));
+            if (!prefix || !prefix.value) {
+                continue;
+            }
+            const auto memory = prefix.value->handle;
+            if (!simulation_.vpi_on_demand_memory(memory)) {
+                return 0U;
+            }
+            const auto selections = full.substr(open);
+            const auto ordinal
+                = simulation_.vpi_on_demand_word_ordinal(memory, selections);
+            return ordinal
+                    && simulation_.vpi_on_demand_word_name(memory, *ordinal)
+                        == selections
+                ? word_handle(memory, *ordinal)
+                : fsim_vpi_handle_v1 { };
+        }
+        return 0U;
+    }
+
     [[nodiscard]] std::optional<runtime::SystemVerilogVpiObjectInfo> info(
         const fsim_vpi_handle_v1 handle) const
     {
+        if (const auto word = word_of(handle)) {
+            return word_info(*word);
+        }
         if (handle == 0U || owned(handle)) {
             return std::nullopt;
         }
@@ -16443,7 +16700,8 @@ private:
             return 0U;
         }
         const auto serial = ++next_iterator_;
-        iterators_.emplace(serial, Iterator { std::move(objects), 0U, 0U });
+        iterators_.emplace(serial,
+            Iterator { std::move(objects), 0U, 0U, std::nullopt, 0U, false });
         return tagged(Tag::iterator, serial);
     }
 
@@ -17100,6 +17358,29 @@ private:
         if (!parent) {
             return succeed(result);
         }
+        // The words of an on-demand memory are made as the scan reaches
+        // them, lowest address first as below; every word is of the kind
+        // and type of its model.
+        if (parent->kind == SystemVerilogVpiObjectKind::Memory) {
+            if (const auto count = simulation_.vpi_on_demand_memory(reference);
+                count && *count != 0U) {
+                const auto span = word_span(reference);
+                const auto model = span ? word_model(*span) : 0U;
+                const auto model_info = model != 0U ? info(model)
+                                                    : std::nullopt;
+                if (model_info) {
+                    if (!matches(type, *model_info)) {
+                        return succeed(result);
+                    }
+                    const auto range = declared_range(reference);
+                    const auto serial = ++next_iterator_;
+                    iterators_.emplace(serial,
+                        Iterator { { }, 0U, 0U, span, *count,
+                            range && range->first > range->second });
+                    return succeed(result, tagged(Tag::iterator, serial));
+                }
+            }
+        }
         for (const auto handle : drain(registry_.iterate_children(reference))) {
             const auto object = info(handle);
             // Names starting `$` or `@` are the elaborator's own storage,
@@ -17148,6 +17429,18 @@ private:
             return FSIM_VPI_STATUS_NOT_FOUND;
         }
         auto& iterator = found->second;
+        if (iterator.span) {
+            if (iterator.cursor >= iterator.words) {
+                iterators_.erase(found);
+                return succeed(result);
+            }
+            const auto step = iterator.cursor++;
+            const auto ordinal = iterator.descending
+                ? iterator.words - 1U - step
+                : step;
+            return succeed(result,
+                word_handle(word_spans_[*iterator.span].memory, ordinal));
+        }
         if (iterator.cursor >= iterator.objects.size()) {
             // The iterator is freed when the scan reaches its end
             // (IEEE 1800-2023 38.32).
@@ -18320,6 +18613,9 @@ private:
         const std::string name
             = hierarchical_name({ request.text, request.text_size });
         const auto found_or_folded = [this](const std::string& full) {
+            if (const auto word = on_demand_word_named(full)) {
+                return word;
+            }
             if (const auto handle = find_full_name(full)) {
                 return handle;
             }
@@ -18716,6 +19012,16 @@ private:
     fsim_vpi_status_v1 property(const fsim_vpi_service_request_v1& request,
         fsim_vpi_service_result_v1& result)
     {
+        // A word without an object of its own has its model's properties,
+        // which no word's name or value changes.
+        if (const auto word = word_of(request.handle)) {
+            auto forwarded = request;
+            forwarded.handle = word_value_shared(*word)
+                ? word_model(word->span)
+                : publish_word(*word);
+            return forwarded.handle == 0U ? FSIM_VPI_STATUS_NOT_FOUND
+                                          : this->property(forwarded, result);
+        }
         const auto property = static_cast<PLI_INT32>(request.argument);
         if (const auto loop = loop_statement_of(request.handle)) {
             auto forwarded = request;
@@ -19979,6 +20285,36 @@ private:
     fsim_vpi_status_v1 string_property(const fsim_vpi_service_request_v1& request,
         fsim_vpi_service_result_v1& result)
     {
+        // A word without an object of its own has its model's strings, with
+        // its own selections in its names.
+        if (const auto word = word_of(request.handle)) {
+            const auto selector = static_cast<PLI_INT32>(request.argument);
+            auto forwarded = request;
+            const bool shared = word_value_shared(*word)
+                && selector != vpiDecompile;
+            forwarded.handle = shared ? word_model(word->span)
+                                      : publish_word(*word);
+            if (forwarded.handle == 0U) {
+                return FSIM_VPI_STATUS_NOT_FOUND;
+            }
+            const auto status = string_property(forwarded, result);
+            if (!shared || status != FSIM_VPI_STATUS_OK
+                || (selector != vpiName && selector != vpiFullName)
+                || result.user_data == 0U) {
+                return status;
+            }
+            std::string named { pointer<const char>(result.user_data) };
+            const auto& span = word_spans_[word->span];
+            const auto model_name
+                = simulation_.vpi_on_demand_word_name(span.memory, 0U);
+            if (!named.ends_with(model_name)) {
+                return status;
+            }
+            named.resize(named.size() - model_name.size());
+            named += simulation_.vpi_on_demand_word_name(
+                span.memory, word->ordinal);
+            return succeed(result, 0U, 0U, address(store(std::move(named))));
+        }
         const auto property = static_cast<PLI_INT32>(request.argument);
         const auto text = [&](std::string value) {
             return succeed(result, 0U, 0U, address(store(std::move(value))));
@@ -21586,6 +21922,28 @@ private:
         if (out == nullptr) {
             return FSIM_VPI_STATUS_NOT_FOUND;
         }
+        // The value of a word without an object of its own is read from its
+        // memory, as its object would read it; a strength comes from the
+        // object.
+        if (const auto word = word_of(request.handle)) {
+            if (out->format == vpiStrengthVal || !word_value_shared(*word)) {
+                auto published = request;
+                published.handle = publish_word(*word);
+                return published.handle == 0U
+                    ? FSIM_VPI_STATUS_NOT_FOUND
+                    : get_value(published, result);
+            }
+            const auto& span = word_spans_[word->span];
+            const auto value = stored_to_value(
+                simulation_.vpi_on_demand_word_value(span.memory, word->ordinal),
+                span.is_signed);
+            if (!value || !write_value(*value, *out)) {
+                out->format = vpiSuppressVal;
+                std::memset(&out->value, 0, sizeof(out->value));
+                return FSIM_VPI_STATUS_NOT_FOUND;
+            }
+            return succeed(result);
+        }
         // A delay term has the value of its net (IEEE 1800-2023 37.45).
         if (const auto term = path_delay_term_of(request.handle)) {
             auto redirected = request;
@@ -21862,9 +22220,17 @@ private:
         if (!current || !current.value) {
             return std::nullopt;
         }
+        return stored_like(*current.value, value);
+    }
+
+    // `value` in the representation of `current`.
+    [[nodiscard]] std::optional<runtime::SystemVerilogVpiStoredValue> stored_like(
+        const runtime::SystemVerilogVpiStoredValue& current,
+        const Value& value) const
+    {
         runtime::SystemVerilogVpiStoredValue stored;
-        stored.strength = current.value->strength;
-        const auto& payload = current.value->payload;
+        stored.strength = current.strength;
+        const auto& payload = current.payload;
         if (const auto* bits = std::get_if<runtime::PackedBit2>(&payload)) {
             const auto source = value_bits(value, bits->width());
             runtime::PackedBit2 next { bits->width() };
@@ -21938,6 +22304,63 @@ private:
             (void)values.cancel(handle);
             (void)values.release(handle);
             return succeed(result);
+        }
+        // A deposit with no delay into a word without an object of its own
+        // writes its memory, as a deposit through its object would (IEEE
+        // 1800-2023 38.34); any other put is the word's own object's.
+        if (const auto word = word_of(request.handle)) {
+            const bool deposit = (mode == vpiNoDelay
+                                     || (arguments->time == nullptr
+                                         && (mode == vpiInertialDelay
+                                             || mode == vpiTransportDelay
+                                             || mode == vpiPureTransportDelay)))
+                && (flags & vpiReturnEvent) == 0
+                && arguments->value != nullptr
+                && arguments->value->format != vpiStrengthVal
+                && word_value_shared(*word);
+            if (!deposit) {
+                auto published = request;
+                published.handle = publish_word(*word);
+                return published.handle == 0U
+                    ? FSIM_VPI_STATUS_NOT_FOUND
+                    : put_value(published, result);
+            }
+            if (read_only_) {
+                error_message_ = "vpi_put_value: no write in a cbReadOnlySynch "
+                                 "callback";
+                error_ = true;
+                return FSIM_VPI_STATUS_INVALID_ARGUMENT;
+            }
+            const auto model = info(word_model(word->span));
+            if (!model || !model->type) {
+                return FSIM_VPI_STATUS_NOT_FOUND;
+            }
+            using Category = runtime::SystemVerilogVpiValueCategory;
+            if (arguments->value->format == vpiStringVal
+                && (model->type->category == Category::Real
+                    || model->type->category == Category::ShortReal)) {
+                error_message_ = "vpi_put_value: vpiStringVal cannot be put "
+                                 "to a real variable (IEEE 1800-2023 38.34)";
+                error_ = true;
+                return FSIM_VPI_STATUS_INVALID_ARGUMENT;
+            }
+            const auto value = input_value(*arguments->value,
+                std::max<std::size_t>(model->type->width, 1U));
+            if (!value) {
+                return FSIM_VPI_STATUS_NOT_FOUND;
+            }
+            const auto& span = word_spans_[word->span];
+            const auto stored = stored_like(
+                simulation_.vpi_on_demand_word_value(span.memory, word->ordinal),
+                *value);
+            if (!stored) {
+                return FSIM_VPI_STATUS_NOT_FOUND;
+            }
+            return simulation_.deposit_vpi_on_demand_word(
+                       span.memory, word->ordinal, *stored)
+                    == runtime::SystemVerilogVpiValueError::None
+                ? succeed(result)
+                : FSIM_VPI_STATUS_NOT_FOUND;
         }
         // A system function's calltf returns its value by writing the call
         // (IEEE 1800-2023 38.35).
@@ -23115,6 +23538,11 @@ private:
         std::less<>>
         static_container_views_;
     std::uint64_t next_iterator_ { };
+    // The words of on-demand memories, by span of serials in increasing
+    // order (Tag::word).
+    mutable std::vector<WordSpan> word_spans_;
+    mutable std::unordered_map<fsim_vpi_handle_v1, std::size_t> word_span_index_;
+    mutable std::uint64_t next_word_serial_ { };
     std::unordered_map<std::uint64_t, Iterator> iterators_;
     std::unordered_map<fsim_vpi_handle_v1, void*> user_data_;
     std::array<std::string, 16> strings_;

@@ -6433,12 +6433,36 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 }
                 // A source wider than the targets supplies its leftmost bits
                 // (IEEE 1800-2017 11.4.14.3), before any slice reordering.
+                // A variable-size target takes all the bits it is given
+                // (11.4.14.4), so then the targets have no width.
                 std::size_t target_width { };
                 bool target_width_known = true;
                 for (auto operand = stream.operands.begin() + 1;
                     operand != stream.operands.end(); ++operand) {
-                    const auto width = hir_expression_width(
-                        *operand, hir_process_scope_);
+                    std::optional<std::uint64_t> width;
+                    if (const auto destination
+                        = hir_container_object_binding(*operand)) {
+                        if (destination->type != nullptr
+                            && destination->type->fixed) {
+                            width = hir_systemverilog_container_bit_width(
+                                *destination->type);
+                        }
+                    } else if (const auto with
+                        = specialized_hir_unit_->find_expression(*operand);
+                        !with || with->systemverilog == nullptr
+                        || with->systemverilog->kind
+                            != semantic::sv::ExpressionKind::call
+                        || (with->systemverilog->marker
+                                != support::ExpressionMarker::stream_with
+                            && with->systemverilog->marker
+                                != support::ExpressionMarker::stream_with_range
+                            && with->systemverilog->marker
+                                != support::ExpressionMarker::stream_with_plus
+                            && with->systemverilog->marker
+                                != support::ExpressionMarker::stream_with_minus)) {
+                        width = hir_expression_width(
+                            *operand, hir_process_scope_);
+                    }
                     if (!width || *width == 0U) {
                         target_width_known = false;
                         break;

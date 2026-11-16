@@ -3386,6 +3386,10 @@ void Simulation::Impl::require_vpi_value(
                 return force_vpi_bridge_word(update, word->second.first,
                     word->second.second);
             }
+            if (vpi_fixed_word_counts.contains(word->second.first)) {
+                return deposit_vpi_fixed_word(
+                    word->second.first, word->second.second, update.value);
+            }
             auto value = vpi_container_value(word->second.first);
             // A word of a string container takes a string (IEEE 1800-2023
             // 38.35).
@@ -3874,6 +3878,80 @@ void Simulation::Impl::materialize_vpi_children(
     }
 }
 
+runtime::SystemVerilogVpiStoredValue Simulation::Impl::vpi_fixed_word_value(
+    const runtime::simir::ContainerObjectId container,
+    const std::size_t ordinal) const
+{
+    const auto category = vpi_container_categories.at(container);
+    if (auto owned
+        = interpreter->kernel_container_object_element(container, ordinal)) {
+        return systemverilog_vpi_signal_value(std::move(*owned),
+            vpi_container_scalar_kinds.at(container), category);
+    }
+    auto element
+        = interpreter->container_object_element_snapshot(container, ordinal);
+    if (category == runtime::SystemVerilogVpiValueCategory::String) {
+        runtime::SystemVerilogVpiStoredValue text;
+        text.payload = std::move(element.text);
+        return text;
+    }
+    return systemverilog_vpi_signal_value(std::move(element.packed),
+        vpi_container_scalar_kinds.at(container), category);
+}
+
+runtime::SystemVerilogVpiValueError Simulation::Impl::deposit_vpi_fixed_word(
+    const runtime::simir::ContainerObjectId container,
+    const std::size_t ordinal,
+    const runtime::SystemVerilogVpiStoredValue& value)
+{
+    const auto category = vpi_container_categories.at(container);
+    // A word of a string container takes a string (IEEE 1800-2023 38.35).
+    if (category == runtime::SystemVerilogVpiValueCategory::String) {
+        const auto* text = std::get_if<std::string>(&value.payload);
+        if (text == nullptr) {
+            return runtime::SystemVerilogVpiValueError::TypeMismatch;
+        }
+        auto whole = vpi_container_value(container);
+        if (runtime::simir::container_string_element(whole, ordinal)
+            != *text) {
+            runtime::simir::set_container_string_element(
+                whole, ordinal, *text);
+            interpreter->deposit_container_object(container, std::move(whole));
+        }
+        return runtime::SystemVerilogVpiValueError::None;
+    }
+    interpreter->deposit_container_object_element(container, ordinal,
+        systemverilog_vpi_packed_value(
+            value, vpi_container_scalar_kinds.at(container), category));
+    return runtime::SystemVerilogVpiValueError::None;
+}
+
+bool Simulation::Impl::materialize_vpi_word(
+    const fsim_vpi_handle_v1 parent, const std::string_view name)
+{
+    std::scoped_lock bridge_lock { vpi_bridge_mutex };
+    const auto deferred = vpi_deferred_children.find(parent);
+    if (deferred == vpi_deferred_children.end()
+        || !deferred->second.memory || !deferred->second.processes.empty()
+        || !deferred->second.drivers.empty()
+        || !deferred->second.generate_scopes.empty()) {
+        return false;
+    }
+    auto& memory = *deferred->second.memory;
+    const auto ordinal
+        = systemverilog_vpi_memory_word_ordinal(memory.type, name);
+    if (!ordinal || memory.created.contains(*ordinal)) {
+        return true;
+    }
+    const auto handle = create_systemverilog_vpi_memory_word(
+        *vpi_registry, memory, parent, *ordinal);
+    memory.created.insert(*ordinal);
+    vpi_registry->claim_deferred_child(parent);
+    vpi_word_handles.emplace(handle, std::pair { memory.container, *ordinal });
+    vpi_container_words[memory.container].push_back({ handle, *ordinal });
+    return true;
+}
+
 void Simulation::Impl::sync_vpi_live_memory(
     const runtime::simir::ContainerObjectId object,
     const runtime::simir::ContainerValue& value)
@@ -4026,6 +4104,13 @@ Simulation::Impl::vpi_live_value(
     if (const auto word = vpi_word_handles.find(handle);
         word != vpi_word_handles.end()) {
         const auto [container, ordinal] = word->second;
+        if (const auto fixed = vpi_fixed_word_counts.find(container);
+            fixed != vpi_fixed_word_counts.end()) {
+            if (ordinal >= fixed->second) {
+                return std::nullopt;
+            }
+            return vpi_fixed_word_value(container, ordinal);
+        }
         const auto value = vpi_container_value(container);
         if (ordinal >= runtime::simir::container_element_count(value)) {
             return std::nullopt;

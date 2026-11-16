@@ -825,6 +825,17 @@ struct Simulation::Impl {
     // Creates and releases the words of a published dynamic array or queue
     // to match its current size (IEEE 1800-2023 37.17).
     void materialize_vpi_children(fsim_vpi_handle_v1 parent);
+    // Create only the word of a deferred memory that `name` selects;
+    // false when `parent` is not such a memory.
+    [[nodiscard]] bool materialize_vpi_word(
+        fsim_vpi_handle_v1 parent, std::string_view name);
+    // A word of a fixed memory whose words are created on demand, read or
+    // deposited alone (not through a copy of the whole memory).
+    [[nodiscard]] runtime::SystemVerilogVpiStoredValue vpi_fixed_word_value(
+        runtime::simir::ContainerObjectId container, std::size_t ordinal) const;
+    [[nodiscard]] runtime::SystemVerilogVpiValueError deposit_vpi_fixed_word(
+        runtime::simir::ContainerObjectId container, std::size_t ordinal,
+        const runtime::SystemVerilogVpiStoredValue& value);
     [[nodiscard]] std::optional<runtime::SystemVerilogVpiStoredValue>
     vpi_live_value(fsim_vpi_handle_v1 handle, bool stored) const;
     // A memory's value as a foreign interface reads it: from the v4 kernel
@@ -1173,6 +1184,19 @@ struct Simulation::Impl {
     std::map<runtime::simir::ContainerObjectId,
         std::vector<std::pair<fsim_vpi_handle_v1, std::size_t>>>
         vpi_container_words;
+    // The fixed memories whose words are created on demand, by memory
+    // handle: the container, its type (for word names) and word count.
+    struct VpiOnDemandMemory {
+        runtime::simir::ContainerObjectId container { };
+        runtime::simir::ContainerType type;
+        std::size_t count { };
+    };
+    std::unordered_map<fsim_vpi_handle_v1, VpiOnDemandMemory>
+        vpi_on_demand_memories;
+    // The fixed memories whose words are created on demand, with their
+    // word counts.
+    std::unordered_map<runtime::simir::ContainerObjectId, std::size_t>
+        vpi_fixed_word_counts;
 
     std::set<fsim_vpi_handle_v1> vpi_read_only_container_words;
 

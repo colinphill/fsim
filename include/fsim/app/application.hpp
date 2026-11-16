@@ -751,6 +751,28 @@ public:
     /// instance at `instance`, or 0 (IEEE 1800-2023 38.3.3).
     [[nodiscard]] fsim_vpi_handle_v1 vpi_declared_object(
         std::string_view instance, std::uint32_t declaration) const;
+    /// A fixed memory whose words get no VPI object until one is needed
+    /// (IEEE 1800-2023 37.17): its word count; none for any other object.
+    [[nodiscard]] std::optional<std::size_t> vpi_on_demand_memory(
+        fsim_vpi_handle_v1 memory) const;
+    /// The ordinal of the word of such a memory that `name` (`[5]`,
+    /// `[1][-2]`, relative to the memory) begins with; none when it selects
+    /// no word.
+    [[nodiscard]] std::optional<std::size_t> vpi_on_demand_word_ordinal(
+        fsim_vpi_handle_v1 memory, std::string_view name) const;
+    /// The name of that word relative to the memory (`[5]`).
+    [[nodiscard]] std::string vpi_on_demand_word_name(
+        fsim_vpi_handle_v1 memory, std::size_t ordinal) const;
+    /// Whether that word has its own VPI object now.
+    [[nodiscard]] bool vpi_on_demand_word_published(
+        fsim_vpi_handle_v1 memory, std::size_t ordinal) const;
+    /// The word's current value, and a deposit into it (IEEE 1800-2023
+    /// 38.34 vpiNoDelay), without an object of its own.
+    [[nodiscard]] runtime::SystemVerilogVpiStoredValue vpi_on_demand_word_value(
+        fsim_vpi_handle_v1 memory, std::size_t ordinal);
+    [[nodiscard]] runtime::SystemVerilogVpiValueError
+    deposit_vpi_on_demand_word(fsim_vpi_handle_v1 memory, std::size_t ordinal,
+        const runtime::SystemVerilogVpiStoredValue& value);
     /// The driver objects beneath the net or variable `object`, each with the
     /// kernel process that drives it (IEEE 1800-2023 37.16); materializes
     /// them first.
