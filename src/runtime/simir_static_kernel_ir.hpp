@@ -465,7 +465,50 @@ enum class DynOp : std::uint8_t {
     append_value,
     append_text,
     append_container,
+    /// The whole-array operations (7.12, 11.4.11, 11.4.5): the container
+    /// is aux.
+    /// CompareContainers: d = aux == container z (imm_b bit 0: ===), one
+    /// bit, X when unknown bits decide (packed elements); scalar elements
+    /// compare as dyn_layout_scalar_* says.
+    compare,
+    /// ConditionalContainerSelect: aux = register x (one bit) ? container
+    /// z : container y; an unknown condition merges them (11.4.11).
+    select,
+    /// ContainerReduction: d = the ContainerReductionOperator x of the
+    /// elements, each first through the predicate graph imm_b
+    /// (dyn_graph_begin / dyn_graph_count; none when the count is 0).
+    reduce,
+    /// OrderContainer: the ContainerOrderingOperator x on aux (reverse,
+    /// or a stable sort by the key graph imm_b or the elements, 7.12.2).
+    order,
+    /// LocateContainer: queue aux = the ContainerLocatorOperator x over
+    /// container z: the graph imm_b is the predicate of the find
+    /// locators, else the transformation (7.12.1).
+    locate,
 };
+
+/// A container predicate graph of CompiledBody::predicate_words, as
+/// KInst::imm_b holds it: the first node and the node count.
+[[nodiscard]] inline std::uint64_t dyn_graph(const std::uint64_t begin,
+    const std::uint64_t count) noexcept
+{
+    return begin | count << 32U;
+}
+
+[[nodiscard]] inline std::uint64_t dyn_graph_begin(const std::uint64_t imm) noexcept
+{
+    return imm & 0xFFFF'FFFFU;
+}
+
+[[nodiscard]] inline std::uint64_t dyn_graph_count(const std::uint64_t imm) noexcept
+{
+    return imm >> 32U;
+}
+
+/// The words of one predicate node in CompiledBody::predicate_words:
+/// operator | value kind << 8 | constant width << 16, left | right << 32,
+/// third, and the constant's two planes.
+inline constexpr std::size_t dyn_graph_node_words = 5U;
 
 /// The failure codes of KOp::dyn (native fail reasons from
 /// dyn_fail_first on): the reference operations' messages.
@@ -509,6 +552,13 @@ inline constexpr std::uint64_t dyn_layout_text = 16U;
 /// String keys: each key slot is a text slot (two words), in std::string
 /// order (dyn_text_keys).
 inline constexpr std::uint64_t dyn_layout_text_keys = 32U;
+/// Signed packed elements (predicate comparisons).
+inline constexpr std::uint64_t dyn_layout_signed_elements = 64U;
+/// Scalar elements that compare by their bits (time, chandle), as a double
+/// (real, realtime) or as a float (shortreal).
+inline constexpr std::uint64_t dyn_layout_scalar_bits = 128U;
+inline constexpr std::uint64_t dyn_layout_scalar_double = 256U;
+inline constexpr std::uint64_t dyn_layout_scalar_float = 512U;
 
 /// A string element of a kernel container: one element slot (two words)
 /// holding the element's bytes, which the slot owns (malloc'd, no
@@ -536,7 +586,27 @@ static_assert(sizeof(DynTextSlot) == 16U);
 {
     return op == DynOp::write || op == DynOp::resize || op == DynOp::push_back
         || op == DynOp::push_front || op == DynOp::insert || op == DynOp::assoc_write
-        || op == DynOp::assoc_default || op == DynOp::append_value;
+        || op == DynOp::assoc_default || op == DynOp::append_value || op == DynOp::select;
+}
+
+/// Whether KInst::y is a third container (bound like aux and z).
+[[nodiscard]] inline bool dyn_third_container(const DynOp op) noexcept
+{
+    return op == DynOp::select;
+}
+
+/// Whether KInst::imm_b is a predicate graph (dyn_graph).
+[[nodiscard]] inline bool dyn_has_graph(const DynOp op) noexcept
+{
+    return op == DynOp::reduce || op == DynOp::order || op == DynOp::locate;
+}
+
+/// The whole-array operations, which the bytecode tier runs through the
+/// reference's routines (execute_dyn_whole).
+[[nodiscard]] inline bool dyn_whole(const DynOp op) noexcept
+{
+    return op == DynOp::compare || op == DynOp::select || op == DynOp::reduce
+        || op == DynOp::order || op == DynOp::locate;
 }
 
 /// Container z is the member's string file (not a second container).
@@ -551,7 +621,7 @@ static_assert(sizeof(DynTextSlot) == 16U);
     return op == DynOp::read || op == DynOp::size || op == DynOp::pop_front
         || op == DynOp::pop_back || op == DynOp::assoc_read || op == DynOp::exists
         || op == DynOp::first || op == DynOp::last || op == DynOp::next
-        || op == DynOp::prev;
+        || op == DynOp::prev || op == DynOp::compare || op == DynOp::reduce;
 }
 
 /// A traversal also writes the selected key to its index register y.
@@ -901,6 +971,9 @@ struct CompiledBody {
     /// bytes of string constants.
     std::vector<std::uint32_t> string_operands;
     std::string string_bytes;
+    /// KOp::dyn: container predicate graphs (dyn_graph_node_words words a
+    /// node).
+    std::vector<std::uint64_t> predicate_words;
     /// The plans of the directives whose tick is generated code
     /// (KOp::sva_tick, z the index plus one).
     std::vector<SvaNativePlan> sva_plans;

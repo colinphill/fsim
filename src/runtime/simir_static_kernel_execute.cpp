@@ -578,6 +578,19 @@ void Interpreter::Impl::StaticKernel::execute_body(
             break;
         case KOp::dyn: {
             auto& header = dynamic_headers_[containers_[inst.aux].dynamic_header];
+            const auto sub = static_cast<static_kernel_detail::DynOp>(inst.sub);
+            if (static_kernel_detail::dyn_whole(sub)) {
+                const auto* other = inst.z == no_container ? nullptr
+                    : &dynamic_headers_[containers_[inst.z].dynamic_header];
+                const auto* third = static_kernel_detail::dyn_third_container(sub)
+                    ? &dynamic_headers_[containers_[inst.y].dynamic_header]
+                    : nullptr;
+                static_kernel_detail::execute_dyn_whole(inst, body, header,
+                    containers_[inst.aux].type, other,
+                    inst.z == no_container ? nullptr : &containers_[inst.z].type, third,
+                    registers, [&] { return next_member_random(member_index); });
+                break;
+            }
             const bool string_file = static_kernel_detail::dyn_uses_string_file(inst);
             const auto* other = inst.z == no_container || string_file ? nullptr
                 : &dynamic_headers_[containers_[inst.z].dynamic_header];
@@ -2919,6 +2932,7 @@ void Interpreter::Impl::StaticKernel::set_instruction_helpers(
             needed);
     };
     helpers.dyn_text_reserve = &StaticKernel::native_dyn_text_reserve;
+    helpers.dyn_scratch = &StaticKernel::native_dyn_scratch;
     helpers.sva_post = &StaticKernel::native_sva_post;
     helpers.sva_filter = &StaticKernel::native_sva_filter;
     helpers.sva_check = &StaticKernel::native_sva_check;

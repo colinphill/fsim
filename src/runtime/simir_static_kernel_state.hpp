@@ -1843,6 +1843,10 @@ private:
     /// (a string element of a kernel container), its bytes kept.
     static std::uint32_t native_dyn_text_reserve(StaticKernelNativeFrame* frame,
         std::uint32_t at, std::uint64_t* slot, std::uint64_t needed);
+    /// fsim_sk_dyn_scratch: a whole-array operation's scratch words (the
+    /// thread's own block, grown as needed).
+    static std::uint64_t* native_dyn_scratch(StaticKernelNativeFrame* frame,
+        std::uint32_t at, std::uint64_t words);
     static void native_sva_grow(StaticKernelNativeFrame* frame,
         std::uint32_t at, std::uint32_t region, std::uint64_t needed);
     static void native_sva_post(StaticKernelNativeFrame* frame, std::uint32_t at);

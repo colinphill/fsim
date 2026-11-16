@@ -383,6 +383,12 @@ struct StaticKernelNativeHelpers {
     /// nonzero when the memory is not available (the failure is reported).
     std::uint32_t (*dyn_text_reserve)(StaticKernelNativeFrame*, std::uint32_t at,
         std::uint64_t* slot, std::uint64_t needed) { };
+    /// `fsim_sk_dyn_scratch`: the running thread's scratch block of at
+    /// least `words` words for one whole-array operation (a sort's merge
+    /// buffers, a locator's copy of its source); null when the memory is
+    /// not available (the failure is reported).
+    std::uint64_t* (*dyn_scratch)(StaticKernelNativeFrame*, std::uint32_t at,
+        std::uint64_t words) { };
     /// Wide-register instructions by kind (`fsim_sk_wide_<op>`): instruction
     /// `at` with the caller's register file, where wide values live, and the
     /// narrow operand words x, y and z; `out` receives a narrow result and

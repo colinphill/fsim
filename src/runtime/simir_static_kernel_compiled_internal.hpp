@@ -988,6 +988,7 @@ public:
         grouped(body.wide_constants);
         grouped(body.string_operands);
         text(body.string_bytes);
+        grouped(body.predicate_words);
         grouped(body.return_targets);
         grouped(body.live_at_entry);
         put(body.shadow_base);
@@ -1361,6 +1362,7 @@ public:
             && list(body.wide_registers, [&](PackedLogic4& value) { return packed(value); })
             && grouped(body.wide_base) && grouped(body.wide_constants)
             && grouped(body.string_operands) && text(body.string_bytes)
+            && grouped(body.predicate_words)
             && grouped(body.return_targets) && grouped(body.live_at_entry)
             && get(body.shadow_base) && get(body.weak) && raw(body.tracked)
             && raw(body.u_mode) && raw(body.statement_starts)

@@ -122,7 +122,12 @@ bool Interpreter::Impl::StaticKernel::native_dynamic_containers(
                 || std::is_same_v<T, PopContainer>
                 || std::is_same_v<T, CopyContainerRegister>
                 || std::is_same_v<T, ContainerExists>
-                || std::is_same_v<T, TraverseContainer>;
+                || std::is_same_v<T, TraverseContainer>
+                || std::is_same_v<T, CompareContainers>
+                || std::is_same_v<T, ConditionalContainerSelect>
+                || std::is_same_v<T, ContainerReduction>
+                || std::is_same_v<T, OrderContainer>
+                || std::is_same_v<T, LocateContainer>;
         }, operation);
         if (!native) {
             return false;
@@ -1853,6 +1858,17 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                     // size(), num(), exists() and the traversals return an
                     // int (IEEE 1800-2023 7.5.2, 7.9.1 - 7.9.7, 7.10.2.1).
                     define(op.destination, 32U);
+                } else if constexpr (std::is_same_v<T, CompareContainers>) {
+                    // Array equality is one bit (7.12.2, 11.4.5).
+                    define(op.destination, 1U);
+                } else if constexpr (std::is_same_v<T, ContainerReduction>) {
+                    // A reduction is of the element type (7.12.3).
+                    if (op.source < container_of_register.size()
+                        && container_of_register[op.source] != no_container) {
+                        define(op.destination, static_cast<std::uint32_t>(
+                            containers_[container_of_register[op.source]]
+                                .type.element_width));
+                    }
                 }
             }, member.operations()[pc]);
         }
@@ -2015,7 +2031,17 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                 | (type.element_kind == ContainerElementKind::String
                         ? static_kernel_detail::dyn_layout_text : 0U)
                 | (type.associative && type.string_indices
-                        ? static_kernel_detail::dyn_layout_text_keys : 0U);
+                        ? static_kernel_detail::dyn_layout_text_keys : 0U)
+                | (type.signed_elements ? static_kernel_detail::dyn_layout_signed_elements
+                                        : 0U);
+            if (type.element_kind == ContainerElementKind::Scalar) {
+                inst.imm_a |= type.scalar_kind == SystemVerilogScalarKind::ShortReal
+                    ? static_kernel_detail::dyn_layout_scalar_float
+                    : type.scalar_kind == SystemVerilogScalarKind::Real
+                        || type.scalar_kind == SystemVerilogScalarKind::Realtime
+                    ? static_kernel_detail::dyn_layout_scalar_double
+                    : static_kernel_detail::dyn_layout_scalar_bits;
+            }
         };
         const auto sparse = [&](const std::uint32_t container) {
             return containers_[container].type.sparse;
@@ -2054,6 +2080,37 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
         };
         // An associative array's key operand: an integral value of the
         // index type's width (associative_key's check).
+        // A predicate graph into CompiledBody::predicate_words (dyn_graph);
+        // its constants are of at most 64 bits.
+        const auto graph = [&](const std::vector<ContainerPredicateNode>& nodes,
+                               const char* reason) -> std::uint64_t {
+            const auto begin = body.predicate_words.size()
+                / static_kernel_detail::dyn_graph_node_words;
+            for (const auto& node : nodes) {
+                std::uint64_t a = 0U;
+                std::uint64_t b = 0U;
+                std::uint64_t constant_width = 0U;
+                if (node.operation == ContainerPredicateOperator::constant) {
+                    if (node.constant.width() == 0U || node.constant.width() > 64U
+                        || node.constant.is_logic9()) {
+                        throw reject(reason);
+                    }
+                    const auto low = node.constant.low_word();
+                    a = low.aval;
+                    b = low.bval;
+                    constant_width = node.constant.width();
+                }
+                body.predicate_words.push_back(static_cast<std::uint64_t>(node.operation)
+                    | static_cast<std::uint64_t>(node.value_kind) << 8U
+                    | constant_width << 16U);
+                body.predicate_words.push_back(
+                    node.left | static_cast<std::uint64_t>(node.right) << 32U);
+                body.predicate_words.push_back(node.third);
+                body.predicate_words.push_back(a);
+                body.predicate_words.push_back(b);
+            }
+            return static_kernel_detail::dyn_graph(begin, nodes.size());
+        };
         // The key operand: a string register (z the string file) for string
         // keys, else a register of the index width.
         const auto key = [&](const std::uint32_t container, const RegisterId index,
@@ -2356,6 +2413,108 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             set(DynOp::exists, container);
             inst.d = narrow(op.destination);
             key(container, op.index, op.string_index, false, "dyn_exists");
+            return true;
+        } else if constexpr (std::is_same_v<T, CompareContainers>) {
+            const auto left = dyn_container(op.lhs);
+            const auto right = dyn_container(op.rhs);
+            if (left == no_container || right == no_container) {
+                return false;
+            }
+            const auto& lt = containers_[left].type;
+            const auto& rt = containers_[right].type;
+            if (lt.sparse || rt.sparse || lt.element_kind != rt.element_kind
+                || lt.element_width != rt.element_width || lt.associative != rt.associative
+                || lt.string_indices != rt.string_indices || lt.index_width != rt.index_width
+                || lt.signed_indices != rt.signed_indices || lt.scalar_kind != rt.scalar_kind
+                || w(op.destination) != 1U) {
+                throw reject("dyn_compare");
+            }
+            set(DynOp::compare, left);
+            inst.z = right;
+            inst.d = narrow(op.destination);
+            inst.imm_b = op.case_equal ? 1U : 0U;
+            return true;
+        } else if constexpr (std::is_same_v<T, ConditionalContainerSelect>) {
+            const auto target = dyn_container(op.destination);
+            const auto first = dyn_container(op.when_true);
+            const auto second = dyn_container(op.when_false);
+            if (target == no_container || first == no_container || second == no_container) {
+                return false;
+            }
+            const auto& type = containers_[target].type;
+            if (type.sparse || containers_[first].type != type
+                || containers_[second].type != type || w(op.condition) != 1U) {
+                throw reject("dyn_select");
+            }
+            set(DynOp::select, target);
+            inst.x = narrow(op.condition);
+            inst.z = first;
+            inst.y = second;
+            return true;
+        } else if constexpr (std::is_same_v<T, ContainerReduction>) {
+            const auto container = dyn_container(op.source);
+            if (container == no_container) {
+                return false;
+            }
+            const auto& type = containers_[container].type;
+            if (type.sparse || text(container)
+                || (type.associative && !op.transformation.empty())
+                || w(op.destination) != element_width(container)) {
+                throw reject("dyn_reduce");
+            }
+            set(DynOp::reduce, container);
+            inst.d = narrow(op.destination);
+            inst.x = static_cast<std::uint32_t>(op.operation);
+            inst.imm_b = graph(op.transformation, "dyn_reduce");
+            return true;
+        } else if constexpr (std::is_same_v<T, OrderContainer>) {
+            const auto container = dyn_container(op.target);
+            if (container == no_container) {
+                return false;
+            }
+            const auto& type = containers_[container].type;
+            // shuffle draws the process's random numbers: with the kernel's
+            // native random source.
+            if (type.sparse || type.associative
+                || op.operation == ContainerOrderingOperator::shuffle
+                || (text(container) && op.operation != ContainerOrderingOperator::reverse)) {
+                throw reject("dyn_order");
+            }
+            set(DynOp::order, container);
+            inst.x = static_cast<std::uint32_t>(op.operation);
+            inst.imm_b = graph(op.key, "dyn_order");
+            return true;
+        } else if constexpr (std::is_same_v<T, LocateContainer>) {
+            const auto target = dyn_container(op.destination);
+            const auto source = dyn_container(op.source);
+            if (target == no_container || source == no_container) {
+                return false;
+            }
+            const auto& tt = containers_[target].type;
+            const auto& st = containers_[source].type;
+            const bool index_result = op.operation == ContainerLocatorOperator::unique_index
+                || op.operation == ContainerLocatorOperator::find_index
+                || op.operation == ContainerLocatorOperator::find_first_index
+                || op.operation == ContainerLocatorOperator::find_last_index;
+            const bool predicate = op.operation >= ContainerLocatorOperator::find;
+            if (st.sparse || st.associative || text(source) || !tt.queue || tt.associative
+                || (predicate ? op.predicate.empty() || !op.transformation.empty()
+                              : !op.predicate.empty())
+                || (index_result
+                        ? tt.element_width != 32U || !tt.two_state || !tt.signed_elements
+                        : tt.element_width != st.element_width
+                            || tt.two_state != st.two_state
+                            || tt.signed_elements != st.signed_elements)) {
+                throw reject("dyn_locate");
+            }
+            set(DynOp::locate, target);
+            inst.z = source;
+            inst.x = static_cast<std::uint32_t>(op.operation);
+            inst.imm_b = graph(predicate ? op.predicate : op.transformation, "dyn_locate");
+            // The source's layout (its signed elements) for the comparisons.
+            inst.imm_a = (inst.imm_a & ~static_kernel_detail::dyn_layout_signed_elements)
+                | (st.signed_elements ? static_kernel_detail::dyn_layout_signed_elements : 0U);
+            inst.offset = static_cast<std::uint32_t>(st.element_width);
             return true;
         } else if constexpr (std::is_same_v<T, TraverseContainer>) {
             const auto container = dyn_container(op.source);
@@ -5605,7 +5764,12 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                 || std::is_same_v<T, PushContainer>
                 || std::is_same_v<T, PopContainer>
                 || std::is_same_v<T, ContainerExists>
-                || std::is_same_v<T, TraverseContainer>) {
+                || std::is_same_v<T, TraverseContainer>
+                || std::is_same_v<T, CompareContainers>
+                || std::is_same_v<T, ConditionalContainerSelect>
+                || std::is_same_v<T, ContainerReduction>
+                || std::is_same_v<T, OrderContainer>
+                || std::is_same_v<T, LocateContainer>) {
                 // Only a kernel queue, dynamic array or associative array
                 // (IEEE 1800-2023 7.5, 7.8 - 7.10; native_dynamic_containers
                 // admitted the member).

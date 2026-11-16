@@ -158,6 +158,11 @@ using runtime::simir::static_kernel_prologue_entry;
 using runtime::simir::BinaryOperator;
 using runtime::simir::LogicalBinaryOperator;
 using runtime::simir::ReductionOperator;
+using runtime::simir::ContainerPredicateOperator;
+using runtime::simir::ContainerPredicateValueKind;
+using runtime::simir::ContainerReductionOperator;
+using runtime::simir::ContainerOrderingOperator;
+using runtime::simir::ContainerLocatorOperator;
 using runtime::simir::SignalReadKind;
 using runtime::simir::ProcessSchedulingDomain;
 namespace detail = runtime::simir::static_kernel_detail;
@@ -6098,6 +6103,52 @@ private:
         return { a, b };
     }
 
+    /// logic_not: one -> 0, zero -> 1, unknown -> x.
+    [[nodiscard]] Pair logical_not_value(const Pair value)
+    {
+        const auto [one, unknown] = truth(value);
+        auto* zero = builder_.CreateNot(builder_.CreateOr(one, unknown));
+        return from_truth(zero, unknown);
+    }
+
+    /// && and || of two truth values (IEEE 1800-2023 11.4.7).
+    [[nodiscard]] Pair logical_value(const LogicalBinaryOperator operation, const Pair left,
+        const Pair right)
+    {
+        const auto [left_one, left_unknown] = truth(left);
+        const auto [right_one, right_unknown] = truth(right);
+        auto* left_zero = builder_.CreateNot(builder_.CreateOr(left_one, left_unknown));
+        auto* right_zero = builder_.CreateNot(builder_.CreateOr(right_one, right_unknown));
+        llvm::Value* one { };
+        llvm::Value* zero { };
+        if (operation == LogicalBinaryOperator::logical_and) {
+            zero = builder_.CreateOr(left_zero, right_zero);
+            one = builder_.CreateAnd(left_one, right_one);
+        } else {
+            one = builder_.CreateOr(left_one, right_one);
+            zero = builder_.CreateAnd(left_zero, right_zero);
+        }
+        auto* unknown = builder_.CreateNot(builder_.CreateOr(one, zero));
+        return from_truth(one, unknown);
+    }
+
+    /// condition ? when_true : when_false of `width` bits: only equal known
+    /// bits survive an ambiguous condition; equal X or Z bits produce X
+    /// (IEEE 1800-2023 11.4.11, Table 11-20).
+    [[nodiscard]] Pair conditional_merge(llvm::Value* is_one, llvm::Value* is_zero,
+        const Pair when_true, const Pair when_false, const std::uint32_t width)
+    {
+        auto* m = constant(mask_of(width));
+        auto* same = builder_.CreateAnd(
+            bit_not(builder_.CreateOr(builder_.CreateXor(when_true.a, when_false.a),
+                builder_.CreateOr(when_true.b, when_false.b))),
+            m);
+        auto* differ = builder_.CreateAnd(bit_not(same), m);
+        const Pair merged { builder_.CreateOr(builder_.CreateAnd(when_true.a, same), differ),
+            builder_.CreateOr(builder_.CreateAnd(when_true.b, same), differ) };
+        return select(is_one, when_true, select(is_zero, when_false, merged));
+    }
+
     [[nodiscard]] llvm::Value* sign_extend(llvm::Value* value,
         const std::uint32_t width)
     {
@@ -8419,6 +8470,10 @@ private:
         const auto op = static_cast<DynOp>(inst.sub);
         const bool is_signed = (inst.flags & detail::flag_signed) != 0U;
         auto* header = dyn_header(inst.aux);
+        if (detail::dyn_whole(op)) {
+            emit_dyn_whole(inst, at, header);
+            return;
+        }
         if ((inst.imm_a & detail::dyn_layout_sparse) != 0U) {
             emit_dyn_sparse(inst, at, header);
             return;
@@ -8625,38 +8680,9 @@ private:
             dyn_store(header, dyn_size, count);
             break;
         }
-        case DynOp::copy: {
-            auto* other = dyn_header(inst.z);
-            auto* distinct = dyn_when(builder_.CreateICmpNE(other, header));
-            auto* count = dyn_load(other, dyn_size);
-            dyn_store(header, dyn_size, constant(0U));
-            dyn_store(header, dyn_head, constant(0U));
-            dyn_reserve(header, count, at);
-            dyn_loop(constant(0U), count, false, [&](llvm::Value* ordinal) {
-                dyn_store_element(header, ordinal, dyn_load_element(other, ordinal));
-                if ((inst.imm_a & 1U) != 0U) {
-                    builder_.CreateStore(
-                        builder_.CreateLoad(i64_, dyn_key_address(other, ordinal)),
-                        dyn_key_address(header, ordinal));
-                }
-            });
-            if ((inst.imm_a & 1U) != 0U) {
-                // The `default:` value goes with the elements.
-                dyn_store(header, dyn_fill, dyn_load(other, dyn_fill));
-                dyn_store(header, dyn_fill + 8U, dyn_load(other, dyn_fill + 8U));
-                auto* flags = dyn_address(header, dyn_flags);
-                auto* other_flags = builder_.CreateLoad(i32_, dyn_address(other, dyn_flags));
-                auto* default_bit = llvm::ConstantInt::get(i32_, dyn_default_flag);
-                builder_.CreateStore(
-                    builder_.CreateOr(builder_.CreateAnd(builder_.CreateLoad(i32_, flags),
-                                          builder_.CreateNot(default_bit)),
-                        builder_.CreateAnd(other_flags, default_bit)),
-                    flags);
-            }
-            dyn_store(header, dyn_size, count);
-            dyn_end(distinct);
+        case DynOp::copy:
+            dyn_copy_whole(inst.imm_a, header, dyn_header(inst.z), at);
             break;
-        }
         case DynOp::assoc_read:
         case DynOp::assoc_write:
         case DynOp::assoc_default:
@@ -8675,7 +8701,753 @@ private:
         case DynOp::append_text:
         case DynOp::append_container:
             throw std::logic_error("static kernel string container operation misplaced");
+        case DynOp::compare:
+        case DynOp::select:
+        case DynOp::reduce:
+        case DynOp::order:
+        case DynOp::locate:
+            throw std::logic_error("static kernel whole-array operation misplaced");
         }
+    }
+
+    /// element_less: whether `left` orders before `right` (`width` bits),
+    /// by the rank of their most significant differing bit: 0 < 1 < X < Z,
+    /// and for a signed element's sign bit 1 < 0 < X < Z.
+    [[nodiscard]] llvm::Value* element_less(const Pair left, const Pair right,
+        const std::uint32_t width, const bool is_signed)
+    {
+        auto* m = constant(mask_of(width));
+        auto* left_low = builder_.CreateXor(left.a, left.b);
+        auto* right_low = builder_.CreateXor(right.a, right.b);
+        auto* diff = builder_.CreateAnd(builder_.CreateOr(builder_.CreateXor(left_low, right_low),
+                                            builder_.CreateXor(left.b, right.b)),
+            m);
+        auto* top = builder_.CreateSub(constant(63U),
+            builder_.CreateBinaryIntrinsic(llvm::Intrinsic::ctlz,
+                builder_.CreateOr(diff, constant(1U)), builder_.getFalse()));
+        const auto bit = [&](llvm::Value* value) {
+            return builder_.CreateAnd(builder_.CreateLShr(value, top), constant(1U));
+        };
+        const auto rank = [&](llvm::Value* high_plane, llvm::Value* low_plane) {
+            auto* high = bit(high_plane);
+            auto* low = bit(low_plane);
+            if (is_signed) {
+                auto* sign = builder_.CreateICmpEQ(top, constant(width - 1U));
+                low = builder_.CreateXor(low,
+                    builder_.CreateSelect(sign, builder_.CreateXor(high, constant(1U)),
+                        constant(0U)));
+            }
+            return builder_.CreateOr(builder_.CreateShl(high, constant(1U)), low);
+        };
+        return builder_.CreateAnd(nonzero(diff),
+            builder_.CreateICmpULT(rank(left.b, left_low), rank(right.b, right_low)));
+    }
+
+    /// while (condition()) body(): the condition is built in the loop's head.
+    template <typename Condition, typename Body>
+    void dyn_while(Condition&& condition, Body&& body)
+    {
+        auto* head = llvm::BasicBlock::Create(context_, "dyn_while", &function_);
+        auto* step = llvm::BasicBlock::Create(context_, "dyn_while_body", &function_);
+        auto* done = llvm::BasicBlock::Create(context_, "dyn_while_done", &function_);
+        builder_.CreateBr(head);
+        builder_.SetInsertPoint(head);
+        builder_.CreateCondBr(condition(), step, done);
+        builder_.SetInsertPoint(step);
+        body();
+        builder_.CreateBr(head);
+        builder_.SetInsertPoint(done);
+    }
+
+    /// The running thread's scratch block of `words` words
+    /// (fsim_sk_dyn_scratch).
+    [[nodiscard]] llvm::Value* dyn_scratch(llvm::Value* words, const std::uint32_t at)
+    {
+        auto* type = llvm::FunctionType::get(ptr_, { ptr_, i32_, i64_ }, false);
+        auto* block = builder_.CreateCall(type, helper_symbol("fsim_sk_dyn_scratch", type),
+            { frame_, llvm::ConstantInt::get(i32_, at), words });
+        check_status();
+        return block;
+    }
+
+    /// Scratch entry `index` (four words: a key's planes, then an
+    /// element's) of the block at `base`.
+    [[nodiscard]] llvm::Value* scratch_entry(llvm::Value* base, llvm::Value* index)
+    {
+        return builder_.CreateInBoundsGEP(i64_, base, builder_.CreateShl(index, constant(2U)));
+    }
+
+    [[nodiscard]] Pair scratch_load(llvm::Value* entry, const std::uint64_t word)
+    {
+        return { builder_.CreateLoad(i64_, builder_.CreateConstInBoundsGEP1_64(i64_, entry, word)),
+            builder_.CreateLoad(i64_,
+                builder_.CreateConstInBoundsGEP1_64(i64_, entry, word + 1U)) };
+    }
+
+    void scratch_store(llvm::Value* entry, const std::uint64_t word, const Pair value)
+    {
+        builder_.CreateStore(value.a, builder_.CreateConstInBoundsGEP1_64(i64_, entry, word));
+        builder_.CreateStore(value.b,
+            builder_.CreateConstInBoundsGEP1_64(i64_, entry, word + 1U));
+    }
+
+    /// Container `header`'s elements into scratch entries 0 .. size - 1 of
+    /// `base`, each with its key: the graph `imm` of the element (and its
+    /// index) when it has one, else the element.
+    void scratch_fill(llvm::Value* header, llvm::Value* base, llvm::Value* size,
+        const std::uint64_t imm, const bool keyed, const std::uint32_t width,
+        const bool is_signed)
+    {
+        dyn_loop(constant(0U), size, false, [&](llvm::Value* ordinal) {
+            const auto element = dyn_load_element(header, ordinal);
+            auto* entry = scratch_entry(base, ordinal);
+            scratch_store(entry, 0U,
+                keyed ? emit_predicate(imm, element, ordinal, width, is_signed) : element);
+            scratch_store(entry, 2U, element);
+        });
+    }
+
+    /// OrderContainer (7.12.2): reverse, or a stable merge sort by key.
+    void emit_dyn_order(const KInst& inst, const std::uint32_t at, llvm::Value* header)
+    {
+        const auto operation = static_cast<ContainerOrderingOperator>(inst.x);
+        const auto width = static_cast<std::uint32_t>(inst.offset);
+        const bool is_signed = (inst.imm_a & detail::dyn_layout_signed_elements) != 0U;
+        auto* size = dyn_load(header, dyn_size);
+        if (operation == ContainerOrderingOperator::reverse) {
+            // Slots swap (a string's block moves with it).
+            dyn_loop(constant(0U), builder_.CreateLShr(size, constant(1U)), false,
+                [&](llvm::Value* ordinal) {
+                    auto* mirror = builder_.CreateSub(builder_.CreateSub(size, constant(1U)),
+                        ordinal);
+                    const auto low = dyn_load_element(header, ordinal);
+                    const auto high = dyn_load_element(header, mirror);
+                    dyn_store_element(header, ordinal, high);
+                    dyn_store_element(header, mirror, low);
+                });
+            return;
+        }
+        const bool descending = operation == ContainerOrderingOperator::descending;
+        const bool keyed = detail::dyn_graph_count(inst.imm_b) != 0U;
+        // Two buffers of size + 1 entries (a merge may load one entry past
+        // its run; the value is not used).
+        auto* entries = builder_.CreateAdd(size, constant(1U));
+        auto* block = dyn_scratch(builder_.CreateShl(entries, constant(3U)), at);
+        auto* source_slot = str_slot(ptr_, block);
+        auto* target_slot = str_slot(ptr_, scratch_entry(block, entries));
+        scratch_fill(header, block, size, inst.imm_b, keyed, width, is_signed);
+        auto* run = str_slot(i64_, constant(1U));
+        dyn_while([&] { return builder_.CreateICmpULT(builder_.CreateLoad(i64_, run), size); },
+            [&] {
+                auto* source = builder_.CreateLoad(ptr_, source_slot);
+                auto* target = builder_.CreateLoad(ptr_, target_slot);
+                auto* length = builder_.CreateLoad(i64_, run);
+                auto* low_slot = str_slot(i64_, constant(0U));
+                const auto at_most = [&](llvm::Value* value) {
+                    return builder_.CreateSelect(builder_.CreateICmpULT(value, size), value, size);
+                };
+                dyn_while(
+                    [&] { return builder_.CreateICmpULT(builder_.CreateLoad(i64_, low_slot), size); },
+                    [&] {
+                        auto* low = builder_.CreateLoad(i64_, low_slot);
+                        auto* middle = at_most(builder_.CreateAdd(low, length));
+                        auto* high = at_most(builder_.CreateAdd(middle, length));
+                        auto* left_slot = str_slot(i64_, low);
+                        auto* right_slot = str_slot(i64_, middle);
+                        dyn_loop(low, high, false, [&](llvm::Value* into) {
+                            auto* left = builder_.CreateLoad(i64_, left_slot);
+                            auto* right = builder_.CreateLoad(i64_, right_slot);
+                            auto* left_entry = scratch_entry(source, left);
+                            auto* right_entry = scratch_entry(source, right);
+                            const auto left_key = scratch_load(left_entry, 0U);
+                            const auto right_key = scratch_load(right_entry, 0U);
+                            // Stable: the right run's entry goes first only
+                            // when it orders strictly before.
+                            auto* right_first = descending
+                                ? element_less(left_key, right_key, width, is_signed)
+                                : element_less(right_key, left_key, width, is_signed);
+                            auto* take_left = builder_.CreateAnd(
+                                builder_.CreateICmpULT(left, middle),
+                                builder_.CreateOr(builder_.CreateICmpUGE(right, high),
+                                    builder_.CreateNot(right_first)));
+                            auto* taken = builder_.CreateSelect(take_left, left_entry, right_entry);
+                            auto* destination = scratch_entry(target, into);
+                            scratch_store(destination, 0U, scratch_load(taken, 0U));
+                            scratch_store(destination, 2U, scratch_load(taken, 2U));
+                            builder_.CreateStore(builder_.CreateAdd(left,
+                                                     builder_.CreateZExt(take_left, i64_)),
+                                left_slot);
+                            builder_.CreateStore(builder_.CreateAdd(right,
+                                                     builder_.CreateZExt(builder_.CreateNot(
+                                                                             take_left),
+                                                         i64_)),
+                                right_slot);
+                        });
+                        builder_.CreateStore(high, low_slot);
+                    });
+                builder_.CreateStore(target, source_slot);
+                builder_.CreateStore(source, target_slot);
+                builder_.CreateStore(builder_.CreateShl(length, constant(1U)), run);
+            });
+        auto* sorted = builder_.CreateLoad(ptr_, source_slot);
+        dyn_loop(constant(0U), size, false, [&](llvm::Value* ordinal) {
+            dyn_store_element(header, ordinal, scratch_load(scratch_entry(sorted, ordinal), 2U));
+        });
+    }
+
+    /// LocateContainer (7.12.1): queue `header` takes the located elements
+    /// or indices of container z, up to its bound.
+    void emit_dyn_locate(const KInst& inst, const std::uint32_t at, llvm::Value* header)
+    {
+        const auto operation = static_cast<ContainerLocatorOperator>(inst.x);
+        const auto width = static_cast<std::uint32_t>(inst.offset);
+        const bool is_signed = (inst.imm_a & detail::dyn_layout_signed_elements) != 0U;
+        const bool predicate = operation >= ContainerLocatorOperator::find;
+        const bool index_result = operation == ContainerLocatorOperator::unique_index
+            || operation == ContainerLocatorOperator::find_index
+            || operation == ContainerLocatorOperator::find_first_index
+            || operation == ContainerLocatorOperator::find_last_index;
+        const bool keyed = !predicate && detail::dyn_graph_count(inst.imm_b) != 0U;
+        auto* source = dyn_header(inst.z);
+        auto* size = dyn_load(source, dyn_size);
+        // The source's elements (and keys) first: the result may be the
+        // source itself.
+        auto* block = dyn_scratch(builder_.CreateShl(builder_.CreateAdd(size, constant(1U)),
+                                      constant(2U)),
+            at);
+        scratch_fill(source, block, size, inst.imm_b, keyed, width, is_signed);
+        dyn_store(header, dyn_size, constant(0U));
+        dyn_store(header, dyn_head, constant(0U));
+        // Appends the entry at `ordinal` (its element or its index), up to
+        // the queue's bound.
+        const auto append = [&](llvm::Value* ordinal) {
+            auto* count = dyn_load(header, dyn_size);
+            auto* room = dyn_when(builder_.CreateICmpULT(count, dyn_load(header, dyn_maximum)));
+            auto* grown = builder_.CreateAdd(count, constant(1U));
+            dyn_reserve(header, grown, at);
+            dyn_store_element(header, count,
+                index_result
+                    ? Pair { builder_.CreateAnd(ordinal, constant(0xFFFF'FFFFU)), constant(0U) }
+                    : scratch_load(scratch_entry(block, ordinal), 2U));
+            dyn_store(header, dyn_size, grown);
+            dyn_end(room);
+        };
+        if (predicate) {
+            const bool select_last = operation == ContainerLocatorOperator::find_last
+                || operation == ContainerLocatorOperator::find_last_index;
+            const bool select_one = select_last
+                || operation == ContainerLocatorOperator::find_first
+                || operation == ContainerLocatorOperator::find_first_index;
+            auto* step_slot = str_slot(i64_, constant(0U));
+            auto* found_slot = str_slot(llvm::Type::getInt1Ty(context_), builder_.getFalse());
+            dyn_while(
+                [&] {
+                    auto* more = builder_.CreateICmpULT(builder_.CreateLoad(i64_, step_slot),
+                        size);
+                    return select_one
+                        ? builder_.CreateAnd(more,
+                              builder_.CreateNot(builder_.CreateLoad(
+                                  llvm::Type::getInt1Ty(context_), found_slot)))
+                        : more;
+                },
+                [&] {
+                    auto* step = builder_.CreateLoad(i64_, step_slot);
+                    auto* ordinal = select_last
+                        ? builder_.CreateSub(builder_.CreateSub(size, constant(1U)), step)
+                        : step;
+                    const auto element = scratch_load(scratch_entry(block, ordinal), 2U);
+                    const auto [one, unknown] = truth(
+                        emit_predicate(inst.imm_b, element, ordinal, width, is_signed));
+                    static_cast<void>(unknown);
+                    auto* matched = dyn_when(one);
+                    append(ordinal);
+                    builder_.CreateStore(builder_.getTrue(), found_slot);
+                    dyn_end(matched);
+                    builder_.CreateStore(builder_.CreateAdd(step, constant(1U)), step_slot);
+                });
+            return;
+        }
+        if (operation == ContainerLocatorOperator::minimum
+            || operation == ContainerLocatorOperator::maximum) {
+            auto* any = dyn_when(builder_.CreateICmpNE(size, constant(0U)));
+            auto* selected_slot = str_slot(i64_, constant(0U));
+            dyn_loop(constant(1U), size, false, [&](llvm::Value* current) {
+                auto* selected = builder_.CreateLoad(i64_, selected_slot);
+                const auto current_key = scratch_load(scratch_entry(block, current), 0U);
+                const auto selected_key = scratch_load(scratch_entry(block, selected), 0U);
+                auto* replace = operation == ContainerLocatorOperator::minimum
+                    ? element_less(current_key, selected_key, width, is_signed)
+                    : element_less(selected_key, current_key, width, is_signed);
+                builder_.CreateStore(builder_.CreateSelect(replace, current, selected),
+                    selected_slot);
+            });
+            append(builder_.CreateLoad(i64_, selected_slot));
+            dyn_end(any);
+            return;
+        }
+        // unique, unique_index: the first entry of each key (exact equality).
+        dyn_loop(constant(0U), size, false, [&](llvm::Value* ordinal) {
+            const auto key = scratch_load(scratch_entry(block, ordinal), 0U);
+            auto* earlier_slot = str_slot(i64_, constant(0U));
+            auto* seen_slot = str_slot(llvm::Type::getInt1Ty(context_), builder_.getFalse());
+            dyn_while(
+                [&] {
+                    return builder_.CreateAnd(
+                        builder_.CreateICmpULT(builder_.CreateLoad(i64_, earlier_slot), ordinal),
+                        builder_.CreateNot(
+                            builder_.CreateLoad(llvm::Type::getInt1Ty(context_), seen_slot)));
+                },
+                [&] {
+                    auto* earlier = builder_.CreateLoad(i64_, earlier_slot);
+                    const auto other = scratch_load(scratch_entry(block, earlier), 0U);
+                    auto* m = constant(mask_of(width));
+                    builder_.CreateStore(
+                        builder_.CreateAnd(
+                            builder_.CreateICmpEQ(builder_.CreateAnd(key.a, m),
+                                builder_.CreateAnd(other.a, m)),
+                            builder_.CreateICmpEQ(builder_.CreateAnd(key.b, m),
+                                builder_.CreateAnd(other.b, m))),
+                        seen_slot);
+                    builder_.CreateStore(builder_.CreateAdd(earlier, constant(1U)), earlier_slot);
+                });
+            auto* first = dyn_when(builder_.CreateNot(
+                builder_.CreateLoad(llvm::Type::getInt1Ty(context_), seen_slot)));
+            append(ordinal);
+            dyn_end(first);
+        });
+    }
+
+    /// Container `header` takes the elements of container `other` (of its
+    /// layout `layout`, dyn_layout_*): with an associative array's keys and
+    /// `default:`; nothing when they are one container.
+    void dyn_copy_whole(const std::uint64_t layout, llvm::Value* header, llvm::Value* other,
+        const std::uint32_t at)
+    {
+        const bool text = (layout & detail::dyn_layout_text) != 0U;
+        const bool text_keys = (layout & detail::dyn_layout_text_keys) != 0U;
+        const bool associative = (layout & detail::dyn_layout_associative) != 0U;
+        auto* distinct = dyn_when(builder_.CreateICmpNE(other, header));
+        auto* count = dyn_load(other, dyn_size);
+        dyn_store(header, dyn_size, constant(0U));
+        dyn_store(header, dyn_head, constant(0U));
+        dyn_reserve(header, count, at);
+        dyn_loop(constant(0U), count, false, [&](llvm::Value* ordinal) {
+            if (text) {
+                text_copy(dyn_element_address(header, ordinal),
+                    dyn_element_address(other, ordinal), at);
+            } else {
+                dyn_store_element(header, ordinal, dyn_load_element(other, ordinal));
+            }
+            if (text_keys) {
+                text_copy(dyn_text_key_address(header, ordinal),
+                    dyn_text_key_address(other, ordinal), at);
+            } else if (associative) {
+                builder_.CreateStore(builder_.CreateLoad(i64_, dyn_key_address(other, ordinal)),
+                    dyn_key_address(header, ordinal));
+            }
+        });
+        if (associative) {
+            // The `default:` goes with the elements.
+            if (text) {
+                text_copy(dyn_address(header, dyn_fill), dyn_address(other, dyn_fill), at);
+            } else {
+                dyn_store(header, dyn_fill, dyn_load(other, dyn_fill));
+                dyn_store(header, dyn_fill + 8U, dyn_load(other, dyn_fill + 8U));
+            }
+            auto* flags = dyn_address(header, dyn_flags);
+            auto* other_flags = builder_.CreateLoad(i32_, dyn_address(other, dyn_flags));
+            auto* default_bit = llvm::ConstantInt::get(i32_, dyn_default_flag);
+            builder_.CreateStore(
+                builder_.CreateOr(builder_.CreateAnd(builder_.CreateLoad(i32_, flags),
+                                      builder_.CreateNot(default_bit)),
+                    builder_.CreateAnd(other_flags, default_bit)),
+                flags);
+        }
+        dyn_store(header, dyn_size, count);
+        dyn_end(distinct);
+    }
+
+    /// The result of predicate graph `imm` (dyn_graph) for one element
+    /// `item` (`width` bits, `is_signed`) at iterator index `index` (32
+    /// bits), as evaluate_container_predicate computes it.
+    [[nodiscard]] Pair emit_predicate(const std::uint64_t imm, const Pair item,
+        llvm::Value* index, const std::uint32_t width, const bool is_signed)
+    {
+        const auto begin = detail::dyn_graph_begin(imm);
+        const auto count = detail::dyn_graph_count(imm);
+        std::vector<Pair> values;
+        std::vector<ContainerPredicateValueKind> kinds;
+        values.reserve(static_cast<std::size_t>(count));
+        for (std::uint64_t node = 0U; node < count; ++node) {
+            const auto* words = body_.predicate_words.data()
+                + static_cast<std::size_t>((begin + node) * detail::dyn_graph_node_words);
+            const auto operation = static_cast<ContainerPredicateOperator>(words[0] & 0xFFU);
+            const auto kind = static_cast<ContainerPredicateValueKind>((words[0] >> 8U) & 0xFFU);
+            const auto left = static_cast<std::size_t>(static_cast<std::uint32_t>(words[1]));
+            const auto right = static_cast<std::size_t>(words[1] >> 32U);
+            const auto third = static_cast<std::size_t>(words[2]);
+            Pair value = zero_pair();
+            switch (operation) {
+            case ContainerPredicateOperator::item:
+                value = item;
+                break;
+            case ContainerPredicateOperator::index:
+                value = { builder_.CreateAnd(index, constant(0xFFFF'FFFFU)), constant(0U) };
+                break;
+            case ContainerPredicateOperator::constant:
+                value = { constant(words[3]), constant(words[4]) };
+                break;
+            case ContainerPredicateOperator::equal:
+            case ContainerPredicateOperator::not_equal:
+            case ContainerPredicateOperator::less:
+            case ContainerPredicateOperator::less_equal:
+            case ContainerPredicateOperator::greater:
+            case ContainerPredicateOperator::greater_equal: {
+                const bool index_kind = kinds.at(left) == ContainerPredicateValueKind::index;
+                const bool signed_comparison = index_kind || is_signed;
+                KInst compare { };
+                compare.op = KOp::binary;
+                compare.width = index_kind ? 32U : width;
+                auto relation = BinaryOperator::equal;
+                switch (operation) {
+                case ContainerPredicateOperator::not_equal:
+                    relation = BinaryOperator::not_equal;
+                    break;
+                case ContainerPredicateOperator::less:
+                    relation = signed_comparison ? BinaryOperator::less_signed
+                                                 : BinaryOperator::less_unsigned;
+                    break;
+                case ContainerPredicateOperator::less_equal:
+                    relation = signed_comparison ? BinaryOperator::less_equal_signed
+                                                 : BinaryOperator::less_equal_unsigned;
+                    break;
+                case ContainerPredicateOperator::greater:
+                    relation = signed_comparison ? BinaryOperator::greater_signed
+                                                 : BinaryOperator::greater_unsigned;
+                    break;
+                case ContainerPredicateOperator::greater_equal:
+                    relation = signed_comparison ? BinaryOperator::greater_equal_signed
+                                                 : BinaryOperator::greater_equal_unsigned;
+                    break;
+                default:
+                    break;
+                }
+                compare.sub = static_cast<std::uint8_t>(relation);
+                value = emit_binary(compare, values.at(left), values.at(right));
+                break;
+            }
+            case ContainerPredicateOperator::logical_and:
+            case ContainerPredicateOperator::logical_or:
+                value = logical_value(operation == ContainerPredicateOperator::logical_and
+                        ? LogicalBinaryOperator::logical_and
+                        : LogicalBinaryOperator::logical_or,
+                    values.at(left), values.at(right));
+                break;
+            case ContainerPredicateOperator::logical_not:
+                value = logical_not_value(values.at(left));
+                break;
+            case ContainerPredicateOperator::conditional: {
+                const auto [one, unknown] = truth(values.at(left));
+                auto* zero = builder_.CreateNot(builder_.CreateOr(one, unknown));
+                value = conditional_merge(one, zero, values.at(right), values.at(third), width);
+                break;
+            }
+            default:
+                throw std::logic_error("static kernel container predicate is invalid");
+            }
+            values.push_back(value);
+            kinds.push_back(kind);
+        }
+        return values.back();
+    }
+
+    /// The whole-array operations: compare, select and reduce (7.12,
+    /// 11.4.5, 11.4.11).
+    void emit_dyn_whole(const KInst& inst, const std::uint32_t at, llvm::Value* header)
+    {
+        using detail::DynOp;
+        const auto op = static_cast<DynOp>(inst.sub);
+        const bool text = (inst.imm_a & detail::dyn_layout_text) != 0U;
+        const bool associative = (inst.imm_a & detail::dyn_layout_associative) != 0U;
+        const auto width = static_cast<std::uint32_t>(inst.offset);
+        auto* element_mask = constant(mask_of(width));
+        const bool scalar_double = (inst.imm_a & detail::dyn_layout_scalar_double) != 0U;
+        const bool scalar_float = (inst.imm_a & detail::dyn_layout_scalar_float) != 0U;
+        const bool scalar_bits = (inst.imm_a & detail::dyn_layout_scalar_bits) != 0U;
+        // Scalar elements' equality (systemverilog_scalar_compare): a real
+        // compares as a number, a time or chandle by its value bits.
+        const auto scalar_equal = [&](const Pair left, const Pair right) -> llvm::Value* {
+            if (scalar_double || scalar_float) {
+                auto* real = scalar_double ? llvm::Type::getDoubleTy(context_)
+                                           : llvm::Type::getFloatTy(context_);
+                const auto as_real = [&](llvm::Value* bits) {
+                    return scalar_double
+                        ? builder_.CreateBitCast(bits, real)
+                        : builder_.CreateBitCast(builder_.CreateTrunc(bits, i32_), real);
+                };
+                return builder_.CreateFCmpOEQ(as_real(left.a), as_real(right.a));
+            }
+            return builder_.CreateICmpEQ(left.a, right.a);
+        };
+        const bool scalar = scalar_double || scalar_float || scalar_bits;
+        // Whether two element slots hold the same value: their bytes (a
+        // string) or both planes.
+        const auto same_element = [&](llvm::Value* left, llvm::Value* right,
+                                      llvm::Value* ordinal) -> llvm::Value* {
+            if (text) {
+                auto* left_slot = dyn_element_address(left, ordinal);
+                auto* right_slot = dyn_element_address(right, ordinal);
+                auto* size = text_slot_size(left_slot);
+                auto* sized = builder_.CreateICmpEQ(size, text_slot_size(right_slot));
+                auto* slot = str_slot(llvm::Type::getInt1Ty(context_), sized);
+                auto* bytes = dyn_when(sized);
+                builder_.CreateStore(str_bytes_equal(builder_.CreateLoad(ptr_, left_slot),
+                                         builder_.CreateLoad(ptr_, right_slot), size),
+                    slot);
+                dyn_end(bytes);
+                return builder_.CreateLoad(llvm::Type::getInt1Ty(context_), slot);
+            }
+            const auto a = dyn_load_element(left, ordinal);
+            const auto b = dyn_load_element(right, ordinal);
+            return builder_.CreateAnd(builder_.CreateICmpEQ(a.a, b.a),
+                builder_.CreateICmpEQ(a.b, b.b));
+        };
+        switch (op) {
+        case DynOp::compare: {
+            auto* other = dyn_header(inst.z);
+            const bool case_equal = (inst.imm_b & 1U) != 0U;
+            const bool text_keys = (inst.imm_a & detail::dyn_layout_text_keys) != 0U;
+            auto* size = dyn_load(header, dyn_size);
+            auto* differ = str_slot(i64_,
+                builder_.CreateZExt(builder_.CreateICmpNE(size, dyn_load(other, dyn_size)),
+                    i64_));
+            auto* unknown = str_slot(i64_, constant(0U));
+            const auto mark = [&](llvm::Value* slot, llvm::Value* condition) {
+                builder_.CreateStore(builder_.CreateOr(builder_.CreateLoad(i64_, slot),
+                                         builder_.CreateZExt(condition, i64_)),
+                    slot);
+            };
+            auto* same_size = dyn_when(builder_.CreateICmpEQ(builder_.CreateLoad(i64_, differ),
+                constant(0U)));
+            dyn_loop(constant(0U), size, false, [&](llvm::Value* ordinal) {
+                if (text_keys) {
+                    auto* left_key = dyn_text_key_address(header, ordinal);
+                    auto* right_key = dyn_text_key_address(other, ordinal);
+                    auto* key_size = text_slot_size(left_key);
+                    auto* sized = builder_.CreateICmpEQ(key_size, text_slot_size(right_key));
+                    mark(differ, builder_.CreateNot(sized));
+                    auto* bytes = dyn_when(sized);
+                    mark(differ, builder_.CreateNot(str_bytes_equal(
+                                     builder_.CreateLoad(ptr_, left_key),
+                                     builder_.CreateLoad(ptr_, right_key), key_size)));
+                    dyn_end(bytes);
+                } else if (associative) {
+                    mark(differ,
+                        builder_.CreateICmpNE(
+                            builder_.CreateLoad(i64_, dyn_key_address(header, ordinal)),
+                            builder_.CreateLoad(i64_, dyn_key_address(other, ordinal))));
+                }
+                if (text) {
+                    mark(differ, builder_.CreateNot(same_element(header, other, ordinal)));
+                    return;
+                }
+                const auto left = dyn_load_element(header, ordinal);
+                const auto right = dyn_load_element(other, ordinal);
+                if (scalar) {
+                    mark(differ, builder_.CreateNot(scalar_equal(left, right)));
+                    return;
+                }
+                if (case_equal) {
+                    mark(differ, builder_.CreateNot(builder_.CreateAnd(
+                                     builder_.CreateICmpEQ(left.a, right.a),
+                                     builder_.CreateICmpEQ(left.b, right.b))));
+                    return;
+                }
+                auto* unknown_bits = builder_.CreateAnd(builder_.CreateOr(left.b, right.b),
+                    element_mask);
+                mark(differ, nonzero(builder_.CreateAnd(
+                                 builder_.CreateAnd(builder_.CreateXor(left.a, right.a),
+                                     bit_not(unknown_bits)),
+                                 element_mask)));
+                mark(unknown, nonzero(unknown_bits));
+            });
+            dyn_end(same_size);
+            auto* zero = nonzero(builder_.CreateLoad(i64_, differ));
+            auto* x = nonzero(builder_.CreateLoad(i64_, unknown));
+            store_register(inst.d, select(zero, zero_pair(),
+                select(x, x_value(1U), scalar_bool(builder_.getTrue()))));
+            break;
+        }
+        case DynOp::select: {
+            auto* first = dyn_header(inst.z);
+            auto* second = dyn_header(inst.y);
+            const auto [one, unknown] = truth(load_register(inst.x));
+            auto* choose_first = dyn_when(one);
+            dyn_copy_whole(inst.imm_a, header, first, at);
+            dyn_end(choose_first);
+            auto* known = builder_.CreateNot(builder_.CreateOr(one, unknown));
+            auto* choose_second = dyn_when(known);
+            dyn_copy_whole(inst.imm_a, header, second, at);
+            dyn_end(choose_second);
+            // An ambiguous condition (11.4.11): equal arrays give either;
+            // an associative array, or different element counts, the
+            // default (empty) array; otherwise matching elements are kept
+            // and the others take the element's initial value.
+            auto* ambiguous = dyn_when(unknown);
+            auto* size = dyn_load(first, dyn_size);
+            auto* same_count = builder_.CreateICmpEQ(size, dyn_load(second, dyn_size));
+            auto* all_equal = str_slot(llvm::Type::getInt1Ty(context_), same_count);
+            auto* counted = dyn_when(same_count);
+            dyn_loop(constant(0U), size, false, [&](llvm::Value* ordinal) {
+                // Logical equality (compare_container_values): unknown bits
+                // leave packed elements not equal.
+                llvm::Value* same = nullptr;
+                if (text) {
+                    same = same_element(first, second, ordinal);
+                } else {
+                    const auto a = dyn_load_element(first, ordinal);
+                    const auto b = dyn_load_element(second, ordinal);
+                    same = scalar ? scalar_equal(a, b)
+                                  : builder_.CreateAnd(builder_.CreateICmpEQ(a.a, b.a),
+                                        builder_.CreateICmpEQ(
+                                            builder_.CreateAnd(builder_.CreateOr(a.b, b.b),
+                                                element_mask),
+                                            constant(0U)));
+                }
+                if (associative) {
+                    same = builder_.CreateAnd(same,
+                        (inst.imm_a & detail::dyn_layout_text_keys) != 0U
+                            ? text_slots_equal(dyn_text_key_address(first, ordinal),
+                                  dyn_text_key_address(second, ordinal))
+                            : builder_.CreateICmpEQ(
+                                  builder_.CreateLoad(i64_, dyn_key_address(first, ordinal)),
+                                  builder_.CreateLoad(i64_, dyn_key_address(second, ordinal))));
+                }
+                builder_.CreateStore(builder_.CreateAnd(
+                                         builder_.CreateLoad(llvm::Type::getInt1Ty(context_),
+                                             all_equal),
+                                         same),
+                    all_equal);
+            });
+            dyn_end(counted);
+            auto* equivalent = builder_.CreateLoad(llvm::Type::getInt1Ty(context_), all_equal);
+            auto* keep = dyn_when(equivalent);
+            dyn_copy_whole(inst.imm_a, header, first, at);
+            dyn_end(keep);
+            auto* empty = dyn_when(builder_.CreateAnd(builder_.CreateNot(equivalent),
+                associative ? builder_.getTrue() : builder_.CreateNot(same_count)));
+            dyn_store(header, dyn_size, constant(0U));
+            dyn_store(header, dyn_head, constant(0U));
+            if (associative) {
+                if (text) {
+                    text_clear(dyn_address(header, dyn_fill));
+                } else {
+                    dyn_store(header, dyn_fill, constant(0U));
+                    dyn_store(header, dyn_fill + 8U, constant(0U));
+                }
+                auto* flags = dyn_address(header, dyn_flags);
+                builder_.CreateStore(builder_.CreateAnd(builder_.CreateLoad(i32_, flags),
+                                         llvm::ConstantInt::get(i32_, ~dyn_default_flag)),
+                    flags);
+            }
+            dyn_end(empty);
+            if (!associative) {
+                auto* merging = dyn_when(builder_.CreateAnd(builder_.CreateNot(equivalent),
+                    same_count));
+                dyn_reserve(header, size, at);
+                dyn_store(header, dyn_size, size);
+                const auto initial = dyn_pair(header, dyn_empty);
+                dyn_loop(constant(0U), size, false, [&](llvm::Value* ordinal) {
+                    auto* same = same_element(first, second, ordinal);
+                    if (text) {
+                        auto* target = dyn_element_address(header, ordinal);
+                        auto* source = dyn_element_address(first, ordinal);
+                        auto* copying = dyn_when(builder_.CreateAnd(same,
+                            builder_.CreateICmpNE(target, source)));
+                        text_copy(target, source, at);
+                        dyn_end(copying);
+                        auto* clearing = dyn_when(builder_.CreateNot(same));
+                        text_clear(target);
+                        dyn_end(clearing);
+                        return;
+                    }
+                    dyn_store_element(header, ordinal,
+                        select(same, dyn_load_element(first, ordinal), initial));
+                });
+                dyn_end(merging);
+            }
+            dyn_end(ambiguous);
+            break;
+        }
+        case DynOp::reduce: {
+            const auto operation = static_cast<ContainerReductionOperator>(inst.x);
+            auto binary = BinaryOperator::add_unsigned;
+            std::uint64_t initial = 0U;
+            switch (operation) {
+            case ContainerReductionOperator::sum:
+                break;
+            case ContainerReductionOperator::product:
+                binary = BinaryOperator::multiply_unsigned;
+                initial = 1U;
+                break;
+            case ContainerReductionOperator::bit_and:
+                binary = BinaryOperator::bit_and;
+                initial = mask_of(width);
+                break;
+            case ContainerReductionOperator::bit_or:
+                binary = BinaryOperator::bit_or;
+                break;
+            case ContainerReductionOperator::bit_xor:
+                binary = BinaryOperator::bit_xor;
+                break;
+            }
+            KInst fold { };
+            fold.op = KOp::binary;
+            fold.sub = static_cast<std::uint8_t>(binary);
+            fold.width = width;
+            auto* result_a = str_slot(i64_, constant(initial));
+            auto* result_b = str_slot(i64_, constant(0U));
+            const bool is_signed = (inst.imm_a & detail::dyn_layout_signed_elements) != 0U;
+            dyn_loop(constant(0U), dyn_load(header, dyn_size), false,
+                [&](llvm::Value* ordinal) {
+                    auto value = dyn_load_element(header, ordinal);
+                    if (detail::dyn_graph_count(inst.imm_b) != 0U) {
+                        value = emit_predicate(inst.imm_b, value, ordinal, width, is_signed);
+                    }
+                    const auto folded = emit_binary(fold,
+                        { builder_.CreateLoad(i64_, result_a),
+                            builder_.CreateLoad(i64_, result_b) },
+                        value);
+                    builder_.CreateStore(folded.a, result_a);
+                    builder_.CreateStore(folded.b, result_b);
+                });
+            store_register(inst.d,
+                { builder_.CreateLoad(i64_, result_a), builder_.CreateLoad(i64_, result_b) });
+            break;
+        }
+        case DynOp::order:
+            emit_dyn_order(inst, at, header);
+            break;
+        case DynOp::locate:
+            emit_dyn_locate(inst, at, header);
+            break;
+        default:
+            throw std::logic_error("static kernel whole-array operation is invalid");
+        }
+    }
+
+    /// Whether two text slots hold the same bytes.
+    [[nodiscard]] llvm::Value* text_slots_equal(llvm::Value* left, llvm::Value* right)
+    {
+        auto* size = text_slot_size(left);
+        auto* sized = builder_.CreateICmpEQ(size, text_slot_size(right));
+        auto* slot = str_slot(llvm::Type::getInt1Ty(context_), sized);
+        auto* bytes = dyn_when(sized);
+        builder_.CreateStore(str_bytes_equal(builder_.CreateLoad(ptr_, left),
+                                 builder_.CreateLoad(ptr_, right), size),
+            slot);
+        dyn_end(bytes);
+        return builder_.CreateLoad(llvm::Type::getInt1Ty(context_), slot);
     }
 
     static constexpr std::uint64_t text_size_mask = 0xFFFF'FFFFU;
@@ -9148,52 +9920,9 @@ private:
             dyn_store(header, dyn_size, count);
             break;
         }
-        case DynOp::copy: {
-            auto* other = dyn_header(inst.z);
-            auto* distinct = dyn_when(builder_.CreateICmpNE(other, header));
-            auto* count = dyn_load(other, dyn_size);
-            dyn_store(header, dyn_size, constant(0U));
-            dyn_store(header, dyn_head, constant(0U));
-            dyn_reserve(header, count, at);
-            const bool associative = (inst.imm_a & detail::dyn_layout_associative) != 0U;
-            const bool text_keys = (inst.imm_a & detail::dyn_layout_text_keys) != 0U;
-            dyn_loop(constant(0U), count, false, [&](llvm::Value* ordinal) {
-                if (text) {
-                    text_copy(dyn_element_address(header, ordinal),
-                        dyn_element_address(other, ordinal), at);
-                } else {
-                    dyn_store_element(header, ordinal, dyn_load_element(other, ordinal));
-                }
-                if (text_keys) {
-                    text_copy(dyn_text_key_address(header, ordinal),
-                        dyn_text_key_address(other, ordinal), at);
-                } else if (associative) {
-                    builder_.CreateStore(
-                        builder_.CreateLoad(i64_, dyn_key_address(other, ordinal)),
-                        dyn_key_address(header, ordinal));
-                }
-            });
-            if (associative) {
-                // The keys and the `default:` go with the elements.
-                if (text) {
-                    text_copy(dyn_address(header, dyn_fill), dyn_address(other, dyn_fill), at);
-                } else {
-                    dyn_store(header, dyn_fill, dyn_load(other, dyn_fill));
-                    dyn_store(header, dyn_fill + 8U, dyn_load(other, dyn_fill + 8U));
-                }
-                auto* flags = dyn_address(header, dyn_flags);
-                auto* other_flags = builder_.CreateLoad(i32_, dyn_address(other, dyn_flags));
-                auto* default_bit = llvm::ConstantInt::get(i32_, dyn_default_flag);
-                builder_.CreateStore(
-                    builder_.CreateOr(builder_.CreateAnd(builder_.CreateLoad(i32_, flags),
-                                          builder_.CreateNot(default_bit)),
-                        builder_.CreateAnd(other_flags, default_bit)),
-                    flags);
-            }
-            dyn_store(header, dyn_size, count);
-            dyn_end(distinct);
+        case DynOp::copy:
+            dyn_copy_whole(inst.imm_a, header, dyn_header(inst.z), at);
             break;
-        }
         default:
             throw std::logic_error("static kernel string container operation is invalid");
         }
@@ -16960,33 +17689,14 @@ private:
                     builder_.CreateAnd(value.b, m) });
             break;
         }
-        case KOp::logical_not: {
-            const auto [one, unknown] = truth(load_register(inst.x));
-            // logic_not: one -> 0, zero -> 1, unknown -> x.
-            auto* zero = builder_.CreateNot(builder_.CreateOr(one, unknown));
-            store_register(inst.d, from_truth(zero, unknown));
+        case KOp::logical_not:
+            store_register(inst.d, logical_not_value(load_register(inst.x)));
             break;
-        }
-        case KOp::logical_binary: {
-            const auto [left_one, left_unknown] = truth(load_register(inst.x));
-            const auto [right_one, right_unknown] = truth(load_register(inst.y));
-            auto* left_zero = builder_.CreateNot(builder_.CreateOr(left_one, left_unknown));
-            auto* right_zero
-                = builder_.CreateNot(builder_.CreateOr(right_one, right_unknown));
-            llvm::Value* one { };
-            llvm::Value* zero { };
-            if (static_cast<LogicalBinaryOperator>(inst.sub)
-                == LogicalBinaryOperator::logical_and) {
-                zero = builder_.CreateOr(left_zero, right_zero);
-                one = builder_.CreateAnd(left_one, right_one);
-            } else {
-                one = builder_.CreateOr(left_one, right_one);
-                zero = builder_.CreateAnd(left_zero, right_zero);
-            }
-            auto* unknown = builder_.CreateNot(builder_.CreateOr(one, zero));
-            store_register(inst.d, from_truth(one, unknown));
+        case KOp::logical_binary:
+            store_register(inst.d,
+                logical_value(static_cast<LogicalBinaryOperator>(inst.sub),
+                    load_register(inst.x), load_register(inst.y)));
             break;
-        }
         case KOp::extract: {
             if (inst.sub == 2U) {
                 store_register(inst.d,
@@ -17038,26 +17748,13 @@ private:
         }
         case KOp::conditional: {
             const auto condition = load_register(inst.x);
-            const auto when_true = load_register(inst.y);
-            const auto when_false = load_register(inst.z);
             auto* a0 = builder_.CreateTrunc(condition.a, llvm::Type::getInt1Ty(context_));
             auto* b0 = builder_.CreateTrunc(condition.b, llvm::Type::getInt1Ty(context_));
             auto* is_one = builder_.CreateAnd(a0, builder_.CreateNot(b0));
             auto* is_zero = builder_.CreateAnd(builder_.CreateNot(a0),
                 builder_.CreateNot(b0));
-            auto* m = constant(mask_of(inst.width));
-            // Only equal known bits survive an ambiguous condition; equal X
-            // or Z bits produce X (IEEE 1800-2023 11.4.11, Table 11-20).
-            auto* same = builder_.CreateAnd(
-                bit_not(builder_.CreateOr(builder_.CreateXor(when_true.a, when_false.a),
-                    builder_.CreateOr(when_true.b, when_false.b))),
-                m);
-            auto* differ = builder_.CreateAnd(bit_not(same), m);
-            const Pair merged { builder_.CreateOr(builder_.CreateAnd(when_true.a, same),
-                                    differ),
-                builder_.CreateOr(builder_.CreateAnd(when_true.b, same), differ) };
-            store_register(inst.d,
-                select(is_one, when_true, select(is_zero, when_false, merged)));
+            store_register(inst.d, conditional_merge(is_one, is_zero, load_register(inst.y),
+                                       load_register(inst.z), inst.width));
             break;
         }
         case KOp::two_state: {
@@ -19506,6 +20203,7 @@ private:
         add("fsim_sk_dyn_reshape", helpers.dyn_reshape);
         add("fsim_sk_str_reserve", helpers.str_reserve);
         add("fsim_sk_dyn_text_reserve", helpers.dyn_text_reserve);
+        add("fsim_sk_dyn_scratch", helpers.dyn_scratch);
         // llvm.memcpy of a run-time length (KOp::str).
         add("memcpy", static_cast<void* (*)(void*, const void*, std::size_t)>(&std::memcpy));
 #if defined(__MINGW32__)

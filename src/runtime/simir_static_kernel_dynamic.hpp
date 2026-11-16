@@ -16,6 +16,7 @@
 
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <string>
 #include <string_view>
 
@@ -130,6 +131,21 @@ private:
 /// or the reference's error to report.
 [[nodiscard]] DynFailure execute_str(const KInst& inst, const CompiledBody& body,
     std::string* strings, kernel_word::Word* registers);
+
+/// The predicate graph imm_b of a KOp::dyn instruction (dyn_graph) as the
+/// reference's nodes.
+[[nodiscard]] std::vector<ContainerPredicateNode> dyn_graph_nodes(
+    const CompiledBody& body, std::uint64_t imm);
+
+/// Executes a whole-array KOp::dyn `inst` (dyn_whole) on the bytecode tier
+/// through the reference's routines: `container` (type `type`) is aux,
+/// `other` container z and `third` container y; `random` draws the
+/// process's next random number (shuffle).
+void execute_dyn_whole(const KInst& inst, const CompiledBody& body,
+    StaticKernelDynamicContainer& container, const ContainerType& type,
+    const StaticKernelDynamicContainer* other, const ContainerType* other_type,
+    const StaticKernelDynamicContainer* third, kernel_word::Word* registers,
+    const std::function<std::uint32_t()>& random);
 
 /// The reference's message for a DynFailure.
 [[nodiscard]] const char* dyn_fail_message(DynFailure failure) noexcept;

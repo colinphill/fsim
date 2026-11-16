@@ -12,6 +12,7 @@
 #include <new>
 #include <numeric>
 #include <optional>
+#include <span>
 #include <stdexcept>
 
 namespace fsim::runtime::simir::static_kernel_detail {
@@ -1748,11 +1749,95 @@ DynFailure execute_dyn(const KInst& inst, StaticKernelDynamicContainer& containe
         case DynOp::append_container:
             // execute_text_dyn.
             break;
+        case DynOp::compare:
+        case DynOp::select:
+        case DynOp::reduce:
+        case DynOp::order:
+        case DynOp::locate:
+            throw std::logic_error { "static kernel whole-array operation misplaced" };
         }
     } catch (const std::bad_alloc&) {
         return DynFailure::out_of_memory;
     }
     return DynFailure::none;
+}
+
+std::vector<ContainerPredicateNode> dyn_graph_nodes(const CompiledBody& body,
+    const std::uint64_t imm)
+{
+    std::vector<ContainerPredicateNode> nodes;
+    const auto begin = dyn_graph_begin(imm);
+    const auto count = dyn_graph_count(imm);
+    nodes.reserve(static_cast<std::size_t>(count));
+    for (std::uint64_t index = 0U; index < count; ++index) {
+        const auto* words = body.predicate_words.data()
+            + static_cast<std::size_t>((begin + index) * dyn_graph_node_words);
+        ContainerPredicateNode node;
+        node.operation = static_cast<ContainerPredicateOperator>(words[0] & 0xFFU);
+        node.value_kind = static_cast<ContainerPredicateValueKind>((words[0] >> 8U) & 0xFFU);
+        node.left = static_cast<std::uint32_t>(words[1]);
+        node.right = static_cast<std::uint32_t>(words[1] >> 32U);
+        node.third = static_cast<std::uint32_t>(words[2]);
+        if (node.operation == ContainerPredicateOperator::constant) {
+            node.constant = PackedLogic4::from_aval_bval(
+                static_cast<std::size_t>(words[0] >> 16U), words[3], words[4]);
+        }
+        nodes.push_back(std::move(node));
+    }
+    return nodes;
+}
+
+void execute_dyn_whole(const KInst& inst, const CompiledBody& body,
+    StaticKernelDynamicContainer& container, const ContainerType& type,
+    const StaticKernelDynamicContainer* other, const ContainerType* other_type,
+    const StaticKernelDynamicContainer* third, Word* registers,
+    const std::function<std::uint32_t()>& random)
+{
+    const auto word = [](const PackedLogic4& value) {
+        const auto low = value.low_word();
+        return Word { low.aval, low.bval };
+    };
+    switch (static_cast<DynOp>(inst.sub)) {
+    case DynOp::compare:
+        registers[inst.d] = word(compare_container_values(dynamic_value(container, type),
+            dynamic_value(*other, *other_type), (inst.imm_b & 1U) != 0U));
+        return;
+    case DynOp::select: {
+        auto value = dynamic_value(container, type);
+        const auto condition = registers[inst.x];
+        select_container_value(value,
+            PackedLogic4::from_aval_bval(1U, condition.a & 1U, condition.b & 1U),
+            dynamic_value(*other, type), dynamic_value(*third, type));
+        assign_dynamic_value(container, value);
+        return;
+    }
+    case DynOp::reduce:
+        registers[inst.d] = word(reduce_container_value(dynamic_value(container, type),
+            static_cast<ContainerReductionOperator>(inst.x), dyn_graph_nodes(body, inst.imm_b)));
+        return;
+    case DynOp::order: {
+        auto value = dynamic_value(container, type);
+        order_container_value(value, static_cast<ContainerOrderingOperator>(inst.x),
+            dyn_graph_nodes(body, inst.imm_b), random);
+        assign_dynamic_value(container, value);
+        return;
+    }
+    case DynOp::locate: {
+        auto value = dynamic_value(container, type);
+        const auto operation = static_cast<ContainerLocatorOperator>(inst.x);
+        const auto graph = dyn_graph_nodes(body, inst.imm_b);
+        const bool predicate = operation >= ContainerLocatorOperator::find;
+        locate_container_values(value, dynamic_value(*other, *other_type), operation,
+            predicate ? std::span<const ContainerPredicateNode> { graph }
+                      : std::span<const ContainerPredicateNode> { },
+            predicate ? std::span<const ContainerPredicateNode> { }
+                      : std::span<const ContainerPredicateNode> { graph });
+        assign_dynamic_value(container, value);
+        return;
+    }
+    default:
+        throw std::logic_error { "static kernel whole-array operation is invalid" };
+    }
 }
 
 } // namespace fsim::runtime::simir::static_kernel_detail

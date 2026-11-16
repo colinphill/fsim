@@ -24,7 +24,7 @@ using namespace static_kernel_compiled_detail;
 namespace kw = kernel_word;
 
 namespace {
-constexpr std::string_view native_magic { "fsim-static-kernel-templates-v3" };
+constexpr std::string_view native_magic { "fsim-static-kernel-templates-v4" };
 
 /// The operands build_native binds to slots (bind_slot), in binding order:
 /// the field, and whether it holds the slot's arena offset (else its index;
@@ -105,6 +105,7 @@ bool same_body(const CompiledBody& left, const CompiledBody& right, const bool s
         || left.wide_constants.size() != right.wide_constants.size()
         || left.string_operands != right.string_operands
         || left.string_bytes != right.string_bytes
+        || left.predicate_words != right.predicate_words
         || left.sva_plans != right.sva_plans) {
         return false;
     }
@@ -175,6 +176,10 @@ std::uint64_t hash_body(const CompiledBody& body, const bool shape)
     mix(body.wide_base.size() | body.wide_constants.size() << 32U);
     mix(body.sva_plans.size());
     mix(body.string_operands.size() | body.string_bytes.size() << 32U);
+    mix(body.predicate_words.size());
+    for (const auto word : body.predicate_words) {
+        mix(word);
+    }
     return hash;
 }
 } // namespace
@@ -1045,6 +1050,27 @@ std::uint32_t Interpreter::Impl::StaticKernel::native_dyn_text_reserve(
     }
 }
 
+std::uint64_t* Interpreter::Impl::StaticKernel::native_dyn_scratch(
+    StaticKernelNativeFrame* frame, const std::uint32_t at, const std::uint64_t words)
+{
+    // Parallel lanes run members at once: each thread has its own block.
+    thread_local std::vector<std::uint64_t> scratch;
+    try {
+        if (words > scratch.max_size()) {
+            throw std::bad_alloc { };
+        }
+        if (scratch.size() < words) {
+            scratch.resize(static_cast<std::size_t>(words));
+        }
+        return scratch.data();
+    } catch (const std::exception&) {
+        native_fail(frame, at, static_kernel_detail::dyn_fail_first
+                + static_cast<std::uint32_t>(
+                    static_kernel_detail::DynFailure::out_of_memory));
+        return nullptr;
+    }
+}
+
 void Interpreter::Impl::StaticKernel::native_fail(
     StaticKernelNativeFrame* frame, const std::uint32_t at,
     const std::uint32_t reason)
@@ -1750,6 +1776,9 @@ void Interpreter::Impl::StaticKernel::canonicalize_unit(const CompiledBody& inst
             inst.aux = bind(3U, inst.aux, inst.aux, 0U);
             if (inst.z != no_container) {
                 inst.z = bind(3U, inst.z, inst.z, 0U);
+            }
+            if (dyn_third_container(static_cast<DynOp>(inst.sub))) {
+                inst.y = bind(3U, inst.y, inst.y, 0U);
             }
             break;
         case KOp::str:
@@ -2536,6 +2565,9 @@ void Interpreter::Impl::StaticKernel::concatenate_members(CompiledBody& program,
         program.string_operands.insert(program.string_operands.end(),
             body.string_operands.begin(), body.string_operands.end());
         program.string_bytes += body.string_bytes;
+        const auto predicate_base = program.predicate_words.size() / dyn_graph_node_words;
+        program.predicate_words.insert(program.predicate_words.end(),
+            body.predicate_words.begin(), body.predicate_words.end());
         const auto plan_base = static_cast<std::uint32_t>(program.sva_plans.size());
         program.sva_plans.insert(program.sva_plans.end(), body.sva_plans.begin(),
             body.sva_plans.end());
@@ -2731,6 +2763,9 @@ void Interpreter::Impl::StaticKernel::concatenate_members(CompiledBody& program,
                 break;
             case KOp::dyn: {
                 const auto op = static_cast<DynOp>(inst.sub);
+                if (dyn_has_graph(op) && dyn_graph_count(inst.imm_b) != 0U) {
+                    inst.imm_b += predicate_base;
+                }
                 if (dyn_writes_destination(op)) {
                     reg(inst.d);
                 }
@@ -3182,6 +3217,9 @@ void Interpreter::Impl::StaticKernel::build_partitions(
                     inst.aux = bind((std::uint64_t { 4 } << 40U) | inst.aux);
                     if (inst.z != no_container) {
                         inst.z = bind((std::uint64_t { 4 } << 40U) | inst.z);
+                    }
+                    if (dyn_third_container(static_cast<DynOp>(inst.sub))) {
+                        inst.y = bind((std::uint64_t { 4 } << 40U) | inst.y);
                     }
                     break;
                 case KOp::str:
