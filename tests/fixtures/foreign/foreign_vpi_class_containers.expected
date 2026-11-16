@@ -39,6 +39,27 @@
 #c rl type=vpiRegArray size=2 arraytype=1
 #c rl[0] type=vpiRealVar value=1.5
 #c rl[1] type=vpiRealVar value=2.5
+#c grid type=vpiRegArray size=2 arraytype=1
+#c grid[0] array size=3
+#c grid[0][0] type=vpiIntVar value=0
+#c grid[0][1] type=vpiIntVar value=1
+#c grid[0][2] type=vpiIntVar value=2
+#c grid[1] array size=3
+#c grid[1][0] type=vpiIntVar value=10
+#c grid[1][1] type=vpiIntVar value=11
+#c grid[1][2] type=vpiIntVar value=12
+#c down type=vpiRegArray size=4 arraytype=1
+#c down[0] type=vpiIntVar value=1
+#c down[1] type=vpiIntVar value=2
+#c down[2] type=vpiIntVar value=3
+#c down[3] type=vpiIntVar value=4
+#c grid[1] type=vpiRegArray size=3
+#c grid[1][2] by index value=12 multi value=12
+#c grid[2] null
+#c array grid from [0][2] 2 10 11
+#c down[4] value=1 down[1] value=4 down[0] null
+#c down[3] index=3
+#c array down from [3] 2 3
 #c put rl[0] value=3.25
 #c put dyn[1] value=77
 #c array bs 100 200

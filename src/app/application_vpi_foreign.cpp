@@ -11204,7 +11204,67 @@ private:
         std::size_t index { };
         bool is_handle { };
         runtime::SystemVerilogClassHandle handle { };
+        // A fixed array of several unpacked dimensions is an array of the
+        // arrays of its next dimension (IEEE 1800-2023 7.4.5, 37.20): the
+        // dimension of `container` this node is, and the row-major ordinal
+        // of the indexes that select it in the dimensions before.
+        std::size_t level { };
+        std::size_t base { };
     };
+
+    // The unpacked dimensions a fixed container is indexed by, one VPI
+    // array level each; 0 for any other container.
+    [[nodiscard]] static std::size_t class_container_levels(
+        const runtime::simir::ContainerValue& container) noexcept
+    {
+        return container.type.fixed && !container.type.associative
+                && !container.type.queue
+            ? container.type.dimensions.size()
+            : 0U;
+    }
+
+    [[nodiscard]] static std::size_t class_dimension_extent(
+        const runtime::simir::ContainerDimension& dimension) noexcept
+    {
+        return static_cast<std::size_t>(
+                   std::max(dimension.first, dimension.second)
+                   - static_cast<std::int64_t>(
+                       std::min(dimension.first, dimension.second)))
+            + 1U;
+    }
+
+    // The position within `dimension` of the declared index `index`.
+    [[nodiscard]] static std::optional<std::size_t> class_dimension_position(
+        const runtime::simir::ContainerDimension& dimension,
+        const std::int64_t index) noexcept
+    {
+        const auto distance = dimension.first >= dimension.second
+            ? static_cast<std::int64_t>(dimension.first) - index
+            : index - dimension.first;
+        if (distance < 0
+            || static_cast<std::size_t>(distance)
+                >= class_dimension_extent(dimension)) {
+            return std::nullopt;
+        }
+        return static_cast<std::size_t>(distance);
+    }
+
+    // The declared index of the element at `position` of a node: its
+    // dimension's index for a fixed array, else the position.
+    [[nodiscard]] static std::int64_t class_node_index(
+        const ClassNode& node, const std::size_t position) noexcept
+    {
+        if (node.container != nullptr
+            && node.level < class_container_levels(*node.container)) {
+            const auto& dimension = node.container->type.dimensions[node.level];
+            return dimension.first >= dimension.second
+                ? static_cast<std::int64_t>(dimension.first)
+                    - static_cast<std::int64_t>(position)
+                : static_cast<std::int64_t>(dimension.first)
+                    + static_cast<std::int64_t>(position);
+        }
+        return static_cast<std::int64_t>(position);
+    }
 
     // A structure member holding one packed, scalar or string element is a
     // leaf (IEEE 1800-2023 37.17: the member's value).
@@ -11261,7 +11321,23 @@ private:
             if (here == nullptr || step == 0U) {
                 return ClassNode { };
             }
-            const auto at = step - 1U;
+            auto at = step - 1U;
+            // A step in a dimension before the last selects a subarray; the
+            // last selects the element at the indexes' row-major ordinal.
+            if (const auto levels = class_container_levels(*here);
+                levels > 1U) {
+                const auto extent = class_dimension_extent(
+                    here->type.dimensions[node.level]);
+                if (at >= extent) {
+                    return ClassNode { };
+                }
+                at += node.base * extent;
+                if (node.level + 1U < levels) {
+                    node.level += 1U;
+                    node.base = at;
+                    continue;
+                }
+            }
             if (here->type.element_kind == Element::Container
                 || here->type.element_kind == Element::Aggregate) {
                 if (at >= here->nested_elements.size()) {
@@ -11288,6 +11364,11 @@ private:
 
     [[nodiscard]] static std::size_t class_node_size(const ClassNode& node)
     {
+        if (node.container != nullptr
+            && class_container_levels(*node.container) > 1U) {
+            return class_dimension_extent(
+                node.container->type.dimensions[node.level]);
+        }
         return node.handles != nullptr ? node.handles->size()
             : node.container != nullptr ? class_container_size(*node.container)
                                         : 0U;
@@ -11330,7 +11411,8 @@ private:
         auto prefix = member;
         prefix.path.clear();
         for (const auto step : member.path) {
-            const auto holder = class_node(prefix).container;
+            const auto holder_node = class_node(prefix);
+            const auto holder = holder_node.container;
             const auto index = step - 1U;
             // A structure's member names are the stored value's, else the
             // declared structure typespec's (37.17, 37.25).
@@ -11346,7 +11428,8 @@ private:
                 && !declared->node->member_names[index].empty()) {
                 name += "." + declared->node->member_names[index];
             } else {
-                name += "[" + std::to_string(index) + "]";
+                name += "["
+                    + std::to_string(class_node_index(holder_node, index)) + "]";
             }
             prefix.path.push_back(step);
         }
@@ -12276,11 +12359,15 @@ private:
                 return node.parent != nullptr
                     ? integer(node.parent->type.signed_elements ? 1 : 0)
                     : succeed(result, 0U, undefined);
-            case vpiIndex:
-                return member->path.empty()
-                    ? succeed(result, 0U, undefined)
-                    : integer(static_cast<std::int64_t>(
-                          member->path.back() - 1U));
+            case vpiIndex: {
+                if (member->path.empty()) {
+                    return succeed(result, 0U, undefined);
+                }
+                auto holder = *member;
+                holder.path.pop_back();
+                return integer(class_node_index(
+                    class_node(holder), member->path.back() - 1U));
+            }
             case vpiArrayType:
                 if (node.handles != nullptr) {
                     using Container = runtime::SystemVerilogClassContainerKind;
@@ -18780,6 +18867,11 @@ private:
                     }
                     ++at;
                 }
+            } else if (node.container != nullptr
+                && node.level < class_container_levels(*node.container)) {
+                // A fixed array is indexed by its declared range (37.20).
+                position = class_dimension_position(
+                    node.container->type.dimensions[node.level], index);
             } else if (index >= 0
                 && static_cast<std::size_t>(index) < class_node_size(node)) {
                 position = static_cast<std::size_t>(index);
@@ -22820,8 +22912,7 @@ private:
         const fsim_vpi_handle_v1 handle, const ValueArrayArguments& arguments)
     {
         const auto* const member = class_member_of(resolve(handle));
-        if (member == nullptr || member->constraint || arguments.indexes == nullptr
-            || arguments.indexes[0] < 0) {
+        if (member == nullptr || member->constraint || arguments.indexes == nullptr) {
             return std::nullopt;
         }
         const auto node = class_node(*member);
@@ -22837,14 +22928,40 @@ private:
             || frontend::is_real_scalar_kind(node.container->type.scalar_kind)) {
             return std::nullopt;
         }
+        // The start is one declared index per unpacked dimension of the
+        // array, left to right; elements follow in row-major order, within
+        // the array (38.16, 38.34).
+        const auto levels = class_container_levels(*node.container);
+        std::size_t start = node.base;
+        std::size_t span = 1U;
+        if (levels == 0U) {
+            if (arguments.indexes[0] < 0) {
+                return std::nullopt;
+            }
+            start = static_cast<std::size_t>(arguments.indexes[0]);
+            span = runtime::simir::container_element_count(*node.container);
+        } else {
+            for (auto level = node.level; level < levels; ++level) {
+                const auto& dimension = node.container->type.dimensions[level];
+                const auto position = class_dimension_position(dimension,
+                    arguments.indexes[level - node.level]);
+                if (!position) {
+                    return std::nullopt;
+                }
+                const auto extent = class_dimension_extent(dimension);
+                start = start * extent + *position;
+                span *= extent;
+            }
+        }
+        const auto end = levels == 0U ? span
+                                      : (start / span + 1U) * span;
         FrameSection section;
         section.container = *node.container;
         section.class_member = resolve(handle);
-        section.start = static_cast<std::size_t>(arguments.indexes[0]);
+        section.start = start;
         section.count = arguments.count;
-        if (section.count == 0U
-            || section.start + section.count
-                > runtime::simir::container_element_count(section.container)) {
+        if (section.count == 0U || section.start + section.count > end
+            || end > runtime::simir::container_element_count(section.container)) {
             return std::nullopt;
         }
         return section;

@@ -3,7 +3,9 @@
 // 37.33, 38.15, 38.34, 38.36.1): size, array type, elements by iteration and
 // by index with their declared types, class handle, structure and nested
 // container elements, a value written to an element, the array value
-// routines, and a size-change callback. At the end of time 1 the plug-in
+// routines, and a size-change callback. A multi-dimensional fixed array is
+// one array level per dimension, selected by index or by multi-index, and a
+// fixed array is indexed by its declared range (7.4.5, 37.20, 38.16). At the end of time 1 the plug-in
 // reads them; the queue then grows at time 2.
 // Lines starting with "#c " form the checked trace.
 #include "fsim/runtime/vpi_abi.h"
@@ -153,6 +155,43 @@ static void writes(void)
     vpi_printf("#c array dyn %s\n", untouched[0] == -1 ? "refused" : "read");
 }
 
+// The levels of a multi-dimensional fixed array and a fixed array with a
+// descending declared range.
+static void dimensions(void)
+{
+    vpiHandle grid = vpi_handle_by_name("top.b.grid", NULL);
+    vpiHandle down = vpi_handle_by_name("top.b.down", NULL);
+    vpiHandle row = vpi_handle_by_index(grid, 1);
+    PLI_INT32 at[2] = { 1, 2 };
+    PLI_INT32 from[2] = { 0, 2 };
+    PLI_INT32 start[1] = { 3 };
+    PLI_INT32 out[3] = { -1, -1, -1 };
+    s_vpi_arrayvalue array;
+    vpi_printf("#c grid[1] type=%s size=%d\n", vpi_get_str(vpiType, row),
+        (int)vpi_get(vpiSize, row));
+    vpi_printf("#c grid[1][2] by index value=%d multi value=%d\n",
+        integer_of(vpi_handle_by_index(row, 2)),
+        integer_of(vpi_handle_by_multi_index(grid, 2, at)));
+    vpi_printf("#c grid[2] %s\n",
+        vpi_handle_by_index(grid, 2) == NULL ? "null" : "found");
+    memset(&array, 0, sizeof array);
+    array.format = vpiIntVal;
+    array.flags = vpiUserAllocFlag;
+    array.value.integers = out;
+    vpi_get_value_array(grid, &array, from, 3);
+    vpi_printf("#c array grid from [0][2] %d %d %d\n", (int)out[0],
+        (int)out[1], (int)out[2]);
+    vpi_printf("#c down[4] value=%d down[1] value=%d down[0] %s\n",
+        integer_of(vpi_handle_by_index(down, 4)),
+        integer_of(vpi_handle_by_index(down, 1)),
+        vpi_handle_by_index(down, 0) == NULL ? "null" : "found");
+    vpi_printf("#c down[3] index=%d\n",
+        (int)vpi_get(vpiIndex, vpi_handle_by_index(down, 3)));
+    out[0] = out[1] = -1;
+    vpi_get_value_array(down, &array, start, 2);
+    vpi_printf("#c array down from [3] %d %d\n", (int)out[0], (int)out[1]);
+}
+
 static PLI_INT32 first(p_cb_data data)
 {
     s_cb_data watch;
@@ -170,6 +209,9 @@ static PLI_INT32 first(p_cb_data data)
     show("ps", -1);
     show("nest", -1);
     show("rl", -1);
+    show("grid", -1);
+    show("down", -1);
+    dimensions();
     real_write();
     writes();
     memset(&watch, 0, sizeof watch);
