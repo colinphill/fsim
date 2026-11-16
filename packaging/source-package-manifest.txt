@@ -1963,6 +1963,7 @@ tests/fixtures/compliance/sv_automatic_fork_typed_context_controls_batch59.sv
 tests/fixtures/compliance/sv_bits_anonymous_packed_struct_batch58.sv
 tests/fixtures/compliance/sv_block_imported_typedef_visibility_batch59.sv
 tests/fixtures/compliance/sv_block_labels_and_class_parameters.sv
+tests/fixtures/compliance/sv_block_typedef_patterns.sv
 tests/fixtures/compliance/sv_block_wildcard_import_event_shadow_batch58.sv
 tests/fixtures/compliance/sv_block_wildcard_import_scope_batch58.sv
 tests/fixtures/compliance/sv_bounded_queue_function_conversion.sv

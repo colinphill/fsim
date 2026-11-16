@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "fsim/semantic/systemverilog_type_descriptor.hpp"
 #include "fsim/semantic/systemverilog_class_specialization.hpp"
 #include "fsim/support/process_method.hpp"
 #include "fsim/support/stack_growth.hpp"
@@ -19665,6 +19666,27 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 }
                 hierarchical_reference_missed_
                     = hierarchical_reference_missed_ || earlier_miss;
+                // A typed assignment pattern has the bits of its type
+                // (10.9, 20.6.2); an untyped one has no self-determined
+                // type.
+                if (!packed_bits) {
+                    if (const auto pattern
+                        = specialized_hir_unit_->find_expression(
+                            call.operands.front());
+                        pattern && pattern->systemverilog != nullptr
+                        && pattern->systemverilog->kind
+                            == semantic::sv::ExpressionKind::assignment_pattern
+                        && pattern->systemverilog->nominal_type_target) {
+                        const auto described
+                            = semantic::describe_systemverilog_expression_type(
+                                *specialized_hir_unit_, call.operands.front());
+                        if (described && described->bits
+                            && *described->bits != 0U) {
+                            packed_bits
+                                = static_cast<std::size_t>(*described->bits);
+                        }
+                    }
+                }
                 if (!packed_bits) {
                     packed_bits = hir_expression_width(
                         call.operands.front(), hir_process_scope_);

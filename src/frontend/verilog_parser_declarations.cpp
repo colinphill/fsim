@@ -1510,11 +1510,15 @@ Type VerilogParser::parse_named_type() {
     name = compilation_unit_package_->name
         + name.substr(std::string_view { "$unit" }.size());
   }
-  // A typedef of an enclosing procedural block (6.18).
+  // A typedef of an enclosing procedural block (6.18). The declaration
+  // has the typedef's type, the one its name selects (an aggregate's
+  // nominal type, 6.22.1), not a copy with its own identity.
   if (const auto local = block_typedef_types_.find(name);
       local != block_typedef_types_.end() && !at(TokenKind::Hash)
       && class_parse_depth_ == 0U) {
     auto type = local->second;
+    type.named_type = name;
+    type.named_type_span = span;
     type.systemverilog_source_order = source_order;
     return type;
   }

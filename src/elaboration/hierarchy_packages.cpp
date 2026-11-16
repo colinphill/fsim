@@ -11167,26 +11167,10 @@ namespace {
                     *expression->systemverilog->nominal_type_target,
                     visiting);
             }
-            // A typed pattern whose type was not selected when it was
-            // projected names its type declaration in its scope.
+            // A typed pattern whose type name selects no type has none.
             if (expression && expression->systemverilog != nullptr
                 && expression->systemverilog->kind
-                    == ExpressionKind::assignment_pattern
-                && !expression->systemverilog->nominal_type.empty()) {
-                const auto selected = semantic::CompiledDesignResolver {
-                    compiled, unit.id, unit_specialized }
-                                          .resolve_systemverilog(
-                                              expression->systemverilog
-                                                  ->nominal_type,
-                                              expression->systemverilog->scope)
-                                          .unique();
-                for (const auto* type : types) {
-                    if (selected && type->declaration == *selected) {
-                        std::unordered_set<std::uint32_t> visiting;
-                        return nominal_type_identity(
-                            nominal_type_identity, type->id, visiting);
-                    }
-                }
+                    == ExpressionKind::assignment_pattern) {
                 return std::nullopt;
             }
             if (!expression || expression->systemverilog == nullptr
