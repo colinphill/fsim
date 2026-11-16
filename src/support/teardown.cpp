@@ -10,6 +10,7 @@ namespace fsim::support {
 namespace {
 
 std::atomic<bool> skip_teardown { false };
+std::atomic<HeapSettle> heap_settle { nullptr };
 
 struct Retained {
     std::mutex mutex;
@@ -33,6 +34,18 @@ void enable_exit_without_teardown() noexcept
 bool exit_without_teardown() noexcept
 {
     return skip_teardown.load(std::memory_order_relaxed);
+}
+
+void set_heap_settle(const HeapSettle settle) noexcept
+{
+    heap_settle.store(settle, std::memory_order_relaxed);
+}
+
+void settle_heap_for_run() noexcept
+{
+    if (const auto settle = heap_settle.load(std::memory_order_relaxed)) {
+        settle();
+    }
 }
 
 void retain_until_exit(std::shared_ptr<void> object)

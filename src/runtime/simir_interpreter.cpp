@@ -30,6 +30,7 @@
 #include "fsim/runtime/simir_vital.hpp"
 #include "fsim/runtime/sva_engine.hpp"
 #include "fsim/runtime/systemverilog_scalar.hpp"
+#include "fsim/support/teardown.hpp"
 #include "simir_driver_table.hpp"
 #include "simir_operation_kinds.hpp"
 #include "simir_process_program.hpp"
@@ -4206,6 +4207,11 @@ void Interpreter::start()
     if (!impl_->start_restoring && impl_->start_of_simulation_hook) {
         impl_->start_of_simulation_hook();
     }
+    // Give the heap that elaboration, initialization and the start callbacks
+    // freed back to the system now, and keep what the run frees for reuse: the
+    // resident size then does not drop at an arbitrary point of the run, so a
+    // foreign library that measures its own memory use sees a steady baseline.
+    support::settle_heap_for_run();
     // The startup assignments above establish the simulation baseline. Build
     // active runtime inventories and sampled defaults only after that baseline
     // is final, before ordinary time-zero processes are prearmed or queued.

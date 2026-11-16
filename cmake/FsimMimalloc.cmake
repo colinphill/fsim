@@ -159,6 +159,12 @@ int main(void) { return 0; }
       COMPILE_WARNING_AS_ERROR OFF)
     target_include_directories(fsim_mimalloc SYSTEM PRIVATE
       "${source_root}/include")
+    # The executable calls the mimalloc API (mi_collect, mi_option_set).
+    target_include_directories(fsim_mimalloc SYSTEM INTERFACE
+      "${source_root}/include")
+    if(WIN32)
+      target_compile_definitions(fsim_mimalloc INTERFACE MI_SHARED_LIB)
+    endif()
     target_link_libraries(fsim_mimalloc PUBLIC Threads::Threads)
     # Upstream source does not follow fsim's authored-source warning policy.
     if(MSVC OR CMAKE_C_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")

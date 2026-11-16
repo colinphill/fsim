@@ -3,6 +3,22 @@
 #include "fsim/cli/driver.hpp"
 #include "fsim/support/teardown.hpp"
 
+#if defined(FSIM_USES_MIMALLOC)
+#  include <mimalloc.h>
+
+namespace {
+
+// Purges the pages mimalloc has freed so far, then turns purging off: the
+// pages the run frees stay mapped for reuse (see settle_heap_for_run).
+void settle_mimalloc_heap() noexcept
+{
+    mi_collect(true);
+    mi_option_set(mi_option_purge_delay, -1);
+}
+
+}  // namespace
+#endif
+
 #if defined(_WIN32)
 #  if !defined(NOMINMAX)
 #    define NOMINMAX
@@ -11,13 +27,6 @@
 
 #  include <string>
 #  include <vector>
-
-#  if defined(FSIM_USES_MIMALLOC)
-// mimalloc's redirection module must initialize before the C runtime, so
-// mimalloc.dll has to head the import table. A call from this first object
-// file makes the linker import it before every other DLL.
-extern "C" __declspec(dllimport) int mi_version(void) noexcept;
-#  endif
 
 namespace {
 
@@ -49,6 +58,9 @@ namespace {
 
 int wmain(const int argc, wchar_t** wide_argv) {
 #  if defined(FSIM_USES_MIMALLOC)
+  // mimalloc's redirection module must initialize before the C runtime, so
+  // mimalloc.dll has to head the import table: a call from this first object
+  // file makes the linker import it before every other DLL.
   (void)mi_version();
 #  endif
   try {
@@ -65,6 +77,9 @@ int wmain(const int argc, wchar_t** wide_argv) {
       argv.push_back(argument.c_str());
     }
     fsim::support::enable_exit_without_teardown();
+#  if defined(FSIM_USES_MIMALLOC)
+    fsim::support::set_heap_settle(&settle_mimalloc_heap);
+#  endif
     return fsim::cli::run(
         argc, argv.data(), fsim::app::make_stdio_cli_services());
   } catch (...) {
@@ -74,6 +89,9 @@ int wmain(const int argc, wchar_t** wide_argv) {
 #else
 int main(const int argc, char** argv) {
   fsim::support::enable_exit_without_teardown();
+#  if defined(FSIM_USES_MIMALLOC)
+  fsim::support::set_heap_settle(&settle_mimalloc_heap);
+#  endif
   return fsim::cli::run(argc, argv, fsim::app::make_stdio_cli_services());
 }
 #endif
