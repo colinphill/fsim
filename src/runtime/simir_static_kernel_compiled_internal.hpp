@@ -657,10 +657,10 @@ inline void kinst_flow(const KInst& inst, const std::uint32_t at,
     case KOp::str: {
         // String register fields name no kernel register.
         const auto op = static_cast<StrOp>(inst.sub);
-        if (op == StrOp::index || op == StrOp::replace_byte) {
+        if (str_reads_index(op)) {
             use.push_back(inst.y);
         }
-        if (op == StrOp::replace_byte) {
+        if (str_reads_byte(op)) {
             use.push_back(inst.x);
         }
         if (str_writes_register(op)) {

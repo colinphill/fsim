@@ -348,26 +348,55 @@ enum class StrOp : std::uint8_t {
     /// d = byte y of string z, 0 out of range (32 bits).
     index,
     /// Byte y of string offset = the low byte of register x (imm_a bits),
-    /// unless y is out of range or the byte is zero.
+    /// unless y is out of range or the byte is zero. A byte with unknown
+    /// bits is an error, or (imm_b 1, putc) leaves the string unchanged.
     replace_byte,
+    /// String offset = string z in upper case (imm_a 1) or lower case
+    /// (toupper, tolower; 6.16.4, 6.16.5).
+    change_case,
+    /// d = -1, 0 or 1 (32 bits) as string z orders before, equal to or
+    /// after string imm_b, folding letters to lower case when imm_a is 1
+    /// (compare, icompare; 6.16.8, 6.16.9).
+    order,
+    /// String offset = bytes y .. x of string z, or the empty string when
+    /// the range is unknown or not inside the string (substr; 6.16.10).
+    /// The index registers are 32-bit integers (y: width bits, x: imm_a
+    /// bits; at most 32, a 32-bit one signed).
+    substr,
+    /// d = the integer string z spells in radix imm_a (32 bits; atoi,
+    /// atohex, atooct, atobin; 6.16.11).
+    to_integer,
+    /// String offset = register y (an integer as for substr) in radix
+    /// imm_a, signed in radix 10, 0 when unknown (itoa, hextoa, octtoa,
+    /// bintoa; 6.16.12).
+    from_integer,
 };
 
 [[nodiscard]] inline bool str_writes_string(const StrOp op) noexcept
 {
     return op == StrOp::copy || op == StrOp::load_constant || op == StrOp::concat
-        || op == StrOp::replace_byte;
+        || op == StrOp::replace_byte || op == StrOp::change_case || op == StrOp::substr
+        || op == StrOp::from_integer;
 }
 
 /// Writes register d.
 [[nodiscard]] inline bool str_writes_register(const StrOp op) noexcept
 {
-    return op == StrOp::compare || op == StrOp::length || op == StrOp::index;
+    return op == StrOp::compare || op == StrOp::length || op == StrOp::index
+        || op == StrOp::order || op == StrOp::to_integer;
 }
 
 /// Reads index register y.
 [[nodiscard]] inline bool str_reads_index(const StrOp op) noexcept
 {
-    return op == StrOp::index || op == StrOp::replace_byte;
+    return op == StrOp::index || op == StrOp::replace_byte || op == StrOp::substr
+        || op == StrOp::from_integer;
+}
+
+/// Reads register x.
+[[nodiscard]] inline bool str_reads_byte(const StrOp op) noexcept
+{
+    return op == StrOp::replace_byte || op == StrOp::substr;
 }
 
 /// KOp::dyn operations (KInst::sub), the SimIR container operations they

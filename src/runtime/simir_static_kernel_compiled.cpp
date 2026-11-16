@@ -2353,6 +2353,114 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             // The byte register's width (the reference reads its low word).
             inst.imm_a = w(op.source);
             return true;
+        } else if constexpr (std::is_same_v<T, StringMethod>) {
+            // The methods' integer arguments are the registers' 32-bit
+            // values, none when unknown (execute_string): registers of at
+            // most 32 bits, a 32-bit one signed.
+            const auto integer = [&](const RegisterId reg) {
+                return reg < register_count && w(reg) != 0U && w(reg) <= 32U;
+            };
+            const auto radix = [](const StringMethodOperator method) -> std::uint64_t {
+                switch (method) {
+                case StringMethodOperator::atoi:
+                case StringMethodOperator::itoa:
+                    return 10U;
+                case StringMethodOperator::atohex:
+                case StringMethodOperator::hextoa:
+                    return 16U;
+                case StringMethodOperator::atooct:
+                case StringMethodOperator::octtoa:
+                    return 8U;
+                default:
+                    return 2U;
+                }
+            };
+            const auto integer_result = [&] {
+                return op.destination < register_count && w(op.destination) == 32U;
+            };
+            switch (op.operation) {
+            case StringMethodOperator::getc:
+                if (!string(op.source) || !integer_result() || !integer(op.first)) {
+                    return false;
+                }
+                set(StrOp::index);
+                (void)index(op.first, w(op.first) == 32U);
+                inst.d = narrow(op.destination);
+                inst.z = op.source;
+                return true;
+            case StringMethodOperator::putc:
+                if (!string(op.source) || !integer(op.first) || !integer(op.second)) {
+                    return false;
+                }
+                set(StrOp::replace_byte);
+                (void)index(op.first, w(op.first) == 32U);
+                inst.offset = op.source;
+                inst.x = narrow(op.second);
+                inst.imm_a = w(op.second);
+                inst.imm_b = 1U;
+                return true;
+            case StringMethodOperator::toupper:
+            case StringMethodOperator::tolower:
+                if (!string(op.source) || !string(op.string_destination)) {
+                    return false;
+                }
+                set(StrOp::change_case);
+                inst.offset = op.string_destination;
+                inst.z = op.source;
+                inst.imm_a = op.operation == StringMethodOperator::toupper ? 1U : 0U;
+                return true;
+            case StringMethodOperator::compare:
+            case StringMethodOperator::icompare:
+                if (!string(op.source) || !string(op.argument) || !integer_result()) {
+                    return false;
+                }
+                set(StrOp::order);
+                inst.d = narrow(op.destination);
+                inst.z = op.source;
+                inst.imm_b = op.argument;
+                inst.imm_a = op.operation == StringMethodOperator::icompare ? 1U : 0U;
+                return true;
+            case StringMethodOperator::substr:
+                if (!string(op.source) || !string(op.string_destination)
+                    || !integer(op.first) || !integer(op.second)) {
+                    return false;
+                }
+                set(StrOp::substr);
+                inst.offset = op.string_destination;
+                inst.z = op.source;
+                inst.y = narrow(op.first);
+                inst.width = w(op.first);
+                inst.x = narrow(op.second);
+                inst.imm_a = w(op.second);
+                return true;
+            case StringMethodOperator::atoi:
+            case StringMethodOperator::atohex:
+            case StringMethodOperator::atooct:
+            case StringMethodOperator::atobin:
+                if (!string(op.source) || !integer_result()) {
+                    return false;
+                }
+                set(StrOp::to_integer);
+                inst.d = narrow(op.destination);
+                inst.z = op.source;
+                inst.imm_a = radix(op.operation);
+                return true;
+            case StringMethodOperator::itoa:
+            case StringMethodOperator::hextoa:
+            case StringMethodOperator::octtoa:
+            case StringMethodOperator::bintoa:
+                if (!string(op.source) || !integer(op.first)) {
+                    return false;
+                }
+                set(StrOp::from_integer);
+                inst.offset = op.source;
+                inst.y = narrow(op.first);
+                inst.width = w(op.first);
+                inst.imm_a = radix(op.operation);
+                return true;
+            default:
+                return false;
+            }
         } else {
             return false;
         }
@@ -3305,7 +3413,8 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                     || std::is_same_v<T, CompareStrings>
                     || std::is_same_v<T, StringLength>
                     || std::is_same_v<T, StringIndex>
-                    || std::is_same_v<T, StringReplaceByte>) {
+                    || std::is_same_v<T, StringReplaceByte>
+                    || std::is_same_v<T, StringMethod>) {
                     if (emit_str(inst, op)) {
                         return;
                     }

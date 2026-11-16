@@ -2726,10 +2726,10 @@ void Interpreter::Impl::StaticKernel::concatenate_members(CompiledBody& program,
             }
             case KOp::str: {
                 const auto op = static_cast<StrOp>(inst.sub);
-                if (op == StrOp::index || op == StrOp::replace_byte) {
+                if (str_reads_index(op)) {
                     reg(inst.y);
                 }
-                if (op == StrOp::replace_byte) {
+                if (str_reads_byte(op)) {
                     reg(inst.x);
                 }
                 if (str_writes_register(op)) {

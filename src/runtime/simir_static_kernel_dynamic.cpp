@@ -2,6 +2,8 @@
 
 #include "simir_static_kernel_dynamic.hpp"
 
+#include "fsim/runtime/string_methods.hpp"
+
 #include <algorithm>
 #include <bit>
 #include <cstdlib>
@@ -679,6 +681,22 @@ void DynamicHeaders::truncate(const std::size_t count) noexcept
     }
 }
 
+namespace {
+
+// A string method's integer argument (execute_string): the register's
+// value (width bits, at most 32; a 32-bit one signed), none when unknown.
+[[nodiscard]] std::optional<std::int32_t> string_method_integer(
+    const Word value, const std::uint32_t width) noexcept
+{
+    if ((value.b & kernel_word::mask(width)) != 0U) {
+        return std::nullopt;
+    }
+    return static_cast<std::int32_t>(
+        static_cast<std::uint32_t>(value.a & kernel_word::mask(width)));
+}
+
+} // namespace
+
 DynFailure execute_str(const KInst& inst, const CompiledBody& body, std::string* strings,
     Word* registers)
 {
@@ -733,7 +751,8 @@ DynFailure execute_str(const KInst& inst, const CompiledBody& body, std::string*
         }
         const auto byte = registers[inst.x];
         if ((byte.b & kernel_word::mask(static_cast<std::uint32_t>(inst.imm_a))) != 0U) {
-            return DynFailure::byte_unknown;
+            // putc of an unknown character leaves the string unchanged.
+            return inst.imm_b != 0U ? DynFailure::none : DynFailure::byte_unknown;
         }
         if (target.size() > maximum_string_bytes) {
             return DynFailure::string_limit;
@@ -743,6 +762,31 @@ DynFailure execute_str(const KInst& inst, const CompiledBody& body, std::string*
         }
         return DynFailure::none;
     }
+    case StrOp::change_case:
+        strings[inst.offset] = string_change_case(strings[inst.z], inst.imm_a != 0U);
+        return DynFailure::none;
+    case StrOp::order:
+        registers[inst.d] = { static_cast<std::uint32_t>(
+                                  string_compare(strings[inst.z],
+                                      strings[static_cast<std::size_t>(inst.imm_b)],
+                                      inst.imm_a != 0U)),
+            0U };
+        return DynFailure::none;
+    case StrOp::substr:
+        strings[inst.offset] = string_substr(strings[inst.z],
+            string_method_integer(registers[inst.y], inst.width),
+            string_method_integer(registers[inst.x], static_cast<std::uint32_t>(inst.imm_a)));
+        return DynFailure::none;
+    case StrOp::to_integer:
+        registers[inst.d] = { static_cast<std::uint32_t>(string_to_integer(
+                                  strings[inst.z], static_cast<unsigned>(inst.imm_a))),
+            0U };
+        return DynFailure::none;
+    case StrOp::from_integer:
+        strings[inst.offset] = string_from_integer(
+            string_method_integer(registers[inst.y], inst.width).value_or(0),
+            static_cast<unsigned>(inst.imm_a));
+        return DynFailure::none;
     }
     return DynFailure::none;
 }

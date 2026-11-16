@@ -5463,10 +5463,10 @@ private:
             case KOp::str: {
                 // String register fields name no register.
                 const auto op = static_cast<detail::StrOp>(inst.sub);
-                if (op == detail::StrOp::index || op == detail::StrOp::replace_byte) {
+                if (detail::str_reads_index(op)) {
                     reads.push_back(inst.y);
                 }
-                if (op == detail::StrOp::replace_byte) {
+                if (detail::str_reads_byte(op)) {
                     reads.push_back(inst.x);
                 }
                 writes = detail::str_writes_register(op);
@@ -7740,14 +7740,20 @@ private:
                 }, { constant(0U), constant(0U) }));
                 break;
             }
-            auto* replace = dyn_when(valid);
             const auto byte = load_register(inst.x);
             const auto byte_width = static_cast<std::uint32_t>(inst.imm_a);
             const auto byte_mask = byte_width >= 64U ? ~std::uint64_t { 0 }
                                                      : (std::uint64_t { 1 } << byte_width) - 1U;
-            dyn_check(builder_.CreateICmpEQ(builder_.CreateAnd(byte.b, constant(byte_mask)),
-                          constant(0U)),
-                at, DynFailure::byte_unknown);
+            auto* byte_known = builder_.CreateICmpEQ(
+                builder_.CreateAnd(byte.b, constant(byte_mask)), constant(0U));
+            if (inst.imm_b != 0U) {
+                // putc of an unknown character leaves the string unchanged.
+                valid = builder_.CreateAnd(valid, byte_known);
+            }
+            auto* replace = dyn_when(valid);
+            if (inst.imm_b == 0U) {
+                dyn_check(byte_known, at, DynFailure::byte_unknown);
+            }
             dyn_check(builder_.CreateICmpULE(size, constant(runtime::simir::maximum_string_bytes)), at,
                 DynFailure::string_limit);
             auto* low = builder_.CreateTrunc(byte.a, i8_);
@@ -7757,7 +7763,280 @@ private:
             dyn_end(replace);
             break;
         }
+        case StrOp::change_case:
+            emit_str_change_case(inst, file, at);
+            break;
+        case StrOp::order:
+            emit_str_order(inst, file);
+            break;
+        case StrOp::substr:
+            emit_str_substr(inst, file, at);
+            break;
+        case StrOp::to_integer:
+            emit_str_to_integer(inst, file);
+            break;
+        case StrOp::from_integer:
+            emit_str_from_integer(inst, file, at);
+            break;
         }
+    }
+
+    [[nodiscard]] llvm::AllocaInst* str_slot(llvm::Type* type, llvm::Value* initial)
+    {
+        auto* slot = entry_builder().CreateAlloca(type);
+        builder_.CreateStore(initial, slot);
+        return slot;
+    }
+
+    /// for (index = 0; index < count; ++index) body(index, done): the body
+    /// may leave the loop by branching to `done`.
+    template <typename Body>
+    void str_for(llvm::Value* count, Body&& body)
+    {
+        auto* index = str_slot(i64_, constant(0U));
+        auto* head = llvm::BasicBlock::Create(context_, "str_loop", &function_);
+        auto* step = llvm::BasicBlock::Create(context_, "str_step", &function_);
+        auto* done = llvm::BasicBlock::Create(context_, "str_done", &function_);
+        builder_.CreateBr(head);
+        builder_.SetInsertPoint(head);
+        auto* current = builder_.CreateLoad(i64_, index);
+        builder_.CreateCondBr(builder_.CreateICmpULT(current, count), step, done);
+        builder_.SetInsertPoint(step);
+        body(current, done);
+        builder_.CreateStore(builder_.CreateAdd(current, constant(1U)), index);
+        builder_.CreateBr(head);
+        builder_.SetInsertPoint(done);
+    }
+
+    /// A string method's integer argument (register `reg`, `width` bits, at
+    /// most 32; a 32-bit one signed) as a 64-bit signed value, and whether
+    /// it is known.
+    [[nodiscard]] std::pair<llvm::Value*, llvm::Value*> str_integer(
+        const std::uint32_t reg, const std::uint32_t width)
+    {
+        const auto value = load_register(reg);
+        const auto mask = (std::uint64_t { 1 } << width) - 1U;
+        auto* known = builder_.CreateICmpEQ(builder_.CreateAnd(value.b, constant(mask)),
+            constant(0U));
+        auto* bits = builder_.CreateAnd(value.a, constant(mask));
+        auto* integer = width == 32U
+            ? builder_.CreateSExt(builder_.CreateTrunc(bits, i32_), i64_)
+            : bits;
+        return { integer, known };
+    }
+
+    /// toupper / tolower: string offset = string z with its letters mapped.
+    void emit_str_change_case(const KInst& inst, llvm::Value* file, const std::uint32_t at)
+    {
+        auto* source = str_object(file, inst.z);
+        auto* target = str_object(file, inst.offset);
+        auto* size = str_size(source);
+        if (inst.offset != inst.z) {
+            str_reserve(target, size, at);
+        }
+        auto* from = str_data(source);
+        auto* to = str_data(target);
+        const bool upper = inst.imm_a != 0U;
+        str_for(size, [&](llvm::Value* index, llvm::BasicBlock*) {
+            auto* byte = builder_.CreateLoad(i8_, builder_.CreateInBoundsGEP(i8_, from, index));
+            auto* letter = builder_.CreateICmpULT(
+                builder_.CreateSub(byte, llvm::ConstantInt::get(i8_, static_cast<std::uint64_t>(upper ? 'a' : 'A'))),
+                llvm::ConstantInt::get(i8_, 26U));
+            auto* mapped = upper ? builder_.CreateSub(byte, llvm::ConstantInt::get(i8_, 32U))
+                                 : builder_.CreateAdd(byte, llvm::ConstantInt::get(i8_, 32U));
+            builder_.CreateStore(builder_.CreateSelect(letter, mapped, byte),
+                builder_.CreateInBoundsGEP(i8_, to, index));
+        });
+        str_set_size(target, size);
+    }
+
+    /// compare / icompare: d = -1, 0 or 1 by the first differing byte (both
+    /// folded to lower case for icompare), then by the lengths.
+    void emit_str_order(const KInst& inst, llvm::Value* file)
+    {
+        auto* left = str_object(file, inst.z);
+        auto* right = str_object(file, inst.imm_b);
+        auto* left_size = str_size(left);
+        auto* right_size = str_size(right);
+        auto* left_data = str_data(left);
+        auto* right_data = str_data(right);
+        auto* order = str_slot(i64_, constant(0U));
+        const bool fold = inst.imm_a != 0U;
+        const auto folded = [&](llvm::Value* byte) -> llvm::Value* {
+            auto* wide = builder_.CreateZExt(byte, i64_);
+            if (!fold) {
+                return wide;
+            }
+            auto* capital = builder_.CreateICmpULT(builder_.CreateSub(wide, constant(static_cast<std::uint64_t>('A'))),
+                constant(26U));
+            return builder_.CreateSelect(capital, builder_.CreateAdd(wide, constant(32U)), wide);
+        };
+        str_for(builder_.CreateSelect(builder_.CreateICmpULT(left_size, right_size), left_size,
+                    right_size),
+            [&](llvm::Value* index, llvm::BasicBlock* done) {
+                auto* a = folded(
+                    builder_.CreateLoad(i8_, builder_.CreateInBoundsGEP(i8_, left_data, index)));
+                auto* b = folded(
+                    builder_.CreateLoad(i8_, builder_.CreateInBoundsGEP(i8_, right_data, index)));
+                auto* same = llvm::BasicBlock::Create(context_, "str_same", &function_);
+                auto* differs = llvm::BasicBlock::Create(context_, "str_differs", &function_);
+                builder_.CreateCondBr(builder_.CreateICmpEQ(a, b), same, differs);
+                builder_.SetInsertPoint(differs);
+                builder_.CreateStore(builder_.CreateSelect(builder_.CreateICmpULT(a, b),
+                                         constant(0xffffffffU), constant(1U)),
+                    order);
+                builder_.CreateBr(done);
+                builder_.SetInsertPoint(same);
+            });
+        auto* by_bytes = builder_.CreateLoad(i64_, order);
+        auto* by_size = builder_.CreateSelect(builder_.CreateICmpEQ(left_size, right_size),
+            constant(0U),
+            builder_.CreateSelect(builder_.CreateICmpULT(left_size, right_size),
+                constant(0xffffffffU), constant(1U)));
+        store_register(inst.d,
+            { builder_.CreateSelect(builder_.CreateICmpNE(by_bytes, constant(0U)), by_bytes,
+                  by_size),
+                constant(0U) });
+    }
+
+    /// substr: string offset = bytes y .. x of string z, or empty.
+    void emit_str_substr(const KInst& inst, llvm::Value* file, const std::uint32_t at)
+    {
+        auto* source = str_object(file, inst.z);
+        auto* target = str_object(file, inst.offset);
+        const auto [first, first_known] = str_integer(inst.y, inst.width);
+        const auto [last, last_known] = str_integer(inst.x, static_cast<std::uint32_t>(inst.imm_a));
+        auto* size = str_size(source);
+        // last >= first >= 0, so the unsigned comparison with the length
+        // is the signed one.
+        auto* valid = builder_.CreateAnd(builder_.CreateAnd(first_known, last_known),
+            builder_.CreateAnd(
+                builder_.CreateAnd(builder_.CreateICmpSGE(first, constant(0U)),
+                    builder_.CreateICmpSGE(last, first)),
+                builder_.CreateICmpULT(last, size)));
+        auto* count = builder_.CreateSelect(valid,
+            builder_.CreateAdd(builder_.CreateSub(last, first), constant(1U)), constant(0U));
+        auto* start = builder_.CreateSelect(valid, first, constant(0U));
+        if (inst.offset == inst.z) {
+            auto* data = str_data(source);
+            builder_.CreateMemMove(data, llvm::MaybeAlign(1),
+                builder_.CreateInBoundsGEP(i8_, data, start), llvm::MaybeAlign(1), count);
+        } else {
+            str_reserve(target, count, at);
+            str_copy_bytes(str_data(target),
+                builder_.CreateInBoundsGEP(i8_, str_data(source), start), count);
+        }
+        str_set_size(target, count);
+    }
+
+    /// atoi, atohex, atooct, atobin: d = the leading integer of string z
+    /// (underscores skipped; a sign first in radix 10), wrapping at 32 bits.
+    void emit_str_to_integer(const KInst& inst, llvm::Value* file)
+    {
+        auto* source = str_object(file, inst.z);
+        auto* data = str_data(source);
+        const auto radix = inst.imm_a;
+        auto* result = str_slot(i64_, constant(0U));
+        auto* negative = str_slot(i64_, constant(0U));
+        auto* started = str_slot(i64_, constant(0U));
+        str_for(str_size(source), [&](llvm::Value* index, llvm::BasicBlock* done) {
+            auto* c = builder_.CreateZExt(
+                builder_.CreateLoad(i8_, builder_.CreateInBoundsGEP(i8_, data, index)), i64_);
+            auto* skip = builder_.CreateICmpEQ(c, constant(static_cast<std::uint64_t>('_')));
+            auto* was_started = builder_.CreateICmpNE(builder_.CreateLoad(i64_, started),
+                constant(0U));
+            llvm::Value* sign = llvm::ConstantInt::getFalse(context_);
+            if (radix == 10U) {
+                sign = builder_.CreateAnd(builder_.CreateNot(was_started),
+                    builder_.CreateOr(builder_.CreateICmpEQ(c, constant(static_cast<std::uint64_t>('+'))),
+                        builder_.CreateICmpEQ(c, constant(static_cast<std::uint64_t>('-')))));
+            }
+            const auto in = [&](const char low, const char high) {
+                return builder_.CreateICmpULE(builder_.CreateSub(c, constant(
+                                                  static_cast<std::uint64_t>(low))),
+                    constant(static_cast<std::uint64_t>(high - low)));
+            };
+            auto* digit = builder_.CreateSelect(in('0', '9'),
+                builder_.CreateSub(c, constant(static_cast<std::uint64_t>('0'))),
+                builder_.CreateSelect(in('a', 'f'), builder_.CreateSub(c, constant(static_cast<std::uint64_t>('a' - 10))),
+                    builder_.CreateSelect(in('A', 'F'), builder_.CreateSub(c, constant(static_cast<std::uint64_t>('A' - 10))),
+                        constant(radix))));
+            auto* other = builder_.CreateNot(builder_.CreateOr(skip, sign));
+            auto* stop = builder_.CreateAnd(other, builder_.CreateICmpUGE(digit, constant(radix)));
+            auto* go = llvm::BasicBlock::Create(context_, "str_digit", &function_);
+            builder_.CreateCondBr(stop, done, go);
+            builder_.SetInsertPoint(go);
+            builder_.CreateStore(builder_.CreateSelect(sign,
+                                     builder_.CreateZExt(builder_.CreateICmpEQ(c, constant(static_cast<std::uint64_t>('-'))),
+                                         i64_),
+                                     builder_.CreateLoad(i64_, negative)),
+                negative);
+            builder_.CreateStore(builder_.CreateSelect(builder_.CreateOr(sign, other),
+                                     constant(1U), builder_.CreateLoad(i64_, started)),
+                started);
+            auto* old = builder_.CreateLoad(i64_, result);
+            auto* next = builder_.CreateAnd(
+                builder_.CreateAdd(builder_.CreateMul(old, constant(radix)), digit),
+                constant(0xffffffffU));
+            builder_.CreateStore(builder_.CreateSelect(other, next, old), result);
+        });
+        auto* magnitude = builder_.CreateLoad(i64_, result);
+        auto* value = builder_.CreateSelect(
+            builder_.CreateICmpNE(builder_.CreateLoad(i64_, negative), constant(0U)),
+            builder_.CreateAnd(builder_.CreateSub(constant(0U), magnitude),
+                constant(0xffffffffU)),
+            magnitude);
+        store_register(inst.d, { value, constant(0U) });
+    }
+
+    /// itoa, hextoa, octtoa, bintoa: string offset = register y's digits
+    /// (lower-case letters; a minus sign in radix 10), "0" when unknown.
+    void emit_str_from_integer(const KInst& inst, llvm::Value* file, const std::uint32_t at)
+    {
+        static constexpr std::uint64_t buffer_bytes = 40U;
+        const auto radix = inst.imm_a;
+        const auto [integer, known] = str_integer(inst.y, inst.width);
+        auto* value = builder_.CreateSelect(known, integer, constant(0U));
+        llvm::Value* negative = llvm::ConstantInt::getFalse(context_);
+        auto* bits = builder_.CreateAnd(value, constant(0xffffffffU));
+        if (radix == 10U) {
+            negative = builder_.CreateICmpSLT(value, constant(0U));
+            bits = builder_.CreateSelect(negative, builder_.CreateSub(constant(0U), value), value);
+        }
+        auto* buffer = entry_builder().CreateAlloca(llvm::ArrayType::get(i8_, buffer_bytes));
+        auto* position = str_slot(i64_, constant(buffer_bytes));
+        auto* magnitude = str_slot(i64_, bits);
+        // do { one digit } while (magnitude != 0)
+        auto* digit_block = llvm::BasicBlock::Create(context_, "str_itoa", &function_);
+        auto* after = llvm::BasicBlock::Create(context_, "str_itoa_done", &function_);
+        builder_.CreateBr(digit_block);
+        builder_.SetInsertPoint(digit_block);
+        auto* rest = builder_.CreateLoad(i64_, magnitude);
+        auto* digit = builder_.CreateURem(rest, constant(radix));
+        auto* character = builder_.CreateSelect(builder_.CreateICmpULT(digit, constant(10U)),
+            builder_.CreateAdd(digit, constant(static_cast<std::uint64_t>('0'))), builder_.CreateAdd(digit, constant(static_cast<std::uint64_t>('a' - 10))));
+        auto* place = builder_.CreateSub(builder_.CreateLoad(i64_, position), constant(1U));
+        builder_.CreateStore(builder_.CreateTrunc(character, i8_),
+            builder_.CreateInBoundsGEP(i8_, buffer, place));
+        builder_.CreateStore(place, position);
+        auto* quotient = builder_.CreateUDiv(rest, constant(radix));
+        builder_.CreateStore(quotient, magnitude);
+        builder_.CreateCondBr(builder_.CreateICmpNE(quotient, constant(0U)), digit_block, after);
+        builder_.SetInsertPoint(after);
+        if (radix == 10U) {
+            auto* sign = dyn_when(negative);
+            auto* minus = builder_.CreateSub(builder_.CreateLoad(i64_, position), constant(1U));
+            builder_.CreateStore(llvm::ConstantInt::get(i8_, static_cast<std::uint64_t>('-')),
+                builder_.CreateInBoundsGEP(i8_, buffer, minus));
+            builder_.CreateStore(minus, position);
+            dyn_end(sign);
+        }
+        auto* start = builder_.CreateLoad(i64_, position);
+        auto* count = builder_.CreateSub(constant(buffer_bytes), start);
+        auto* target = str_object(file, inst.offset);
+        str_reserve(target, count, at);
+        str_copy_bytes(str_data(target), builder_.CreateInBoundsGEP(i8_, buffer, start), count);
+        str_set_size(target, count);
     }
 
     /// KOp::dyn on an associative array with integral keys (imm_a bit 0).
