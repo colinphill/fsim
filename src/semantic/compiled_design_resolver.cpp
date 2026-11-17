@@ -9713,6 +9713,44 @@ CompiledVhdlProvidedType CompiledDesignResolver::resolve_vhdl_provided_type(
     if (design_ == nullptr || spelling.empty() || !use_scope.valid()) {
         return CompiledVhdlProvidedType::none;
     }
+    if (!resolutions_memoizable()) {
+        return compute_provided_type(spelling, use_scope);
+    }
+    // A type mark denotes alike in every iteration of a generate body
+    // (resolve_vhdl_type_identity).
+    auto* const family = effective_->iteration_family_memo();
+    auto& memo = family != nullptr ? *family : effective_->resolution_memo();
+    {
+        detail::SharedCacheLock lock { memo.mutex };
+        auto& by_spelling = memo.provided_types[use_scope.value()];
+        if (const auto found = by_spelling.find(spelling);
+            found != by_spelling.end()) {
+            for (const auto& entry : found->second) {
+                if (std::ranges::equal(entry.binding_frames, binding_frames_)) {
+                    return entry.result;
+                }
+            }
+        }
+    }
+    const auto result = compute_provided_type(spelling, use_scope);
+    // The computation can resolve other names and rehash the table.
+    detail::SharedCacheLock lock { memo.mutex };
+    auto& entries = memo.provided_types[use_scope.value()]
+                        .try_emplace(std::string { spelling })
+                        .first->second;
+    if (entries.size() < detail::ResolutionMemo::maximum_type_identity_contexts) {
+        entries.push_back({
+            std::vector<CompiledBindingFrame> {
+                binding_frames_.begin(), binding_frames_.end() },
+            result,
+        });
+    }
+    return result;
+}
+
+CompiledVhdlProvidedType CompiledDesignResolver::compute_provided_type(
+    const std::string_view spelling, const ScopeId use_scope) const
+{
     const auto identity = resolve_vhdl_type_identity(spelling, use_scope);
     if (identity.status == CompiledResolutionStatus::ambiguous) {
         return CompiledVhdlProvidedType::none;

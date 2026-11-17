@@ -66,6 +66,18 @@ struct ResolutionMemo {
             SpellingHash, std::equal_to<>>>
         type_identities;
 
+    struct ProvidedType {
+        std::vector<CompiledBindingFrame> binding_frames;
+        CompiledVhdlProvidedType result { };
+    };
+
+    /// CompiledDesignResolver::resolve_vhdl_provided_type results, by use
+    /// scope and spelling, for each binding context (as type_identities).
+    std::unordered_map<std::uint32_t,
+        std::unordered_map<std::string, std::vector<ProvidedType>,
+            SpellingHash, std::equal_to<>>>
+        provided_types;
+
     struct EffectiveSubtype {
         ScopeId scope;
         vhdl::SubtypeIndication input;

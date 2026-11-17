@@ -763,6 +763,9 @@ private:
     // binding frames, so the specialization's memo can keep them.
     [[nodiscard]] bool resolutions_memoizable() const noexcept;
 
+    // resolve_vhdl_provided_type without the specialization's memo.
+    [[nodiscard]] CompiledVhdlProvidedType compute_provided_type(
+        std::string_view spelling, ScopeId use_scope) const;
     // resolve_vhdl_type_identity without the specialization's memo.
     [[nodiscard]] CompiledVhdlTypeIdentityResolution
     compute_vhdl_type_identity(
