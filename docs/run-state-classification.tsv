@@ -400,6 +400,7 @@ interp.impl	fork_spawn_filter	Cfg	hook or callback installed by the embedder
 interp.impl	fork_spawn_filter_observes	Cfg	hook or callback installed by the embedder
 interp.impl	class_allocate_context_hook	Cfg	hook or callback installed by the embedder
 interp.impl	pending_class_allocation_seed	P	plain run state
+interp.impl	allocation_random_draw	W	set only while a class service runs for a thread (AllocationRandomScope)
 interp.impl	class_property_read_hook	Cfg	hook or callback installed by the embedder
 interp.impl	class_property_write_hook	Cfg	hook or callback installed by the embedder
 interp.impl	class_property_container_hook	Cfg	hook or callback installed by the embedder

@@ -2435,6 +2435,12 @@ std::string Simulation::Impl::static_property_specialization(
 {
     const auto& specialization = class_specialization(
         specialization_identity);
+    // An object created for a thread is seeded with the thread's next random
+    // values (IEEE 1800-2023 18.14.1).
+    if (interpreter != nullptr) {
+        class_heap.set_next_object_seed(
+            interpreter->take_class_allocation_seed());
+    }
     runtime::SystemVerilogClassDescriptor descriptor;
     descriptor.dynamic_type = specialization.declaration_identity;
     descriptor.declared_type = declared_type.empty()

@@ -907,6 +907,10 @@ const char* Interpreter::Impl::run_class_operation(
     const auto high = access.next_random();
     pending_class_allocation_seed
         = (static_cast<std::uint64_t>(high) << 32U) | access.next_random();
+    // An object the service creates takes the calling thread's next random
+    // values (IEEE 1800-2023 18.14.1), drawn only when it is created.
+    const AllocationRandomScope random_scope { *this,
+        [&access] { return access.next_random(); } };
     const auto handle = class_allocate_context_hook(process, design_process,
         scope, operation.specialization_identity, operation.declared_type,
         operation.construction, actuals, string_actuals,
@@ -1066,6 +1070,10 @@ const char* Interpreter::Impl::run_class_operation(
     const auto argument_count = std::min(actuals.size(),
         std::min(operation.actual_names.size(),
             operation.actual_directions.size()));
+    // An object the service creates takes the calling thread's next random
+    // values (IEEE 1800-2023 18.14.1), drawn only when it is created.
+    const AllocationRandomScope random_scope { *this,
+        [&access] { return access.next_random(); } };
     auto result = class_method_call_context_hook(process, handle,
         operation.method_identity, operation.hook, actuals, string_actuals,
         std::span<const std::string> { operation.actual_names }.first(
@@ -1183,6 +1191,10 @@ const char* Interpreter::Impl::run_class_operation(
         // 1800-2023 35.9).
         DpiCallProcess::set_current(process);
     }
+    // An object the service creates takes the calling thread's next random
+    // values (IEEE 1800-2023 18.14.1), drawn only when it is created.
+    const AllocationRandomScope random_scope { *this,
+        [&access] { return access.next_random(); } };
     auto result = dpi
         ? call_dpi_import(operation, actuals, string_actuals, bound)
         : class_static_method_call_context_hook(process, identity,
@@ -2995,6 +3007,11 @@ void Interpreter::Impl::handle_boundary(
         pending_class_allocation_seed
             = (static_cast<std::uint64_t>(next_random(process)) << 32U)
             | next_random(process);
+        // An object the service creates takes the calling thread's next
+        // random values (IEEE 1800-2023 18.14.1), drawn only when it is
+        // created.
+        const AllocationRandomScope random_scope { *this,
+            [this, id = process.id] { return next_random(get_process(id)); } };
         const auto handle = class_allocate_context_hook(
                   process.id,
                   process.cold().design_process,
@@ -3148,6 +3165,11 @@ void Interpreter::Impl::handle_boundary(
         const auto argument_count = std::min(actuals.size(),
             std::min(method->actual_names.size(),
                 method->actual_directions.size()));
+        // An object the service creates takes the calling thread's next
+        // random values (IEEE 1800-2023 18.14.1), drawn only when it is
+        // created.
+        const AllocationRandomScope random_scope { *this,
+            [this, id = process.id] { return next_random(get_process(id)); } };
         write_process_register(
             process,
             method->destination,
@@ -3268,6 +3290,11 @@ void Interpreter::Impl::handle_boundary(
             // 1800-2023 35.9), as the compiled kernel's does.
             DpiCallProcess::set_position(instruction);
         }
+        // An object the service creates takes the calling thread's next
+        // random values (IEEE 1800-2023 18.14.1), drawn only when it is
+        // created.
+        const AllocationRandomScope random_scope { *this,
+            [this, id = process.id] { return next_random(get_process(id)); } };
         write_process_register(
             process,
             method->destination,

@@ -338,10 +338,12 @@ SystemVerilogClassHandle SystemVerilogClassHeap::allocate(
   // An object created by `new` in a thread is seeded with the thread's next
   // random value (IEEE 1800-2023 18.14.1), and with nothing else: no text of
   // its class, so declarations added elsewhere leave it.
+  // An object created outside every thread (by the tool, before the run)
+  // takes the next value of its root's own stream.
   object_value.random_object_seed = next_object_seed_
       ? *next_object_seed_
-      : derived_seed(object_value.random_root_seed,
-            descriptor.specialization_identity, object_ordinal);
+      : derived_seed(object_value.random_root_seed, "unthreaded",
+            object_ordinal);
   next_object_seed_.reset();
   for (std::size_t index = 0; index < object_value.properties.size(); ++index) {
     auto& state = object_value.properties[index].random_state;

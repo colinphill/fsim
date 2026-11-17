@@ -2343,6 +2343,25 @@ struct Interpreter::Impl : SchedulerBatchTask {
     bool assertion_starts_bound { };
     ClassAllocateContextHook class_allocate_context_hook;
     std::optional<std::uint64_t> pending_class_allocation_seed;
+    // While a class service runs for a thread, the thread's random stream:
+    // an object the service creates is seeded from it (IEEE 1800-2023
+    // 18.14.1). Empty outside a service call.
+    std::function<std::uint32_t()> allocation_random_draw;
+    struct AllocationRandomScope {
+        AllocationRandomScope(Impl& owner, std::function<std::uint32_t()> draw)
+            : impl(owner)
+            , saved(std::exchange(owner.allocation_random_draw, std::move(draw)))
+        {
+        }
+        ~AllocationRandomScope()
+        {
+            impl.allocation_random_draw = std::move(saved);
+        }
+        AllocationRandomScope(const AllocationRandomScope&) = delete;
+        AllocationRandomScope& operator=(const AllocationRandomScope&) = delete;
+        Impl& impl;
+        std::function<std::uint32_t()> saved;
+    };
     ClassPropertyReadHook class_property_read_hook;
     ClassPropertyWriteHook class_property_write_hook;
     ClassPropertyContainerHook class_property_container_hook;

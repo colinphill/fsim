@@ -3,7 +3,8 @@
 // IEEE 1800-2023 18.14.1, 18.13.4, 18.13.5: an object created with new is
 // seeded with the next random value of the creating thread and nothing
 // else, so two classes of one layout created from one thread state draw the
-// same values; a forked thread is seeded with the next value of its parent;
+// same values, and a shallow copy (8.12) is seeded the same way; a forked
+// thread is seeded with the next value of its parent;
 // every initialization random number generator is seeded with the default
 // seed, so two instances of one module seed their static processes and the
 // objects of their static initializers alike.
@@ -64,6 +65,19 @@ module sv_random_stability;
     self_process.set_randstate(state);
     fork second = $urandom; join
     `CHECK("forked thread seeded from its parent", first == second)
+
+    begin
+      sv_random_stability_a copy0;
+      sv_random_stability_a copy1;
+      state = self_process.get_randstate();
+      copy0 = new a;
+      self_process.set_randstate(state);
+      copy1 = new a;
+      void'(copy0.randomize());
+      void'(copy1.randomize());
+      `CHECK("shallow copy seeded from the copying thread",
+        copy0.x == copy1.x && copy0.y == copy1.y)
+    end
 
     #1;
     `CHECK("instances seed their static processes alike",

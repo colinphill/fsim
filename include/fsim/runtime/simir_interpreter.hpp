@@ -1048,8 +1048,9 @@ public:
     // the order they are added.
     void set_process_random_ordinals(std::vector<std::uint64_t> ordinals);
     // The seed a new object's random number generator takes from the
-    // allocating process's generator (IEEE 1800-2017 18.14.1), available
-    // while the class allocation hook runs.
+    // allocating thread's generator (IEEE 1800-2023 18.14.1): the values a
+    // `new` drew, or, while a class service runs for a thread, the thread's
+    // next two values; none outside a thread.
     [[nodiscard]] std::optional<std::uint64_t> take_class_allocation_seed();
     void set_class_property_read_hook(ClassPropertyReadHook hook);
     void set_class_property_write_hook(ClassPropertyWriteHook hook);

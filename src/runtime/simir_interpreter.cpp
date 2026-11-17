@@ -143,7 +143,16 @@ void Interpreter::set_process_random_ordinals(
 
 std::optional<std::uint64_t> Interpreter::take_class_allocation_seed()
 {
-    return std::exchange(impl_->pending_class_allocation_seed, std::nullopt);
+    if (auto pending = std::exchange(
+            impl_->pending_class_allocation_seed, std::nullopt)) {
+        return pending;
+    }
+    if (impl_->allocation_random_draw) {
+        const auto high = impl_->allocation_random_draw();
+        return (static_cast<std::uint64_t>(high) << 32U)
+            | impl_->allocation_random_draw();
+    }
+    return std::nullopt;
 }
 
 void Interpreter::set_class_allocate_context_hook(
