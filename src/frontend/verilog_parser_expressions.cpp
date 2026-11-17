@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "verilog_parser_internal.hpp"
 #include "fsim/frontend/systemverilog_standard_package.hpp"
+#include "fsim/support/system_tf.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -1505,6 +1506,30 @@ Expression VerilogParser::parse_primary_impl()
                             canonical + " requires " + std::string { description });
                     }
                 };
+            // The file I/O functions and the plusarg queries return an
+            // integer (IEEE 1800-2023 21.3, 21.6).
+            switch (support::system_tf_named(canonical)) {
+            case support::SystemTf::fopen:
+            case support::SystemTf::fgetc:
+            case support::SystemTf::ungetc:
+            case support::SystemTf::fgets:
+            case support::SystemTf::fscanf:
+            case support::SystemTf::sscanf:
+            case support::SystemTf::fread:
+            case support::SystemTf::ftell:
+            case support::SystemTf::fseek:
+            case support::SystemTf::rewind:
+            case support::SystemTf::feof:
+            case support::SystemTf::ferror:
+            case support::SystemTf::test_plusargs:
+            case support::SystemTf::value_plusargs:
+                expression.call_result_width = 32;
+                expression.call_result_domain = ValueDomain::Integer;
+                expression.call_result_signed = true;
+                break;
+            default:
+                break;
+            }
             if (canonical == "$fopen") {
                 if (expression.operands.size() < 1U
                     || expression.operands.size() > 2U) {
@@ -1561,9 +1586,14 @@ Expression VerilogParser::parse_primary_impl()
                         "FSIM-SV-SEM-075",
                         canonical + " accepts at most one inout seed");
                 }
+                // $random is integer (20.14.1), $urandom int unsigned
+                // (18.13.1).
                 expression.call_result_width = 32;
-                expression.call_result_domain = ValueDomain::Integer;
-                expression.call_result_signed = canonical == "$random";
+                const bool random_call = support::system_tf_named(canonical)
+                    == support::SystemTf::random;
+                expression.call_result_domain
+                    = random_call ? ValueDomain::Integer : ValueDomain::Bit2;
+                expression.call_result_signed = random_call;
             } else if (canonical == "$urandom_range") {
                 if (expression.operands.empty()
                     || expression.operands.size() > 2U) {
@@ -1572,8 +1602,9 @@ Expression VerilogParser::parse_primary_impl()
                         "FSIM-SV-SEM-075",
                         "$urandom_range requires a maximum and optional minimum");
                 }
+                // int unsigned (18.13.2).
                 expression.call_result_width = 32;
-                expression.call_result_domain = ValueDomain::Integer;
+                expression.call_result_domain = ValueDomain::Bit2;
                 expression.call_result_signed = false;
             } else if (canonical == "$sformatf") {
                 if (expression.operands.empty()) {
@@ -1616,8 +1647,17 @@ Expression VerilogParser::parse_primary_impl()
                                "$unpacked_dimensions" },
                            canonical)) {
                 require_file_call(1, "one expression or data type");
+                // $bits, $clog2 and the array queries return integer (IEEE
+                // 1800-2023 20.6.2, 20.8.1, 20.7), $countones int (20.9).
                 expression.call_result_width = 32;
-                expression.call_result_domain = ValueDomain::Bit2;
+                const auto routine = support::system_tf_named(canonical);
+                expression.call_result_domain
+                    = routine == support::SystemTf::bits
+                        || routine == support::SystemTf::clog2
+                        || routine == support::SystemTf::dimensions
+                        || routine == support::SystemTf::unpacked_dimensions
+                    ? ValueDomain::Integer
+                    : ValueDomain::Bit2;
                 expression.call_result_signed = true;
                 if (canonical == "$bits" && data_type_bits) {
                     expression = Expression { ExpressionKind::IntegerLiteral,
@@ -1636,8 +1676,9 @@ Expression VerilogParser::parse_primary_impl()
                         canonical
                             + " requires an array and optional dimension");
                 }
+                // The array queries return integer (IEEE 1800-2023 20.7).
                 expression.call_result_width = 32;
-                expression.call_result_domain = ValueDomain::Bit2;
+                expression.call_result_domain = ValueDomain::Integer;
                 expression.call_result_signed = true;
             } else if (canonical == "$system") {
                 if (expression.operands.size() > 1U) {
@@ -1782,9 +1823,13 @@ Expression VerilogParser::parse_primary_impl()
                 || canonical == "$stime"
                 || canonical == "$realtime") {
                 require_file_call(0, "no arguments");
-                expression.call_result_width
-                    = canonical == "$stime" ? 32 : 64;
-                expression.call_result_domain = ValueDomain::Bit2;
+                // $stime is the low 32 bits of $time, an unsigned 4-state
+                // vector like time's (20.3.2, 6.11).
+                const bool stime = support::system_tf_named(canonical)
+                    == support::SystemTf::stime;
+                expression.call_result_width = stime ? 32 : 64;
+                expression.call_result_domain
+                    = stime ? ValueDomain::Logic4 : ValueDomain::Bit2;
                 expression.call_result_signed = false;
                 expression.systemverilog_scalar_kind
                     = canonical == "$realtime"
@@ -1828,9 +1873,14 @@ Expression VerilogParser::parse_primary_impl()
                 const bool result32 = canonical == "$rtoi"
                     || canonical == "$bitstoshortreal"
                     || canonical == "$shortrealtobits";
+                // $rtoi returns integer (20.5); the bit conversions keep
+                // two-state vectors, since a real's bits are never unknown.
+                const bool rtoi = support::system_tf_named(canonical)
+                    == support::SystemTf::rtoi;
                 expression.call_result_width = result32 ? 32 : 64;
-                expression.call_result_domain = ValueDomain::Bit2;
-                expression.call_result_signed = canonical == "$rtoi";
+                expression.call_result_domain
+                    = rtoi ? ValueDomain::Integer : ValueDomain::Bit2;
+                expression.call_result_signed = rtoi;
                 if (canonical == "$itor"
                     || canonical == "$bitstoreal"
                     || (canonical != "$rtoi"
@@ -1946,13 +1996,20 @@ Expression VerilogParser::parse_primary_impl()
                 expression.call_result_signed = false;
             } else if (canonical == "$random" || canonical == "$urandom") {
                 expression.call_result_width = 32;
-                expression.call_result_domain = ValueDomain::Integer;
-                expression.call_result_signed = canonical == "$random";
+                const bool random_call = support::system_tf_named(canonical)
+                    == support::SystemTf::random;
+                expression.call_result_domain
+                    = random_call ? ValueDomain::Integer : ValueDomain::Bit2;
+                expression.call_result_signed = random_call;
             } else if (canonical == "$time" || canonical == "$stime"
                 || canonical == "$realtime") {
-                expression.call_result_width
-                    = canonical == "$stime" ? 32 : 64;
-                expression.call_result_domain = ValueDomain::Bit2;
+                // $stime is the low 32 bits of $time, an unsigned 4-state
+                // vector like time's (20.3.2, 6.11).
+                const bool stime = support::system_tf_named(canonical)
+                    == support::SystemTf::stime;
+                expression.call_result_width = stime ? 32 : 64;
+                expression.call_result_domain
+                    = stime ? ValueDomain::Logic4 : ValueDomain::Bit2;
                 expression.call_result_signed = false;
                 expression.systemverilog_scalar_kind
                     = canonical == "$realtime"

@@ -341,8 +341,9 @@ endmodule
     require(
         legacy_block.statements[2].value.call_result_width == 32
             && legacy_block.statements[2].value.call_result_domain
-                == ValueDomain::Bit2,
-        "legacy time result profile remains exact");
+                == ValueDomain::Logic4
+            && !legacy_block.statements[2].value.call_result_signed,
+        "legacy $stime result is an unsigned 4-state 32-bit value");
     require(
         legacy_block.statements[3].kind
                 == StatementKind::FileDisplay

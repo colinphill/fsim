@@ -20,7 +20,14 @@
 // an array's size of int (7.5.1); a system function's has the type its
 // clause gives: $urandom and $urandom_range int unsigned (18.13), $random
 // integer (20.14.1), $time time and $realtime realtime (20.3), $sformatf
-// and $typename string (21.3.3, 20.6.1), $cast int (6.24.2).
+// and $typename string (21.3.3, 20.6.1), $cast int (6.24.2), $bits and the
+// array queries integer (20.6.2, 20.7), $clog2 and $rtoi integer (20.8.1,
+// 20.5), $stime logic [31:0] (20.3.2), $realtobits bit [63:0] and
+// $shortrealtobits bit [31:0] (20.5), $countones and $countbits int and
+// $onehot and $isunknown bit (20.9), $itor, $bitstoreal and $sqrt real
+// (20.5, 20.8.2), the file and plusarg functions integer (21.3, 21.6);
+// $signed and $unsigned have their operand's type with the sign changed
+// (11.7) and $sampled its operand's (16.9.3).
 `define CHECK(what, ok) \
   if (!(ok)) begin \
     $display("FAIL %s", what); \
@@ -301,6 +308,111 @@ module sv_typeless_mailbox;
         got = box.try_get(whole);
         `CHECK("cast int", got > 0 && whole == 1 && color == GREEN)
         `CHECK("system results all taken", box.num() == 0)
+      end
+      begin
+        integer four;
+        bit one;
+        logic [7:0] bits8;
+        logic signed [7:0] sbits8;
+        logic [7:0] probe = 8'h35;
+        logic signed [7:0] negative = -8'sd3;
+        integer fd;
+        integer unsigned stamp;
+        int unsigned two_state;
+        bit [63:0] bits64;
+        logic [63:0] logic64;
+        box.put($bits(probe));
+        got = box.try_peek(whole);
+        `CHECK("bits not int", got < 0)
+        got = box.try_get(four);
+        `CHECK("bits integer", got > 0 && four == 8)
+        box.put($countones(probe));
+        got = box.try_peek(four);
+        `CHECK("countones not integer", got < 0)
+        got = box.try_get(whole);
+        `CHECK("countones int", got > 0 && whole == 4)
+        box.put($countbits(probe, '0));
+        got = box.try_get(whole);
+        `CHECK("countbits int", got > 0 && whole == 4)
+        box.put($onehot(probe));
+        got = box.try_get(one);
+        `CHECK("onehot bit", got > 0 && one == 1'b0)
+        box.put($isunknown(probe));
+        got = box.try_get(one);
+        `CHECK("isunknown bit", got > 0 && one == 1'b0)
+        box.put($itor(5));
+        got = box.try_get(value);
+        `CHECK("itor real", got > 0 && value == 5.0)
+        box.put($bitstoreal(64'h4004000000000000));
+        got = box.try_get(value);
+        `CHECK("bitstoreal real", got > 0 && value == 2.5)
+        box.put($sqrt(16.0));
+        got = box.try_get(value);
+        `CHECK("sqrt real", got > 0 && value == 4.0)
+        box.put($signed(probe));
+        got = box.try_peek(bits8);
+        `CHECK("signed not unsigned", got < 0)
+        got = box.try_get(sbits8);
+        `CHECK("signed of the operand", got > 0 && sbits8 == 8'sh35)
+        box.put($unsigned(negative));
+        got = box.try_peek(sbits8);
+        `CHECK("unsigned not signed", got < 0)
+        got = box.try_get(bits8);
+        `CHECK("unsigned of the operand", got > 0 && bits8 == 8'hfd)
+        box.put($sampled(probe));
+        got = box.try_get(bits8);
+        `CHECK("sampled of the operand", got > 0 && bits8 == 8'h35)
+        box.put($left(probe));
+        got = box.try_peek(whole);
+        `CHECK("left not int", got < 0)
+        got = box.try_get(four);
+        `CHECK("left integer", got > 0 && four == 7)
+        box.put($dimensions(probe));
+        got = box.try_get(four);
+        `CHECK("dimensions integer", got > 0 && four == 1)
+        box.put($size(probe));
+        got = box.try_get(four);
+        `CHECK("size integer", got > 0 && four == 8)
+        box.put($test$plusargs("sv_typeless_mailbox_absent"));
+        got = box.try_peek(whole);
+        `CHECK("test plusargs not int", got < 0)
+        got = box.try_get(four);
+        `CHECK("test plusargs integer", got > 0 && four == 0)
+        fd = $fopen("sv_typeless_mailbox.txt", "w");
+        box.put($fopen("sv_typeless_mailbox_more.txt", "w"));
+        got = box.try_get(four);
+        `CHECK("fopen integer", got > 0 && four != 0)
+        $fclose(four);
+        box.put($feof(fd));
+        got = box.try_get(four);
+        `CHECK("feof integer", got > 0)
+        box.put($fgetc(fd));
+        got = box.try_get(four);
+        `CHECK("fgetc integer", got > 0)
+        $fclose(fd);
+        box.put($clog2(9));
+        got = box.try_peek(whole);
+        `CHECK("clog2 not int", got < 0)
+        got = box.try_get(four);
+        `CHECK("clog2 integer", got > 0 && four == 4)
+        box.put($rtoi(-2.5));
+        got = box.try_peek(whole);
+        `CHECK("rtoi not int", got < 0)
+        got = box.try_get(four);
+        `CHECK("rtoi integer", got > 0 && four == -2)
+        box.put($stime);
+        got = box.try_peek(two_state);
+        `CHECK("stime not int unsigned", got < 0)
+        got = box.try_peek(four);
+        `CHECK("stime not integer", got < 0)
+        got = box.try_get(stamp);
+        `CHECK("stime logic 32", got > 0 && stamp == $stime)
+        box.put($realtobits(2.5));
+        got = box.try_peek(logic64);
+        `CHECK("realtobits not logic", got < 0)
+        got = box.try_get(bits64);
+        `CHECK("realtobits bit 64", got > 0 && bits64 == 64'h4004000000000000)
+        `CHECK("more system results all taken", box.num() == 0)
       end
     end
 

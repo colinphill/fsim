@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include "fsim/support/systemverilog_builtin_type.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -169,6 +171,49 @@ static_assert(std::ranges::is_sorted(kBuiltinMethodNames, { },
         table, name, { }, &std::pair<std::string_view, BuiltinMethod>::first);
     return found != table.end() && found->first == name ? found->second
                                                          : BuiltinMethod::none;
+}
+
+// The keyword type of a built-in method's value when every receiver gives
+// it the same type: the string methods (IEEE 1800-2023 6.16), num (6.19.5.6,
+// 7.9.1, 15.4.3), size (7.5.2, 7.10.2.1), exists (7.9.3), and the
+// semaphore's and mailbox's try_get, try_put and try_peek (15.3.4, 15.4.5,
+// 15.4.6, 15.4.8). None for a task or void function, and for a value of
+// the receiver's type (an enumeration's first, last, next and prev; the
+// array locator, ordering and reduction methods); an associative array's
+// traversal functions first, last, next and prev return int (7.9.4 to
+// 7.9.7), which the caller tells from an enumeration's.
+[[nodiscard]] constexpr SystemVerilogBuiltinType builtin_method_result_type(
+    const BuiltinMethod method) noexcept
+{
+    using Type = SystemVerilogBuiltinType;
+    switch (method) {
+    case BuiltinMethod::len:
+    case BuiltinMethod::compare:
+    case BuiltinMethod::icompare:
+    case BuiltinMethod::num:
+    case BuiltinMethod::size:
+    case BuiltinMethod::exists:
+    case BuiltinMethod::try_get:
+    case BuiltinMethod::try_put:
+    case BuiltinMethod::try_peek:
+        return Type::int_type;
+    case BuiltinMethod::getc:
+        return Type::byte;
+    case BuiltinMethod::atoi:
+    case BuiltinMethod::atohex:
+    case BuiltinMethod::atooct:
+    case BuiltinMethod::atobin:
+        return Type::integer;
+    case BuiltinMethod::atoreal:
+        return Type::real;
+    case BuiltinMethod::toupper:
+    case BuiltinMethod::tolower:
+    case BuiltinMethod::substr:
+    case BuiltinMethod::name:
+        return Type::string;
+    default:
+        return Type::none;
+    }
 }
 
 // The member name of a built-in method (empty for none).

@@ -219,10 +219,36 @@ std::optional<Lowerer::HirMailboxElement> Lowerer::hir_mailbox_element(
 }
 
 std::optional<Lowerer::HirMailboxMessage>
-Lowerer::hir_typeless_mailbox_message(const semantic::ExpressionId message,
+Lowerer::hir_typeless_mailbox_message(const semantic::ExpressionId value,
     const frontend::SourceSpan& span)
 {
     using Kind = semantic::SystemVerilogTypeDescriptor::Kind;
+    // A sampled value function's value has its expression's type (IEEE
+    // 1800-2023 16.9.3, 16.15); $signed and $unsigned keep their operand's
+    // width and states with the signedness they name (11.7).
+    auto message = value;
+    std::optional<bool> sign_override;
+    for (;;) {
+        const auto expression = specialized_hir_unit_->find_expression(message);
+        if (!expression || expression->systemverilog == nullptr
+            || expression->systemverilog->call_kind != semantic::sv::CallKind::system
+            || expression->systemverilog->operands.empty()) {
+            break;
+        }
+        const auto& call = *expression->systemverilog;
+        using Routine = support::SystemTf;
+        if (call.system_tf == Routine::sampled || call.system_tf == Routine::past
+            || call.system_tf == Routine::past_gclk
+            || call.system_tf == Routine::future_gclk) {
+            message = call.operands.front();
+        } else if (call.system_tf == Routine::signed_conversion
+            || call.system_tf == Routine::unsigned_conversion) {
+            sign_override = call.system_tf == Routine::signed_conversion;
+            message = call.operands.front();
+        } else {
+            break;
+        }
+    }
     // The message's static type: a cast's target type (`T'(x)`, `T'{...}`,
     // 6.24.1, 10.9), the declared type of a variable, member, element or
     // class property, else the type of the expression's form.
@@ -256,33 +282,15 @@ Lowerer::hir_typeless_mailbox_message(const semantic::ExpressionId message,
                 ? specialized_hir_unit_->find_declaration(
                       enumeration->receiver_declaration)
                 : std::nullopt;
+            // The methods whose value has one keyword type
+            // (support::builtin_method_result_type); an enumeration's first,
+            // last, next and prev are of its type (6.19.5), an associative
+            // array's traversal functions int (7.9.4 to 7.9.7).
+            if (const auto kind = support::builtin_method_result_type(builtin);
+                kind != Builtin::none) {
+                builtin_result(kind);
+            }
             switch (builtin) {
-            // The string methods' results (IEEE 1800-2023 6.16).
-            case Method::len:
-            case Method::compare:
-            case Method::icompare:
-                builtin_result(Builtin::int_type);
-                break;
-            case Method::getc:
-                builtin_result(Builtin::byte);
-                break;
-            case Method::atoi:
-            case Method::atohex:
-            case Method::atooct:
-            case Method::atobin:
-                builtin_result(Builtin::integer);
-                break;
-            case Method::atoreal:
-                builtin_result(Builtin::real);
-                break;
-            case Method::toupper:
-            case Method::tolower:
-            case Method::substr:
-                builtin_result(Builtin::string);
-                break;
-            // An enumeration's first, last, next and prev are of its type,
-            // num is int and name a string (6.19.5); an array's size, num,
-            // exists and traversal methods are int (7.5.1, 7.9, 7.10.2).
             case Method::first:
             case Method::last:
             case Method::next:
@@ -297,16 +305,6 @@ Lowerer::hir_typeless_mailbox_message(const semantic::ExpressionId message,
                     builtin_result(Builtin::int_type);
                 }
                 break;
-            case Method::name:
-                if (enumeration) {
-                    builtin_result(Builtin::string);
-                }
-                break;
-            case Method::num:
-            case Method::size:
-            case Method::exists:
-                builtin_result(Builtin::int_type);
-                break;
             default:
                 break;
             }
@@ -315,44 +313,46 @@ Lowerer::hir_typeless_mailbox_message(const semantic::ExpressionId message,
             // $cast called as a function returns int (6.24.2).
             builtin_result(Builtin::int_type);
         } else if (source.call_kind == semantic::sv::CallKind::system) {
-            // A system function's value has the type its clause gives it:
-            // $time is time and $realtime realtime (20.3.1, 20.3.3),
-            // $urandom and $urandom_range int unsigned (18.13.1, 18.13.2),
-            // $random and the $dist_ functions integer (20.14), $sformatf
-            // and $typename string (21.3.3, 20.6.1), $isunbounded bit
-            // (20.6.3).
-            using Routine = support::SystemTf;
-            switch (source.system_tf) {
-            case Routine::time:
-                builtin_result(Builtin::time);
-                break;
-            case Routine::realtime:
+            // A system function's value has the type its clause gives it
+            // (20.3 to 20.17, 21.3, 21.6, 18.13), as the call records it: a
+            // real or time result its scalar type, a string, else an
+            // integral value of its width, signedness and states, which is
+            // equivalent to the keyword type of that width, signedness and
+            // states (6.22.2).
+            using Scalar = semantic::sv::ScalarKind;
+            using Values = semantic::sv::CallResultValues;
+            const bool four = source.call_result_values == Values::four_state;
+            if (source.scalar_kind == Scalar::real) {
+                builtin_result(Builtin::real);
+            } else if (source.scalar_kind == Scalar::realtime) {
                 builtin_result(Builtin::realtime);
-                break;
-            case Routine::urandom:
-            case Routine::urandom_range:
-                builtin_result(Builtin::int_type);
-                declared->signed_value = false;
-                break;
-            case Routine::random:
-            case Routine::dist_chi_square:
-            case Routine::dist_erlang:
-            case Routine::dist_exponential:
-            case Routine::dist_normal:
-            case Routine::dist_poisson:
-            case Routine::dist_t:
-            case Routine::dist_uniform:
-                builtin_result(Builtin::integer);
-                break;
-            case Routine::sformatf:
-            case Routine::typename_query:
+            } else if (source.scalar_kind == Scalar::short_real) {
+                builtin_result(Builtin::shortreal);
+            } else if (source.scalar_kind == Scalar::time) {
+                builtin_result(Builtin::time);
+            } else if (source.call_result_values == Values::string) {
                 builtin_result(Builtin::string);
-                break;
-            case Routine::isunbounded:
-                builtin_result(Builtin::bit);
-                break;
-            default:
-                break;
+            } else if (source.call_result_values != Values::none) {
+                const auto keyword = [&]() -> Builtin {
+                    switch (source.call_result_width) {
+                    case 1U:
+                        return four ? Builtin::logic : Builtin::bit;
+                    case 8U:
+                        return four ? Builtin::none : Builtin::byte;
+                    case 16U:
+                        return four ? Builtin::none : Builtin::shortint;
+                    case 32U:
+                        return four ? Builtin::integer : Builtin::int_type;
+                    case 64U:
+                        return four ? Builtin::time : Builtin::longint;
+                    default:
+                        return Builtin::none;
+                    }
+                }();
+                if (keyword != Builtin::none) {
+                    builtin_result(keyword);
+                    declared->signed_value = source.signed_value;
+                }
             }
         } else if (source.kind == semantic::sv::ExpressionKind::call
             && source.marker == support::ExpressionMarker::none) {
@@ -640,7 +640,25 @@ Lowerer::hir_typeless_mailbox_message(const semantic::ExpressionId message,
         return HirMailboxMessage { true, 0U,
             support::Xxh64::digest("string") | 1U };
     }
-    const auto identity = element_identity(*described, declared);
+    std::optional<std::string> identity;
+    if (sign_override) {
+        // $signed and $unsigned of an integral value (11.7).
+        const bool integral = described->kind == Kind::integer_atom
+            || described->kind == Kind::integer_vector
+            || described->kind == Kind::enumeration
+            || ((described->kind == Kind::structure
+                    || described->kind == Kind::union_type)
+                && described->packed_aggregate);
+        const auto bits = described->total_bits();
+        if (integral && bits && *bits != 0U
+            && *bits <= std::numeric_limits<std::uint32_t>::max()) {
+            identity = "packed:" + std::to_string(*bits)
+                + (*sign_override ? ":signed" : ":unsigned")
+                + (described->four_state ? ":4" : ":2");
+        }
+    } else {
+        identity = element_identity(*described, declared);
+    }
     if (!identity) {
         return refuse();
     }

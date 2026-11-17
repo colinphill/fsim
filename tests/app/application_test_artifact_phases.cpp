@@ -43,7 +43,7 @@ void ApplicationTestFixture::test_artifact_phase_semantics()
     static_assert(app::kSemanticStateSchema == 9);
     static_assert(app::kDesignIrStateSchema == 18);
     static_assert(app::kCompiledHirBundleSchema == 14);
-    static_assert(app::kSystemVerilogConstraintHirStateSchema == 40);
+    static_assert(app::kSystemVerilogConstraintHirStateSchema == 41);
     static_assert(app::kSystemVerilogCoverageStateSchema == 8);
     static_assert(app::kSystemVerilogUvmStateSchema == 3);
     static_assert(app::kVhdlHirStateSchema == 18);

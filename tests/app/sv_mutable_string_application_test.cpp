@@ -348,7 +348,8 @@ endmodule
             "|fsim-v1!:0a", "|sim  |0011|%",
             "|011110xz", "|a5xz", "|2455",
             "|input:port", "|Shared",
-            "3", "|255", "|67", "|0", "|12.5",
+            // getc returns a byte (IEEE 1800-2023 6.16.3): 8'hff is -1.
+            "3", "|-1", "|67", "|0", "|12.5",
             "|seedA", "|seedAB", "|taskA", "|taskAB"
         };
         expected.insert(
@@ -386,7 +387,7 @@ endmodule
             mutable_source,
             fsim::project::Optimization::o2),
         fsim::app::SimulationEngine::compiled);
-    assert(changed.output == std::vector<std::string>({ "stable", "Fsim-v2!", "|FSIM-V2!", "|fsim-v2!", "|sim", "|Sim", "|-42", "|ff", "|11", "|101", "|0", "|0", "|70", "|0", "|123", "|255", "|15", "|5", "|fmt=42/Sim/mutable_top.worker/0001", "|fsim-v2!:0a", "|sim  |0011|%", "|011110xz", "|a5xz", "|2455", "|input:port", "|Shared", "3", "|255", "|67", "|0", "|12.5", "|seedA", "|seedAB", "|taskA", "|taskAB" }));
+    assert(changed.output == std::vector<std::string>({ "stable", "Fsim-v2!", "|FSIM-V2!", "|fsim-v2!", "|sim", "|Sim", "|-42", "|ff", "|11", "|101", "|0", "|0", "|70", "|0", "|123", "|255", "|15", "|5", "|fmt=42/Sim/mutable_top.worker/0001", "|fsim-v2!:0a", "|sim  |0011|%", "|011110xz", "|a5xz", "|2455", "|input:port", "|Shared", "3", "|-1", "|67", "|0", "|12.5", "|seedA", "|seedAB", "|taskA", "|taskAB" }));
     assert(changed.keys != baseline.keys);
     return 0;
 }

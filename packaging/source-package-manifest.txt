@@ -1976,6 +1976,7 @@ tests/fixtures/compliance/sv_block_wildcard_import_event_shadow_batch58.sv
 tests/fixtures/compliance/sv_block_wildcard_import_scope_batch58.sv
 tests/fixtures/compliance/sv_bounded_queue_function_conversion.sv
 tests/fixtures/compliance/sv_buffer_gates_z_input.sv
+tests/fixtures/compliance/sv_builtin_method_signed.sv
 tests/fixtures/compliance/sv_celldefine_idempotent_batch57.sv
 tests/fixtures/compliance/sv_child_instance_rules.sv
 tests/fixtures/compliance/sv_class_cast_specialization.sv

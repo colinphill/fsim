@@ -5420,6 +5420,33 @@ bool Lowerer::hir_expression_signed(
         if (!expression) {
             return false;
         }
+        // A built-in method's value of one keyword type has that type's
+        // signedness (int, byte and integer are signed, IEEE 1800-2023
+        // 6.11); an enumeration's first, last, next and prev have the
+        // enumeration's, an associative array's traversal functions return
+        // int (7.9.4 to 7.9.7).
+        if (expression->systemverilog != nullptr) {
+            const auto method
+                = semantic::sv::member_builtin_method(*expression->systemverilog);
+            if (const auto kind = support::builtin_method_result_type(method);
+                kind != support::SystemVerilogBuiltinType::none) {
+                return support::systemverilog_builtin_default_signed(kind);
+            }
+            if (method == support::BuiltinMethod::first
+                || method == support::BuiltinMethod::last
+                || method == support::BuiltinMethod::next
+                || method == support::BuiltinMethod::prev) {
+                const auto enumeration = hir_systemverilog_enumeration_method(candidate);
+                return !enumeration || enumeration->signed_value;
+            }
+            // A string's element is a byte (6.16, Table 6-9).
+            if (expression->systemverilog->kind == semantic::sv::ExpressionKind::index
+                && expression->systemverilog->operands.size() == 2U
+                && hir_expression_is_string(
+                    expression->systemverilog->operands.front(), hir_process_scope_)) {
+                return true;
+            }
+        }
         if (expression->systemverilog != nullptr
             && expression->systemverilog->kind
                 == semantic::sv::ExpressionKind::name
@@ -22440,15 +22467,19 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
             }
             return 64U;
         }
-        // size() and num() of an unpacked container return int (IEEE
-        // 1800-2017 7.5.2, 7.9.1, 7.10.2.1).
-        if (source.kind == semantic::sv::ExpressionKind::call
-            && (semantic::sv::member_builtin_method(source) == support::BuiltinMethod::size || semantic::sv::member_builtin_method(source) == support::BuiltinMethod::num)
-            && source.operands.size() == 1U
-            && (hir_container_object_binding(source.operands.front())
-                || hir_static_container_expression_type(
-                    source.operands.front()))) {
-            return 32U;
+        // A built-in method's value of one keyword type has that type's
+        // width (support::builtin_method_result_type; 6.11): num, size,
+        // exists, the string methods, and the semaphore's and mailbox's
+        // try_ functions; atoreal's real has 64 bits (6.12).
+        if (source.kind == semantic::sv::ExpressionKind::call) {
+            const auto kind = support::builtin_method_result_type(
+                semantic::sv::member_builtin_method(source));
+            if (kind == support::SystemVerilogBuiltinType::real) {
+                return 64U;
+            }
+            if (const auto bits = support::systemverilog_builtin_width(kind); bits != 0U) {
+                return bits;
+            }
         }
         // exists(), first(), last(), next() and prev() of an associative
         // array return int (IEEE 1800-2023 7.9.3-7.9.7).
@@ -22574,31 +22605,12 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
                 || source.text == "$reset_value")) {
             return 32U;
         }
-        if (source.kind == semantic::sv::ExpressionKind::call
-            && semantic::sv::member_builtin_method(source) == support::BuiltinMethod::len && source.operands.size() == 1U
-            && hir_expression_is_string(
-                source.operands.front(), process_scope)) {
-            return 32U;
-        }
-        if (source.kind == semantic::sv::ExpressionKind::call
-            && (semantic::sv::member_builtin_method(source) == support::BuiltinMethod::getc
-                || semantic::sv::member_builtin_method(source) == support::BuiltinMethod::compare
-                || semantic::sv::member_builtin_method(source) == support::BuiltinMethod::icompare
-                || semantic::sv::member_builtin_method(source) == support::BuiltinMethod::atoi
-                || semantic::sv::member_builtin_method(source) == support::BuiltinMethod::atohex
-                || semantic::sv::member_builtin_method(source) == support::BuiltinMethod::atooct
-                || semantic::sv::member_builtin_method(source) == support::BuiltinMethod::atobin
-                || semantic::sv::member_builtin_method(source) == support::BuiltinMethod::atoreal)
-            && !source.operands.empty()
-            && hir_expression_is_string(
-                source.operands.front(), process_scope)) {
-            return semantic::sv::member_builtin_method(source) == support::BuiltinMethod::atoreal ? 64U : 32U;
-        }
+        // A string's element is a byte (6.16, Table 6-9).
         if (source.kind == semantic::sv::ExpressionKind::index
             && source.operands.size() == 2U
             && hir_expression_is_string(
                 source.operands.front(), process_scope)) {
-            return 32U;
+            return 8U;
         }
         if (source.kind == semantic::sv::ExpressionKind::class_null
             || source.kind

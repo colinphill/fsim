@@ -1234,6 +1234,9 @@ namespace codec_detail {
         } else if constexpr (std::same_as<T, fsim::support::SystemTf>) {
             return value >= fsim::support::SystemTf::none
                 && value <= fsim::support::kLastSystemTf;
+        } else if constexpr (std::same_as<T, fsim::semantic::sv::CallResultValues>) {
+            return value >= fsim::semantic::sv::CallResultValues::none
+                && value <= fsim::semantic::sv::CallResultValues::string;
         } else if constexpr (std::same_as<T, fsim::semantic::sv::CallKind>) {
             return value >= fsim::semantic::sv::CallKind::user
                 && value <= fsim::semantic::sv::CallKind::system;

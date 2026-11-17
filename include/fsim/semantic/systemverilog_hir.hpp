@@ -305,6 +305,14 @@ enum class CallKind : std::uint8_t {
     system,
 };
 
+// The values a system function's result holds (Expression::call_result_values).
+enum class CallResultValues : std::uint8_t {
+    none,
+    two_state,
+    four_state,
+    string,
+};
+
 enum class GeneratedTextKind : std::uint8_t {
     none,
     systemverilog_file_macro,
@@ -421,6 +429,12 @@ struct Expression {
     // 20.1, 21.1), resolved once from its system_tf_identifier; none for a
     // user-defined system task or function (36.1) and on every other node.
     support::SystemTf system_tf { support::SystemTf::none };
+    // The result of a system function call as its clause types it: the
+    // width and the values it holds (with `signed_value` and, for a real or
+    // time result, `scalar_kind`); 0 and none for a function whose result
+    // takes its operand's type, and on every other node.
+    std::uint32_t call_result_width { };
+    CallResultValues call_result_values { CallResultValues::none };
     // Exact semantic type selected for an explicitly typed assignment pattern.
     // Invalid or unresolved names leave this disengaged.
     std::optional<TypeId> nominal_type_target;

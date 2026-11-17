@@ -65,6 +65,34 @@ namespace sv = semantic::sv;
         : support::SystemTf::none;
 }
 
+// The result a system function call of `input` has as the parser typed it
+// (frontend Expression::call_result_width and call_result_domain), on the
+// HIR node `output`; nothing for any other node.
+inline void set_systemverilog_call_result(
+    sv::Expression& output, const frontend::Expression& input) noexcept
+{
+    if (output.system_tf == support::SystemTf::none) {
+        return;
+    }
+    switch (input.call_result_domain) {
+    case frontend::ValueDomain::Bit2:
+    case frontend::ValueDomain::Boolean:
+        output.call_result_values = sv::CallResultValues::two_state;
+        break;
+    case frontend::ValueDomain::Logic4:
+    case frontend::ValueDomain::Integer:
+        output.call_result_values = sv::CallResultValues::four_state;
+        break;
+    case frontend::ValueDomain::String:
+        output.call_result_values = sv::CallResultValues::string;
+        return;
+    case frontend::ValueDomain::Logic9:
+    case frontend::ValueDomain::Unknown:
+        return;
+    }
+    output.call_result_width = static_cast<std::uint32_t>(input.call_result_width);
+}
+
 inline void inherit_named_systemverilog_type_shape(
     sv::TypeReference& reference, const sv::Hir& hir)
 {

@@ -620,6 +620,7 @@ namespace systemverilog_hir_detail {
         output.keyword_type = input.systemverilog_keyword_type;
         output.call_kind = systemverilog_hir_detail::systemverilog_call_kind(input);
         output.system_tf = systemverilog_hir_detail::systemverilog_system_tf(input);
+        systemverilog_hir_detail::set_systemverilog_call_result(output, input);
         output.marker = input.marker;
         output.marker_argument = input.marker_argument;
         output.builtin_method = input.builtin_method;

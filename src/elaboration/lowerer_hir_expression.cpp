@@ -18002,20 +18002,26 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             method.argument = *argument;
         }
         process_.operations.emplace_back(method);
-        // compare and icompare return a signed int (IEEE 1800-2017 6.16.8),
-        // atoi, atohex, atooct and atobin an integer (6.16.9).
-        const bool signed_result
-            = method.operation == StringMethodOperator::compare
+        // compare and icompare return a signed int (IEEE 1800-2023 6.16.8),
+        // atoi, atohex, atooct and atobin an integer (6.16.9), getc a byte
+        // (6.16.3): the character's code in 8 signed bits.
+        const bool getc = method.operation == StringMethodOperator::getc;
+        const bool signed_result = getc
+            || method.operation == StringMethodOperator::compare
             || method.operation == StringMethodOperator::icompare
             || method.operation == StringMethodOperator::atoi
             || method.operation == StringMethodOperator::atohex
             || method.operation == StringMethodOperator::atooct
             || method.operation == StringMethodOperator::atobin;
+        const auto value = getc
+            ? resize_register(method.destination, 8U, false)
+            : method.destination;
+        const auto value_width = getc ? 8U : method_width;
         result = expected_width != 0U
-                && expected_width != method_width
+                && expected_width != value_width
             ? std::optional { resize_register(
-                  method.destination, expected_width, signed_result) }
-            : std::optional { method.destination };
+                  value, expected_width, signed_result) }
+            : std::optional { value };
     } else if (const auto aggregate
         = lower_hir_packed_container_aggregate(
             expression_id, expected_width)) {
@@ -18171,11 +18177,14 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             *index,
             hir_expression_signed(indexed.operands.back()),
         });
-        result = expected_width != 0U && expected_width != 32U
+        // A string's element is a byte (IEEE 1800-2023 6.16, Table 6-9):
+        // the character's code in 8 signed bits.
+        const auto character = resize_register(destination, 8U, false);
+        result = expected_width != 0U && expected_width != 8U
             ? std::optional {
-                  resize_register(destination, expected_width, false)
+                  resize_register(character, expected_width, true)
               }
-            : std::optional { destination };
+            : std::optional { character };
     } else if (const auto file_enumeration
         = hir_vhdl_standard_enumeration_literal(expression_id)) {
         const auto width = expected_width == 0U ? 2U : expected_width;
