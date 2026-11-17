@@ -3919,6 +3919,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
     [[nodiscard]] bool monitor_watches(
         const SignalId signal) const;
 
+    /// Materializes the monitor's kernel-owned signals before it prints.
+    void prepare_monitor_observation(const MonitorInstall& registration);
     [[nodiscard]] std::string render_monitor(
         const MonitorInstall& registration) const;
 

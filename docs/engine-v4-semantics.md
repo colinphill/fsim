@@ -341,7 +341,7 @@ state, S3):
     writes host signals, disjoint from the kernel's slots, so only the order
     observers see between the two objects can differ (§4.7).
   - A kernel body's nonblocking write of a host signal (one a host process
-    or `$monitor` reads), and its `<= #0` write (§10.4.2), joins the
+    reads), and its `<= #0` write (§10.4.2), joins the
     kernel's own queue as a host entry (`PendingKind::host`,
     `queue_host_update`, `schedule_host_after`), not the host's NBA region
     at the time its statement executes. The commit applies it in its queue
@@ -393,6 +393,9 @@ state, S3):
     Re-NBA, Postponed, and the PLI regions. Processes that need them
     (clocking input samplers, program processes, postponed output,
     `$monitor`, `$strobe`, `final`) are not members (S2) and run on the host.
+    The signals a `$monitor` or `$strobe` prints stay kernel-owned: a
+    monitor watches its signals when it is installed (S19), and both read
+    them materialized when they print (1800 §21.2.2, §21.2.3).
   - The host scheduler still owns time and the other regions; the kernel is
     a pseudo-process activated by it (S10).
 - **Witness.** T-beh (delays, `#0` order not isolated). To add: `#0`,

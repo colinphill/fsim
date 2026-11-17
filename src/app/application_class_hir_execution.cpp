@@ -6845,9 +6845,9 @@ SystemVerilogClassHirExecution::evaluate_packed(
     constexpr auto static_method_marker
         = support::ExpressionMarker::sv_static_method;
     if (value->kind == ExpressionKind::call
-        && (value->text == "$size" || value->text == "$left"
-            || value->text == "$right" || value->text == "$low"
-            || value->text == "$high" || value->text == "$increment")
+        && (value->system_tf == support::SystemTf::size || value->system_tf == support::SystemTf::left
+            || value->system_tf == support::SystemTf::right || value->system_tf == support::SystemTf::low
+            || value->system_tf == support::SystemTf::high || value->system_tf == support::SystemTf::increment)
         && (value->operands.size() == 1U
             || value->operands.size() == 2U)) {
         const auto declaration_id
@@ -6898,11 +6898,11 @@ SystemVerilogClassHirExecution::evaluate_packed(
             const auto right = size == 0U
                 ? std::int64_t { -1 }
                 : static_cast<std::int64_t>(size - 1U);
-            const auto answer = value->text == "$size"
+            const auto answer = value->system_tf == support::SystemTf::size
                 ? static_cast<std::int64_t>(size)
-                : value->text == "$left" || value->text == "$low"
+                : value->system_tf == support::SystemTf::left || value->system_tf == support::SystemTf::low
                 ? std::int64_t { 0 }
-                : value->text == "$right" || value->text == "$high"
+                : value->system_tf == support::SystemTf::right || value->system_tf == support::SystemTf::high
                 ? right
                 : std::int64_t { -1 };
             return apply_context(runtime::PackedLogic4::from_aval_bval(
@@ -7142,12 +7142,12 @@ SystemVerilogClassHirExecution::evaluate_packed(
                 return *selected->type;
         }
         if (selected_expression->kind == ExpressionKind::call
-            && (selected_expression->text == "$size"
-                || selected_expression->text == "$left"
-                || selected_expression->text == "$right"
-                || selected_expression->text == "$low"
-                || selected_expression->text == "$high"
-                || selected_expression->text == "$increment")) {
+            && (selected_expression->system_tf == support::SystemTf::size
+                || selected_expression->system_tf == support::SystemTf::left
+                || selected_expression->system_tf == support::SystemTf::right
+                || selected_expression->system_tf == support::SystemTf::low
+                || selected_expression->system_tf == support::SystemTf::high
+                || selected_expression->system_tf == support::SystemTf::increment)) {
             semantic::sv::TypeReference query_result;
             query_result.value_form
                 = semantic::sv::TypeForm::packed_integral;
@@ -9771,8 +9771,9 @@ SystemVerilogClassHirExecution::execute(
                     continue;
                 }
             }
-            if (spelling == "$stop" || spelling == "$finish"
-                || spelling == "$fatal") {
+            if (item->task_system_tf == support::SystemTf::stop
+                || item->task_system_tf == support::SystemTf::finish
+                || item->task_system_tf == support::SystemTf::fatal) {
                 // A class method interpreted on the host cannot suspend the
                 // simulation; reaching one ends it with an error.
                 throw std::invalid_argument {
@@ -10596,7 +10597,7 @@ bool SystemVerilogClassHirExecution::is_string_expression(
         }
         return found;
     }
-    if (value->kind == ExpressionKind::call && value->text == "$sformatf") {
+    if (value->kind == ExpressionKind::call && value->system_tf == support::SystemTf::sformatf) {
         return true;
     }
     if (value->kind == ExpressionKind::call && value->referenced_name
@@ -10696,9 +10697,9 @@ std::string SystemVerilogClassHirExecution::format_display(
         // $signed and $unsigned set the signedness %d shows (11.7).
         const bool signed_value = source != nullptr
             && (source->kind == semantic::sv::ExpressionKind::call
-                    && (source->text == "$signed"
-                        || source->text == "$unsigned")
-                ? source->text == "$signed"
+                    && (source->system_tf == support::SystemTf::signed_conversion
+                        || source->system_tf == support::SystemTf::unsigned_conversion)
+                ? source->system_tf == support::SystemTf::signed_conversion
                 : source->signed_value);
         return runtime::simir::make_formatted_output({ }, { }, runtime_format,
             *packed, signed_value,
@@ -10832,7 +10833,7 @@ SystemVerilogClassHirExecution::evaluate_string_call(
     if (value == nullptr || packed_environment_ == nullptr)
         return std::nullopt;
     if (value->kind == semantic::sv::ExpressionKind::call
-        && value->text == "$sformatf" && !value->operands.empty()) {
+        && value->system_tf == support::SystemTf::sformatf && !value->operands.empty()) {
         const auto format = evaluate_string(
             value->operands.front(), strings, handle);
         if (!format) {

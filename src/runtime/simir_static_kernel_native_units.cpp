@@ -25,7 +25,7 @@ using namespace static_kernel_compiled_detail;
 namespace kw = kernel_word;
 
 namespace {
-constexpr std::string_view native_magic { "fsim-static-kernel-templates-v6" };
+constexpr std::string_view native_magic { "fsim-static-kernel-templates-v7" };
 
 /// The operands build_native binds to slots (bind_slot), in binding order:
 /// the field, and whether it holds the slot's arena offset (else its index;

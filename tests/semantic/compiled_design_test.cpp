@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "fsim/support/system_tf.hpp"
 #include "fsim/semantic/compiled_design.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
 #include "fsim/semantic/compiled_design_normalization.hpp"
@@ -6151,6 +6152,13 @@ void test_specialized_hir_parameter_bit_selection()
               expression.scope = scope;
               expression.kind = kind;
               expression.text = std::move(text);
+              if (kind == sv::ExpressionKind::call) {
+                  expression.system_tf
+                      = fsim::support::system_tf_named(expression.text);
+                  if (expression.system_tf != fsim::support::SystemTf::none) {
+                      expression.call_kind = sv::CallKind::system;
+                  }
+              }
               expression.operands = std::move(operands);
               expression.signed_value = signed_value;
               expression.source = builder.source;

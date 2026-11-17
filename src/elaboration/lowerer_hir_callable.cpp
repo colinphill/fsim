@@ -4785,9 +4785,9 @@ Lowerer::hir_inline_constraints(
                     || source.builtin_method
                         == support::BuiltinMethod::reduce_xor
                     || source.marker == support::ExpressionMarker::sv_cast
-                    || source.text == "$countones"
-                    || source.text == "$onehot"
-                    || source.text == "$onehot0")) {
+                    || source.system_tf == support::SystemTf::countones
+                    || source.system_tf == support::SystemTf::onehot
+                    || source.system_tf == support::SystemTf::onehot0)) {
                 return TemplateKind::Method;
             }
             if (source.kind == semantic::sv::ExpressionKind::call

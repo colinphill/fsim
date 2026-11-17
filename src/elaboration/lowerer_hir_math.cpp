@@ -13,71 +13,46 @@ namespace fsim::elaboration {
 using namespace runtime::simir;
 namespace {
 
+    // The math and time routine a system function call names, by its typed
+    // identity (support::SystemTf, resolved when the HIR is built).
     [[nodiscard]] std::optional<runtime::SystemVerilogMathFunction>
-    systemverilog_math_function(const std::string_view name) noexcept
+    systemverilog_math_function(const support::SystemTf routine) noexcept
     {
         using Function = runtime::SystemVerilogMathFunction;
-        if (name == "$rtoi")
-            return Function::Rtoi;
-        if (name == "$itor")
-            return Function::Itor;
-        if (name == "$bitstoreal")
-            return Function::BitsToReal;
-        if (name == "$realtobits")
-            return Function::RealToBits;
-        if (name == "$bitstoshortreal")
-            return Function::BitsToShortReal;
-        if (name == "$shortrealtobits")
-            return Function::ShortRealToBits;
-        if (name == "$ln")
-            return Function::Ln;
-        if (name == "$log10")
-            return Function::Log10;
-        if (name == "$exp")
-            return Function::Exp;
-        if (name == "$sqrt")
-            return Function::Sqrt;
-        if (name == "$pow")
-            return Function::Pow;
-        if (name == "$floor")
-            return Function::Floor;
-        if (name == "$ceil")
-            return Function::Ceil;
-        if (name == "$sin")
-            return Function::Sin;
-        if (name == "$cos")
-            return Function::Cos;
-        if (name == "$tan")
-            return Function::Tan;
-        if (name == "$asin")
-            return Function::Asin;
-        if (name == "$acos")
-            return Function::Acos;
-        if (name == "$atan")
-            return Function::Atan;
-        if (name == "$atan2")
-            return Function::Atan2;
-        if (name == "$hypot")
-            return Function::Hypot;
-        if (name == "$sinh")
-            return Function::Sinh;
-        if (name == "$cosh")
-            return Function::Cosh;
-        if (name == "$tanh")
-            return Function::Tanh;
-        if (name == "$asinh")
-            return Function::Asinh;
-        if (name == "$acosh")
-            return Function::Acosh;
-        if (name == "$atanh")
-            return Function::Atanh;
-        if (name == "$time" || name == "$simtime")
-            return Function::Time;
-        if (name == "$stime")
-            return Function::Stime;
-        if (name == "$realtime")
-            return Function::Realtime;
-        return std::nullopt;
+        using Routine = support::SystemTf;
+        switch (routine) {
+        case Routine::rtoi: return Function::Rtoi;
+        case Routine::itor: return Function::Itor;
+        case Routine::bitstoreal: return Function::BitsToReal;
+        case Routine::realtobits: return Function::RealToBits;
+        case Routine::bitstoshortreal: return Function::BitsToShortReal;
+        case Routine::shortrealtobits: return Function::ShortRealToBits;
+        case Routine::ln: return Function::Ln;
+        case Routine::log10: return Function::Log10;
+        case Routine::exp: return Function::Exp;
+        case Routine::sqrt: return Function::Sqrt;
+        case Routine::pow: return Function::Pow;
+        case Routine::floor: return Function::Floor;
+        case Routine::ceil: return Function::Ceil;
+        case Routine::sin: return Function::Sin;
+        case Routine::cos: return Function::Cos;
+        case Routine::tan: return Function::Tan;
+        case Routine::asin: return Function::Asin;
+        case Routine::acos: return Function::Acos;
+        case Routine::atan: return Function::Atan;
+        case Routine::atan2: return Function::Atan2;
+        case Routine::hypot: return Function::Hypot;
+        case Routine::sinh: return Function::Sinh;
+        case Routine::cosh: return Function::Cosh;
+        case Routine::tanh: return Function::Tanh;
+        case Routine::asinh: return Function::Asinh;
+        case Routine::acosh: return Function::Acosh;
+        case Routine::atanh: return Function::Atanh;
+        case Routine::time: return Function::Time;
+        case Routine::stime: return Function::Stime;
+        case Routine::realtime: return Function::Realtime;
+        default: return std::nullopt;
+        }
     }
 
     [[nodiscard]] bool binary_math_function(
@@ -173,8 +148,13 @@ Lowerer::hir_systemverilog_math_function(
             != semantic::sv::ExpressionKind::call) {
         return std::nullopt;
     }
-    return systemverilog_math_function(
-        expression->systemverilog->text);
+    // $simtime, which no clause defines, takes $time's routine; its tick
+    // count is chosen at the call (lower_hir_time_call).
+    if (expression->systemverilog->system_tf == support::SystemTf::none
+        && expression->systemverilog->text == "$simtime") {
+        return runtime::SystemVerilogMathFunction::Time;
+    }
+    return systemverilog_math_function(expression->systemverilog->system_tf);
 }
 
 const semantic::sv::Unit* Lowerer::hir_time_scope_unit(

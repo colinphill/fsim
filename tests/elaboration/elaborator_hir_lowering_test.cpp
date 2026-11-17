@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_test_support.hpp"
 
+#include "fsim/support/system_tf.hpp"
 #include "fsim/runtime/simir_interpreter.hpp"
 #include "fsim/support/environment.hpp"
 #include "fsim/support/systemverilog_builtin_type.hpp"
@@ -313,6 +314,13 @@ semantic::ExpressionId add_systemverilog_expression(
         expression.scope, expression.source, expression.origin);
     expression.kind = kind;
     expression.text = text;
+    // Identified as the HIR builder identifies a system call.
+    expression.system_tf = kind == semantic::sv::ExpressionKind::call
+        ? support::system_tf_named(text)
+        : support::SystemTf::none;
+    if (expression.system_tf != support::SystemTf::none) {
+        expression.call_kind = semantic::sv::CallKind::system;
+    }
     expression.operands = std::move(operands);
     expression.dependencies = { };
     fixture.compiled.systemverilog_hir.mutable_expressions().push_back(
@@ -991,6 +999,8 @@ void run_systemverilog_system_function_assignment_test()
     task_record->target.reset();
     task_record->value.reset();
     task_record->task.spelling = "$system";
+    task_record->task_call_kind = semantic::sv::CallKind::system;
+    task_record->task_system_tf = support::SystemTf::system;
     task_record->task.source = task_record->source;
     task_record->task_arguments.push_back({
         std::nullopt, string, task_record->source });

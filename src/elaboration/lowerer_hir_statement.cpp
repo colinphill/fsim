@@ -15825,12 +15825,12 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 }
                 const auto& source = *expression->systemverilog;
                 if (source.kind == semantic::sv::ExpressionKind::call
-                    && (source.text == "$bits" || source.text == "$left"
-                        || source.text == "$right" || source.text == "$low"
-                        || source.text == "$high" || source.text == "$size"
-                        || source.text == "$increment"
-                        || source.text == "$dimensions"
-                        || source.text == "$unpacked_dimensions")) {
+                    && (source.system_tf == support::SystemTf::bits || source.system_tf == support::SystemTf::left
+                        || source.system_tf == support::SystemTf::right || source.system_tf == support::SystemTf::low
+                        || source.system_tf == support::SystemTf::high || source.system_tf == support::SystemTf::size
+                        || source.system_tf == support::SystemTf::increment
+                        || source.system_tf == support::SystemTf::dimensions
+                        || source.system_tf == support::SystemTf::unpacked_dimensions)) {
                     const bool operands_constant = std::ranges::all_of(
                         source.operands,
                         [&](const semantic::ExpressionId operand) {
@@ -22695,7 +22695,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
             && expression_source->systemverilog != nullptr
             && expression_source->systemverilog->kind
                 == semantic::sv::ExpressionKind::call
-            && expression_source->systemverilog->text == "$typename";
+            && expression_source->systemverilog->system_tf == support::SystemTf::typename_query;
         // A string literal given to `%d` is its packed value: a literal
         // display argument is otherwise a format string.
         const bool literal_value = expression_source
@@ -23357,7 +23357,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
             return true;
         }
         case semantic::sv::StatementKind::task_call: {
-            if (input.task.spelling == "$sdf_annotate") {
+            if (input.task_system_tf == support::SystemTf::sdf_annotate) {
                 // The annotation is applied at elaboration; the call itself
                 // has no run-time effect.
                 std::string file;
@@ -23442,8 +23442,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 std::string_view { "$assertvacuousoff" },
             };
             const auto coverage_database_task
-                = input.task.spelling == "$set_coverage_db_name"
-                || input.task.spelling == "$load_coverage_db";
+                = input.task_system_tf == support::SystemTf::set_coverage_db_name
+                || input.task_system_tf == support::SystemTf::load_coverage_db;
             // A process control method of a named handle (IEEE 1800-2023
             // 9.7): a variable of the process class selecting one of its
             // methods.
@@ -23570,7 +23570,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     process, *seed });
                 return true;
             }
-            if (input.task.spelling == "$system") {
+            if (input.task_system_tf == support::SystemTf::system) {
                 const auto valid = input.task_arguments.size() <= 1U
                     && (input.task_arguments.empty()
                         || (!input.task_arguments.front().formal
@@ -23599,7 +23599,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     command, std::nullopt });
                 return true;
             }
-            if (input.task.spelling == "$printtimescale") {
+            if (input.task_system_tf == support::SystemTf::printtimescale) {
                 const bool named = std::ranges::any_of(
                     input.task_arguments,
                     [](const semantic::sv::TaskAssociation& argument) {
@@ -23666,7 +23666,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 });
                 return true;
             }
-            if (input.task.spelling == "$list") {
+            if (input.task_system_tf == support::SystemTf::list) {
                 // $list belongs to the interactive scope tasks of IEEE
                 // 1800-2023 D.6; it lists source text for a front end,
                 // which a batch run does not have. Rejected on purpose.
@@ -23677,16 +23677,16 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     span);
                 return true;
             }
-            if (input.task.spelling == "$scope"
-                || input.task.spelling == "$showscopes"
-                || input.task.spelling == "$showvars") {
+            if (input.task_system_tf == support::SystemTf::scope
+                || input.task_system_tf == support::SystemTf::showscopes
+                || input.task_system_tf == support::SystemTf::showvars) {
                 // The interactive scope tasks (IEEE 1800-2023 D.11-D.13,
                 // IEEE 1364-2005 C.10-C.12). Their hierarchical names are
                 // resolved when the task runs, by the host, against the
                 // design: the interactive scope is one setting of the
                 // tool shared with VPI, ACC and the debugger.
-                const bool is_scope = input.task.spelling == "$scope";
-                const bool is_showvars = input.task.spelling == "$showvars";
+                const bool is_scope = input.task_system_tf == support::SystemTf::scope;
+                const bool is_showvars = input.task_system_tf == support::SystemTf::showvars;
                 const bool named = std::ranges::any_of(
                     input.task_arguments,
                     [](const semantic::sv::TaskAssociation& argument) {
@@ -23793,9 +23793,9 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     HostRequest { std::move(request), { }, false });
                 return true;
             }
-            if (input.task.spelling == "$save"
-                || input.task.spelling == "$incsave"
-                || input.task.spelling == "$restart") {
+            if (input.task_system_tf == support::SystemTf::save
+                || input.task_system_tf == support::SystemTf::incsave
+                || input.task_system_tf == support::SystemTf::restart) {
                 // $save, $incsave and $restart take a file name "supplied as
                 // a string enclosed in quotation marks" (IEEE 1800-2023
                 // D.9). The host acts at the end of the time slot, once the
@@ -23826,9 +23826,9 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 }
                 process_.operations.emplace_back(HostRequest {
                     SimulationControlRequest {
-                        input.task.spelling == "$save"
+                        input.task_system_tf == support::SystemTf::save
                             ? SimulationControlKind::save
-                            : input.task.spelling == "$incsave"
+                            : input.task_system_tf == support::SystemTf::incsave
                             ? SimulationControlKind::incsave
                             : SimulationControlKind::restart,
                         *file->decoded_string },
@@ -23837,7 +23837,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 });
                 return true;
             }
-            if (input.task.spelling == "$reset") {
+            if (input.task_system_tf == support::SystemTf::reset) {
                 // $reset [ ( stop_value [ , reset_value [ , diagnostics_value
                 // ] ] ) ] (IEEE 1800-2023 D.8). Each argument is an integer
                 // value the request evaluates when it runs; reset_value is
@@ -23881,7 +23881,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 process_.operations.emplace_back(std::move(request));
                 return true;
             }
-            if (input.task.spelling == "$timeformat") {
+            if (input.task_system_tf == support::SystemTf::timeformat) {
                 const bool complete = input.task_arguments.size() == 4U
                     && std::ranges::all_of(
                         input.task_arguments,
@@ -23923,10 +23923,10 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 return true;
             }
             const bool stochastic_queue_task
-                = input.task.spelling == "$q_initialize"
-                || input.task.spelling == "$q_add"
-                || input.task.spelling == "$q_remove"
-                || input.task.spelling == "$q_exam";
+                = input.task_system_tf == support::SystemTf::q_initialize
+                || input.task_system_tf == support::SystemTf::q_add
+                || input.task_system_tf == support::SystemTf::q_remove
+                || input.task_system_tf == support::SystemTf::q_exam;
             if (stochastic_queue_task) {
                 const bool named = std::ranges::any_of(
                     input.task_arguments,
@@ -23955,9 +23955,9 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 std::array<bool, 4U> output {
                     false, false, false, true
                 };
-                if (input.task.spelling == "$q_remove") {
+                if (input.task_system_tf == support::SystemTf::q_remove) {
                     output = { false, true, true, true };
-                } else if (input.task.spelling == "$q_exam") {
+                } else if (input.task_system_tf == support::SystemTf::q_exam) {
                     output = { false, false, true, true };
                 }
                 std::array<RegisterId, 4U> arguments { };
@@ -23986,15 +23986,15 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 StochasticQueueOperation operation;
                 operation.queue_id = arguments[0];
                 operation.status = arguments[3];
-                if (input.task.spelling == "$q_initialize") {
+                if (input.task_system_tf == support::SystemTf::q_initialize) {
                     operation.kind = StochasticQueueKind::initialize;
                     operation.queue_type = arguments[1];
                     operation.maximum_length = arguments[2];
-                } else if (input.task.spelling == "$q_add") {
+                } else if (input.task_system_tf == support::SystemTf::q_add) {
                     operation.kind = StochasticQueueKind::add;
                     operation.job_id = arguments[1];
                     operation.information_id = arguments[2];
-                } else if (input.task.spelling == "$q_remove") {
+                } else if (input.task_system_tf == support::SystemTf::q_remove) {
                     operation.kind = StochasticQueueKind::remove;
                     operation.job_id = arguments[1];
                     operation.information_id = arguments[2];
@@ -24026,19 +24026,19 @@ bool Lowerer::lower_hir_statement_unsuspended(
             }
 
             const bool vcd_control_task
-                = input.task.spelling == "$dumpfile"
-                || input.task.spelling == "$dumpvars"
-                || input.task.spelling == "$dumpoff"
-                || input.task.spelling == "$dumpon"
-                || input.task.spelling == "$dumpall"
-                || input.task.spelling == "$dumplimit"
-                || input.task.spelling == "$dumpflush"
-                || input.task.spelling == "$dumpports"
-                || input.task.spelling == "$dumpportsoff"
-                || input.task.spelling == "$dumpportson"
-                || input.task.spelling == "$dumpportsall"
-                || input.task.spelling == "$dumpportslimit"
-                || input.task.spelling == "$dumpportsflush";
+                = input.task_system_tf == support::SystemTf::dumpfile
+                || input.task_system_tf == support::SystemTf::dumpvars
+                || input.task_system_tf == support::SystemTf::dumpoff
+                || input.task_system_tf == support::SystemTf::dumpon
+                || input.task_system_tf == support::SystemTf::dumpall
+                || input.task_system_tf == support::SystemTf::dumplimit
+                || input.task_system_tf == support::SystemTf::dumpflush
+                || input.task_system_tf == support::SystemTf::dumpports
+                || input.task_system_tf == support::SystemTf::dumpportsoff
+                || input.task_system_tf == support::SystemTf::dumpportson
+                || input.task_system_tf == support::SystemTf::dumpportsall
+                || input.task_system_tf == support::SystemTf::dumpportslimit
+                || input.task_system_tf == support::SystemTf::dumpportsflush;
             if (vcd_control_task) {
                 const bool named = std::ranges::any_of(
                     input.task_arguments,
@@ -24128,7 +24128,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     return true;
                 };
 
-                if (extended && input.task.spelling == "$dumpports") {
+                if (extended && input.task_system_tf == support::SystemTf::dumpports) {
                     operation.kind = VcdControlKind::ports;
                     std::optional<std::size_t> filename_index;
                     auto selection_end = input.task_arguments.size();
@@ -24170,7 +24170,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         }
                     }
                 } else if (extended
-                    && input.task.spelling == "$dumpportslimit") {
+                    && input.task_system_tf == support::SystemTf::dumpportslimit) {
                     if (input.task_arguments.empty()
                         || input.task_arguments.size() > 2U
                         || !input.task_arguments.front().actual
@@ -24218,11 +24218,11 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         return true;
                     }
                     operation.kind
-                        = input.task.spelling == "$dumpportsoff"
+                        = input.task_system_tf == support::SystemTf::dumpportsoff
                         ? VcdControlKind::ports_off
-                        : input.task.spelling == "$dumpportson"
+                        : input.task_system_tf == support::SystemTf::dumpportson
                         ? VcdControlKind::ports_on
-                        : input.task.spelling == "$dumpportsall"
+                        : input.task_system_tf == support::SystemTf::dumpportsall
                         ? VcdControlKind::ports_all
                         : VcdControlKind::ports_flush;
                     if (!input.task_arguments.empty()) {
@@ -24231,7 +24231,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                             return false;
                         }
                     }
-                } else if (input.task.spelling == "$dumpfile") {
+                } else if (input.task_system_tf == support::SystemTf::dumpfile) {
                     if (input.task_arguments.size() > 1U
                         || (!input.task_arguments.empty()
                             && !input.task_arguments.front().actual)) {
@@ -24249,7 +24249,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                             return false;
                         }
                     }
-                } else if (input.task.spelling == "$dumpvars") {
+                } else if (input.task_system_tf == support::SystemTf::dumpvars) {
                     operation.kind = VcdControlKind::variables;
                     if (!input.task_arguments.empty()) {
                         if (input.task_arguments.size() < 2U
@@ -24290,7 +24290,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                             }
                         }
                     }
-                } else if (input.task.spelling == "$dumplimit") {
+                } else if (input.task_system_tf == support::SystemTf::dumplimit) {
                     if (input.task_arguments.size() != 1U
                         || !input.task_arguments.front().actual) {
                         report(
@@ -24324,11 +24324,11 @@ bool Lowerer::lower_hir_statement_unsuspended(
                             span);
                         return true;
                     }
-                    operation.kind = input.task.spelling == "$dumpoff"
+                    operation.kind = input.task_system_tf == support::SystemTf::dumpoff
                         ? VcdControlKind::off
-                        : input.task.spelling == "$dumpon"
+                        : input.task_system_tf == support::SystemTf::dumpon
                         ? VcdControlKind::on
-                        : input.task.spelling == "$dumpall"
+                        : input.task_system_tf == support::SystemTf::dumpall
                         ? VcdControlKind::all
                         : VcdControlKind::flush;
                 }
@@ -24336,31 +24336,46 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 return true;
             }
 
+            // The PLA modeling tasks (IEEE 1800-2023 20.16): their routine
+            // gives the timing, the logic and the array or plane form.
             bool pla_asynchronous { };
-            auto pla_remainder = std::string_view { input.task.spelling };
-            if (pla_remainder.starts_with("$async$")) {
-                pla_asynchronous = true;
-                pla_remainder.remove_prefix(7U);
-            } else if (pla_remainder.starts_with("$sync$")) {
-                pla_remainder.remove_prefix(6U);
-            }
+            bool pla_plane { };
             std::optional<PlaLogicKind> pla_logic;
-            if (pla_remainder.starts_with("and$")) {
-                pla_logic = PlaLogicKind::and_logic;
-                pla_remainder.remove_prefix(4U);
-            } else if (pla_remainder.starts_with("nand$")) {
-                pla_logic = PlaLogicKind::nand_logic;
-                pla_remainder.remove_prefix(5U);
-            } else if (pla_remainder.starts_with("or$")) {
-                pla_logic = PlaLogicKind::or_logic;
-                pla_remainder.remove_prefix(3U);
-            } else if (pla_remainder.starts_with("nor$")) {
-                pla_logic = PlaLogicKind::nor_logic;
-                pla_remainder.remove_prefix(4U);
+            {
+                using Routine = support::SystemTf;
+                struct PlaForm {
+                    Routine routine;
+                    bool asynchronous;
+                    PlaLogicKind logic;
+                    bool plane;
+                };
+                static constexpr std::array forms {
+                    PlaForm { Routine::async_and_array, true, PlaLogicKind::and_logic, false },
+                    PlaForm { Routine::async_and_plane, true, PlaLogicKind::and_logic, true },
+                    PlaForm { Routine::async_nand_array, true, PlaLogicKind::nand_logic, false },
+                    PlaForm { Routine::async_nand_plane, true, PlaLogicKind::nand_logic, true },
+                    PlaForm { Routine::async_or_array, true, PlaLogicKind::or_logic, false },
+                    PlaForm { Routine::async_or_plane, true, PlaLogicKind::or_logic, true },
+                    PlaForm { Routine::async_nor_array, true, PlaLogicKind::nor_logic, false },
+                    PlaForm { Routine::async_nor_plane, true, PlaLogicKind::nor_logic, true },
+                    PlaForm { Routine::sync_and_array, false, PlaLogicKind::and_logic, false },
+                    PlaForm { Routine::sync_and_plane, false, PlaLogicKind::and_logic, true },
+                    PlaForm { Routine::sync_nand_array, false, PlaLogicKind::nand_logic, false },
+                    PlaForm { Routine::sync_nand_plane, false, PlaLogicKind::nand_logic, true },
+                    PlaForm { Routine::sync_or_array, false, PlaLogicKind::or_logic, false },
+                    PlaForm { Routine::sync_or_plane, false, PlaLogicKind::or_logic, true },
+                    PlaForm { Routine::sync_nor_array, false, PlaLogicKind::nor_logic, false },
+                    PlaForm { Routine::sync_nor_plane, false, PlaLogicKind::nor_logic, true },
+                };
+                const auto form = std::ranges::find(
+                    forms, input.task_system_tf, &PlaForm::routine);
+                if (form != forms.end()) {
+                    pla_asynchronous = form->asynchronous;
+                    pla_logic = form->logic;
+                    pla_plane = form->plane;
+                }
             }
-            const bool pla_plane = pla_remainder == "plane";
-            const bool pla_task = pla_logic
-                && (pla_plane || pla_remainder == "array");
+            const bool pla_task = pla_logic.has_value();
             if (pla_task) {
                 const bool named = std::ranges::any_of(
                     input.task_arguments,
@@ -24547,7 +24562,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 // request names the task, the calling scope (where the list
                 // items are resolved, as for $dumpvars, 21.7.1.2) and the
                 // list items. The tasks are in AssertionControlTask's order.
-                const bool control = input.task.spelling == "$assertcontrol";
+                const bool control = input.task_system_tf == support::SystemTf::assertcontrol;
                 const std::size_t integers = control ? 4U : 1U;
                 const bool named = std::ranges::any_of(input.task_arguments,
                     [](const semantic::sv::TaskAssociation& argument) {
@@ -24775,7 +24790,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     return false;
                 }
                 process_.operations.emplace_back(CoverageDatabaseControl {
-                    input.task.spelling == "$load_coverage_db"
+                    input.task_system_tf == support::SystemTf::load_coverage_db
                         ? CoverageDatabaseControlKind::load
                         : CoverageDatabaseControlKind::set_name,
                     *filename,
@@ -24937,11 +24952,11 @@ bool Lowerer::lower_hir_statement_unsuspended(
                                 == semantic::sv::ExpressionKind::call
                             && monitored_expression->systemverilog->operands
                                    .empty()
-                        ? std::string_view {
-                              monitored_expression->systemverilog->text }
-                        : std::string_view { };
-                    if (time_call == "$time" || time_call == "$stime"
-                        || time_call == "$realtime") {
+                        ? monitored_expression->systemverilog->system_tf
+                        : support::SystemTf::none;
+                    if (time_call == support::SystemTf::time
+                        || time_call == support::SystemTf::stime
+                        || time_call == support::SystemTf::realtime) {
                         const auto unit
                             = specialized_hir_unit_->design().find_unit(
                                 specialized_hir_unit_->unit());
@@ -24951,9 +24966,9 @@ bool Lowerer::lower_hir_statement_unsuspended(
                             : nullptr;
                         monitor_value.kind
                             = MonitorValueKind::simulation_time;
-                        monitor_value.time_function = time_call == "$time"
+                        monitor_value.time_function = time_call == support::SystemTf::time
                             ? runtime::SystemVerilogTimeFunction::Time
-                            : time_call == "$stime"
+                            : time_call == support::SystemTf::stime
                             ? runtime::SystemVerilogTimeFunction::Stime
                             : runtime::SystemVerilogTimeFunction::Realtime;
                         monitor_value.time_unit_femtoseconds = context
@@ -24967,7 +24982,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                                   .value_or(0U)
                             : 0U;
                         monitor_value.format = runtime_output_format(format);
-                        monitor_value.scalar_kind = time_call == "$realtime"
+                        monitor_value.scalar_kind = time_call == support::SystemTf::realtime
                             ? frontend::SystemVerilogScalarKind::Realtime
                             : frontend::SystemVerilogScalarKind::None;
                         monitor_value.minimum_width

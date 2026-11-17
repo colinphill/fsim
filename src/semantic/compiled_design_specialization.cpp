@@ -14506,7 +14506,7 @@ private:
                     : std::nullopt;
             }
             if (expression.kind == Kind::call
-                && expression.text == "$isunbounded") {
+                && expression.system_tf == support::SystemTf::isunbounded) {
                 if (expression.operands.size() != 1U) {
                     return std::nullopt;
                 }
@@ -14518,8 +14518,8 @@ private:
                     : std::nullopt;
             }
             if (expression.kind == Kind::call
-                && (expression.text == "$signed"
-                    || expression.text == "$unsigned")) {
+                && (expression.system_tf == support::SystemTf::signed_conversion
+                    || expression.system_tf == support::SystemTf::unsigned_conversion)) {
                 return expression.operands.size() == 1U
                     ? evaluate(expression.operands.front())
                     : std::nullopt;
@@ -14548,13 +14548,13 @@ private:
                     expression.operands.front());
                 if (operand_view && operand_view->systemverilog != nullptr
                     && operand_view->systemverilog->kind == Kind::call
-                    && operand_view->systemverilog->text == "$unsigned") {
+                    && operand_view->systemverilog->system_tf == support::SystemTf::unsigned_conversion) {
                     return ((*operand % modulus) + modulus) % modulus;
                 }
                 return std::nullopt;
             }
             if (expression.kind == Kind::call
-                && expression.text == "$clog2") {
+                && expression.system_tf == support::SystemTf::clog2) {
                 if (expression.operands.size() != 1U) {
                     return std::nullopt;
                 }
@@ -14626,7 +14626,7 @@ private:
             // `$bits` of a typedef or a variable is its packed width
             // (IEEE 1800-2017 20.6.2).
             if (expression.kind == Kind::call
-                && expression.text == "$bits"
+                && expression.system_tf == support::SystemTf::bits
                 && expression.operands.size() == 1U) {
                 if (const auto value = evaluate_callable(expression)) {
                     return value;
@@ -15119,7 +15119,7 @@ private:
             // $sformatf in a constant expression (IEEE 1800-2017 21.3.3),
             // for the integral and string conversions.
             if (expression.kind == Kind::call
-                && expression.text == "$sformatf"
+                && expression.system_tf == support::SystemTf::sformatf
                 && !expression.operands.empty()) {
                 return format_constant_string(expression);
             }

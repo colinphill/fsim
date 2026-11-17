@@ -287,11 +287,11 @@ fully_effective_systemverilog_type(
 [[nodiscard]] std::optional<double>
 systemverilog_real_literal(std::string_view spelling) noexcept;
 [[nodiscard]] std::optional<runtime::simir::RandomDistributionKind>
-systemverilog_random_distribution_kind(std::string_view spelling) noexcept;
+systemverilog_random_distribution_kind(support::SystemTf routine) noexcept;
 [[nodiscard]] bool systemverilog_sampled_value_call(
-    std::string_view spelling) noexcept;
+    support::SystemTf routine) noexcept;
 [[nodiscard]] bool systemverilog_sampled_value_preserves_signal(
-    std::string_view spelling) noexcept;
+    support::SystemTf routine) noexcept;
 [[nodiscard]] std::optional<std::string_view>
 vhdl_logic_string_function_name(std::string_view spelling) noexcept;
 // The static range constraint of an integer subtype, if it has one.

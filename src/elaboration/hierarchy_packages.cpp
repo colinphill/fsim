@@ -11083,11 +11083,11 @@ namespace {
                     = [](const semantic::sv::Expression& expression) {
                           return expression.kind
                                   == semantic::sv::ExpressionKind::call
-                              && (expression.text == "$time"
-                                  || expression.text == "$stime"
-                                  || expression.text == "$realtime"
-                                  || expression.text == "$random"
-                                  || expression.text == "$urandom");
+                              && (expression.system_tf == support::SystemTf::time
+                                  || expression.system_tf == support::SystemTf::stime
+                                  || expression.system_tf == support::SystemTf::realtime
+                                  || expression.system_tf == support::SystemTf::random
+                                  || expression.system_tf == support::SystemTf::urandom);
                       };
                 const auto value_view = literal.value
                     ? specialized->find_expression(*literal.value)
@@ -12401,14 +12401,14 @@ namespace {
                 }
                 const auto& value = *view->systemverilog;
                 if (value.kind == ExpressionKind::call
-                    && (value.text == "$bits" || value.text == "$size"
-                        || value.text == "$left" || value.text == "$right"
-                        || value.text == "$low" || value.text == "$high"
-                        || value.text == "$increment"
-                        || value.text == "$dimensions"
-                        || value.text == "$unpacked_dimensions"
-                        || value.text == "$typename"
-                        || value.text == "$isunbounded")) {
+                    && (value.system_tf == support::SystemTf::bits || value.system_tf == support::SystemTf::size
+                        || value.system_tf == support::SystemTf::left || value.system_tf == support::SystemTf::right
+                        || value.system_tf == support::SystemTf::low || value.system_tf == support::SystemTf::high
+                        || value.system_tf == support::SystemTf::increment
+                        || value.system_tf == support::SystemTf::dimensions
+                        || value.system_tf == support::SystemTf::unpacked_dimensions
+                        || value.system_tf == support::SystemTf::typename_query
+                        || value.system_tf == support::SystemTf::isunbounded)) {
                     return nullptr;
                 }
                 // A parameter of an interface named through an interface
@@ -13268,7 +13268,7 @@ namespace {
                     || expression.marker
                         == support::ExpressionMarker::stream_right);
             if (expression.kind == ExpressionKind::call
-                && expression.text == "$bits"
+                && expression.system_tf == support::SystemTf::bits
                 && expression.operands.size() == 1U
                 && expression_has_real_scalar_type(
                     expression.operands.front())) {

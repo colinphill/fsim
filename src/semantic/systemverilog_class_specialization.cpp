@@ -999,7 +999,7 @@ private:
                 if (x && y) {
                     resolved.real = binary_function->second(*x, *y);
                 }
-            } else if (expression->text == "$rtoi"
+            } else if (expression->system_tf == support::SystemTf::rtoi
                 && expression->operands.size() == 1U) {
                 if (const auto x = real_operand(expression->operands.front())) {
                     resolved.integer = static_cast<std::int64_t>(std::trunc(*x));

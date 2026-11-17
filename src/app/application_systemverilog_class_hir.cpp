@@ -512,6 +512,7 @@ sv::ConstraintExpression SystemVerilogHirBuilder::constraint_expression(
     output.marker_argument = input.marker_argument;
     output.builtin_method = input.builtin_method;
     output.call_kind = systemverilog_call_kind(input);
+    output.system_tf = systemverilog_hir_detail::systemverilog_system_tf(input);
     output.cast_target = input.systemverilog_cast_target;
     output.cast_builtin = input.systemverilog_cast_builtin;
     output.source = source(input.span);

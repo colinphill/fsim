@@ -604,6 +604,10 @@ struct Statement {
     std::string task_marker_argument;
     // The kind of the task a task call names.
     CallKind task_call_kind { CallKind::user };
+    // The system task a system task call names (IEEE 1800-2023 20.1, 21.1),
+    // resolved once from its system_tf_identifier; none for any other
+    // statement and for a user-defined system task (36.1).
+    support::SystemTf task_system_tf { support::SystemTf::none };
     std::vector<TaskAssociation> task_arguments;
     std::string loop_variable;
     bool loop_variable_declared { };
@@ -1137,6 +1141,8 @@ struct ConstraintExpression {
     support::BuiltinMethod builtin_method { support::BuiltinMethod::none };
     // As Expression::call_kind.
     CallKind call_kind { CallKind::user };
+    // As Expression::system_tf.
+    support::SystemTf system_tf { support::SystemTf::none };
     // A cast `T'(e)` (6.24.1): what T is. A cast to a typedef of a packed
     // integral type is resolved to signed_type/unsigned_type with the width
     // in marker_argument.

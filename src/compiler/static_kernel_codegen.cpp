@@ -80,6 +80,15 @@ namespace fsim::compiler {
 
 namespace {
 
+/// The NaN the host's floating-point unit gives an invalid operation of two
+/// numbers (0/0): the reference interpreter's result for it.
+template <typename Real>
+[[nodiscard]] Real host_default_nan() noexcept
+{
+    volatile Real zero { };
+    return zero / zero;
+}
+
 #if defined(_WIN32)
 /// Registers the Windows unwind table (.pdata) of each object RuntimeDyld
 /// loads. LLVM's default memory manager only knows DWARF frame registration,
@@ -8145,6 +8154,16 @@ private:
                 number = builder_.CreateFDiv(l, r);
                 break;
             }
+            // An invalid operation of two numbers (0/0, inf-inf, 0*inf)
+            // gives the host's default NaN, as the reference computes it;
+            // LLVM folds constant operands to a NaN of its own sign.
+            auto* invalid = builder_.CreateAnd(
+                builder_.CreateFCmpUNO(number, number), builder_.CreateFCmpORD(l, r));
+            number = builder_.CreateSelect(invalid,
+                kind == Kind::ShortReal
+                    ? llvm::ConstantFP::get(context_, llvm::APFloat(host_default_nan<float>()))
+                    : llvm::ConstantFP::get(context_, llvm::APFloat(host_default_nan<double>())),
+                number);
             value = kind == Kind::ShortReal
                 ? builder_.CreateZExt(builder_.CreateBitCast(number, i32_), i64_)
                 : builder_.CreateBitCast(number, i64_);

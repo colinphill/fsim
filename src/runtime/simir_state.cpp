@@ -2774,6 +2774,18 @@ void Interpreter::Impl::notify_execution_point(
     return monitor_signal_watch_mask[signal] != 0U;
 }
 
+void Interpreter::Impl::prepare_monitor_observation(
+    const MonitorInstall& registration)
+{
+    // The printed values are the signals' current ones, kernel-owned ones
+    // included (prepare_signal_observation materializes them).
+    for (const auto& value : registration.values) {
+        if (value.kind == MonitorValueKind::signal) {
+            prepare_signal_observation(value.signal);
+        }
+    }
+}
+
 [[nodiscard]] std::string Interpreter::Impl::render_monitor(
     const MonitorInstall& registration) const
 {
@@ -2928,6 +2940,7 @@ void Interpreter::Impl::install_monitor(const ProcessId process,
     if (registration.one_shot) {
         auto publish = [this, process, registration, file_handle](
                            Scheduler& runtime) {
+                prepare_monitor_observation(registration);
                 if (file_handle) {
                     write_file(
                         process,
@@ -2979,6 +2992,16 @@ void Interpreter::Impl::install_monitor(const ProcessId process,
         }
         monitor_signal_watch_mask[value.signal] = 1U;
     }
+    // A $monitor prints when one of its signals changes (IEEE 1800-2023
+    // 21.2.3): kernel-owned signals report their changes to the host from
+    // here on (watch_static_kernel_signals).
+    std::vector<SignalId> watched;
+    for (const auto& value : registration.values) {
+        if (value.kind == MonitorValueKind::signal) {
+            watched.push_back(value.signal);
+        }
+    }
+    watch_static_kernel_signals(watched);
     monitor_process = process;
     monitor_file_handle = file_handle;
     monitor_enabled = true;

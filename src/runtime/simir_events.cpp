@@ -235,6 +235,10 @@ void MonitorPublishSv::dispatch(Scheduler& runtime, const Payload& scheduled)
         || !owner.monitor_enabled || !owner.monitor) {
         return;
     }
+    // Kernel-owned signals the print reads are materialized while this
+    // publication is still the time step's: a change that shows is one of
+    // the step this line prints.
+    owner.prepare_monitor_observation(*owner.monitor);
     owner.monitor_systemverilog_publication.reset();
     emit_monitor(owner, scheduled.process, runtime);
 }
@@ -246,6 +250,7 @@ void MonitorPublishVhdl::dispatch(Scheduler& runtime, const Payload& scheduled)
         || !owner.monitor_enabled || !owner.monitor) {
         return;
     }
+    owner.prepare_monitor_observation(*owner.monitor);
     owner.monitor_publication.reset();
     emit_monitor(owner, scheduled.process, runtime);
 }

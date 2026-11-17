@@ -504,7 +504,7 @@ class Lowerer final {
           ? builder_.unary(Operator::LogicalNot, reduced) : reduced;
     }
     if (expression.kind == sv::ConstraintExpressionKind::call
-        && expression.text == "$countbits" && expression.operands.size() >= 2U) {
+        && expression.system_tf == support::SystemTf::countbits && expression.operands.size() >= 2U) {
       // $countbits counts the bits equal to any control bit (20.9); a
       // two-state variable has only '0 and '1 bits.
       const auto operand = lower(expression.operands.front());
@@ -541,7 +541,7 @@ class Lowerer final {
       return builder_.constant(low_value(32, 0), index_profile());
     }
     if (expression.kind == sv::ConstraintExpressionKind::call
-        && expression.text == "$clog2" && expression.operands.size() == 1U) {
+        && expression.system_tf == support::SystemTf::clog2 && expression.operands.size() == 1U) {
       // $clog2 counts the powers of two below its argument (20.8.1).
       const auto operand = lower(expression.operands.front());
       if (!operand) return std::nullopt;
@@ -562,8 +562,8 @@ class Lowerer final {
       return count;
     }
     if (expression.kind == sv::ConstraintExpressionKind::call
-        && (expression.text == "$countones" || expression.text == "$onehot"
-            || expression.text == "$onehot0")
+        && (expression.system_tf == support::SystemTf::countones || expression.system_tf == support::SystemTf::onehot
+            || expression.system_tf == support::SystemTf::onehot0)
         && expression.operands.size() == 1U) {
       // Bit-count functions (IEEE 1800-2017 20.9).
       const auto operand = lower(expression.operands.front());
@@ -587,9 +587,9 @@ class Lowerer final {
         count = count ? builder_.binary(Operator::Add, *count, counted)
                       : counted;
       }
-      if (expression.text == "$countones") return count;
+      if (expression.system_tf == support::SystemTf::countones) return count;
       return builder_.binary(
-          expression.text == "$onehot" ? Operator::Equal : Operator::LessEqual,
+          expression.system_tf == support::SystemTf::onehot ? Operator::Equal : Operator::LessEqual,
           *count, builder_.constant(low_value(32, 1), index_profile()));
     }
     if (expression.kind == sv::ConstraintExpressionKind::concatenation
@@ -1032,7 +1032,7 @@ class Lowerer final {
     }
     // Only a parameter given `$` is unbounded (IEEE 1800-2017 20.6.3);
     // a constraint operand never is.
-    if (expression.text == "$isunbounded" && expression.operands.size() == 1U) {
+    if (expression.system_tf == support::SystemTf::isunbounded && expression.operands.size() == 1U) {
       return builder_.constant(
           low_value(1, 0),
           runtime::SystemVerilogConstraintVariableProfile{

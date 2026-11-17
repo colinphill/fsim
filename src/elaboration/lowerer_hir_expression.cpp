@@ -160,52 +160,54 @@ std::optional<double> systemverilog_real_literal(
 }
 
 std::optional<runtime::simir::RandomDistributionKind>
-systemverilog_random_distribution_kind(
-    const std::string_view spelling) noexcept
+systemverilog_random_distribution_kind(const support::SystemTf routine) noexcept
 {
     using Kind = runtime::simir::RandomDistributionKind;
-    if (spelling == "$dist_uniform") {
-        return Kind::uniform;
+    using Routine = support::SystemTf;
+    switch (routine) {
+    case Routine::dist_uniform: return Kind::uniform;
+    case Routine::dist_normal: return Kind::normal;
+    case Routine::dist_exponential: return Kind::exponential;
+    case Routine::dist_poisson: return Kind::poisson;
+    case Routine::dist_chi_square: return Kind::chi_square;
+    case Routine::dist_t: return Kind::student_t;
+    case Routine::dist_erlang: return Kind::erlang;
+    default: return std::nullopt;
     }
-    if (spelling == "$dist_normal") {
-        return Kind::normal;
-    }
-    if (spelling == "$dist_exponential") {
-        return Kind::exponential;
-    }
-    if (spelling == "$dist_poisson") {
-        return Kind::poisson;
-    }
-    if (spelling == "$dist_chi_square") {
-        return Kind::chi_square;
-    }
-    if (spelling == "$dist_t") {
-        return Kind::student_t;
-    }
-    if (spelling == "$dist_erlang") {
-        return Kind::erlang;
-    }
-    return std::nullopt;
 }
 
-bool systemverilog_sampled_value_call(
-    const std::string_view spelling) noexcept
+bool systemverilog_sampled_value_call(const support::SystemTf routine) noexcept
 {
-    return spelling == "$sampled" || spelling == "$rose"
-        || spelling == "$fell" || spelling == "$stable"
-        || spelling == "$changed" || spelling == "$past"
-        || spelling == "$past_gclk" || spelling == "$rose_gclk"
-        || spelling == "$fell_gclk" || spelling == "$stable_gclk"
-        || spelling == "$changed_gclk" || spelling == "$future_gclk"
-        || spelling == "$rising_gclk" || spelling == "$falling_gclk"
-        || spelling == "$steady_gclk" || spelling == "$changing_gclk";
+    using Routine = support::SystemTf;
+    switch (routine) {
+    case Routine::sampled:
+    case Routine::rose:
+    case Routine::fell:
+    case Routine::stable:
+    case Routine::changed:
+    case Routine::past:
+    case Routine::past_gclk:
+    case Routine::rose_gclk:
+    case Routine::fell_gclk:
+    case Routine::stable_gclk:
+    case Routine::changed_gclk:
+    case Routine::future_gclk:
+    case Routine::rising_gclk:
+    case Routine::falling_gclk:
+    case Routine::steady_gclk:
+    case Routine::changing_gclk:
+        return true;
+    default:
+        return false;
+    }
 }
 
 bool systemverilog_sampled_value_preserves_signal(
-    const std::string_view spelling) noexcept
+    const support::SystemTf routine) noexcept
 {
-    return spelling == "$sampled" || spelling == "$past"
-        || spelling == "$past_gclk" || spelling == "$future_gclk";
+    using Routine = support::SystemTf;
+    return routine == Routine::sampled || routine == Routine::past
+        || routine == Routine::past_gclk || routine == Routine::future_gclk;
 }
 
 std::optional<std::string_view> vhdl_logic_string_function_name(
@@ -810,6 +812,9 @@ PackedLogic4 character_string_value(const std::string_view text)
 
     struct HirExpressionLeaf {
         std::string_view text;
+        // A SystemVerilog system task or function call's routine; none for
+        // VHDL and for every other expression.
+        support::SystemTf system_tf { support::SystemTf::none };
         support::ExpressionMarker marker { support::ExpressionMarker::none };
         std::string_view marker_argument;
         semantic::SourceSpanId source;
@@ -846,6 +851,7 @@ PackedLogic4 character_string_value(const std::string_view text)
         if (expression.systemverilog != nullptr) {
             const auto& source = *expression.systemverilog;
             result.text = source.text;
+            result.system_tf = source.system_tf;
             result.marker = source.marker;
             result.marker_argument = source.marker_argument;
             result.source = source.source;
@@ -9089,15 +9095,17 @@ bool Lowerer::is_hir_systemverilog_coverage_call(
             != semantic::sv::ExpressionKind::call) {
         return false;
     }
-    const auto& name = expression->systemverilog->text;
-    return name == "$get_coverage"
-        || name == "$get_inst_coverage"
+    using Routine = support::SystemTf;
+    const auto routine = expression->systemverilog->system_tf;
+    return routine == Routine::get_coverage
+        || (routine == Routine::none
+            && expression->systemverilog->text == "$get_inst_coverage")
         || frontend::is_coverage_query(expression->systemverilog->marker)
-        || name == "$coverage_control"
-        || name == "$coverage_get"
-        || name == "$coverage_get_max"
-        || name == "$coverage_merge"
-        || name == "$coverage_save";
+        || routine == Routine::coverage_control
+        || routine == Routine::coverage_get
+        || routine == Routine::coverage_get_max
+        || routine == Routine::coverage_merge
+        || routine == Routine::coverage_save;
 }
 
 std::optional<RegisterId> Lowerer::lower_hir_systemverilog_coverage_call(
@@ -9152,7 +9160,7 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_coverage_call(
             ? resize_register(destination, expected_width, false)
             : destination;
     }
-    if (source.text == "$get_coverage"
+    if (source.system_tf == support::SystemTf::get_coverage
         || source.text == "$get_inst_coverage") {
         if (language_ != frontend::Language::SystemVerilog2017
             || named || !source.operands.empty()) {
@@ -9199,7 +9207,7 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_coverage_call(
             destination, selector->systemverilog->text });
         return { destination, true };
     };
-    if (source.text == "$coverage_control") {
+    if (source.system_tf == support::SystemTf::coverage_control) {
         if (language_ != frontend::Language::SystemVerilog2017
             || named || source.operands.size() != 4U) {
             return invalid(
@@ -9233,8 +9241,8 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_coverage_call(
         return result(destination);
     }
 
-    const auto file_call = source.text == "$coverage_merge"
-        || source.text == "$coverage_save";
+    const auto file_call = source.system_tf == support::SystemTf::coverage_merge
+        || source.system_tf == support::SystemTf::coverage_save;
     if (language_ != frontend::Language::SystemVerilog2017
         || named
         || source.operands.size() != (file_call ? 2U : 3U)
@@ -9277,11 +9285,11 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_coverage_call(
                       "hierarchical instance name");
         }
     }
-    const auto kind = source.text == "$coverage_get"
+    const auto kind = source.system_tf == support::SystemTf::coverage_get
         ? SystemVerilogCoverageAccessKind::get
-        : source.text == "$coverage_get_max"
+        : source.system_tf == support::SystemTf::coverage_get_max
         ? SystemVerilogCoverageAccessKind::get_max
-        : source.text == "$coverage_merge"
+        : source.system_tf == support::SystemTf::coverage_merge
         ? SystemVerilogCoverageAccessKind::merge
         : SystemVerilogCoverageAccessKind::save;
     const auto destination = allocate_register(
@@ -16440,7 +16448,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         if (record->systemverilog != nullptr
             && record->systemverilog->kind
                 == semantic::sv::ExpressionKind::call) {
-            if (record->systemverilog->text == "$isunbounded"
+            if (record->systemverilog->system_tf == support::SystemTf::isunbounded
                 && specialized_hir_unit_->evaluate_integral_expression(
                     candidate)) {
                 return false;
@@ -17023,7 +17031,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
     // The length check of a single dynamic-range aggregate operand.
     std::optional<RegisterId> vhdl_aggregate_length_matches;
     if (expression->systemverilog != nullptr && source.call
-        && systemverilog_sampled_value_call(source.text)) {
+        && systemverilog_sampled_value_call(source.system_tf)) {
         const auto& sampled = *expression->systemverilog;
         std::vector<std::optional<semantic::ExpressionId>> arguments;
         if (!sampled.call_arguments.empty()) {
@@ -17057,7 +17065,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 ? hir_source_span(record->systemverilog->source)
                 : hir_source_span(sampled.source);
         };
-        const bool past = source.text == "$past";
+        const bool past = source.system_tf == support::SystemTf::past;
         const bool global = source.text.ends_with("_gclk");
         const auto maximum_arity = global ? 1U : past ? 4U
                                                       : 2U;
@@ -17087,11 +17095,11 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         const auto& sampled_source = *signal_expression->systemverilog;
         // The sampled value of a time function is its current value (IEEE
         // 1800-2017 16.5.1).
-        if (source.text == "$sampled"
+        if (source.system_tf == support::SystemTf::sampled
             && sampled_source.kind == semantic::sv::ExpressionKind::call
-            && (sampled_source.text == "$time"
-                || sampled_source.text == "$stime"
-                || sampled_source.text == "$realtime")) {
+            && (sampled_source.system_tf == support::SystemTf::time
+                || sampled_source.system_tf == support::SystemTf::stime
+                || sampled_source.system_tf == support::SystemTf::realtime)) {
             return lower_hir_expression(*arguments.front(), expected_width);
         }
         // The sampled value of an automatic variable is its current value,
@@ -17152,11 +17160,11 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             if (automatic_only(
                     automatic_only, *arguments.front(), automatic_name)
                 && automatic_name) {
-                if (source.text == "$sampled" || past) {
+                if (source.system_tf == support::SystemTf::sampled || past) {
                     return lower_hir_expression(
                         *arguments.front(), expected_width);
                 }
-                const bool stable = source.text == "$stable";
+                const bool stable = source.system_tf == support::SystemTf::stable;
                 const auto constant = allocate_register(
                     std::max<std::size_t>(expected_width, 1U),
                     frontend::ValueDomain::Bit2);
@@ -17170,7 +17178,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         // sampled value, its type's default (IEEE 1800-2023 16.5.1). Its
         // Preponed value after time 0 is not kept: the run stops there.
         if (const auto property
-            = source.text == "$sampled" && !global
+            = source.system_tf == support::SystemTf::sampled && !global
                 && sampled_source.kind
                     == semantic::sv::ExpressionKind::class_property
             ? hir_class_property_profile(*arguments.front())
@@ -17416,25 +17424,25 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                     : SampledClockEdge::any;
             }
         }
-        const auto kind = source.text == "$sampled"
+        const auto kind = source.system_tf == support::SystemTf::sampled
             ? SignalReadKind::sampled
-            : source.text == "$rose" || source.text == "$rose_gclk"
+            : source.system_tf == support::SystemTf::rose || source.system_tf == support::SystemTf::rose_gclk
             ? SignalReadKind::rose
-            : source.text == "$fell" || source.text == "$fell_gclk"
+            : source.system_tf == support::SystemTf::fell || source.system_tf == support::SystemTf::fell_gclk
             ? SignalReadKind::fell
-            : source.text == "$stable" || source.text == "$stable_gclk"
+            : source.system_tf == support::SystemTf::stable || source.system_tf == support::SystemTf::stable_gclk
             ? SignalReadKind::stable
-            : source.text == "$changed" || source.text == "$changed_gclk"
+            : source.system_tf == support::SystemTf::changed || source.system_tf == support::SystemTf::changed_gclk
             ? SignalReadKind::changed
-            : source.text == "$future_gclk"
+            : source.system_tf == support::SystemTf::future_gclk
             ? SignalReadKind::future
-            : source.text == "$rising_gclk"
+            : source.system_tf == support::SystemTf::rising_gclk
             ? SignalReadKind::rising
-            : source.text == "$falling_gclk"
+            : source.system_tf == support::SystemTf::falling_gclk
             ? SignalReadKind::falling
-            : source.text == "$steady_gclk"
+            : source.system_tf == support::SystemTf::steady_gclk
             ? SignalReadKind::steady
-            : source.text == "$changing_gclk"
+            : source.system_tf == support::SystemTf::changing_gclk
             ? SignalReadKind::changing
             : SignalReadKind::past;
         const auto result_width = kind == SignalReadKind::sampled
@@ -19339,23 +19347,23 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
     } else if (expression->systemverilog != nullptr
         && expression->systemverilog->kind
             == semantic::sv::ExpressionKind::call
-        && (expression->systemverilog->text == "$left"
-            || expression->systemverilog->text == "$right"
-            || expression->systemverilog->text == "$low"
-            || expression->systemverilog->text == "$high"
-            || expression->systemverilog->text == "$increment"
-            || expression->systemverilog->text == "$size"
-            || expression->systemverilog->text == "$bits"
-            || expression->systemverilog->text == "$dimensions"
-            || expression->systemverilog->text
-                == "$unpacked_dimensions")) {
+        && (expression->systemverilog->system_tf == support::SystemTf::left
+            || expression->systemverilog->system_tf == support::SystemTf::right
+            || expression->systemverilog->system_tf == support::SystemTf::low
+            || expression->systemverilog->system_tf == support::SystemTf::high
+            || expression->systemverilog->system_tf == support::SystemTf::increment
+            || expression->systemverilog->system_tf == support::SystemTf::size
+            || expression->systemverilog->system_tf == support::SystemTf::bits
+            || expression->systemverilog->system_tf == support::SystemTf::dimensions
+            || expression->systemverilog->system_tf
+                == support::SystemTf::unpacked_dimensions)) {
         const auto& call = *expression->systemverilog;
         emit_debug_point(
             DebugPointKind::call, hir_source_span(call.source));
         // $bits of a parameter without a type or range is the width of its
         // value (IEEE 1800-2017 6.20.2), not of the implicit integer type.
         const auto implicit_parameter = [&]() -> bool {
-            if (call.text != "$bits" || call.operands.size() != 1U) {
+            if (call.system_tf != support::SystemTf::bits || call.operands.size() != 1U) {
                 return false;
             }
             const auto declaration_id
@@ -19379,8 +19387,8 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             // A run-time dimension selects from a fixed type's dimension
             // table. Invalid or unknown dimensions return integer 'x (20.7).
             if (call.operands.size() == 2U
-                && call.text != "$bits" && call.text != "$dimensions"
-                && call.text != "$unpacked_dimensions") {
+                && call.system_tf != support::SystemTf::bits && call.system_tf != support::SystemTf::dimensions
+                && call.system_tf != support::SystemTf::unpacked_dimensions) {
                 const auto shape = hir_systemverilog_array_query_shape(
                     call.operands.front());
                 const auto dimension_width = hir_expression_width(
@@ -19490,12 +19498,12 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                                                         Bit2);
                                                 return reg;
                                             };
-                                        if (call.text == "$left"
-                                            || call.text == "$low") {
+                                        if (call.system_tf == support::SystemTf::left
+                                            || call.system_tf == support::SystemTf::low) {
                                             variable_first_value
                                                 = value_for_container(0U);
-                                        } else if (call.text
-                                            == "$increment") {
+                                        } else if (call.system_tf
+                                            == support::SystemTf::increment) {
                                             variable_first_value
                                                 = value_for_container(
                                                     std::numeric_limits<
@@ -19508,10 +19516,10 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                                             process_.operations.emplace_back(
                                                 ContainerSize {
                                                     size, container->value });
-                                            if (call.text == "$size") {
+                                            if (call.system_tf == support::SystemTf::size) {
                                                 variable_first_value = size;
-                                            } else if (call.text == "$right"
-                                                || call.text == "$high") {
+                                            } else if (call.system_tf == support::SystemTf::right
+                                                || call.system_tf == support::SystemTf::high) {
                                                 const auto decrement
                                                     = value_for_container(1U);
                                                 const auto last
@@ -19571,12 +19579,12 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                                 = std::min(range.left, range.right);
                             const auto high
                                 = std::max(range.left, range.right);
-                            const auto bound_value = call.text == "$left"
+                            const auto bound_value = call.system_tf == support::SystemTf::left
                                     ? range.left
-                                : call.text == "$right" ? range.right
-                                : call.text == "$low" ? low
-                                : call.text == "$high" ? high
-                                : call.text == "$increment"
+                                : call.system_tf == support::SystemTf::right ? range.right
+                                : call.system_tf == support::SystemTf::low ? low
+                                : call.system_tf == support::SystemTf::high ? high
+                                : call.system_tf == support::SystemTf::increment
                                 ? (range.descending ? 1 : -1)
                                 : static_cast<std::int64_t>(
                                       index_distance(
@@ -19615,7 +19623,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             // A type with unpacked parts (`$bits(s_t)`, an unpacked
             // structure type) has the bits of all its members and elements
             // (IEEE 1800-2017 20.6.2).
-            if (call.text == "$bits" && call.operands.size() == 1U
+            if (call.system_tf == support::SystemTf::bits && call.operands.size() == 1U
                 && !receiver_type) {
                 const auto operand_declaration
                     = hir_referenced_declaration(call.operands.front());
@@ -19655,7 +19663,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                         = hir_systemverilog_container_bit_width(*container);
                 }
             }
-            if (!packed_bits && call.text == "$bits"
+            if (!packed_bits && call.system_tf == support::SystemTf::bits
                 && call.operands.size() == 1U && !receiver_type) {
                 // A typedef another instance or array element publishes
                 // (`ifc[0].type_t`, IEEE 1800-2017 20.6.2, 23.6) is not a
@@ -19705,7 +19713,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             }
             // A hierarchical reference (`ifc.member`) has its signal's
             // width.
-            if (!packed_bits && call.text == "$bits"
+            if (!packed_bits && call.system_tf == support::SystemTf::bits
                 && call.operands.size() == 1U && !receiver_type) {
                 const bool missed = std::exchange(
                     hierarchical_reference_missed_, false);
@@ -19806,12 +19814,12 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                         const auto& range = packed[packed_index];
                         const auto low = std::min(range.left, range.right);
                         const auto high = std::max(range.left, range.right);
-                        const std::int64_t answer = call.text == "$left"
+                        const std::int64_t answer = call.system_tf == support::SystemTf::left
                             ? range.left
-                            : call.text == "$right" ? range.right
-                            : call.text == "$low"   ? low
-                            : call.text == "$high"  ? high
-                            : call.text == "$increment"
+                            : call.system_tf == support::SystemTf::right ? range.right
+                            : call.system_tf == support::SystemTf::low   ? low
+                            : call.system_tf == support::SystemTf::high  ? high
+                            : call.system_tf == support::SystemTf::increment
                             ? (range.left >= range.right ? 1 : -1)
                             : high - low + 1;
                         return constant_answer(answer);
@@ -19836,10 +19844,10 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             const bool runtime_dimension
                 = call.operands.size() == 1U
                 || (call.operands.size() == 2U
-                    && (call.text == "$left" || call.text == "$right"
-                        || call.text == "$low" || call.text == "$high"
-                        || call.text == "$increment"
-                        || call.text == "$size")
+                    && (call.system_tf == support::SystemTf::left || call.system_tf == support::SystemTf::right
+                        || call.system_tf == support::SystemTf::low || call.system_tf == support::SystemTf::high
+                        || call.system_tf == support::SystemTf::increment
+                        || call.system_tf == support::SystemTf::size)
                     && hir_constant_integer(call.operands.back())
                         == std::optional<std::int64_t> { 1 });
             if (!runtime_dimension) {
@@ -19853,10 +19861,10 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             }
             if (receiver_type && !receiver_type->fixed
                 && !receiver_type->associative
-                && (call.text == "$left" || call.text == "$low"
-                    || call.text == "$increment")) {
+                && (call.system_tf == support::SystemTf::left || call.system_tf == support::SystemTf::low
+                    || call.system_tf == support::SystemTf::increment)) {
                 const auto destination = load_constant(unsigned_value(
-                        call.text == "$increment"
+                        call.system_tf == support::SystemTf::increment
                             ? std::numeric_limits<std::uint32_t>::max()
                             : 0U,
                         32U), frontend::ValueDomain::Bit2);
@@ -19873,11 +19881,11 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             if (!receiver_type
                 && hir_expression_is_string(
                     call.operands.front(), hir_process_scope_)
-                && call.text != "$bits") {
-                if (call.text == "$left" || call.text == "$low") {
+                && call.system_tf != support::SystemTf::bits) {
+                if (call.system_tf == support::SystemTf::left || call.system_tf == support::SystemTf::low) {
                     return constant_answer(0);
                 }
-                if (call.text == "$increment") {
+                if (call.system_tf == support::SystemTf::increment) {
                     return constant_answer(-1);
                 }
                 const auto text = lower_hir_string_expression(
@@ -19889,7 +19897,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                     32U, frontend::ValueDomain::Integer);
                 process_.operations.emplace_back(StringLength {
                     length, *text });
-                if (call.text != "$size") {
+                if (call.system_tf != support::SystemTf::size) {
                     const auto one = load_constant(unsigned_value(1U, 32U),
                         frontend::ValueDomain::Integer);
                     const auto last = allocate_register(
@@ -19913,21 +19921,21 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                     == semantic::sv::ExpressionKind::call
                 && receiver_expression->systemverilog->text == "?:";
             if (!receiver_type && !conditional_receiver
-                && (call.text == "$left" || call.text == "$right"
-                    || call.text == "$low" || call.text == "$high"
-                    || call.text == "$increment" || call.text == "$size")) {
+                && (call.system_tf == support::SystemTf::left || call.system_tf == support::SystemTf::right
+                    || call.system_tf == support::SystemTf::low || call.system_tf == support::SystemTf::high
+                    || call.system_tf == support::SystemTf::increment || call.system_tf == support::SystemTf::size)) {
                 if (const auto range = hir_expression_range(
                         call.operands.front(), hir_process_scope_);
                     range && hir_systemverilog_packed_shape(
                                  call.operands.front()).size() <= 1U) {
                     const auto low = std::min(range->left, range->right);
                     const auto high = std::max(range->left, range->right);
-                    return constant_answer(call.text == "$left"
+                    return constant_answer(call.system_tf == support::SystemTf::left
                             ? range->left
-                            : call.text == "$right" ? range->right
-                            : call.text == "$low"   ? low
-                            : call.text == "$high"  ? high
-                            : call.text == "$increment"
+                            : call.system_tf == support::SystemTf::right ? range->right
+                            : call.system_tf == support::SystemTf::low   ? low
+                            : call.system_tf == support::SystemTf::high  ? high
+                            : call.system_tf == support::SystemTf::increment
                             ? (range->left >= range->right ? 1 : -1)
                             : high - low + 1);
                 }
@@ -19936,15 +19944,15 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             // dynamic array of fixed arrays) has its static first dimension.
             if (receiver_type && receiver_type->fixed
                 && !receiver_type->dimensions.empty()
-                && call.text != "$bits") {
+                && call.system_tf != support::SystemTf::bits) {
                 const auto [left, right] = receiver_type->dimensions.front();
                 const std::int64_t low = std::min(left, right);
                 const std::int64_t high = std::max(left, right);
-                return constant_answer(call.text == "$left" ? left
-                        : call.text == "$right" ? right
-                        : call.text == "$low"   ? low
-                        : call.text == "$high"  ? high
-                        : call.text == "$increment"
+                return constant_answer(call.system_tf == support::SystemTf::left ? left
+                        : call.system_tf == support::SystemTf::right ? right
+                        : call.system_tf == support::SystemTf::low   ? low
+                        : call.system_tf == support::SystemTf::high  ? high
+                        : call.system_tf == support::SystemTf::increment
                         ? (left >= right ? 1 : -1)
                         : high - low + 1);
             }
@@ -19958,7 +19966,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 && receiver_expression->systemverilog->marker
                     == support::ExpressionMarker::sv_container_property
                 && receiver_expression->systemverilog->operands.size() == 1U
-                && call.text != "$bits") {
+                && call.system_tf != support::SystemTf::bits) {
                 const std::string_view identity {
                     receiver_expression->systemverilog->marker_argument
                 };
@@ -19974,10 +19982,10 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                             == semantic::sv::TypeForm::dynamic_array)
                     && !hir_class_value_container_type(identity);
                 if (sized) {
-                    if (call.text == "$left" || call.text == "$low") {
+                    if (call.system_tf == support::SystemTf::left || call.system_tf == support::SystemTf::low) {
                         return constant_answer(0);
                     }
-                    if (call.text == "$increment") {
+                    if (call.system_tf == support::SystemTf::increment) {
                         return constant_answer(-1);
                     }
                     const auto receiver = lower_hir_expression(
@@ -19998,7 +20006,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                         32U,
                         false, { }, { }, ClassMethodHook::container_size,
                     });
-                    if (call.text != "$size") {
+                    if (call.system_tf != support::SystemTf::size) {
                         const auto one = load_constant(
                             unsigned_value(1U, 32U),
                             frontend::ValueDomain::Integer);
@@ -20016,7 +20024,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 }
             }
             // A string has the bits of its characters now (20.6.2, 6.16).
-            if (call.text == "$bits" && !receiver_type
+            if (call.system_tf == support::SystemTf::bits && !receiver_type
                 && hir_expression_is_string(
                     call.operands.front(), hir_process_scope_)) {
                 const auto text = lower_hir_string_expression(
@@ -20043,7 +20051,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 call.operands.front());
             // A fixed-size unpacked array has a fixed size: its element's
             // bits times its element count (20.6.2).
-            if (container && container->type.fixed && call.text == "$bits"
+            if (container && container->type.fixed && call.system_tf == support::SystemTf::bits
                 && !container->type.dimensions.empty()
                 && container->type.element_kind
                     == ContainerElementKind::Packed) {
@@ -20064,7 +20072,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 return invalid_integral_result();
             }
             if (container->type.associative
-                && call.text != "$size" && call.text != "$bits") {
+                && call.system_tf != support::SystemTf::size && call.system_tf != support::SystemTf::bits) {
                 report(
                     "FSIM-ELAB-SVQUERY-003",
                     call.text
@@ -20074,10 +20082,10 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             }
             const auto destination = allocate_register(
                 32U, frontend::ValueDomain::Bit2);
-            if (call.text == "$left" || call.text == "$low") {
+            if (call.system_tf == support::SystemTf::left || call.system_tf == support::SystemTf::low) {
                 process_.operations.emplace_back(LoadConstant {
                     destination, unsigned_value(0U, 32U) });
-            } else if (call.text == "$increment") {
+            } else if (call.system_tf == support::SystemTf::increment) {
                 process_.operations.emplace_back(LoadConstant {
                     destination,
                     unsigned_value(
@@ -20088,11 +20096,11 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                     32U, frontend::ValueDomain::Bit2);
                 process_.operations.emplace_back(ContainerSize {
                     size, container->value });
-                if (call.text == "$size") {
+                if (call.system_tf == support::SystemTf::size) {
                     process_.operations.emplace_back(CopyRegister {
                         destination, size });
-                } else if (call.text == "$right"
-                    || call.text == "$high") {
+                } else if (call.system_tf == support::SystemTf::right
+                    || call.system_tf == support::SystemTf::high) {
                     const auto one = load_constant(
                         unsigned_value(1U, 32U), frontend::ValueDomain::Bit2);
                     process_.operations.emplace_back(Binary {
@@ -20101,7 +20109,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                         size,
                         one,
                     });
-                } else if (call.text == "$bits") {
+                } else if (call.system_tf == support::SystemTf::bits) {
                     const auto element_bits
                         = hir_systemverilog_container_bit_width(
                             container->type);
@@ -20381,7 +20389,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
     } else if (const auto folded = expression->systemverilog != nullptr
                    && expression->systemverilog->kind
                        == semantic::sv::ExpressionKind::call
-                   && expression->systemverilog->text == "$clog2"
+                   && expression->systemverilog->system_tf == support::SystemTf::clog2
                    && expression->systemverilog->operands.size() == 1U
                ? hir_constant_integer(expression_id)
                : std::nullopt) {
@@ -20395,7 +20403,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
     } else if (expression->systemverilog != nullptr
         && expression->systemverilog->kind
             == semantic::sv::ExpressionKind::call
-        && expression->systemverilog->text == "$clog2"
+        && expression->systemverilog->system_tf == support::SystemTf::clog2
         && expression->systemverilog->operands.size() == 1U
         && !hir_constant_integer(expression_id)) {
         // $clog2 of a run-time value (IEEE 1800-2017 20.8.1): the bit length
@@ -20451,14 +20459,14 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
     } else if (expression->systemverilog != nullptr
         && expression->systemverilog->kind
             == semantic::sv::ExpressionKind::call
-        && (expression->systemverilog->text == "$onehot"
-            || expression->systemverilog->text == "$onehot0"
-            || expression->systemverilog->text == "$countones"
-            || expression->systemverilog->text == "$countbits")) {
+        && (expression->systemverilog->system_tf == support::SystemTf::onehot
+            || expression->systemverilog->system_tf == support::SystemTf::onehot0
+            || expression->systemverilog->system_tf == support::SystemTf::countones
+            || expression->systemverilog->system_tf == support::SystemTf::countbits)) {
         const auto& call = *expression->systemverilog;
-        const bool count_bits = call.text == "$countbits";
-        const bool one_hot = call.text == "$onehot"
-            || call.text == "$onehot0";
+        const bool count_bits = call.system_tf == support::SystemTf::countbits;
+        const bool one_hot = call.system_tf == support::SystemTf::onehot
+            || call.system_tf == support::SystemTf::onehot0;
         if (call.operands.empty()
             || (!count_bits && call.operands.size() != 1U)
             || (count_bits && call.operands.size() < 2U)) {
@@ -20479,7 +20487,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             const auto destination = allocate_register(
                 1U, frontend::ValueDomain::Bit2);
             process_.operations.emplace_back(Reduction {
-                call.text == "$onehot"
+                call.system_tf == support::SystemTf::onehot
                     ? ReductionOperator::one_hot
                     : ReductionOperator::one_hot_or_zero,
                 destination,
@@ -20490,7 +20498,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                       resize_register(destination, expected_width, false)
                   }
                 : std::optional { destination };
-        } else if (call.text == "$countones") {
+        } else if (call.system_tf == support::SystemTf::countones) {
             const auto destination = allocate_register(
                 32U, frontend::ValueDomain::Bit2);
             process_.operations.emplace_back(CountOnes {
@@ -20623,8 +20631,8 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
     } else if (expression->systemverilog != nullptr
         && expression->systemverilog->kind
             == semantic::sv::ExpressionKind::call
-        && (expression->systemverilog->text == "$signed"
-            || expression->systemverilog->text == "$unsigned")
+        && (expression->systemverilog->system_tf == support::SystemTf::signed_conversion
+            || expression->systemverilog->system_tf == support::SystemTf::unsigned_conversion)
         && expression->systemverilog->operands.size() == 1U) {
         emit_debug_point(DebugPointKind::call,
             hir_source_span(expression->systemverilog->source));
@@ -20638,12 +20646,12 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             result = resize_register(
                 *result,
                 expected_width,
-                expression->systemverilog->text == "$signed");
+                expression->systemverilog->system_tf == support::SystemTf::signed_conversion);
         }
     } else if (expression->systemverilog != nullptr
         && expression->systemverilog->kind
             == semantic::sv::ExpressionKind::call
-        && expression->systemverilog->text == "$system") {
+        && expression->systemverilog->system_tf == support::SystemTf::system) {
         const auto& call = *expression->systemverilog;
         const auto named = std::ranges::any_of(
             call.argument_names,
@@ -20720,7 +20728,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
     } else if (expression->systemverilog != nullptr
         && expression->systemverilog->kind
             == semantic::sv::ExpressionKind::call
-        && expression->systemverilog->text == "$q_full") {
+        && expression->systemverilog->system_tf == support::SystemTf::q_full) {
         const auto& call = *expression->systemverilog;
         const bool named = std::ranges::any_of(
             call.argument_names,
@@ -20771,7 +20779,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
     } else if (expression->systemverilog != nullptr
         && expression->systemverilog->kind
             == semantic::sv::ExpressionKind::call
-        && expression->systemverilog->text == "$isunknown") {
+        && expression->systemverilog->system_tf == support::SystemTf::isunknown) {
         const auto& call = *expression->systemverilog;
         if (language_ != frontend::Language::SystemVerilog2017
             || call.operands.size() != 1U) {
@@ -21234,8 +21242,8 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
     } else if (expression->systemverilog != nullptr
         && expression->systemverilog->kind
             == semantic::sv::ExpressionKind::call
-        && (expression->systemverilog->text == "$reset_count"
-            || expression->systemverilog->text == "$reset_value")) {
+        && (expression->systemverilog->system_tf == support::SystemTf::reset_count
+            || expression->systemverilog->system_tf == support::SystemTf::reset_value)) {
         // The reset count and the value the last $reset passed (IEEE
         // 1800-2023 D.8); the host keeps both for the running design.
         const auto& call = *expression->systemverilog;
@@ -21250,23 +21258,23 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             32U, frontend::ValueDomain::Bit2);
         process_.operations.emplace_back(PlusArgSelect {
             destination, allocate_string_register(), std::nullopt, false,
-            static_cast<std::uint8_t>(call.text == "$reset_count" ? 1U : 2U) });
+            static_cast<std::uint8_t>(call.system_tf == support::SystemTf::reset_count ? 1U : 2U) });
         result = destination;
     } else if (expression->systemverilog != nullptr
         && expression->systemverilog->kind
             == semantic::sv::ExpressionKind::call
-        && (expression->systemverilog->text == "$urandom"
-            || (expression->systemverilog->text == "$random"
+        && (expression->systemverilog->system_tf == support::SystemTf::urandom
+            || (expression->systemverilog->system_tf == support::SystemTf::random
                 && expression->systemverilog->operands.size() != 1U)
-            || expression->systemverilog->text == "$urandom_range")) {
+            || expression->systemverilog->system_tf == support::SystemTf::urandom_range)) {
         const auto& call = *expression->systemverilog;
-        const auto range = call.text == "$urandom_range";
+        const auto range = call.system_tf == support::SystemTf::urandom_range;
         const auto valid_arguments = range
             ? !call.operands.empty() && call.operands.size() <= 2U
             : call.operands.empty()
-                || (call.text == "$urandom" && call.operands.size() == 1U);
+                || (call.system_tf == support::SystemTf::urandom && call.operands.size() == 1U);
         if (language_ == frontend::Language::Vhdl2008
-            || (call.text != "$random"
+            || (call.system_tf != support::SystemTf::random
                 && language_ != frontend::Language::SystemVerilog2017)
             || !valid_arguments) {
             report(
@@ -21274,7 +21282,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 range
                     ? "$urandom_range requires one maximum and an optional "
                       "minimum argument in SystemVerilog"
-                    : call.text == "$urandom"
+                    : call.system_tf == support::SystemTf::urandom
                     ? "$urandom requires SystemVerilog and an optional seed"
                     : call.text + " requires no arguments",
                 hir_source_span(call.source));
@@ -21325,7 +21333,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             32U, frontend::ValueDomain::Bit2);
         const auto random_kind = range
             ? RandomKind::urandom_range
-            : call.text == "$urandom"
+            : call.system_tf == support::SystemTf::urandom
             ? RandomKind::urandom
             : RandomKind::random;
         process_.operations.emplace_back(RandomValue {
@@ -23850,16 +23858,16 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
     } else if (expression->systemverilog != nullptr
         && expression->systemverilog->kind == semantic::sv::ExpressionKind::call
         && (systemverilog_random_distribution_kind(
-                expression->systemverilog->text)
-            || (expression->systemverilog->text == "$random"
+                expression->systemverilog->system_tf)
+            || (expression->systemverilog->system_tf == support::SystemTf::random
                 && expression->systemverilog->operands.size() == 1U))) {
         const auto& call = *expression->systemverilog;
         // `$random(seed)` is rtl_dist_uniform(seed, LONG_MIN, LONG_MAX)
         // (IEEE 1364-2005 17.9.1, IEEE 1800-2017 Annex N).
-        const auto seeded_random = call.text == "$random";
+        const auto seeded_random = call.system_tf == support::SystemTf::random;
         const auto kind = seeded_random
             ? runtime::simir::RandomDistributionKind::uniform
-            : *systemverilog_random_distribution_kind(call.text);
+            : *systemverilog_random_distribution_kind(call.system_tf);
         const auto three_arguments
             = kind == runtime::simir::RandomDistributionKind::uniform
             || kind == runtime::simir::RandomDistributionKind::normal
@@ -32175,7 +32183,7 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
         return destination;
     }
     if (source.kind == semantic::sv::ExpressionKind::call
-        && source.text == "$sformatf") {
+        && source.system_tf == support::SystemTf::sformatf) {
         return lower_hir_string_format_expression(expression_id);
     }
     if (source.kind == semantic::sv::ExpressionKind::call
@@ -32236,7 +32244,7 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
         return method.string_destination;
     }
     if (source.kind == semantic::sv::ExpressionKind::call
-        && source.text == "$typename") {
+        && source.system_tf == support::SystemTf::typename_query) {
         if (language_ != frontend::Language::SystemVerilog2017
             || source.operands.size() != 1U) {
             report(

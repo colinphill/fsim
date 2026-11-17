@@ -6966,6 +6966,22 @@ if(FSIM_WITH_LLVM)
     TIMEOUT 600)
 endif()
 
+# $monitor and $strobe of signals the v4 kernel holds, on every kernel tier,
+# printing what the interpreter prints with the signals kept kernel slots.
+if(FSIM_WITH_LLVM)
+  add_test(
+    NAME fsim.application.static-kernel-monitor
+    COMMAND "${CMAKE_COMMAND}"
+      "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+      "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/systemverilog/kernel_monitor"
+      -P
+      "${PROJECT_SOURCE_DIR}/tests/fixtures/systemverilog/kernel_monitor/run_kernel_monitor.cmake"
+  )
+  set_tests_properties(fsim.application.static-kernel-monitor PROPERTIES
+    LABELS "application;systemverilog;static-kernel;llvm;monitor;positive"
+    TIMEOUT 600)
+endif()
+
 # real, shortreal, realtime and time variables held by the v4 kernel on
 # every kernel tier, printing what the interpreter prints.
 if(FSIM_WITH_LLVM)

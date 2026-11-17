@@ -15,7 +15,8 @@ endmodule
 module kernel_real;
   real x = 1.0, y, acc;
   real p_out, q_out;
-  shortreal s = 0.5, p_short, q_short;
+  real invalid_quotient, invalid_difference, invalid_product;
+  shortreal s = 0.5, p_short, q_short, invalid_short;
   realtime rt;
   time t, p_time, q_time;
   int events;
@@ -57,5 +58,18 @@ module kernel_real;
     #2 acc = acc;
     #2 $display("%f %f %f %f %0t", acc, p_out, q_out, p_short, t);
     $finish;
+  end
+
+  // Invalid operations of constants and of variables give one NaN, the one
+  // the reference's hardware gives (LLVM folds constants to a NaN of its
+  // own sign). Time 25 is a step in which nothing else prints.
+  initial #25 begin
+    invalid_quotient = 0.0 / 0.0;
+    invalid_difference = acc - acc;
+    invalid_product = 0.0 * (acc + 1.0e308 * 10.0);
+    invalid_short = shortreal'(0.0) / shortreal'(0.0);
+    $display("nan %h %h %h %h", $realtobits(invalid_quotient),
+        $realtobits(invalid_difference), $realtobits(invalid_product),
+        $shortrealtobits(invalid_short));
   end
 endmodule

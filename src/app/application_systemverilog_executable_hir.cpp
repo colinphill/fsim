@@ -1991,6 +1991,9 @@ namespace {
                 ? systemverilog_hir_detail::systemverilog_call_kind(
                       input.task_name)
                 : sv::CallKind::user;
+            output.task_system_tf = output.task_call_kind == sv::CallKind::system
+                ? support::system_tf_named(input.task_name)
+                : support::SystemTf::none;
             const auto implicit_class_receiver
                 = bind_implicit_class_task_call(
                     output, input, child_scope, statement_origin);

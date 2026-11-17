@@ -2696,7 +2696,6 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         [](const Operation& operation) {
             return static_kernel_host_signal(operation).has_value()
                 || static_kernel_history_query(operation).has_value()
-                || operation_holds<MonitorInstall>(operation)
                 || operation_holds<SvaOperation>(operation)
                 || operation_holds<EventArrayElement>(operation);
         }
@@ -2788,18 +2787,6 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 if (sva->wake_signal && *sva->wake_signal < signal_count) {
                     touched.push_back(*sva->wake_signal);
                     deposited_by_process[index].push_back(*sva->wake_signal);
-                }
-            }
-
-            // A member's $monitor or $strobe: the host's monitor watches
-            // its signals through the host commit path and reads them when
-            // it prints (IEEE 1800-2023 21.2.2, 21.2.3).
-            if (const auto* monitor = operation_get_if<MonitorInstall>(&operation)) {
-                for (const auto& value : monitor->values) {
-                    if (value.kind == MonitorValueKind::signal
-                        && value.signal < signal_count) {
-                        touched.push_back(value.signal);
-                    }
                 }
             }
         });

@@ -1456,33 +1456,33 @@ struct RealMathFunction {
 };
 
 [[nodiscard]] std::optional<RealMathFunction> real_math_function(
-    const std::string_view name)
+    const support::SystemTf routine)
 {
-    using Entry = std::pair<std::string_view, RealMathFunction>;
+    using Entry = std::pair<support::SystemTf, RealMathFunction>;
     static const std::array functions {
-        Entry { "$ln", { 1U, [](double x, double) { return std::log(x); } } },
-        Entry { "$log10", { 1U, [](double x, double) { return std::log10(x); } } },
-        Entry { "$exp", { 1U, [](double x, double) { return std::exp(x); } } },
-        Entry { "$sqrt", { 1U, [](double x, double) { return std::sqrt(x); } } },
-        Entry { "$pow", { 2U, [](double x, double y) { return std::pow(x, y); } } },
-        Entry { "$floor", { 1U, [](double x, double) { return std::floor(x); } } },
-        Entry { "$ceil", { 1U, [](double x, double) { return std::ceil(x); } } },
-        Entry { "$sin", { 1U, [](double x, double) { return std::sin(x); } } },
-        Entry { "$cos", { 1U, [](double x, double) { return std::cos(x); } } },
-        Entry { "$tan", { 1U, [](double x, double) { return std::tan(x); } } },
-        Entry { "$asin", { 1U, [](double x, double) { return std::asin(x); } } },
-        Entry { "$acos", { 1U, [](double x, double) { return std::acos(x); } } },
-        Entry { "$atan", { 1U, [](double x, double) { return std::atan(x); } } },
-        Entry { "$atan2", { 2U, [](double y, double x) { return std::atan2(y, x); } } },
-        Entry { "$hypot", { 2U, [](double x, double y) { return std::hypot(x, y); } } },
-        Entry { "$sinh", { 1U, [](double x, double) { return std::sinh(x); } } },
-        Entry { "$cosh", { 1U, [](double x, double) { return std::cosh(x); } } },
-        Entry { "$tanh", { 1U, [](double x, double) { return std::tanh(x); } } },
-        Entry { "$asinh", { 1U, [](double x, double) { return std::asinh(x); } } },
-        Entry { "$acosh", { 1U, [](double x, double) { return std::acosh(x); } } },
-        Entry { "$atanh", { 1U, [](double x, double) { return std::atanh(x); } } },
+        Entry { support::SystemTf::ln, { 1U, [](double x, double) { return std::log(x); } } },
+        Entry { support::SystemTf::log10, { 1U, [](double x, double) { return std::log10(x); } } },
+        Entry { support::SystemTf::exp, { 1U, [](double x, double) { return std::exp(x); } } },
+        Entry { support::SystemTf::sqrt, { 1U, [](double x, double) { return std::sqrt(x); } } },
+        Entry { support::SystemTf::pow, { 2U, [](double x, double y) { return std::pow(x, y); } } },
+        Entry { support::SystemTf::floor, { 1U, [](double x, double) { return std::floor(x); } } },
+        Entry { support::SystemTf::ceil, { 1U, [](double x, double) { return std::ceil(x); } } },
+        Entry { support::SystemTf::sin, { 1U, [](double x, double) { return std::sin(x); } } },
+        Entry { support::SystemTf::cos, { 1U, [](double x, double) { return std::cos(x); } } },
+        Entry { support::SystemTf::tan, { 1U, [](double x, double) { return std::tan(x); } } },
+        Entry { support::SystemTf::asin, { 1U, [](double x, double) { return std::asin(x); } } },
+        Entry { support::SystemTf::acos, { 1U, [](double x, double) { return std::acos(x); } } },
+        Entry { support::SystemTf::atan, { 1U, [](double x, double) { return std::atan(x); } } },
+        Entry { support::SystemTf::atan2, { 2U, [](double y, double x) { return std::atan2(y, x); } } },
+        Entry { support::SystemTf::hypot, { 2U, [](double x, double y) { return std::hypot(x, y); } } },
+        Entry { support::SystemTf::sinh, { 1U, [](double x, double) { return std::sinh(x); } } },
+        Entry { support::SystemTf::cosh, { 1U, [](double x, double) { return std::cosh(x); } } },
+        Entry { support::SystemTf::tanh, { 1U, [](double x, double) { return std::tanh(x); } } },
+        Entry { support::SystemTf::asinh, { 1U, [](double x, double) { return std::asinh(x); } } },
+        Entry { support::SystemTf::acosh, { 1U, [](double x, double) { return std::acosh(x); } } },
+        Entry { support::SystemTf::atanh, { 1U, [](double x, double) { return std::atanh(x); } } },
     };
-    const auto found = std::ranges::find(functions, name, &Entry::first);
+    const auto found = std::ranges::find(functions, routine, &Entry::first);
     return found == functions.end() ? std::nullopt
                                     : std::optional { found->second };
 }
@@ -2306,8 +2306,8 @@ private:
                     : std::nullopt);
         }
         if (record.kind == ExpressionKind::call
-            && (record.text == "$signed"
-                || record.text == "$unsigned")
+            && (record.system_tf == support::SystemTf::signed_conversion
+                || record.system_tf == support::SystemTf::unsigned_conversion)
             && record.operands.size() == 1U) {
             return finish(expression_width(
                 record.operands.front(), visiting));
@@ -4313,10 +4313,10 @@ private:
             return make_known(static_cast<std::uint64_t>(value), 32U, true,
                 false, frontend::ValueDomain::Integer);
         };
-        if (record.text == "$dimensions") {
+        if (record.system_tf == support::SystemTf::dimensions) {
             return known(static_cast<std::int64_t>(dimensions.ranges.size()));
         }
-        if (record.text == "$unpacked_dimensions") {
+        if (record.system_tf == support::SystemTf::unpacked_dimensions) {
             return known(static_cast<std::int64_t>(dimensions.unpacked));
         }
         std::uint64_t selected { 1U };
@@ -4335,23 +4335,23 @@ private:
             return std::nullopt;
         }
         const auto [left, right] = dimensions.ranges[selected - 1U];
-        if (record.text == "$size") {
+        if (record.system_tf == support::SystemTf::size) {
             return known(static_cast<std::int64_t>(
                 support::index_distance(left, right) + 1U));
         }
-        if (record.text == "$left") {
+        if (record.system_tf == support::SystemTf::left) {
             return known(left);
         }
-        if (record.text == "$right") {
+        if (record.system_tf == support::SystemTf::right) {
             return known(right);
         }
-        if (record.text == "$low") {
+        if (record.system_tf == support::SystemTf::low) {
             return known(std::min(left, right));
         }
-        if (record.text == "$high") {
+        if (record.system_tf == support::SystemTf::high) {
             return known(std::max(left, right));
         }
-        if (record.text == "$increment") {
+        if (record.system_tf == support::SystemTf::increment) {
             return known(left >= right ? 1 : -1);
         }
         return std::nullopt;
@@ -4364,7 +4364,7 @@ private:
             return std::nullopt;
         }
         // `$bits(T)` of a type parameter takes its actual type (20.6.2).
-        if (record.text == "$bits" && record.operands.size() == 1U) {
+        if (record.system_tf == support::SystemTf::bits && record.operands.size() == 1U) {
             const auto view = specialization_.find_expression(
                 record.operands.front());
             const auto declaration_id = view && view->systemverilog != nullptr
@@ -4450,14 +4450,14 @@ private:
         // of the value produced while evaluating it. This matters for enum
         // literal declarations whose initializer has a different width from
         // the literal's enum subtype (IEEE 1800-2017 20.6.2).
-        if (record.text == "$bits" && record.operands.size() == 1U) {
+        if (record.system_tf == support::SystemTf::bits && record.operands.size() == 1U) {
             if (const auto width = expression_width(record.operands.front());
                 width && *width != 0U) {
                 return make_known(*width, 32U, true, false,
                     frontend::ValueDomain::Integer);
             }
         }
-        if (record.text != "$bits") {
+        if (record.system_tf != support::SystemTf::bits) {
             if (const auto dimensions
                 = array_query_dimensions(record.operands.front())) {
                 return evaluate_array_query(record, *dimensions);
@@ -4487,21 +4487,21 @@ private:
                 && operand->packed_range->right
             ? *operand->packed_range->right : 0;
         std::int64_t result { };
-        if (record.text == "$bits" || record.text == "$size") {
+        if (record.system_tf == support::SystemTf::bits || record.system_tf == support::SystemTf::size) {
             result = operand->width;
-        } else if (record.text == "$left") {
+        } else if (record.system_tf == support::SystemTf::left) {
             result = left;
-        } else if (record.text == "$right") {
+        } else if (record.system_tf == support::SystemTf::right) {
             result = right;
-        } else if (record.text == "$low") {
+        } else if (record.system_tf == support::SystemTf::low) {
             result = std::min(left, right);
-        } else if (record.text == "$high") {
+        } else if (record.system_tf == support::SystemTf::high) {
             result = std::max(left, right);
-        } else if (record.text == "$increment") {
+        } else if (record.system_tf == support::SystemTf::increment) {
             result = left >= right ? 1 : -1;
-        } else if (record.text == "$dimensions") {
+        } else if (record.system_tf == support::SystemTf::dimensions) {
             result = 1;
-        } else if (record.text == "$unpacked_dimensions") {
+        } else if (record.system_tf == support::SystemTf::unpacked_dimensions) {
             result = 0;
         }
         return make_known(
@@ -4594,11 +4594,11 @@ private:
     [[nodiscard]] std::optional<Value> evaluate_call(
         const semantic::sv::Expression& record)
     {
-        if ((record.text == "$signed" || record.text == "$unsigned")
+        if ((record.system_tf == support::SystemTf::signed_conversion || record.system_tf == support::SystemTf::unsigned_conversion)
             && record.operands.size() == 1U) {
             auto result = evaluate(record.operands.front());
             if (result) {
-                result->signed_value = record.text == "$signed";
+                result->signed_value = record.system_tf == support::SystemTf::signed_conversion;
             }
             return result;
         }
@@ -4807,20 +4807,20 @@ private:
             return convert_hir_systemverilog_constant(
                 std::move(*result), *type, error_, &specialization_);
         }
-        if ((record.text == "$isunknown"
-                || record.text == "$isunbounded")
+        if ((record.system_tf == support::SystemTf::isunknown
+                || record.system_tf == support::SystemTf::isunbounded)
             && record.operands.size() == 1U) {
             const auto operand = evaluate(record.operands.front());
             if (!operand) {
                 return std::nullopt;
             }
-            const auto result = record.text == "$isunknown"
+            const auto result = record.system_tf == support::SystemTf::isunknown
                 ? !operand->known() : operand->unbounded;
             return make_known(
                 result ? 1U : 0U, 1U, false, false,
                 frontend::ValueDomain::Bit2);
         }
-        if (record.text == "$clog2" && record.operands.size() == 1U) {
+        if (record.system_tf == support::SystemTf::clog2 && record.operands.size() == 1U) {
             const auto operand = evaluate(record.operands.front());
             if (!operand || !operand->known()) {
                 if (operand) {
@@ -4841,12 +4841,12 @@ private:
                 result, 32U, true, false,
                 frontend::ValueDomain::Integer);
         }
-        const auto query = record.text == "$bits"
-            || record.text == "$left" || record.text == "$right"
-            || record.text == "$low" || record.text == "$high"
-            || record.text == "$size" || record.text == "$increment"
-            || record.text == "$dimensions"
-            || record.text == "$unpacked_dimensions";
+        const auto query = record.system_tf == support::SystemTf::bits
+            || record.system_tf == support::SystemTf::left || record.system_tf == support::SystemTf::right
+            || record.system_tf == support::SystemTf::low || record.system_tf == support::SystemTf::high
+            || record.system_tf == support::SystemTf::size || record.system_tf == support::SystemTf::increment
+            || record.system_tf == support::SystemTf::dimensions
+            || record.system_tf == support::SystemTf::unpacked_dimensions;
         if (query) {
             return evaluate_query(record);
         }
@@ -4892,31 +4892,31 @@ private:
         // The real conversion functions are constant system functions
         // (IEEE 1800-2023 11.2.1, 20.5): $rtoi truncates, $itor and the
         // bit-pattern conversions follow IEEE 754.
-        if ((record.text == "$rtoi" || record.text == "$itor"
-                || record.text == "$realtobits"
-                || record.text == "$bitstoreal"
-                || record.text == "$shortrealtobits"
-                || record.text == "$bitstoshortreal")
+        if ((record.system_tf == support::SystemTf::rtoi || record.system_tf == support::SystemTf::itor
+                || record.system_tf == support::SystemTf::realtobits
+                || record.system_tf == support::SystemTf::bitstoreal
+                || record.system_tf == support::SystemTf::shortrealtobits
+                || record.system_tf == support::SystemTf::bitstoshortreal)
             && record.operands.size() == 1U) {
             const auto operand = evaluate(record.operands.front());
             if (!operand) {
                 return std::nullopt;
             }
-            if (record.text == "$itor") {
+            if (record.system_tf == support::SystemTf::itor) {
                 const auto real = real_of(*operand);
                 return real ? std::optional<Value> { real_value(
                                   *real, ScalarKind::Real) }
                             : std::nullopt;
             }
-            if (record.text == "$bitstoreal"
-                || record.text == "$bitstoshortreal") {
+            if (record.system_tf == support::SystemTf::bitstoreal
+                || record.system_tf == support::SystemTf::bitstoshortreal) {
                 if (!operand->known()) {
                     error_ = record.text + " argument contains X or Z";
                     return std::nullopt;
                 }
                 const auto bits = static_cast<std::uint64_t>(
                     unsigned_integer(*operand));
-                if (record.text == "$bitstoreal") {
+                if (record.system_tf == support::SystemTf::bitstoreal) {
                     return real_value(std::bit_cast<double>(bits),
                         ScalarKind::Real);
                 }
@@ -4930,7 +4930,7 @@ private:
                 error_ = record.text + " argument is not numeric";
                 return std::nullopt;
             }
-            if (record.text == "$rtoi") {
+            if (record.system_tf == support::SystemTf::rtoi) {
                 // The truncated value is an integer (20.5).
                 if (!std::isfinite(*real)) {
                     return make_known(0U, 32U, true, false,
@@ -4941,7 +4941,7 @@ private:
                         static_cast<std::int64_t>(std::trunc(*real))),
                     32U, true, false, frontend::ValueDomain::Integer);
             }
-            if (record.text == "$realtobits") {
+            if (record.system_tf == support::SystemTf::realtobits) {
                 return make_known(std::bit_cast<std::uint64_t>(*real), 64U,
                     false, false, frontend::ValueDomain::Bit2);
             }
@@ -4951,7 +4951,7 @@ private:
         }
         // The real math functions are constant system functions (IEEE
         // 1800-2017 11.2.1, 20.8.2); their results follow IEEE 754.
-        if (const auto function = real_math_function(record.text);
+        if (const auto function = real_math_function(record.system_tf);
             function && record.operands.size() == function->arguments) {
             std::array<double, 2U> arguments { };
             for (std::size_t index { }; index < function->arguments;
@@ -8866,12 +8866,12 @@ private:
         const semantic::sv::Expression& record,
         const std::optional<std::uint32_t> context)
     {
-        if ((record.text == "$signed" || record.text == "$unsigned")
+        if ((record.system_tf == support::SystemTf::signed_conversion || record.system_tf == support::SystemTf::unsigned_conversion)
             && record.operands.size() == 1U) {
             auto result = compile_expression(
                 record.operands.front(), std::nullopt);
             if (result) {
-                result->shape.signed_value = record.text == "$signed";
+                result->shape.signed_value = record.system_tf == support::SystemTf::signed_conversion;
             }
             return result;
         }
@@ -9765,9 +9765,9 @@ private:
                            == support::SystemVerilogCastTarget::builtin
                        && support::systemverilog_real_family(
                            record.cast_builtin))
-                || real_math_function(record.text).has_value()
-                || record.text == "$itor" || record.text == "$bitstoreal"
-                || record.text == "$bitstoshortreal"
+                || real_math_function(record.system_tf).has_value()
+                || record.system_tf == support::SystemTf::itor || record.system_tf == support::SystemTf::bitstoreal
+                || record.system_tf == support::SystemTf::bitstoshortreal
                 || user_function_returns_real(record);
         default:
             return false;
@@ -10395,7 +10395,7 @@ private:
                         == support::SystemVerilogBuiltinType::time
                     || record.cast_builtin
                         == support::SystemVerilogBuiltinType::chandle))
-            || real_math_function(record.text))) {
+            || real_math_function(record.system_tf))) {
         return true;
     }
     if (record.kind == ExpressionKind::name) {
@@ -10539,15 +10539,15 @@ bool hir_systemverilog_constant_expression(
                     = source.text == "?:"
                     && source.operands.size() == 3U;
                 const bool constant_query
-                    = source.text == "$bits"
-                    || source.text == "$left"
-                    || source.text == "$right"
-                    || source.text == "$low"
-                    || source.text == "$high"
-                    || source.text == "$size"
-                    || source.text == "$increment"
-                    || source.text == "$dimensions"
-                    || source.text == "$unpacked_dimensions";
+                    = source.system_tf == support::SystemTf::bits
+                    || source.system_tf == support::SystemTf::left
+                    || source.system_tf == support::SystemTf::right
+                    || source.system_tf == support::SystemTf::low
+                    || source.system_tf == support::SystemTf::high
+                    || source.system_tf == support::SystemTf::size
+                    || source.system_tf == support::SystemTf::increment
+                    || source.system_tf == support::SystemTf::dimensions
+                    || source.system_tf == support::SystemTf::unpacked_dimensions;
                 const bool constant_function
                     = source.referenced_name
                     && source.referenced_name->selected
@@ -10563,9 +10563,9 @@ bool hir_systemverilog_constant_expression(
                        }();
                 result = constant_query
                     || ((sized_type_cast || expression_size_cast
-                            || conditional || source.text == "$clog2"
-                            || source.text == "$isunknown"
-                            || source.text == "$isunbounded"
+                            || conditional || source.system_tf == support::SystemTf::clog2
+                            || source.system_tf == support::SystemTf::isunknown
+                            || source.system_tf == support::SystemTf::isunbounded
                             || source.text == "inside"
                             || constant_function)
                         && call_arguments_are_valid);

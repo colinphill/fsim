@@ -115,12 +115,14 @@ namespace {
 }
 
     [[nodiscard]] bool systemverilog_integer_query_call(
-        const std::string_view name) noexcept
+        const support::SystemTf routine) noexcept
     {
-        return name == "$left" || name == "$right" || name == "$low"
-            || name == "$high" || name == "$increment" || name == "$size"
-            || name == "$bits" || name == "$dimensions"
-            || name == "$unpacked_dimensions";
+        using Routine = support::SystemTf;
+        return routine == Routine::left || routine == Routine::right
+            || routine == Routine::low || routine == Routine::high
+            || routine == Routine::increment || routine == Routine::size
+            || routine == Routine::bits || routine == Routine::dimensions
+            || routine == Routine::unpacked_dimensions;
     }
 
     // The type a VHDL subtype chain denotes, through resolved subtypes and
@@ -2718,9 +2720,9 @@ std::optional<std::int64_t> Lowerer::hir_constant_integer(
             // Array queries of a fixed shape are constants (20.6, 20.7).
             if (source.kind == semantic::sv::ExpressionKind::call
                 && !source.operands.empty()
-                && (source.text == "$bits" || source.text == "$size"
-                    || source.text == "$left" || source.text == "$right"
-                    || source.text == "$low" || source.text == "$high")) {
+                && (source.system_tf == support::SystemTf::bits || source.system_tf == support::SystemTf::size
+                    || source.system_tf == support::SystemTf::left || source.system_tf == support::SystemTf::right
+                    || source.system_tf == support::SystemTf::low || source.system_tf == support::SystemTf::high)) {
                 if (const auto query
                     = hir_systemverilog_container_query(candidate)) {
                     return finish(query);
@@ -2749,7 +2751,7 @@ std::optional<std::int64_t> Lowerer::hir_constant_integer(
                                     ->packed_range))) {
                     return finish(std::nullopt);
                 }
-                if (source.text == "$bits" && source.operands.size() == 1U) {
+                if (source.system_tf == support::SystemTf::bits && source.operands.size() == 1U) {
                     const auto width = hir_expression_width(
                         receiver, hir_process_scope_);
                     return finish(width && *width != 0U
@@ -2758,7 +2760,7 @@ std::optional<std::int64_t> Lowerer::hir_constant_integer(
                         ? std::optional { static_cast<std::int64_t>(*width) }
                         : std::nullopt);
                 }
-                if (source.text != "$bits"
+                if (source.system_tf != support::SystemTf::bits
                     && (source.operands.size() == 1U
                         || self(self, source.operands.back())
                             == std::optional<std::int64_t> { 1 })
@@ -2771,11 +2773,11 @@ std::optional<std::int64_t> Lowerer::hir_constant_integer(
                     }
                     const auto low = std::min(range->left, range->right);
                     const auto high = std::max(range->left, range->right);
-                    return finish(source.text == "$size"
+                    return finish(source.system_tf == support::SystemTf::size
                             ? high - low + 1
-                            : source.text == "$left" ? range->left
-                            : source.text == "$right" ? range->right
-                            : source.text == "$low" ? low
+                            : source.system_tf == support::SystemTf::left ? range->left
+                            : source.system_tf == support::SystemTf::right ? range->right
+                            : source.system_tf == support::SystemTf::low ? low
                                                      : high);
                 }
                 return finish(std::nullopt);
@@ -5497,9 +5499,9 @@ bool Lowerer::hir_expression_signed(
         if (expression->systemverilog != nullptr
             && expression->systemverilog->kind
                 == semantic::sv::ExpressionKind::call
-            && (expression->systemverilog->text == "$signed"
-                || expression->systemverilog->text == "$unsigned")) {
-            return expression->systemverilog->text == "$signed";
+            && (expression->systemverilog->system_tf == support::SystemTf::signed_conversion
+                || expression->systemverilog->system_tf == support::SystemTf::unsigned_conversion)) {
+            return expression->systemverilog->system_tf == support::SystemTf::signed_conversion;
         }
         // String compare and icompare return a signed int (6.16.8), atoi,
         // atohex, atooct and atobin an integer (6.16.9).
@@ -5588,7 +5590,7 @@ bool Lowerer::hir_expression_signed(
                             expression->systemverilog->operands.front())
                         || hir_static_container_expression_type(
                             expression->systemverilog->operands.front())))
-                || (expression->systemverilog->text == "$clog2"
+                || (expression->systemverilog->system_tf == support::SystemTf::clog2
                     && expression->systemverilog->operands.size() == 1U))) {
             return true;
         }
@@ -12436,14 +12438,14 @@ Lowerer::hir_systemverilog_container_query(
         return std::nullopt;
     }
     const auto& call = *expression->systemverilog;
-    const bool bound_query = call.text == "$left"
-        || call.text == "$right" || call.text == "$low"
-        || call.text == "$high" || call.text == "$increment";
-    const bool size_query = call.text == "$size";
-    const bool bits_query = call.text == "$bits";
-    const bool dimensions_query = call.text == "$dimensions";
+    const bool bound_query = call.system_tf == support::SystemTf::left
+        || call.system_tf == support::SystemTf::right || call.system_tf == support::SystemTf::low
+        || call.system_tf == support::SystemTf::high || call.system_tf == support::SystemTf::increment;
+    const bool size_query = call.system_tf == support::SystemTf::size;
+    const bool bits_query = call.system_tf == support::SystemTf::bits;
+    const bool dimensions_query = call.system_tf == support::SystemTf::dimensions;
     const bool unpacked_dimensions_query
-        = call.text == "$unpacked_dimensions";
+        = call.system_tf == support::SystemTf::unpacked_dimensions;
     const bool accepts_dimension = bound_query || size_query;
     if (call.kind != semantic::sv::ExpressionKind::call
         || (!accepts_dimension && !bits_query
@@ -12496,19 +12498,19 @@ Lowerer::hir_systemverilog_container_query(
                 return std::nullopt;
             }
             const auto& range = shape->dimensions[index];
-            if (call.text == "$left") {
+            if (call.system_tf == support::SystemTf::left) {
                 return range.left;
             }
-            if (call.text == "$right") {
+            if (call.system_tf == support::SystemTf::right) {
                 return range.right;
             }
-            if (call.text == "$low") {
+            if (call.system_tf == support::SystemTf::low) {
                 return std::min(range.left, range.right);
             }
-            if (call.text == "$high") {
+            if (call.system_tf == support::SystemTf::high) {
                 return std::max(range.left, range.right);
             }
-            if (call.text == "$increment") {
+            if (call.system_tf == support::SystemTf::increment) {
                 return range.descending ? 1 : -1;
             }
             return static_cast<std::int64_t>(
@@ -12701,16 +12703,16 @@ Lowerer::hir_systemverilog_container_query(
                       static_cast<std::int64_t>(extent) + std::int64_t { 1 } }
                 : std::nullopt;
         }
-        if (call.text == "$left") {
+        if (call.system_tf == support::SystemTf::left) {
             return left;
         }
-        if (call.text == "$right") {
+        if (call.system_tf == support::SystemTf::right) {
             return right;
         }
-        if (call.text == "$low") {
+        if (call.system_tf == support::SystemTf::low) {
             return std::min(*left, *right);
         }
-        if (call.text == "$high") {
+        if (call.system_tf == support::SystemTf::high) {
             return std::max(*left, *right);
         }
         return *left >= *right ? 1 : -1;
@@ -12755,16 +12757,16 @@ Lowerer::hir_systemverilog_container_query(
     if (size_query) {
         return static_cast<std::int64_t>(index_distance(left, right)) + 1;
     }
-    if (call.text == "$left") {
+    if (call.system_tf == support::SystemTf::left) {
         return left;
     }
-    if (call.text == "$right") {
+    if (call.system_tf == support::SystemTf::right) {
         return right;
     }
-    if (call.text == "$low") {
+    if (call.system_tf == support::SystemTf::low) {
         return std::min(left, right);
     }
-    if (call.text == "$high") {
+    if (call.system_tf == support::SystemTf::high) {
         return std::max(left, right);
     }
     return left >= right ? 1 : -1;
@@ -13193,7 +13195,7 @@ bool Lowerer::hir_expression_is_string(
             && cast_type->builtin
                 == support::SystemVerilogBuiltinType::string)
             // $typename returns a string (IEEE 1800-2017 20.6.1).
-            || cast->systemverilog->text == "$typename"
+            || cast->systemverilog->system_tf == support::SystemTf::typename_query
             || (cast->systemverilog->text == ".get_randstate"
                 && !cast->systemverilog->operands.empty()
                 && hir_process_handle_expression(
@@ -13715,7 +13717,7 @@ bool Lowerer::hir_expression_is_string(
                 source.operands[2], process_scope);
     }
     if (source.kind == semantic::sv::ExpressionKind::call
-        && source.text == "$sformatf") {
+        && source.system_tf == support::SystemTf::sformatf) {
         return true;
     }
     if (source.kind == semantic::sv::ExpressionKind::class_method_call
@@ -13976,7 +13978,7 @@ bool Lowerer::can_lower_hir_string_expression(
         && source->systemverilog != nullptr
         && source->systemverilog->kind
             == semantic::sv::ExpressionKind::call
-        && source->systemverilog->text == "$typename";
+        && source->systemverilog->system_tf == support::SystemTf::typename_query;
     if (!typename_call
         && !hir_expression_is_string(expression, process_scope)
         && !contextual_string_expression) {
@@ -14077,10 +14079,10 @@ bool Lowerer::can_lower_hir_string_expression(
         return true;
     }
     const auto& call = *source->systemverilog;
-    if (call.text == "$typename") {
+    if (call.system_tf == support::SystemTf::typename_query) {
         return call.operands.size() == 1U;
     }
-    if (call.text == "$sformatf") {
+    if (call.system_tf == support::SystemTf::sformatf) {
         return hir_string_format_expression_status(
                    expression, process_scope)
             == HirStringFormatStatus::valid;
@@ -17938,23 +17940,22 @@ std::optional<frontend::ValueDomain> Lowerer::hir_expression_domain(
             return frontend::ValueDomain::Logic4;
         }
         if (source.kind == semantic::sv::ExpressionKind::call
-            && (source.text == "$isunknown"
-                || source.text == "$onehot"
-                || source.text == "$onehot0"
-                || source.text == "$countones"
-                || source.text == "$countbits")) {
+            && (source.system_tf == support::SystemTf::isunknown
+                || source.system_tf == support::SystemTf::onehot
+                || source.system_tf == support::SystemTf::onehot0
+                || source.system_tf == support::SystemTf::countones
+                || source.system_tf == support::SystemTf::countbits)) {
             return frontend::ValueDomain::Bit2;
         }
         // The array query functions and $bits return integer (IEEE
         // 1800-2017 20.6.2, 20.7).
         if (source.kind == semantic::sv::ExpressionKind::call
-            && systemverilog_integer_query_call(source.text)) {
+            && systemverilog_integer_query_call(source.system_tf)) {
             return frontend::ValueDomain::Logic4;
         }
         if (source.kind == semantic::sv::ExpressionKind::call
-            && systemverilog_sampled_value_call(source.text)) {
-            if (!systemverilog_sampled_value_preserves_signal(
-                    source.text)) {
+            && systemverilog_sampled_value_call(source.system_tf)) {
+            if (!systemverilog_sampled_value_preserves_signal(source.system_tf)) {
                 return frontend::ValueDomain::Bit2;
             }
             return source.operands.empty()
@@ -18024,7 +18025,7 @@ std::optional<frontend::ValueDomain> Lowerer::hir_expression_domain(
             return cast->domain;
         }
         if (source.kind == semantic::sv::ExpressionKind::call
-            && (source.text == "$signed" || source.text == "$unsigned")
+            && (source.system_tf == support::SystemTf::signed_conversion || source.system_tf == support::SystemTf::unsigned_conversion)
             && source.operands.size() == 1U) {
             return hir_expression_domain(
                 source.operands.front(), process_scope);
@@ -18057,13 +18058,13 @@ std::optional<frontend::ValueDomain> Lowerer::hir_expression_domain(
             return frontend::ValueDomain::String;
         }
         if (source.kind == semantic::sv::ExpressionKind::call
-            && (source.text == "$reset_count"
-                || source.text == "$reset_value")) {
+            && (source.system_tf == support::SystemTf::reset_count
+                || source.system_tf == support::SystemTf::reset_value)) {
             return frontend::ValueDomain::Integer;
         }
         if (source.kind == semantic::sv::ExpressionKind::call
-            && (source.text == "$random" || source.text == "$urandom"
-                || source.text == "$urandom_range")) {
+            && (source.system_tf == support::SystemTf::random || source.system_tf == support::SystemTf::urandom
+                || source.system_tf == support::SystemTf::urandom_range)) {
             return frontend::ValueDomain::Bit2;
         }
         // atoreal's real value is carried as the 64-bit pattern of its
@@ -22394,21 +22395,20 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
             return 1U;
         }
         if (source.kind == semantic::sv::ExpressionKind::call
-            && (source.text == "$isunknown"
-                || source.text == "$onehot"
-                || source.text == "$onehot0")) {
+            && (source.system_tf == support::SystemTf::isunknown
+                || source.system_tf == support::SystemTf::onehot
+                || source.system_tf == support::SystemTf::onehot0)) {
             return 1U;
         }
         if (source.kind == semantic::sv::ExpressionKind::call
-            && (source.text == "$countones"
-                || source.text == "$countbits"
-                || systemverilog_integer_query_call(source.text))) {
+            && (source.system_tf == support::SystemTf::countones
+                || source.system_tf == support::SystemTf::countbits
+                || systemverilog_integer_query_call(source.system_tf))) {
             return 32U;
         }
         if (source.kind == semantic::sv::ExpressionKind::call
-            && systemverilog_sampled_value_call(source.text)) {
-            if (!systemverilog_sampled_value_preserves_signal(
-                    source.text)) {
+            && systemverilog_sampled_value_call(source.system_tf)) {
+            if (!systemverilog_sampled_value_preserves_signal(source.system_tf)) {
                 return 1U;
             }
             return source.operands.empty()
@@ -22423,7 +22423,7 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
         // The coverage queries return a real percentage (IEEE 1800-2023
         // 19.8, 20.14).
         if (source.kind == semantic::sv::ExpressionKind::call
-            && (source.text == "$get_coverage"
+            && (source.system_tf == support::SystemTf::get_coverage
                 || source.text == "$get_inst_coverage"
                 || frontend::is_coverage_query(source.marker))) {
             return 64U;
@@ -22487,7 +22487,7 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
         }
         // $clog2 returns an integer (IEEE 1800-2023 20.8.1).
         if (source.kind == semantic::sv::ExpressionKind::call
-            && source.text == "$clog2" && source.operands.size() == 1U) {
+            && source.system_tf == support::SystemTf::clog2 && source.operands.size() == 1U) {
             return 32U;
         }
         if (const auto method = sv_container_method_call(
@@ -22524,7 +22524,7 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
             return cast->width;
         }
         if (source.kind == semantic::sv::ExpressionKind::call
-            && (source.text == "$signed" || source.text == "$unsigned")
+            && (source.system_tf == support::SystemTf::signed_conversion || source.system_tf == support::SystemTf::unsigned_conversion)
             && source.operands.size() == 1U) {
             return hir_expression_width(
                 source.operands.front(), process_scope);
@@ -22591,10 +22591,10 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
                 * 8U;
         }
         if (source.kind == semantic::sv::ExpressionKind::call
-            && (source.text == "$random" || source.text == "$urandom"
-                || source.text == "$urandom_range"
-                || source.text == "$reset_count"
-                || source.text == "$reset_value")) {
+            && (source.system_tf == support::SystemTf::random || source.system_tf == support::SystemTf::urandom
+                || source.system_tf == support::SystemTf::urandom_range
+                || source.system_tf == support::SystemTf::reset_count
+                || source.system_tf == support::SystemTf::reset_value)) {
             return 32U;
         }
         // A string's element is a byte (6.16, Table 6-9).
@@ -30170,7 +30170,7 @@ bool Lowerer::can_lower_hir_expression(
             return supported;
         }
         if (source.kind == semantic::sv::ExpressionKind::call
-            && source.text == "$isunbounded") {
+            && source.system_tf == support::SystemTf::isunbounded) {
             const auto value
                 = specialized_hir_unit_->evaluate_integral_expression(
                     expression_id);
@@ -30180,7 +30180,7 @@ bool Lowerer::can_lower_hir_expression(
             return supported;
         }
         if (source.kind == semantic::sv::ExpressionKind::call
-            && systemverilog_sampled_value_call(source.text)) {
+            && systemverilog_sampled_value_call(source.system_tf)) {
             // Sampled-value lowering owns the exact arity, direct-signal,
             // tick-count, gate, and clocking-event diagnostics. Admit the
             // retained call here even when malformed so those diagnostics
@@ -30200,13 +30200,13 @@ bool Lowerer::can_lower_hir_expression(
             return supported;
         }
         if (source.kind == semantic::sv::ExpressionKind::call
-            && (source.text == "$left" || source.text == "$right"
-                || source.text == "$low" || source.text == "$high"
-                || source.text == "$increment" || source.text == "$size"
-                || source.text == "$bits"
-                || source.text == "$dimensions"
-                || source.text == "$unpacked_dimensions")) {
-            const bool packed_bits = source.text == "$bits"
+            && (source.system_tf == support::SystemTf::left || source.system_tf == support::SystemTf::right
+                || source.system_tf == support::SystemTf::low || source.system_tf == support::SystemTf::high
+                || source.system_tf == support::SystemTf::increment || source.system_tf == support::SystemTf::size
+                || source.system_tf == support::SystemTf::bits
+                || source.system_tf == support::SystemTf::dimensions
+                || source.system_tf == support::SystemTf::unpacked_dimensions)) {
+            const bool packed_bits = source.system_tf == support::SystemTf::bits
                 && source.operands.size() == 1U
                 && !hir_static_container_expression_type(
                     source.operands.front())
@@ -30216,12 +30216,12 @@ bool Lowerer::can_lower_hir_expression(
             const bool runtime_dimension
                 = source.operands.size() == 1U
                 || (source.operands.size() == 2U
-                    && (source.text == "$left"
-                        || source.text == "$right"
-                        || source.text == "$low"
-                        || source.text == "$high"
-                        || source.text == "$increment"
-                        || source.text == "$size")
+                    && (source.system_tf == support::SystemTf::left
+                        || source.system_tf == support::SystemTf::right
+                        || source.system_tf == support::SystemTf::low
+                        || source.system_tf == support::SystemTf::high
+                        || source.system_tf == support::SystemTf::increment
+                        || source.system_tf == support::SystemTf::size)
                     && hir_constant_integer(source.operands.back())
                         == std::optional<std::int64_t> { 1 });
             const auto runtime_binding = runtime_dimension
@@ -30230,13 +30230,13 @@ bool Lowerer::can_lower_hir_expression(
             const bool runtime_query = runtime_binding
                 && runtime_binding->type != nullptr
                 && !runtime_binding->type->fixed
-                && (source.text == "$size" || source.text == "$bits"
+                && (source.system_tf == support::SystemTf::size || source.system_tf == support::SystemTf::bits
                     || (!runtime_binding->type->associative
-                        && (source.text == "$left"
-                            || source.text == "$right"
-                            || source.text == "$low"
-                            || source.text == "$high"
-                            || source.text == "$increment")));
+                        && (source.system_tf == support::SystemTf::left
+                            || source.system_tf == support::SystemTf::right
+                            || source.system_tf == support::SystemTf::low
+                            || source.system_tf == support::SystemTf::high
+                            || source.system_tf == support::SystemTf::increment)));
             const bool packed_query = !source.operands.empty()
                 && !hir_static_container_expression_type(
                     source.operands.front())
@@ -30255,7 +30255,7 @@ bool Lowerer::can_lower_hir_expression(
             return supported;
         }
         if (source.kind == semantic::sv::ExpressionKind::call
-            && (source.text == "$signed" || source.text == "$unsigned")) {
+            && (source.system_tf == support::SystemTf::signed_conversion || source.system_tf == support::SystemTf::unsigned_conversion)) {
             supported = source.operands.size() == 1U
                 && expression_supported(source.operands.front());
             erase();
@@ -30305,50 +30305,50 @@ bool Lowerer::can_lower_hir_expression(
             return supported;
         }
         if (source.kind == semantic::sv::ExpressionKind::call
-            && (source.text == "$system"
-                || source.text == "$q_full"
-                || source.text == "$isunknown"
-                || source.text == "$onehot"
-                || source.text == "$onehot0"
-                || source.text == "$countones"
-                || source.text == "$countbits"
-                || source.text == "$urandom"
-                || source.text == "$random"
-                || source.text == "$reset_count"
-                || source.text == "$reset_value"
-                || source.text == "$urandom_range")) {
+            && (source.system_tf == support::SystemTf::system
+                || source.system_tf == support::SystemTf::q_full
+                || source.system_tf == support::SystemTf::isunknown
+                || source.system_tf == support::SystemTf::onehot
+                || source.system_tf == support::SystemTf::onehot0
+                || source.system_tf == support::SystemTf::countones
+                || source.system_tf == support::SystemTf::countbits
+                || source.system_tf == support::SystemTf::urandom
+                || source.system_tf == support::SystemTf::random
+                || source.system_tf == support::SystemTf::reset_count
+                || source.system_tf == support::SystemTf::reset_value
+                || source.system_tf == support::SystemTf::urandom_range)) {
             // Direct lowering owns the argument diagnostics for these IEEE
             // system functions. Keep malformed calls inside the HIR path so
             // they do not collapse into the generic unavailable-adapter
             // diagnostic during process preflight.
-            if (source.text == "$system") {
+            if (source.system_tf == support::SystemTf::system) {
                 supported = source.operands.size() <= 1U
                     && (source.operands.empty()
                         || can_lower_hir_string_expression(
                             source.operands.front(), process_scope));
-            } else if (source.text == "$q_full") {
+            } else if (source.system_tf == support::SystemTf::q_full) {
                 supported = source.operands.size() == 2U
                     && std::ranges::all_of(
                         source.operands,
                         [&](const auto operand) {
                             return expression_supported(operand);
                         });
-            } else if (source.text == "$isunknown") {
+            } else if (source.system_tf == support::SystemTf::isunknown) {
                 supported = source.operands.size() == 1U
                     && expression_supported(source.operands.front());
-            } else if (source.text == "$onehot"
-                || source.text == "$onehot0"
-                || source.text == "$countones") {
+            } else if (source.system_tf == support::SystemTf::onehot
+                || source.system_tf == support::SystemTf::onehot0
+                || source.system_tf == support::SystemTf::countones) {
                 supported = source.operands.size() == 1U
                     && expression_supported(source.operands.front());
-            } else if (source.text == "$countbits") {
+            } else if (source.system_tf == support::SystemTf::countbits) {
                 supported = source.operands.size() >= 2U
                     && std::ranges::all_of(
                         source.operands,
                         [&](const auto operand) {
                             return expression_supported(operand);
                         });
-            } else if (source.text == "$urandom_range") {
+            } else if (source.system_tf == support::SystemTf::urandom_range) {
                 supported = !source.operands.empty()
                     && source.operands.size() <= 2U
                     && std::ranges::all_of(
@@ -30405,9 +30405,8 @@ bool Lowerer::can_lower_hir_expression(
             return supported;
         }
         if (source.kind == semantic::sv::ExpressionKind::call
-            && systemverilog_random_distribution_kind(source.text)) {
-            const auto kind = *systemverilog_random_distribution_kind(
-                source.text);
+            && systemverilog_random_distribution_kind(source.system_tf)) {
+            const auto kind = *systemverilog_random_distribution_kind(source.system_tf);
             const auto three_arguments
                 = kind == runtime::simir::RandomDistributionKind::uniform
                 || kind == runtime::simir::RandomDistributionKind::normal

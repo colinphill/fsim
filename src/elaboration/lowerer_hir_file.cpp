@@ -18,13 +18,29 @@ namespace {
 
     using runtime::simir::VhdlTextioRead;
 
-[[nodiscard]] bool hir_file_call_name(const std::string_view name) noexcept
+// The file I/O functions and plusarg queries (IEEE 1800-2023 21.3, 21.6).
+[[nodiscard]] bool hir_file_call(const support::SystemTf routine) noexcept
 {
-    return name == "$fopen" || name == "$fgets" || name == "$fgetc"
-        || name == "$ungetc" || name == "$feof" || name == "$ferror"
-        || name == "$fscanf" || name == "$sscanf" || name == "$fread"
-        || name == "$fseek" || name == "$ftell" || name == "$rewind"
-        || name == "$test$plusargs" || name == "$value$plusargs";
+    using Routine = support::SystemTf;
+    switch (routine) {
+    case Routine::fopen:
+    case Routine::fgets:
+    case Routine::fgetc:
+    case Routine::ungetc:
+    case Routine::feof:
+    case Routine::ferror:
+    case Routine::fscanf:
+    case Routine::sscanf:
+    case Routine::fread:
+    case Routine::fseek:
+    case Routine::ftell:
+    case Routine::rewind:
+    case Routine::test_plusargs:
+    case Routine::value_plusargs:
+        return true;
+    default:
+        return false;
+    }
 }
 
 [[nodiscard]] bool hir_sscanf_unknown_integral_format(
@@ -33,7 +49,7 @@ namespace {
 {
     // A variable with an X/Z initializer is not a language constant
     // expression. Do not fold it here and skip its run-time evaluation.
-    if (call.text != "$sscanf" || call.operands.size() < 2U
+    if (call.system_tf != support::SystemTf::sscanf || call.operands.size() < 2U
         || !hir_systemverilog_constant_expression(
             specialization, call.operands[1])) {
         return false;
@@ -47,7 +63,7 @@ namespace {
     const semantic::SpecializedHirUnit& specialization,
     const semantic::sv::Expression& call)
 {
-    if (call.text != "$sscanf" || call.operands.size() < 2U) {
+    if (call.system_tf != support::SystemTf::sscanf || call.operands.size() < 2U) {
         return false;
     }
     const auto source = specialization.find_expression(call.operands[0]);
@@ -301,7 +317,7 @@ bool Lowerer::is_hir_systemverilog_file_call(
     return expression && expression->systemverilog != nullptr
         && expression->systemverilog->kind
             == semantic::sv::ExpressionKind::call
-        && hir_file_call_name(expression->systemverilog->text);
+        && hir_file_call(expression->systemverilog->system_tf);
 }
 
 bool Lowerer::is_hir_vhdl_file_call(
@@ -802,7 +818,7 @@ Lowerer::hir_string_format_expression_status(
     if (!expression || expression->systemverilog == nullptr
         || expression->systemverilog->kind
             != semantic::sv::ExpressionKind::call
-        || expression->systemverilog->text != "$sformatf") {
+        || expression->systemverilog->system_tf != support::SystemTf::sformatf) {
         return HirStringFormatStatus::not_applicable;
     }
     const auto& call = *expression->systemverilog;
@@ -937,7 +953,7 @@ Lowerer::lower_hir_runtime_formatted_string(
         argument.current_time = record && record->systemverilog != nullptr
             && record->systemverilog->kind
                 == semantic::sv::ExpressionKind::call
-            && record->systemverilog->text == "$time";
+            && record->systemverilog->system_tf == support::SystemTf::time;
         operation.arguments.push_back(argument);
     }
     operation.destination = allocate_string_register();
@@ -1032,7 +1048,7 @@ Lowerer::lower_hir_formatted_string(
             const bool current_time = !record || record->systemverilog == nullptr
                 || (record->systemverilog->kind
                         == semantic::sv::ExpressionKind::call
-                    && record->systemverilog->text == "$time");
+                    && record->systemverilog->system_tf == support::SystemTf::time);
             const auto width = value
                 ? hir_expression_width(*value, hir_process_scope_)
                 : std::nullopt;
@@ -1266,12 +1282,12 @@ Lowerer::HirStringFormatStatus Lowerer::hir_string_format_task_status(
         return HirStringFormatStatus::not_applicable;
     }
     const auto& call = *statement->systemverilog;
-    const bool string_write = call.task.spelling == "$swrite";
-    const bool string_format = call.task.spelling == "$sformat";
+    const bool string_write = call.task_system_tf == support::SystemTf::swrite;
+    const bool string_format = call.task_system_tf == support::SystemTf::sformat;
     const auto format_task = string_write || string_format
-        || call.task.spelling == "$swriteb"
-        || call.task.spelling == "$swriteh"
-        || call.task.spelling == "$swriteo";
+        || call.task_system_tf == support::SystemTf::swriteb
+        || call.task_system_tf == support::SystemTf::swriteh
+        || call.task_system_tf == support::SystemTf::swriteo;
     if (!format_task) {
         return HirStringFormatStatus::not_applicable;
     }
@@ -1325,9 +1341,9 @@ Lowerer::HirStringFormatStatus Lowerer::hir_string_format_task_status(
                         *binding->object))))) {
         return HirStringFormatStatus::invalid;
     }
-    const bool default_radix_format = call.task.spelling == "$swriteb"
-        || call.task.spelling == "$swriteh"
-        || call.task.spelling == "$swriteo";
+    const bool default_radix_format = call.task_system_tf == support::SystemTf::swriteb
+        || call.task_system_tf == support::SystemTf::swriteh
+        || call.task_system_tf == support::SystemTf::swriteo;
     const auto first_value = call.task_arguments.size() > 1U
         ? specialized_hir_unit_->find_expression(
               *call.task_arguments[1].actual)
@@ -1513,13 +1529,13 @@ bool Lowerer::lower_hir_string_format_task(
         arguments.push_back(*call.task_arguments[index].actual);
     }
     std::optional<frontend::OutputFormat> default_format;
-    if (call.task.spelling == "$swriteb") {
+    if (call.task_system_tf == support::SystemTf::swriteb) {
         default_format = frontend::OutputFormat::Binary;
-    } else if (call.task.spelling == "$swriteh") {
+    } else if (call.task_system_tf == support::SystemTf::swriteh) {
         default_format = frontend::OutputFormat::Hexadecimal;
-    } else if (call.task.spelling == "$swriteo") {
+    } else if (call.task_system_tf == support::SystemTf::swriteo) {
         default_format = frontend::OutputFormat::Octal;
-    } else if (call.task.spelling == "$swrite") {
+    } else if (call.task_system_tf == support::SystemTf::swrite) {
         const auto first = arguments.empty()
             ? std::optional<semantic::CompiledExpressionView> { }
             : specialized_hir_unit_->find_expression(arguments.front());
@@ -1783,7 +1799,7 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
             }
             const auto& call = *expression->systemverilog;
             if (call.kind == semantic::sv::ExpressionKind::call
-                && hir_file_call_name(call.text)) {
+                && hir_file_call(call.system_tf)) {
                 const auto fail = [&](std::string code,
                                       std::string message) {
                     report_expression(
@@ -1795,12 +1811,12 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
                         return association.formal
                             && !association.formal->empty();
                     });
-                const auto plusarg = call.text == "$test$plusargs"
-                    || call.text == "$value$plusargs";
+                const auto plusarg = call.system_tf == support::SystemTf::test_plusargs
+                    || call.system_tf == support::SystemTf::value_plusargs;
                 if (named && !plusarg) {
                     fail("FSIM-ELAB-SVFILE-011",
                         call.text + " requires positional arguments");
-                } else if (call.text == "$fopen") {
+                } else if (call.system_tf == support::SystemTf::fopen) {
                     if (call.operands.empty()
                         || call.operands.size() > 2U
                         || !hir_filename_operand(
@@ -1812,7 +1828,7 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
                             "$fopen requires a byte-string filename and "
                             "optional mode");
                     }
-                } else if (call.text == "$fgets") {
+                } else if (call.system_tf == support::SystemTf::fgets) {
                     if (call.operands.size() != 2U) {
                         fail("FSIM-ELAB-SVFILE-004",
                             "$fgets requires a target and integer handle");
@@ -1824,9 +1840,9 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
                         fail("FSIM-ELAB-SVFILE-001",
                             "$fgets handle must be an integer expression");
                     }
-                } else if (call.text == "$fgetc"
-                    || call.text == "$feof" || call.text == "$ftell"
-                    || call.text == "$rewind") {
+                } else if (call.system_tf == support::SystemTf::fgetc
+                    || call.system_tf == support::SystemTf::feof || call.system_tf == support::SystemTf::ftell
+                    || call.system_tf == support::SystemTf::rewind) {
                     if (call.operands.size() != 1U) {
                         fail("FSIM-ELAB-SVFILE-009",
                             call.text + " requires one integer handle");
@@ -1835,7 +1851,7 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
                             call.text
                                 + " handle must be an integer expression");
                     }
-                } else if (call.text == "$ungetc") {
+                } else if (call.system_tf == support::SystemTf::ungetc) {
                     // A string literal ("x") is an integral value (IEEE
                     // 1800-2017 5.9).
                     const auto literal_character = call.operands.size() == 2U
@@ -1853,7 +1869,7 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
                             "$ungetc requires a character and integer "
                             "handle");
                     }
-                } else if (call.text == "$ferror") {
+                } else if (call.system_tf == support::SystemTf::ferror) {
                     if (call.operands.size() != 2U) {
                         fail("FSIM-ELAB-SVFILE-006",
                             "$ferror requires an integer handle and "
@@ -1864,7 +1880,7 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
                             "$ferror target must be a writable packed or "
                             "string variable");
                     }
-                } else if (call.text == "$fseek") {
+                } else if (call.system_tf == support::SystemTf::fseek) {
                     if (call.operands.size() != 3U
                         || !file_handle(call.operands[0])
                         || !integral_expression(call.operands[1])
@@ -1873,9 +1889,9 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
                             "$fseek requires integral handle, offset, and "
                             "origin expressions");
                     }
-                } else if (call.text == "$fscanf"
-                    || call.text == "$sscanf") {
-                    const auto string_source = call.text == "$sscanf";
+                } else if (call.system_tf == support::SystemTf::fscanf
+                    || call.system_tf == support::SystemTf::sscanf) {
+                    const auto string_source = call.system_tf == support::SystemTf::sscanf;
                     if (call.operands.size() < 2U) {
                         fail("FSIM-ELAB-SVFILE-011",
                             call.text + " requires source, literal format, "
@@ -2046,7 +2062,7 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
                             }
                         }
                     }
-                } else if (call.text == "$fread") {
+                } else if (call.system_tf == support::SystemTf::fread) {
                     if (call.operands.size() < 2U
                         || call.operands.size() > 4U) {
                         fail("FSIM-ELAB-SVFILE-013",
@@ -2084,7 +2100,7 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
                 }
             }
             if (call.kind == semantic::sv::ExpressionKind::call
-                && call.text == "$sformatf") {
+                && call.system_tf == support::SystemTf::sformatf) {
                 bool refused { };
                 const auto fail = [&](std::string message) {
                     refused = true;
@@ -2272,10 +2288,10 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
                 }
             }
             if (call.kind == semantic::sv::ExpressionKind::call
-                && (call.text == "$test$plusargs"
-                    || call.text == "$value$plusargs")) {
+                && (call.system_tf == support::SystemTf::test_plusargs
+                    || call.system_tf == support::SystemTf::value_plusargs)) {
                 const auto value_query
-                    = call.text == "$value$plusargs";
+                    = call.system_tf == support::SystemTf::value_plusargs;
                 const auto expected_operands = value_query ? 2U : 1U;
                 const auto fail = [&](std::string code,
                                       std::string message) {
@@ -2579,7 +2595,7 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_file_call(
     if (!expression || expression->systemverilog == nullptr
         || expression->systemverilog->kind
             != semantic::sv::ExpressionKind::call
-        || !hir_file_call_name(expression->systemverilog->text)) {
+        || !hir_file_call(expression->systemverilog->system_tf)) {
         return std::nullopt;
     }
     const auto& call = *expression->systemverilog;
@@ -2595,8 +2611,8 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_file_call(
         });
     if (named) {
         return fail(
-            call.text == "$test$plusargs"
-                    || call.text == "$value$plusargs"
+            call.system_tf == support::SystemTf::test_plusargs
+                    || call.system_tf == support::SystemTf::value_plusargs
                 ? "FSIM-ELAB-SVCLI-001"
                 : "FSIM-ELAB-SVFILE-011",
             call.text + " requires positional arguments");
@@ -2695,9 +2711,9 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_file_call(
         return std::nullopt;
     };
 
-    if (call.text == "$test$plusargs"
-        || call.text == "$value$plusargs") {
-        const auto value_query = call.text == "$value$plusargs";
+    if (call.system_tf == support::SystemTf::test_plusargs
+        || call.system_tf == support::SystemTf::value_plusargs) {
+        const auto value_query = call.system_tf == support::SystemTf::value_plusargs;
         const auto expected_operands = value_query ? 2U : 1U;
         if (call.operands.size() != expected_operands
             || call.operands.empty()
@@ -2907,7 +2923,7 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_file_call(
             : std::optional { found };
     }
 
-    if (call.text == "$fopen") {
+    if (call.system_tf == support::SystemTf::fopen) {
         if (call.operands.empty() || call.operands.size() > 2U
             || !hir_filename_operand(
                 call.operands.front(), hir_process_scope_)
@@ -2932,7 +2948,7 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_file_call(
             multichannel });
         return finish(destination);
     }
-    if (call.text == "$fgets") {
+    if (call.system_tf == support::SystemTf::fgets) {
         if (call.operands.size() != 2U) {
             return fail("FSIM-ELAB-SVFILE-004",
                 "$fgets requires a target and integer handle");
@@ -2957,8 +2973,8 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_file_call(
         }
         return finish(destination);
     }
-    if (call.text == "$fgetc" || call.text == "$feof"
-        || call.text == "$ftell" || call.text == "$rewind") {
+    if (call.system_tf == support::SystemTf::fgetc || call.system_tf == support::SystemTf::feof
+        || call.system_tf == support::SystemTf::ftell || call.system_tf == support::SystemTf::rewind) {
         if (call.operands.size() != 1U) {
             return fail("FSIM-ELAB-SVFILE-009",
                 call.text + " requires one integer handle");
@@ -2970,10 +2986,10 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_file_call(
         }
         const auto destination = allocate_register(
             32U, frontend::ValueDomain::Bit2);
-        if (call.text == "$fgetc") {
+        if (call.system_tf == support::SystemTf::fgetc) {
             process_.operations.emplace_back(FileReadLine {
                 destination, *handle, 0U, 0U, FileReadKind::character });
-        } else if (call.text == "$feof") {
+        } else if (call.system_tf == support::SystemTf::feof) {
             process_.operations.emplace_back(FileEndOfFile {
                 destination, *handle });
         } else {
@@ -2982,14 +2998,14 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_file_call(
                 *handle,
                 0U,
                 0U,
-                call.text == "$ftell"
+                call.system_tf == support::SystemTf::ftell
                     ? FilePositionKind::tell
                     : FilePositionKind::rewind,
             });
         }
         return finish(destination);
     }
-    if (call.text == "$ungetc") {
+    if (call.system_tf == support::SystemTf::ungetc) {
         if (call.operands.size() != 2U) {
             return fail("FSIM-ELAB-SVFILE-010",
                 "$ungetc requires a character and integer handle");
@@ -3005,7 +3021,7 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_file_call(
             destination, *handle, 0U, *character, FileReadKind::unget });
         return finish(destination);
     }
-    if (call.text == "$ferror") {
+    if (call.system_tf == support::SystemTf::ferror) {
         if (call.operands.size() != 2U) {
             return fail("FSIM-ELAB-SVFILE-006",
                 "$ferror requires an integer handle and writable target");
@@ -3028,7 +3044,7 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_file_call(
         }
         return finish(destination);
     }
-    if (call.text == "$fseek") {
+    if (call.system_tf == support::SystemTf::fseek) {
         if (call.operands.size() != 3U) {
             return fail("FSIM-ELAB-SVFILE-015",
                 "$fseek requires handle, offset, and origin expressions");
@@ -3047,8 +3063,8 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_file_call(
         return finish(destination);
     }
 
-    if (call.text == "$fscanf" || call.text == "$sscanf") {
-        const auto string_source = call.text == "$sscanf";
+    if (call.system_tf == support::SystemTf::fscanf || call.system_tf == support::SystemTf::sscanf) {
+        const auto string_source = call.system_tf == support::SystemTf::sscanf;
         if (call.operands.size() < 2U) {
             return fail("FSIM-ELAB-SVFILE-011",
                 call.text + " requires source, literal format, and targets");
@@ -3272,7 +3288,7 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_file_call(
         return finish(destination);
     }
 
-    if (call.text == "$fread") {
+    if (call.system_tf == support::SystemTf::fread) {
         if (call.operands.size() < 2U || call.operands.size() > 4U) {
             return fail("FSIM-ELAB-SVFILE-013",
                 "$fread requires target, handle, and optional start/count");
