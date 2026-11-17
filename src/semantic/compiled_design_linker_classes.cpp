@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "compiled_design_linker_classes.hpp"
+#include "fsim/support/stack_growth.hpp"
 
 #include <ranges>
 #include <set>
@@ -183,6 +184,10 @@ void append_statement_references(const ReferenceLookup& lookup,
     std::set<DeclarationId>& visited_declarations,
     std::set<StatementId>& visited_statements)
 {
+    if (!fsim::support::stack_growth_detail::has_room()) {
+        return fsim::support::with_stack(
+            [&] { return append_statement_references(lookup, references, owner, statement_id, visited_declarations, visited_statements); });
+    }
     if (!visited_statements.insert(statement_id).second)
         return;
     const auto* statement = lookup.statement(statement_id);
@@ -212,6 +217,10 @@ void append_declaration_references(const ReferenceLookup& lookup,
     std::set<DeclarationId>& visited_declarations,
     std::set<StatementId>& visited_statements)
 {
+    if (!fsim::support::stack_growth_detail::has_room()) {
+        return fsim::support::with_stack(
+            [&] { return append_declaration_references(lookup, references, owner, declaration_id, visited_declarations, visited_statements); });
+    }
     if (!visited_declarations.insert(declaration_id).second)
         return;
     const auto* declaration = lookup.declaration(declaration_id);

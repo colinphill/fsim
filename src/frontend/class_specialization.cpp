@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/frontend/class_specialization.hpp"
 #include "fsim/frontend/systemverilog_scalars.hpp"
+#include "fsim/support/stack_growth.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1724,6 +1725,10 @@ specialize_systemverilog_classes(const ParsedDesign& design) {
       const auto specialize_statement_types =
           [&](const auto& self,
               std::vector<Statement>& statements) -> void {
+            if (!fsim::support::stack_growth_detail::has_room()) {
+              fsim::support::with_stack([&] { self(self, statements); });
+              return;
+            }
             for (auto& statement : statements) {
               std::vector<PriorAlias> prior_statement_aliases;
               for (auto& alias : statement.type_aliases) {

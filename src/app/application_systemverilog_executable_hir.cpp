@@ -9,6 +9,7 @@
 #include "fsim/frontend/token.hpp"
 #include "fsim/semantic/model.hpp"
 #include "fsim/semantic/systemverilog_hir.hpp"
+#include "fsim/support/stack_growth.hpp"
 
 #include <algorithm>
 #include <concepts>
@@ -1820,6 +1821,10 @@ namespace {
             const semantic::ScopeId enclosing_scope,
             const semantic::OriginId parent)
         {
+            if (!fsim::support::stack_growth_detail::has_room()) {
+                return fsim::support::with_stack(
+                    [&] { return statement(input, enclosing_scope, parent); });
+            }
             const auto statement_source = source(input.span);
             const auto statement_origin = origin(
                 statement_source, parent,

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/semantic/systemverilog_hir.hpp"
+#include "fsim/support/stack_growth.hpp"
 
 #include <algorithm>
 #include <array>
@@ -407,6 +408,10 @@ bool valid_statement_closure(ClassClosure& closure,
     const StatementId id, const ScopeId expected_scope,
     const OriginId expected_parent)
 {
+    if (!fsim::support::stack_growth_detail::has_room()) {
+        return fsim::support::with_stack(
+            [&] { return valid_statement_closure(closure, id, expected_scope, expected_parent); });
+    }
     if (closure.claimed_statements.contains(id))
         return false;
     if (!closure.active_statements.insert(id).second)

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
 #include "fsim/semantic/vhdl_block_guard.hpp"
+#include "fsim/support/stack_growth.hpp"
 
 #include <cstdint>
 #include <string>
@@ -575,6 +576,10 @@ class VhdlExecutableBuilder final {
       const frontend::Statement& input,
       const semantic::ScopeId enclosing_scope,
       const semantic::OriginId parent) {
+    if (!fsim::support::stack_growth_detail::has_room()) {
+        return fsim::support::with_stack(
+            [&] { return statement(input, enclosing_scope, parent); });
+    }
     const auto statement_source = source(input.span);
     const auto statement_origin = origin(
         statement_source, parent,

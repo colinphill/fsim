@@ -27,6 +27,7 @@
 #include "fsim/semantic/design_ir.hpp"
 #include "fsim/semantic/model.hpp"
 #include "fsim/semantic/systemverilog_hir.hpp"
+#include "fsim/support/stack_growth.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1995,6 +1996,10 @@ void publish_vpi_statement_scopes(const VpiStatementLookup& find,
     const std::string& path, const fsim_vpi_handle_v1 owner,
     const VpiScopePublisher& publish)
 {
+    if (!fsim::support::stack_growth_detail::has_room()) {
+        return fsim::support::with_stack(
+            [&] { return publish_vpi_statement_scopes(find, statements, path, owner, publish); });
+    }
     for (const auto id : statements) {
         const auto* const statement = find(id);
         if (statement == nullptr) {

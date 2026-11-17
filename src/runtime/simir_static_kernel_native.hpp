@@ -211,6 +211,17 @@ struct StaticKernelStringCell {
     std::uint64_t index { };
 };
 
+/// The std::string layout generated code reads and writes in place (string
+/// registers, string variables, plusargs): the data pointer, the length,
+/// then a 16-byte local buffer (data pointing at it, capacity 15) or the
+/// allocated capacity, 32 bytes in all. Not every standard library lays a
+/// string out so (libc++'s is 24 bytes); StaticKernel::hold_string_file
+/// gives a member's strings to generated code only when the host's
+/// std::string has this layout, and a member with string operations is not
+/// compiled otherwise, so the code generator builds on any host.
+inline constexpr std::uint64_t static_kernel_string_object_bytes = 32U;
+inline constexpr std::uint64_t static_kernel_string_local_capacity = 15U;
+
 struct StaticKernelNativeFrame {
     /// Kernel word arena (aval words at a slot's offset, bval after them).
     std::uint64_t* arena { };

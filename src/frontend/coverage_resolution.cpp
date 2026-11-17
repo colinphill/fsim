@@ -2,6 +2,7 @@
 #include "fsim/frontend/coverage_resolution.hpp"
 #include "fsim/frontend/coverage_cross_inventory.hpp"
 #include "fsim/frontend/coverage_limits.hpp"
+#include "fsim/support/stack_growth.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -752,6 +753,10 @@ namespace {
         const std::vector<Statement>& statements,
         const std::string_view name)
     {
+        if (!fsim::support::stack_growth_detail::has_room()) {
+            return fsim::support::with_stack(
+                [&] { return find_procedural_construction(statements, name); });
+        }
         for (const auto& statement : statements) {
             if (statement.kind == StatementKind::Assignment
                 && is_new_expression(statement.value)
@@ -1303,6 +1308,10 @@ namespace {
         const std::string& owner,
         Statement& statement)
     {
+        if (!fsim::support::stack_growth_detail::has_room()) {
+            return fsim::support::with_stack(
+                [&] { return bind_coverage_methods(design, owner, statement); });
+        }
         bind_coverage_methods(design, owner, statement.target);
         bind_coverage_methods(design, owner, statement.value);
         bind_coverage_methods(design, owner, statement.condition);
@@ -1328,6 +1337,10 @@ namespace {
         const std::vector<CovergroupEntry>& entries,
         std::vector<Diagnostic>& diagnostics)
     {
+        if (!fsim::support::stack_growth_detail::has_room()) {
+            return fsim::support::with_stack(
+                [&] { return collect_sample_calls(design, owner, statements, entries, diagnostics); });
+        }
         for (auto& statement : statements) {
             if (statement.kind == StatementKind::Assignment
                 && is_new_expression(statement.value)

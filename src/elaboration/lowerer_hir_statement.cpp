@@ -2998,6 +2998,10 @@ Lowerer::finish_deferred_assertion_action_handoff()
 bool Lowerer::lower_hir_statement(
     const semantic::StatementId statement_id)
 {
+    if (!fsim::support::stack_growth_detail::has_room()) {
+        return fsim::support::with_stack(
+            [&] { return lower_hir_statement(statement_id); });
+    }
     if (specialized_hir_unit_ == nullptr) {
         return false;
     }
@@ -3484,6 +3488,10 @@ bool Lowerer::lower_hir_sensitivity_wait(
     const std::span<const semantic::StatementId> wildcard_statements,
     const frontend::SourceSpan& span)
 {
+    if (!fsim::support::stack_growth_detail::has_room()) {
+        return fsim::support::with_stack(
+            [&] { return lower_hir_sensitivity_wait(sensitivities, wildcard_expression, wildcard_statements, span); });
+    }
     if (sensitivities.empty()) {
         return false;
     }
@@ -4156,6 +4164,10 @@ std::optional<semantic::SourceSpanId> Lowerer::hir_statements_assign(
     const semantic::DeclarationId declaration,
     const std::span<const semantic::StatementId> children) const
 {
+    if (!fsim::support::stack_growth_detail::has_room()) {
+        return fsim::support::with_stack(
+            [&] { return hir_statements_assign(declaration, children); });
+    }
     for (const auto child_id : children) {
         const auto child = specialized_hir_unit_->find_statement(
             child_id);

@@ -11,7 +11,7 @@ Exclusions never count as closures.
 | suite | not run | out of scope |
 |---|---:|---:|
 | sv-tests | 0 | 2 |
-| verilator | 63 | 296 |
+| verilator | 63 | 300 |
 | ivtest | 7 | 305 |
 | vests | 2 | 0 |
 | nvc | 225 | 0 |
@@ -131,6 +131,7 @@ Exclusions never count as closures.
 | `t_enum_huge_methods` | out of scope | formats an enumeration with %s as its name, which the test itself calls non-standard; %s reads the value's bits as characters (IEEE 1800-2017 21.2.1.7) |
 | `t_enum_large_methods` | out of scope | compares %p of an unnamed enumeration value |
 | `t_enum_public` | not run | needs the Verilator C++ model API |
+| `t_enum_size` | out of scope | gives enum literals sized literal values whose size differs from the enum base type (`W = 1'b1` of `logic [2:0]`, `UW = 1'b1` of `integer`); that is an error even when the value fits (IEEE 1800-2023 6.19) |
 | `t_enum_type_methods` | out of scope | prints an enumeration with %s as its name (non-standard) |
 | `t_event_class_fire` | out of scope | expects failure from Verilator issue #8303; a `->>` trigger occurs in the same time step's NBA region, so wait(e.triggered) completes (IEEE 1800-2017 15.5.2, 15.5.3) |
 | `t_event_control_expr` | out of scope | Verilator $c extension |
@@ -163,6 +164,8 @@ Exclusions never count as closures.
 | `t_fourstate_fourstate_unsup` | not run | lint-only test |
 | `t_fourstate_no_fourstate` | out of scope | depends on a Verilator command-line flag |
 | `t_func_call_super_arg` | out of scope | uses the Verilator $c extension |
+| `t_func_complex` | out of scope | declares `ref` formals on static module functions; passing by reference is illegal for a subroutine of static lifetime (IEEE 1800-2023 13.5.2) |
+| `t_func_complex_noinl` | out of scope | declares `ref` formals on static module functions; passing by reference is illegal for a subroutine of static lifetime (IEEE 1800-2023 13.5.2) |
 | `t_func_public` | out of scope | Verilator $c extension |
 | `t_func_purification` | out of scope | Verilator $c extension |
 | `t_func_ref` | out of scope | uses ref formals of a static subroutine (IEEE 1800-2017 13.5.2) |
@@ -248,6 +251,7 @@ Exclusions never count as closures.
 | `t_public_flat_rw_large_offset` | out of scope | a behaviourless module that checks Verilator's generated C++ member offsets beyond 32 bits under its --public-flat-rw option; the only observable is that 6 GiB of static array storage compiles, which no LRM clause specifies |
 | `t_public_seq` | not run | needs the Verilator C++ model API |
 | `t_queue` | out of scope | compares %p text against Verilator's element spacing |
+| `t_queue_back` | out of scope | declares `ref` formals on static module functions; passing by reference is illegal for a subroutine of static lifetime (IEEE 1800-2023 13.5.2) |
 | `t_queue_method` | out of scope | calls the non-standard array method map() |
 | `t_queue_slice` | out of scope | compares %p text against Verilator's element spacing |
 | `t_randomize_inline_var_ctl` | out of scope | passes dotted names to randomize(); the arguments are identifiers of the calling object's properties (IEEE 1800-2017 18.11) |

@@ -1715,23 +1715,18 @@ Lowerer::hir_systemverilog_enumeration_method(
             || method == BuiltinMethod::next || method == BuiltinMethod::prev
             || method == BuiltinMethod::num || method == BuiltinMethod::name;
     };
-    // The method a `variable.method` name denotes is read from the name's
-    // text: the name carries no built-in method of its own.
-    // ITEM46-LEFT: a dotted name is split by text before it is resolved.
-    const auto method_name = [](const std::string_view text) {
-        return text == "first" || text == "last" || text == "next"
-            || text == "prev" || text == "num" || text == "name";
-    };
+    // A `variable.method` name written without parentheses (13.4.1)
+    // carries no built-in method of its own: its last part is looked up in
+    // the LRM's method table.
     HirEnumerationMethod result;
     std::optional<semantic::DeclarationId> declaration_id;
     if (source.kind == semantic::sv::ExpressionKind::call
         && enumeration_method(semantic::sv::member_builtin_method(source))
         && !source.operands.empty() && source.operands.size() <= 2U) {
-        result.method
-            = std::string { support::builtin_method_name(semantic::sv::member_builtin_method(source)) };
+        result.method = semantic::sv::member_builtin_method(source);
         result.receiver = source.operands.front();
         if (source.operands.size() == 2U) {
-            if (result.method != "next" && result.method != "prev") {
+            if (result.method != support::BuiltinMethod::next && result.method != support::BuiltinMethod::prev) {
                 return std::nullopt;
             }
             result.count = source.operands[1];
@@ -1781,11 +1776,19 @@ Lowerer::hir_systemverilog_enumeration_method(
                 != semantic::sv::ExpressionKind::name) {
             const auto inner = hir_systemverilog_enumeration_method(
                 source.operands.front());
-            if (!inner || inner->method == "name" || inner->method == "num") {
+            if (!inner || inner->method == support::BuiltinMethod::name
+                || inner->method == support::BuiltinMethod::num) {
                 return std::nullopt;
             }
-            return hir_systemverilog_enumeration_profile(
-                std::move(result), inner->receiver_declaration);
+            // The inner call's value is of the inner receiver's
+            // enumeration type, whatever named that receiver (a variable,
+            // an array element, a class property or a structure member).
+            auto chained = std::move(*inner);
+            chained.method = result.method;
+            chained.receiver = result.receiver;
+            chained.count = result.count;
+            chained.member.reset();
+            return chained;
         }
         if (!receiver || receiver->systemverilog == nullptr) {
             return std::nullopt;
@@ -1808,12 +1811,14 @@ Lowerer::hir_systemverilog_enumeration_method(
         declaration_id = hir_referenced_declaration(source.operands.front());
     } else if (source.kind == semantic::sv::ExpressionKind::name) {
         const auto separator = source.text.rfind('.');
-        if (separator == std::string::npos
-            || !method_name(
-                std::string_view { source.text }.substr(separator + 1U))) {
+        const auto named = separator == std::string::npos
+            ? support::BuiltinMethod::none
+            : support::builtin_method_named(
+                  std::string_view { source.text }.substr(separator + 1U));
+        if (!enumeration_method(named)) {
             return std::nullopt;
         }
-        result.method = source.text.substr(separator + 1U);
+        result.method = named;
         declaration_id = hir_referenced_declaration(expression_id);
         if (!declaration_id) {
             const semantic::CompiledDeclarationPredicate object
@@ -2088,13 +2093,13 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_enumeration_method(
     const std::size_t expected_width)
 {
     const auto method = hir_systemverilog_enumeration_method(expression_id);
-    if (!method || method->method == "name") {
+    if (!method || method->method == support::BuiltinMethod::name) {
         return std::nullopt;
     }
     const auto finish = [&](RegisterId value) {
         if (expected_width != 0U && register_width(value) != expected_width) {
             value = resize_register(value, expected_width,
-                method->method == "num" || method->signed_value);
+                method->method == support::BuiltinMethod::num || method->signed_value);
         }
         return std::optional { value };
     };
@@ -2109,14 +2114,14 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_enumeration_method(
     };
     // num() is an int; first() and last() are the declared extremes
     // (IEEE 1800-2017 6.19.5.1, 6.19.5.2, 6.19.5.5).
-    if (method->method == "num") {
+    if (method->method == support::BuiltinMethod::num) {
         const auto destination
             = load_constant(unsigned_value(method->values.size(), 32U),
                 frontend::ValueDomain::Bit2);
         return finish(destination);
     }
-    if (method->method == "first" || method->method == "last") {
-        return finish(constant(method->method == "first"
+    if (method->method == support::BuiltinMethod::first || method->method == support::BuiltinMethod::last) {
+        return finish(constant(method->method == support::BuiltinMethod::first
                 ? method->values.front()
                 : method->values.back(),
             method->width));
@@ -2145,7 +2150,7 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_enumeration_method(
     // next(N) and prev(N) wrap around the declaration order; a value that
     // is not a member yields the unknown value of the base type.
     const auto count = static_cast<std::int64_t>(method->values.size());
-    const auto offset = method->method == "next" ? steps : -steps;
+    const auto offset = method->method == support::BuiltinMethod::next ? steps : -steps;
     const auto domain = method->four_state ? frontend::ValueDomain::Logic4
                                            : frontend::ValueDomain::Bit2;
     auto result = allocate_register(method->width, domain);
@@ -2177,7 +2182,7 @@ Lowerer::lower_hir_systemverilog_enumeration_name(
     const semantic::ExpressionId expression_id)
 {
     const auto method = hir_systemverilog_enumeration_method(expression_id);
-    if (!method || method->method != "name") {
+    if (!method || method->method != support::BuiltinMethod::name) {
         return std::nullopt;
     }
     return lower_hir_systemverilog_enumeration_name(*method);
@@ -2199,7 +2204,7 @@ Lowerer::lower_hir_systemverilog_enumeration_value_name(
         return std::nullopt;
     }
     HirEnumerationMethod name;
-    name.method = "name";
+    name.method = support::BuiltinMethod::name;
     name.receiver = expression_id;
     const auto profile = hir_systemverilog_enumeration_profile(
         std::move(name), *declaration);

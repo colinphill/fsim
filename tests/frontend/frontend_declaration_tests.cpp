@@ -519,6 +519,39 @@ endmodule
           && has_code("FSIM-SV-SEM-096")
           && has_code("FSIM-SV-SEM-064"),
       "function default, ref lifetime, and timing diagnostics");
+
+  // A void function of static lifetime cannot pass by reference either
+  // (IEEE 1800-2023 13.5.2); automatic ones, by declaration or by the
+  // module's default lifetime, and class methods can.
+  const auto static_void = parse_text(
+      "static_void_ref.sv",
+      R"(
+module static_void_ref;
+  function void by_reference(const ref int value);
+  endfunction
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(std::ranges::count_if(static_void.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                  return diagnostic.code == "FSIM-SV-SEM-096";
+              }) == 1,
+      "a static void function's ref formal is rejected once");
+  const auto automatic_void = parse_text(
+      "automatic_void_ref.sv",
+      R"(
+module automatic automatic_void_ref;
+  function void by_reference(ref int value);
+  endfunction
+  class holder;
+    function void take(ref int value);
+    endfunction
+  endclass
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(automatic_void.ok(),
+      "automatic void functions and class methods take ref formals");
 }
 
 void test_systemverilog_real_time_declarations() {

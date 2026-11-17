@@ -2509,6 +2509,10 @@ private:
         const DeclarationId id, std::set<DeclarationId>& active,
         std::set<StatementId>& statement_active) const
     {
+        if (!fsim::support::stack_growth_detail::has_room()) {
+            return fsim::support::with_stack(
+                [&] { return declaration_references_resolve(id, active, statement_active); });
+        }
         const auto* declaration = record_for(declarations_, id);
         if (declaration == nullptr) {
             return false;
@@ -2567,6 +2571,10 @@ private:
     bool statement_references_resolve(
         const StatementId id, std::set<StatementId>& active) const
     {
+        if (!fsim::support::stack_growth_detail::has_room()) {
+            return fsim::support::with_stack(
+                [&] { return statement_references_resolve(id, active); });
+        }
         const auto* statement = record_for(statements_, id);
         if (statement == nullptr) {
             return false;

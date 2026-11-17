@@ -25,6 +25,7 @@
 #include "fsim/version.hpp"
 
 #include "sv_vpi_user.h"
+#include "fsim/support/stack_growth.hpp"
 
 #include <algorithm>
 #include <iterator>
@@ -5120,6 +5121,10 @@ private:
     [[nodiscard]] static std::string declared_signature(
         const VpiStatementModel::DeclaredType& declared)
     {
+        if (!fsim::support::stack_growth_detail::has_room()) {
+            return fsim::support::with_stack(
+                [&] { return declared_signature(declared); });
+        }
         std::string text
             = std::to_string(static_cast<unsigned>(declared.builtin))
             + (declared.is_signed ? "s" : "u")
@@ -5144,6 +5149,10 @@ private:
     [[nodiscard]] static std::optional<runtime::SystemVerilogVpiTypespec>
     declared_typespec_node(const VpiStatementModel::DeclaredType& declared)
     {
+        if (!fsim::support::stack_growth_detail::has_room()) {
+            return fsim::support::with_stack(
+                [&] { return declared_typespec_node(declared); });
+        }
         using Kind = runtime::SystemVerilogVpiTypespecKind;
         runtime::SystemVerilogVpiTypespec node;
         if (declared.array_kind != 0) {

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "class_expression_resolution_internal.hpp"
 #include "fsim/frontend/class_resolution.hpp"
+#include "fsim/support/stack_growth.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -613,6 +614,10 @@ void Resolver::hydrate_statements(
     std::vector<Statement>& statements,
     std::set<std::string>& active,
     std::set<std::string>& expanded) {
+  if (!fsim::support::stack_growth_detail::has_room()) {
+      return fsim::support::with_stack(
+          [&] { return hydrate_statements(statements, active, expanded); });
+  }
   for (auto& statement : statements) {
     if (hydrate_task_call(statement, active, expanded)) {
       continue;

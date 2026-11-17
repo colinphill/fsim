@@ -64,6 +64,7 @@
 #include <system_error>
 #include <vhpi_user.h>
 #include "application_internal.hpp"
+#include "fsim/support/stack_growth.hpp"
 #include <fstream>
 
 namespace fsim::app::application_detail {
@@ -5984,6 +5985,10 @@ private:
     void number_loops(const std::vector<semantic::StatementId>& statements,
         std::size_t& next)
     {
+        if (!fsim::support::stack_growth_detail::has_room()) {
+            return fsim::support::with_stack(
+                [&] { return number_loops(statements, next); });
+        }
         for (const auto id : statements) {
             const auto* const statement = hir_statement(id);
             if (statement == nullptr) {
@@ -8228,6 +8233,10 @@ private:
     void collect_statement_reads(Object& owner, const vhdl::Statement& statement,
         std::vector<Object*>& result, const std::size_t depth)
     {
+        if (!fsim::support::stack_growth_detail::has_room()) {
+            return fsim::support::with_stack(
+                [&] { return collect_statement_reads(owner, statement, result, depth); });
+        }
         const auto read = [&](const std::optional<semantic::ExpressionId>& id) {
             if (id) {
                 collect_reads(owner, *id, result, 0U);
@@ -9968,6 +9977,10 @@ private:
     void scan_activity(const std::vector<semantic::StatementId>& statements,
         bool& active) const
     {
+        if (!fsim::support::stack_growth_detail::has_room()) {
+            return fsim::support::with_stack(
+                [&] { return scan_activity(statements, active); });
+        }
         for (const auto id : statements) {
             const auto* const statement = hir_statement(id);
             if (statement == nullptr) {

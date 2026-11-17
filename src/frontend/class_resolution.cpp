@@ -3,6 +3,7 @@
 #include "fsim/frontend/class_specialization_selection.hpp"
 
 #include "class_expression_resolution.hpp"
+#include "fsim/support/stack_growth.hpp"
 
 #include <algorithm>
 #include <map>
@@ -606,6 +607,10 @@ void resolve_statement_types(
     std::vector<ClassEntry>& entries,
     const std::set<std::string>& shadowed_types,
     std::vector<Diagnostic>& diagnostics) {
+  if (!fsim::support::stack_growth_detail::has_room()) {
+      return fsim::support::with_stack(
+          [&] { return resolve_statement_types(statement, owner, entries, shadowed_types, diagnostics); });
+  }
   auto local_shadowed_types = shadowed_types;
   for (const auto& alias : statement.type_aliases) {
     local_shadowed_types.insert(alias.name);

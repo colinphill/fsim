@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_vhdl_hir_internal.hpp"
+#include "fsim/support/stack_growth.hpp"
 
 namespace fsim::app::application_detail {
 
@@ -8,6 +9,10 @@ void VhdlHirBuilder::add_statement_regions(
     const semantic::ScopeId enclosing_scope,
     const semantic::OriginId enclosing_origin)
 {
+    if (!fsim::support::stack_growth_detail::has_room()) {
+        return fsim::support::with_stack(
+            [&] { return add_statement_regions(statements, enclosing_scope, enclosing_origin); });
+    }
     // Whether a statement list contains a sequential block statement.
     const auto contains_block = [](const auto& self,
                                    const std::span<const frontend::Statement> list)

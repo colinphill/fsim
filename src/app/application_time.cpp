@@ -14,6 +14,7 @@
 #include "fsim/semantic/model.hpp"
 #include "fsim/semantic/systemverilog_hir.hpp"
 #include "fsim/semantic/vhdl_hir.hpp"
+#include "fsim/support/stack_growth.hpp"
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -83,6 +84,10 @@ template <typename Function>
 void visit_delays(
     std::vector<frontend::Statement>& statements,
     Function&& function)  {
+  if (!fsim::support::stack_growth_detail::has_room()) {
+      return fsim::support::with_stack(
+          [&] { return visit_delays(statements, function); });
+  }
   for (auto& statement : statements) {
     if (!statement.vhdl_waveform.empty()) {
       for (auto& element : statement.vhdl_waveform) {
@@ -257,6 +262,10 @@ void validate_vhdl_rejection_limits(
     const std::vector<frontend::Statement>& statements,
     diagnostic::Engine& diagnostics,
     bool& valid)  {
+  if (!fsim::support::stack_growth_detail::has_room()) {
+      return fsim::support::with_stack(
+          [&] { return validate_vhdl_rejection_limits(statements, diagnostics, valid); });
+  }
   for (const auto& statement : statements) {
     if (statement.vhdl_waveform.size() > 1) {
       auto previous =

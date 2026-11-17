@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "class_expression_resolution_internal.hpp"
 #include "fsim/support/process_method.hpp"
+#include "fsim/support/stack_growth.hpp"
 #include <array>
 
 #include <algorithm>
@@ -2953,6 +2954,10 @@ void Resolver::resolve_statement(
     const Scope& inherited_scope,
     const std::optional<std::string>& return_class,
     const SystemVerilogScalarKind return_scalar) {
+  if (!fsim::support::stack_growth_detail::has_room()) {
+      return fsim::support::with_stack(
+          [&] { return resolve_statement(statement, inherited_scope, return_class, return_scalar); });
+  }
   // Only a statement that declares objects needs its own scope copy. The
   // copy and the statement's own work stay out of this frame, which every
   // nested statement repeats (a long else-if chain nests a level per branch).

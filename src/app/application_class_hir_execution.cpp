@@ -8819,6 +8819,10 @@ SystemVerilogClassHirExecution::execute(
     const bool constructor,
     const std::optional<std::size_t> return_context_width)
 {
+    if (!fsim::support::stack_growth_detail::has_room()) {
+        return fsim::support::with_stack(
+            [&] { return execute(statements, handle, environment, string_environment, constructor, return_context_width); });
+    }
     const ScopedSlot string_scope { strings_, &string_environment };
     const auto assignment_context_width = [this, handle, &environment](
                                               const semantic::ExpressionId id)

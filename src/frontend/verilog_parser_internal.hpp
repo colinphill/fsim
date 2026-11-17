@@ -994,6 +994,7 @@ class VerilogParser final : private detail::ParserBase {
       bool allow_direct_conditional_nesting);
 
   void normalize_systemverilog_generate_names(DesignUnit& unit);
+  void check_systemverilog_name_spaces(const DesignUnit& unit);
 
   void parse_generate_declaration(
       GenerateBody& body,

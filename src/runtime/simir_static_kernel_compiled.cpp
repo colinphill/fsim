@@ -196,7 +196,7 @@ namespace {
 [[nodiscard]] bool string_layout_matches()
 {
     static const bool matches = [] {
-        if (sizeof(std::string) != 32U) {
+        if (sizeof(std::string) != static_kernel_string_object_bytes) {
             return false;
         }
         const std::string local(3U, 'a');
@@ -212,7 +212,8 @@ namespace {
             return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(pointer));
         };
         return local_words[0] == address(local.data()) && local_words[1] == local.size()
-            && local_words[0] == address(&local) + 16U && local.capacity() == 15U
+            && local_words[0] == address(&local) + 16U
+            && local.capacity() == static_kernel_string_local_capacity
             && allocated_words[0] == address(allocated.data())
             && allocated_words[1] == allocated.size()
             && allocated_words[2] == allocated.capacity();

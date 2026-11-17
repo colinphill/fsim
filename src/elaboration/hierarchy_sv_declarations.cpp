@@ -1074,6 +1074,10 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_static_storage(
     const SystemVerilogPackedDefaultResolver& packed_default_resolver,
     const SystemVerilogPackedFallbackResolver& packed_fallback_resolver)
 {
+    if (!fsim::support::stack_growth_detail::has_room()) {
+        return fsim::support::with_stack(
+            [&] { return materialize_compiled_systemverilog_static_storage(unit, materialization, declarations, statements, scope_path, automatic, path, initializers, packed_type_resolver, packed_default_resolver, packed_fallback_resolver); });
+    }
     const auto& specialization = *materialization.specialization;
     // A block's items share one name space (IEEE 1800-2023 3.13, 6.21).
     std::unordered_set<std::string_view> declared_here;

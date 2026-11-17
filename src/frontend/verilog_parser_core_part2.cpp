@@ -2217,6 +2217,7 @@ DesignUnit VerilogParser::parse_module(
         }
       }
     }
+    check_systemverilog_name_spaces(unit);
     normalize_systemverilog_generate_names(unit);
     for (const auto& use : external_genvar_uses_) {
         if (!declared_genvars_.contains(use.text)) {

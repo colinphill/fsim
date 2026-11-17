@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "verilog_parser_internal.hpp"
+#include "fsim/support/stack_growth.hpp"
 
 #include <algorithm>
 #include <functional>
@@ -74,6 +75,10 @@ private:
 
   void visit(const std::vector<Statement>& statements, const Scope& outer)
   {
+    if (!fsim::support::stack_growth_detail::has_room()) {
+        return fsim::support::with_stack(
+            [&] { return visit(statements, outer); });
+    }
     for (const auto& statement : statements) {
       Scope scope = outer;
       for (const auto& declaration : statement.declarations) {
@@ -575,6 +580,16 @@ FunctionDeclaration VerilogParser::parse_function(
     error(start, "FSIM-SV-SEM-422",
         "a Verilog function must declare at least one input");
   }
+  // Only a subroutine of automatic lifetime may pass by reference, a
+  // void function among them (IEEE 1800-2023 13.5.2).
+  if (!function.automatic
+      && std::ranges::any_of(function.arguments,
+          &FunctionArgument::reference)) {
+    error(
+        start,
+        "FSIM-SV-SEM-096",
+        "ref function arguments require automatic lifetime");
+  }
   // A void function and a constructor obey the rule of every function.
   AutomaticNonblockingCheck { function,
       [&](const std::string& message) {
@@ -617,12 +632,6 @@ void VerilogParser::validate_function_body(
           start,
           "FSIM-SV-SEM-095",
           "default function arguments require input value formals");
-    }
-    if (argument.reference && !function.automatic) {
-      error(
-          start,
-          "FSIM-SV-SEM-096",
-          "ref function arguments require automatic lifetime");
     }
   }
 

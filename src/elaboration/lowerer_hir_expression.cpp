@@ -15107,7 +15107,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
     }
     if (const auto method = hir_systemverilog_enumeration_method(
             expression_id);
-        method && method->method != "name") {
+        method && method->method != support::BuiltinMethod::name) {
         return lower_hir_systemverilog_enumeration_method(
             expression_id, expected_width);
     }
@@ -30917,7 +30917,7 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
     }
     if (const auto method = hir_systemverilog_enumeration_method(
             expression_id);
-        method && method->method == "name") {
+        method && method->method == support::BuiltinMethod::name) {
         return lower_hir_systemverilog_enumeration_name(expression_id);
     }
     if (const auto actual = hir_generic_actual(expression_id)) {

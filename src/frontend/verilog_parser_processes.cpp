@@ -521,6 +521,10 @@ VerilogParser::parse_if_statement(const Token& start)
 
 std::optional<Statement> VerilogParser::parse_statement_unhoisted()
 {
+    if (!fsim::support::stack_growth_detail::has_room()) {
+        return fsim::support::with_stack(
+            [&] { return parse_statement_unhoisted(); });
+    }
     // Attribute instances may precede a statement (IEEE 1800-2017 5.12).
     if (verilog_attribute_instance_start()) {
         parse_verilog_attribute_instances();

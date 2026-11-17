@@ -11628,6 +11628,10 @@ private:
     [[nodiscard]] StatementFlow execute_statement(
         const StatementId statement_id)
     {
+        if (!fsim::support::stack_growth_detail::has_room()) {
+            return fsim::support::with_stack(
+                [&] { return execute_statement(statement_id); });
+        }
         const auto view = unit_.find_statement(statement_id);
         if (!view || view->systemverilog == nullptr
             || call_frames_.empty()) {
@@ -12336,6 +12340,10 @@ private:
     [[nodiscard]] StatementFlow execute_vhdl_statement(
         const StatementId statement_id)
     {
+        if (!fsim::support::stack_growth_detail::has_room()) {
+            return fsim::support::with_stack(
+                [&] { return execute_vhdl_statement(statement_id); });
+        }
         const auto view = unit_.find_statement(statement_id);
         if (!view || view->vhdl == nullptr || call_frames_.empty()) {
             return StatementFlow::failed;

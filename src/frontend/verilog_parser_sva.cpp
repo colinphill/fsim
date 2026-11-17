@@ -3404,6 +3404,10 @@ namespace {
 void collect_assertion_spans(const std::vector<Statement>& statements,
     std::vector<std::pair<std::uint64_t, std::uint64_t>>& spans)
 {
+    if (!fsim::support::stack_growth_detail::has_room()) {
+        return fsim::support::with_stack(
+            [&] { return collect_assertion_spans(statements, spans); });
+    }
     for (const auto& statement : statements) {
         if (statement.procedural_concurrent_assertion
             || statement.kind == StatementKind::Assert) {
@@ -3422,6 +3426,10 @@ void collect_assertion_spans(const std::vector<Statement>& statements,
 void collect_automatic_names(const std::vector<Statement>& statements,
     std::vector<std::string>& names)
 {
+    if (!fsim::support::stack_growth_detail::has_room()) {
+        return fsim::support::with_stack(
+            [&] { return collect_automatic_names(statements, names); });
+    }
     for (const auto& statement : statements) {
         for (const auto& declaration : statement.declarations) {
             if (declaration.systemverilog_automatic) {

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "vhdl_parser_internal.hpp"
+#include "fsim/support/stack_growth.hpp"
 
 namespace fsim::frontend {
 
@@ -1000,6 +1001,9 @@ void VhdlParser::parse_statement_end_label(
 }
 
 Statement VhdlParser::parse_if_branch(const Token& start) {
+  if (!fsim::support::stack_growth_detail::has_room()) {
+      return fsim::support::with_stack([&] { return parse_if_branch(start); });
+  }
   Statement statement;
   statement.kind = StatementKind::If;
   statement.condition = parse_expression();
@@ -1577,6 +1581,10 @@ Expression VhdlParser::parse_vhdl_case_choice() {
 }
 
 Statement VhdlParser::parse_conditional_signal_assignment(Statement assignment) {
+  if (!fsim::support::stack_growth_detail::has_room()) {
+      return fsim::support::with_stack(
+          [&] { return parse_conditional_signal_assignment(assignment); });
+  }
   const auto assignment_start = assignment.target.span;
   parse_vhdl_waveform(assignment);
   if (!match_keyword("when", true)) {

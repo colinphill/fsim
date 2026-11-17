@@ -2,6 +2,7 @@
 #include "application_vpi_statements.hpp"
 
 #include "application_vpi_operator_type.hpp"
+#include "fsim/support/stack_growth.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -216,6 +217,10 @@ constexpr std::uint32_t body_case = 4U;
 [[nodiscard]] std::optional<VpiStatementModel::DeclaredType> declared_type_of(
     const sv::TypeReference& type)
 {
+    if (!fsim::support::stack_growth_detail::has_room()) {
+        return fsim::support::with_stack(
+            [&] { return declared_type_of(type); });
+    }
     // A virtual interface type has the interface typespec of the interface,
     // or of its modport (25.9, 37.30).
     if (type.virtual_interface && !type.container_form
@@ -1131,6 +1136,10 @@ fsim_vpi_handle_v1 VpiStatementModel::expression_handle(
     const semantic::ExpressionId id, const fsim_vpi_handle_v1 scope,
     const fsim_vpi_handle_v1 parent)
 {
+    if (!fsim::support::stack_growth_detail::has_room()) {
+        return fsim::support::with_stack(
+            [&] { return expression_handle(id, scope, parent); });
+    }
     const auto* const record = expression(id.value());
     if (record == nullptr) {
         return 0U;
@@ -1278,6 +1287,10 @@ fsim_vpi_handle_v1 VpiStatementModel::call_callee(
 std::optional<std::string> VpiStatementModel::decompile(
     const semantic::ExpressionId id, int* precedence) const
 {
+    if (!fsim::support::stack_growth_detail::has_room()) {
+        return fsim::support::with_stack(
+            [&] { return decompile(id, precedence); });
+    }
     const auto* const record = expression(id.value());
     if (record == nullptr) {
         return std::nullopt;
@@ -1624,6 +1637,10 @@ const sv::Statement* VpiStatementModel::find_block_scope(
     const std::vector<semantic::StatementId>& statements,
     const semantic::ScopeId scope) const
 {
+    if (!fsim::support::stack_growth_detail::has_room()) {
+        return fsim::support::with_stack(
+            [&] { return find_block_scope(statements, scope); });
+    }
     for (const auto id : statements) {
         const auto* const record = statement(id.value());
         if (record == nullptr) {
@@ -1657,6 +1674,10 @@ const sv::Statement* VpiStatementModel::find_block(
     const std::vector<semantic::StatementId>& statements,
     const std::string& label) const
 {
+    if (!fsim::support::stack_growth_detail::has_room()) {
+        return fsim::support::with_stack(
+            [&] { return find_block(statements, label); });
+    }
     for (const auto id : statements) {
         const auto* const record = statement(id.value());
         if (record == nullptr) {
@@ -2930,6 +2951,10 @@ bool VpiStatementModel::targets_object(
     const std::optional<semantic::ExpressionId> id,
     const fsim_vpi_handle_v1 within, const fsim_vpi_handle_v1 object) const
 {
+    if (!fsim::support::stack_growth_detail::has_room()) {
+        return fsim::support::with_stack(
+            [&] { return targets_object(id, within, object); });
+    }
     auto current = id;
     while (current) {
         const auto* const record = expression(current->value());

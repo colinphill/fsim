@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "lowerer_internal.hpp"
 #include "fsim/frontend/parser.hpp"
+#include "fsim/support/stack_growth.hpp"
 
 namespace fsim::elaboration {
 namespace {
@@ -507,6 +508,10 @@ bool contains_hir_protected_call(
     const std::span<const semantic::StatementId> statements,
     const bool wait)
 {
+    if (!fsim::support::stack_growth_detail::has_room()) {
+        return fsim::support::with_stack(
+            [&] { return contains_hir_protected_call(unit, statements, wait); });
+    }
     for (const auto statement_id : statements) {
         const auto statement = unit.find_statement(statement_id);
         if (!statement || statement->vhdl == nullptr) {

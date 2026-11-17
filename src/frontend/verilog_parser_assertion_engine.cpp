@@ -16,6 +16,7 @@
 #include "fsim/frontend/design_core.hpp"
 #include "fsim/frontend/source.hpp"
 #include "fsim/frontend/token.hpp"
+#include "fsim/support/stack_growth.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -2693,6 +2694,10 @@ private:
 
     bool substitute(Statement& statement)
     {
+        if (!fsim::support::stack_growth_detail::has_room()) {
+            return fsim::support::with_stack(
+                [&] { return substitute(statement); });
+        }
         const auto which = statement.kind == StatementKind::TaskCall
             ? statement.task_marker
             : support::ExpressionMarker::none;

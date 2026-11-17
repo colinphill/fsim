@@ -6,6 +6,7 @@
 #include "fsim/frontend/class_specialization_selection.hpp"
 #include "fsim/frontend/parser.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
+#include "fsim/support/stack_growth.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1755,6 +1756,11 @@ private:
     void prepare_statement(frontend::Statement& input, SourceScope scope,
         const ClassTypeView& returned)
     {
+        if (!support::stack_growth_detail::has_room()) {
+            support::with_stack(
+                [&] { prepare_statement(input, std::move(scope), returned); });
+            return;
+        }
         expand_uvm_run_test(input, scope);
         if (!input.systemverilog_imports.empty()) {
             scope.block_imports.push_back(&input.systemverilog_imports);

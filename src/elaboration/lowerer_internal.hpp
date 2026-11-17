@@ -2966,10 +2966,9 @@ private:
     // An enumeration method (IEEE 1800-2017 6.19.5): `e.first()`, or the
     // parenthesis-free `e.next` that the frontend keeps as a dotted name.
     struct HirEnumerationMethod {
-        // ITEM46-LEFT: the method is held as its name and compared by name
-        // in lowerer_hir_expression.cpp too; it should become a
-        // support::BuiltinMethod once that file is converted.
-        std::string method;
+        // The enumeration method (6.19.5): first, last, next, prev, num or
+        // name.
+        support::BuiltinMethod method { support::BuiltinMethod::none };
         std::optional<semantic::ExpressionId> receiver;
         semantic::DeclarationId receiver_declaration;
         std::optional<semantic::ExpressionId> count;

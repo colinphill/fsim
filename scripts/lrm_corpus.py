@@ -719,6 +719,14 @@ VERILATOR_STANDARD_2023 = {
 }
 
 VERILATOR_NONSTANDARD = {
+    "t_enum_size": "gives enum literals sized literal values whose size differs "
+        "from the enum base type (`W = 1'b1` of `logic [2:0]`, `UW = 1'b1` of "
+        "`integer`); that is an error even when the value fits (IEEE "
+        "1800-2023 6.19)",
+    **{name: "declares `ref` formals on static module functions; passing by "
+       "reference is illegal for a subroutine of static lifetime (IEEE "
+       "1800-2023 13.5.2)" for name in ("t_func_complex", "t_func_complex_noinl",
+                                        "t_queue_back")},
     "t_covergroup_coverpoint_method_unsup": "compares get_inst_coverage "
         "with fractions of 1; coverage methods return a percentage from 0 "
         "to 100 (IEEE 1800-2023 19.11)",

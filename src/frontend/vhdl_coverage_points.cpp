@@ -10,6 +10,7 @@
 #include "fsim/frontend/design_core.hpp"
 #include "fsim/frontend/token.hpp"
 #include "fsim/support/sha256.hpp"
+#include "fsim/support/stack_growth.hpp"
 
 #include <algorithm>
 #include <cstdint>

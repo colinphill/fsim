@@ -14030,6 +14030,10 @@ std::vector<semantic::DeclarationId> inactive_generate_declarations(
     const semantic::SpecializedHirUnit& unit,
     const semantic::StatementId statement_id)
 {
+    if (!fsim::support::stack_growth_detail::has_room()) {
+        return fsim::support::with_stack(
+            [&] { return vhdl_statement_may_return(unit, statement_id); });
+    }
     const auto statement = unit.find_statement(statement_id);
     if (!statement || statement->vhdl == nullptr) {
         return true;

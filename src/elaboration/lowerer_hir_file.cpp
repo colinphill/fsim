@@ -7,6 +7,7 @@
 #include "fsim/frontend/output_format.hpp"
 #include "fsim/runtime/file_scanning.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
+#include "fsim/support/stack_growth.hpp"
 
 #include <algorithm>
 #include <array>

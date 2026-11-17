@@ -7649,18 +7649,19 @@ private:
     }
 
     // A member's string registers (KOp::str) are its Member::strings, which
-    // generated code reads and writes in the standard library's layout:
-    // the data pointer, the length, then the local buffer (data pointing at
-    // it, capacity 15) or the allocated capacity; the bytes end with a zero.
-    // StaticKernel::hold_string_file admits a member only after checking
-    // that layout at run time.
-    static_assert(sizeof(std::string) == 32U);
-    static constexpr std::uint64_t str_local_capacity = 15U;
+    // generated code reads and writes in the layout
+    // static_kernel_string_object_bytes describes; the bytes end with a
+    // zero. StaticKernel::hold_string_file admits a member only after
+    // checking at run time that the host's std::string has that layout.
+    static constexpr std::uint64_t str_object_bytes
+        = runtime::simir::static_kernel_string_object_bytes;
+    static constexpr std::uint64_t str_local_capacity
+        = runtime::simir::static_kernel_string_local_capacity;
 
     /// String register `id` (a constant) of the member's string file.
     [[nodiscard]] llvm::Value* str_object(llvm::Value* file, const std::uint64_t id)
     {
-        return builder_.CreateConstInBoundsGEP1_64(i8_, file, id * sizeof(std::string));
+        return builder_.CreateConstInBoundsGEP1_64(i8_, file, id * str_object_bytes);
     }
 
     [[nodiscard]] llvm::Value* str_data(llvm::Value* object)
@@ -8316,7 +8317,7 @@ private:
             [&] {
                 auto* position = builder_.CreateLoad(i64_, index);
                 auto* object = builder_.CreateInBoundsGEP(i8_, table,
-                    builder_.CreateMul(position, constant(sizeof(std::string))));
+                    builder_.CreateMul(position, constant(str_object_bytes)));
                 // The leading `+` is not part of the plusarg (the byte after
                 // an empty string's end is its terminating zero).
                 auto* data = str_data(object);
@@ -8537,7 +8538,7 @@ private:
         auto* holder = builder_.CreateLoad(ptr_, cell);
         auto* index = builder_.CreateLoad(i64_, builder_.CreateConstInBoundsGEP1_64(i8_, cell, 8U));
         return builder_.CreateInBoundsGEP(i8_, builder_.CreateLoad(ptr_, holder),
-            builder_.CreateMul(index, constant(sizeof(std::string))));
+            builder_.CreateMul(index, constant(str_object_bytes)));
     }
 
     [[nodiscard]] llvm::AllocaInst* str_slot(llvm::Type* type, llvm::Value* initial)

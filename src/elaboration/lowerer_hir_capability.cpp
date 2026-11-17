@@ -477,6 +477,10 @@ namespace {
         std::optional<semantic::SourceSpanId> scan_statement(
             const semantic::StatementId statement)
         {
+            if (!fsim::support::stack_growth_detail::has_room()) {
+                return fsim::support::with_stack(
+                    [&] { return scan_statement(statement); });
+            }
             if (!visited_statements_.insert(statement.value()).second) {
                 return std::nullopt;
             }
@@ -5354,7 +5358,7 @@ bool Lowerer::hir_expression_signed(
     }
     if (const auto method = hir_systemverilog_enumeration_method(
             expression_id)) {
-        return method->method == "num" || (method->method != "name"
+        return method->method == support::BuiltinMethod::num || (method->method != support::BuiltinMethod::name
             && method->signed_value);
     }
     if (const auto binding = hir_case_pattern_binding(expression_id)) {
@@ -13217,7 +13221,7 @@ bool Lowerer::hir_expression_is_string(
     }
     if (const auto method = hir_systemverilog_enumeration_method(
             expression_id)) {
-        return method->method == "name";
+        return method->method == support::BuiltinMethod::name;
     }
     if (const auto actual = hir_let_actual(expression_id)) {
         return hir_expression_is_string(*actual, process_scope);
@@ -17535,8 +17539,8 @@ std::optional<frontend::ValueDomain> Lowerer::hir_expression_domain(
     }
     if (const auto method = hir_systemverilog_enumeration_method(
             expression_id)) {
-        return method->method == "name" ? frontend::ValueDomain::String
-            : method->method == "num" || !method->four_state
+        return method->method == support::BuiltinMethod::name ? frontend::ValueDomain::String
+            : method->method == support::BuiltinMethod::num || !method->four_state
             ? frontend::ValueDomain::Bit2
             : frontend::ValueDomain::Logic4;
     }
@@ -21684,8 +21688,8 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
     }
     if (const auto method = hir_systemverilog_enumeration_method(
             expression_id)) {
-        return method->method == "num" ? std::optional<std::size_t> { 32U }
-            : method->method == "name" ? std::nullopt
+        return method->method == support::BuiltinMethod::num ? std::optional<std::size_t> { 32U }
+            : method->method == support::BuiltinMethod::name ? std::nullopt
                                        : std::optional { method->width };
     }
     if (hir_vhdl_function_name(expression_id)) {

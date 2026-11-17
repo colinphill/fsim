@@ -14,6 +14,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace fsim::tests::frontend {
 
@@ -999,6 +1000,58 @@ endmodule
     require(
         !collision.ok() && has_code(collision, "FSIM-SV-SEM-386"),
         "explicit generate names cannot collide across declarations or schemes");
+
+    // A name is declared once in its module or block name space (IEEE
+    // 1800-2023 3.13 e, f; 9.3.5).
+    const std::pair<const char*, const char*> name_space_collisions[] {
+        { "two procedures", "initial begin : a end initial begin : a end" },
+        { "block and variable", "int a; initial begin : a end" },
+        { "block and task", "task a; endtask initial begin : a end" },
+        { "variable and task", "int a; task a; endtask" },
+        { "two instances", "leaf a(); leaf a();" },
+        { "assertion actions",
+          "logic c; assert property (@(posedge c) 1) begin : a end "
+          "else begin : a end" },
+        { "sibling blocks",
+          "initial begin begin : a end begin : a end end" },
+        { "block local and label",
+          "initial begin int a; if (1) begin : a end end" },
+        { "fork branches",
+          "initial fork begin : a end begin : a end join" },
+        { "task body", "task k; begin : a end begin : a end endtask" },
+        { "generate block", "if (1) begin : g int a; task a; endtask end" },
+    };
+    for (const auto& [what, body] : name_space_collisions) {
+        const auto result = parse_verilog(
+            SourceText { "name-space-collision.sv",
+                std::string { "module leaf; endmodule\nmodule t;\n" } + body
+                    + "\nendmodule\n" },
+            StandardRevision::SystemVerilog2023);
+        require(!result.ok() && has_code(result, "FSIM-SV-SEM-478"),
+            std::string { "a name declared twice in one name space: " } + what);
+    }
+    const std::pair<const char*, const char*> name_space_distinct[] {
+        { "procedure bodies",
+          "initial begin begin : a end end initial begin begin : a end end" },
+        { "inner block and module variable",
+          "int a; initial begin begin : a end end" },
+        { "nested block of the same name", "initial begin : a begin : a end end" },
+        { "loop scopes",
+          "initial begin for (int i = 0; i < 2; i++) begin : a end "
+          "for (int i = 0; i < 2; i++) begin : a end end" },
+        { "forward class", "typedef class C; class C; endclass" },
+        { "non-ANSI port and its net", "" },
+    };
+    for (const auto& [what, body] : name_space_distinct) {
+        const bool port = std::string_view { what } == "non-ANSI port and its net";
+        const auto result = parse_verilog(
+            SourceText { "name-space-distinct.sv",
+                port ? std::string { "module t(a); input a; wire a; endmodule\n" }
+                     : std::string { "module t;\n" } + body + "\nendmodule\n" },
+            StandardRevision::SystemVerilog2023);
+        require(result.ok() && !has_code(result, "FSIM-SV-SEM-478"),
+            std::string { "names in different name spaces: " } + what);
+    }
 
     const auto generated_classes = parse_verilog(
         SourceText { "generated-interface-class-2023.sv", R"(

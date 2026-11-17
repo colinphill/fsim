@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/frontend/class_inheritance.hpp"
 #include "fsim/frontend/class_resolution.hpp"
+#include "fsim/support/stack_growth.hpp"
 
 #include <algorithm>
 #include <functional>
@@ -263,6 +264,10 @@ class_ancestry(
 void collect_base_constructor_calls(
     const std::span<const Statement> statements,
     std::vector<const Statement*>& calls) {
+  if (!fsim::support::stack_growth_detail::has_room()) {
+      return fsim::support::with_stack(
+          [&] { return collect_base_constructor_calls(statements, calls); });
+  }
   for (const auto& statement : statements) {
     if (base_constructor_call(statement)) calls.push_back(&statement);
     collect_base_constructor_calls(statement.statements, calls);
