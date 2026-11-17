@@ -1185,6 +1185,123 @@ void test_logic9_storage_profile()
     assert(bytes.substr(offset, packed.size()) == packed);
 }
 
+// The same changes in one value-change block and, under a small container
+// limit, in many: a block after the first starts from the values the ones
+// before it leave.
+[[nodiscard]] std::string write_block_container(const std::size_t container_bytes)
+{
+    using namespace fsim::runtime;
+    FstExtendedTypeMetadata metadata;
+    metadata.kind = FstExtendedTypeKind::VhdlLogic9;
+    metadata.language = FstTypeLanguage::Vhdl;
+    metadata.nominal_name = "std_logic_vector";
+    metadata.width = 3U;
+    metadata.enumeration_literals = {
+        "'U'", "'X'", "'0'", "'1'", "'Z'", "'W'", "'L'", "'H'", "'-'"
+    };
+    TraceDeclarationBuilder builder;
+    const auto bit = builder.add_variable("top.bit", 1U);
+    const auto bus = builder.add_variable("top.bus", 8U);
+    const auto nine = builder.add_typed_variable(
+        "top.nine", TraceTypeKind::VhdlLogic9, 3U,
+        SystemVerilogScalarKind::None,
+        canonical_fst_type_metadata(metadata));
+    const auto model = std::move(builder).freeze();
+    std::ostringstream output;
+    FstWriterLimits limits;
+    limits.maximum_container_bytes = container_bytes;
+    FstWriter writer { output, -9, limits };
+    writer.declare(model);
+    writer.begin();
+    writer.set_initial_value(bit,
+        encode_fst_logic_value(PackedLogic4::from_msb_string("x")));
+    writer.set_initial_value(bus,
+        encode_fst_logic_value(PackedLogic4::from_msb_string("0000000z")));
+    constexpr std::string_view symbols { "UX01ZWLH-" };
+    for (SimulationTick time = 1U; time <= 400U; ++time) {
+        writer.change({ bit, time, 0U, TraceRegion::Active, 0U },
+            encode_fst_logic_value(PackedLogic4::from_msb_string(
+                (time & 1U) != 0U ? "1" : "0")));
+        if (time % 3U == 0U) {
+            std::string value;
+            for (int shift = 7; shift >= 0; --shift) {
+                value.push_back(((time >> shift) & 1U) != 0U ? '1' : '0');
+            }
+            writer.change({ bus, time, 0U, TraceRegion::Active, 1U },
+                encode_fst_logic_value(PackedLogic4::from_msb_string(value)));
+        }
+        if (time % 5U == 0U) {
+            std::string value;
+            for (std::size_t at = 0U; at < 3U; ++at) {
+                value.push_back(symbols[(time / 5U + at) % symbols.size()]);
+            }
+            writer.change({ nine, time, 0U, TraceRegion::Active, 2U },
+                encode_fst_extended_value(PackedLogic4::from_logic9_msb_string(value),
+                    FstValueProfile::VhdlLogic9, metadata));
+        }
+    }
+    writer.close(400U);
+    return output.str();
+}
+
+[[nodiscard]] std::uint64_t value_block_count(const std::string& bytes)
+{
+    // The header's field after the handle count.
+    std::uint64_t value = 0U;
+    for (std::size_t at = 65U; at < 73U; ++at) {
+        value = (value << 8U) | static_cast<unsigned char>(bytes.at(at));
+    }
+    return value;
+}
+
+void test_value_blocks()
+{
+    using namespace fsim::runtime;
+    const auto one = write_block_container(512U << 20U);
+    const auto many = write_block_container(2048U);
+    assert(value_block_count(one) == 1U);
+    assert(value_block_count(many) > 4U);
+    const auto single = read_fst(one);
+    const auto split = read_fst(many);
+    assert(single.ok() && split.ok());
+    assert(single.trace->timestamps == split.trace->timestamps);
+    assert(single.trace->values.size() == split.trace->values.size());
+    assert(single.trace->values.size() == 2U + 400U + 133U + 80U);
+    assert(single.trace->semantic_digest == split.trace->semantic_digest);
+}
+
+// One-bit changes as libfst codes them: 0 and 1 with the time delta above
+// two tag bits, x and z as an index into "xzhuwl-?" above four.
+void test_scalar_wave_codes()
+{
+    using namespace fsim::runtime;
+    TraceDeclarationBuilder builder;
+    const auto bit = builder.add_variable("top.bit", 1U);
+    const auto model = std::move(builder).freeze();
+    std::ostringstream output;
+    FstWriter writer { output, -9, { }, FstWriterCompression::None };
+    writer.declare(model);
+    writer.begin();
+    constexpr std::array<std::string_view, 4> values { "1", "x", "z", "0" };
+    for (std::size_t at = 0U; at < values.size(); ++at) {
+        writer.change({ bit, static_cast<SimulationTick>(at + 1U), 0U,
+                          TraceRegion::Active, 0U },
+            encode_fst_logic_value(PackedLogic4::from_msb_string(values[at])));
+    }
+    writer.close(4U);
+    const auto bytes = output.str();
+    // The chain: its sentinel, then each change one time index after the
+    // last (the first from index 0).
+    const std::string chain { "\x00\x02\x11\x13\x04", 5U };
+    assert(bytes.find(chain) != std::string::npos);
+    const auto parsed = read_fst(bytes);
+    assert(parsed.ok() && parsed.trace->values.size() == 4U);
+    for (std::size_t at = 0U; at < values.size(); ++at) {
+        assert(parsed.trace->values[at].payload == values[at]);
+        assert(parsed.trace->values[at].time == at + 1U);
+    }
+}
+
 void test_ordered_changes_and_validation()
 {
     using namespace fsim::runtime;
@@ -1551,6 +1668,14 @@ int main(const int argc, const char* const argv[])
     test_streaming_output_does_not_seek();
     test_streaming_validation_at_close();
     test_compression_profiles();
+    test_value_blocks();
+    test_scalar_wave_codes();
+    if (argc == 3 && std::string_view { argv[1] } == "--emit-blocks") {
+        const auto bytes = write_block_container(2048U);
+        std::ofstream output { argv[2], std::ios::binary | std::ios::trunc };
+        output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        return output ? 0 : 1;
+    }
     if (argc == 3 && std::string_view { argv[1] } == "--emit") {
         const auto bytes = write_container(make_model());
         std::ofstream output { argv[2], std::ios::binary | std::ios::trunc };

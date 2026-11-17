@@ -80,6 +80,13 @@ therefore produce equal bytes across the supported Linux and Windows boundary;
 the uncompressed profile is a distinct portable identity with the same
 decoded semantic digest.
 
+A run's FST trace takes every change: the writer spools changes to disk and
+splits them into value-change blocks between timestamps, each block within
+the container limit. The first block starts from an unknown frame with the
+initial values as each chain's first entry; a later block's frame holds the
+values the blocks before it leave. Wave chains, one-bit codes and the
+position table use libfst's codings, so GTKWave reads the files.
+
 Trace format, compression, declaration identity, selection, lifecycle, output
 intent, report, and semantic identity survive object, design, mapped-library,
 native-cache, and checkpoint archives. Output paths are stored relative to the

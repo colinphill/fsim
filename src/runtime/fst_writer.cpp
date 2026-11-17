@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -117,6 +118,22 @@ namespace {
             }
             output.push_back(byte);
         } while (value != 0);
+    }
+
+    // A signed varint (libfst's fstWriterSVarint): seven bits a byte, the
+    // last byte's bit 6 the sign.
+    void append_svarint(Bytes& output, std::int64_t value)
+    {
+        while (true) {
+            auto byte = static_cast<std::uint8_t>(value & 0x7f);
+            value >>= 7;
+            if ((value == 0 && (byte & 0x40U) == 0U)
+                || (value == -1 && (byte & 0x40U) != 0U)) {
+                append_u8(output, byte);
+                return;
+            }
+            append_u8(output, static_cast<std::uint8_t>(byte | 0x80U));
+        }
     }
 
     void append_c_string(Bytes& output, const std::string_view value)
@@ -451,15 +468,23 @@ namespace {
         const std::string_view symbols)
     {
         if (symbols.size() == 1U) {
-            if (time_delta > (std::numeric_limits<std::uint64_t>::max() >> 2U)) {
+            // As libfst codes a one-bit change: 0 and 1 in two tag bits,
+            // the others as an index into "xzhuwl-?" in four.
+            const auto symbol = symbols.front();
+            if (symbol == '0' || symbol == '1') {
+                if (time_delta > (std::numeric_limits<std::uint64_t>::max() >> 2U)) {
+                    throw std::length_error("FST scalar time delta overflows");
+                }
+                append_varint(output, (time_delta << 2U) | (symbol == '1' ? 2U : 0U));
+                return;
+            }
+            const auto index = symbol == 'x' ? 0U
+                : symbol == 'z'              ? 1U
+                                             : throw std::invalid_argument("unsupported FST scalar symbol");
+            if (time_delta > (std::numeric_limits<std::uint64_t>::max() >> 4U)) {
                 throw std::length_error("FST scalar time delta overflows");
             }
-            const auto value = symbols.front() == '0' ? 0U
-                : symbols.front() == '1'              ? 2U
-                : symbols.front() == 'x'              ? 1U
-                : symbols.front() == 'z'              ? 3U
-                                                      : throw std::invalid_argument("unsupported FST scalar symbol");
-            append_varint(output, (time_delta << 2U) | value);
+            append_varint(output, (time_delta << 4U) | (index << 1U) | 1U);
             return;
         }
         if (time_delta > (std::numeric_limits<std::uint64_t>::max() >> 1U)) {
@@ -536,6 +561,36 @@ namespace {
         output.resize(output.size() + fst_storage_width(type), 'x');
     }
 
+    // A value as the frame stores it (append_unknown_initial_value's
+    // layout): a string has no frame storage.
+    void store_frame_value(
+        Bytes& frame,
+        const std::size_t offset,
+        const TraceTypeDeclaration& type,
+        const FstPayloadKind payload_kind,
+        const std::string_view payload,
+        const std::uint64_t real_bits)
+    {
+        const auto width = fst_storage_width(type);
+        if (width == 0U) {
+            return;
+        }
+        Bytes value;
+        if (payload_kind == FstPayloadKind::Real) {
+            append_le64(value, real_bits);
+        } else if (type.kind == TraceTypeKind::VhdlLogic9) {
+            const auto symbols = logic9_binary_symbols(payload);
+            value.assign(symbols.begin(), symbols.end());
+        } else {
+            value.assign(payload.begin(), payload.end());
+        }
+        if (value.size() != width || offset > frame.size()
+            || width > frame.size() - offset) {
+            throw std::logic_error("FST frame value width is inconsistent");
+        }
+        std::ranges::copy(value, frame.begin() + static_cast<std::ptrdiff_t>(offset));
+    }
+
     [[nodiscard]] Bytes encode_positions(
         const std::vector<std::optional<std::uint64_t>>& positions)
     {
@@ -556,11 +611,14 @@ namespace {
             flush_zeros();
             if (*position <= previous_positive
                 || *position - previous_positive
-                    > (std::numeric_limits<std::uint64_t>::max() >> 1U)) {
+                    > static_cast<std::uint64_t>(
+                        std::numeric_limits<std::int64_t>::max() >> 1U)) {
                 throw std::length_error("FST value position exceeds its field");
             }
+            // A position (odd) is a signed varint, a run of handles without
+            // a chain (even) an unsigned one, as libfst reads them.
             const auto delta = *position - previous_positive;
-            append_varint(result, (delta << 1U) | 1U);
+            append_svarint(result, static_cast<std::int64_t>((delta << 1U) | 1U));
             previous_positive = *position;
         }
         flush_zeros();
@@ -579,6 +637,9 @@ namespace {
         TraceEvent event;
         std::uint64_t insertion_order { };
         std::uint64_t handle { };
+        /// The value-change block (publish_container) and the event's
+        /// position in that block's time table.
+        std::uint64_t block { };
         std::uint64_t time_index { };
         FstValueProfile profile { FstValueProfile::LogicVector };
         FstPayloadKind payload_kind { FstPayloadKind::Symbols };
@@ -670,6 +731,9 @@ namespace {
         const SpoolEvent& left,
         const SpoolEvent& right) noexcept
     {
+        if (left.block != right.block) {
+            return left.block < right.block;
+        }
         if (left.handle != right.handle) {
             return left.handle < right.handle;
         }
@@ -821,6 +885,7 @@ namespace {
         write_native(output, event.event.sequence);
         write_native(output, event.insertion_order);
         write_native(output, event.handle);
+        write_native(output, event.block);
         write_native(output, event.time_index);
         write_native(output, static_cast<std::uint8_t>(event.event.region));
         write_native(output, static_cast<std::uint8_t>(event.profile));
@@ -851,6 +916,7 @@ namespace {
         event.event.sequence = read_native<std::uint64_t>(input);
         event.insertion_order = read_native<std::uint64_t>(input);
         event.handle = read_native<std::uint64_t>(input);
+        event.block = read_native<std::uint64_t>(input);
         event.time_index = read_native<std::uint64_t>(input);
         const auto region = read_native<std::uint8_t>(input);
         const auto profile = read_native<std::uint8_t>(input);
@@ -1154,6 +1220,9 @@ struct FstWriter::Impl {
     }
 
     std::ostream& output;
+    /// Where write_output_bytes writes: the output, or a work file the
+    /// value-change blocks are assembled in.
+    std::ostream* sink { };
     std::int8_t timescale_exponent;
     FstWriterLimits limits;
     FstWriterCompression compression;
@@ -1515,7 +1584,8 @@ struct FstWriter::Impl {
 
     [[nodiscard]] Bytes header(
         const SimulationTick final_time,
-        const std::size_t handle_count) const
+        const std::size_t handle_count,
+        const std::size_t block_count) const
     {
         Bytes result;
         append_u8(result, fst_block_header);
@@ -1529,7 +1599,7 @@ struct FstWriter::Impl {
                 + static_cast<std::size_t>(has_root_declarations()));
         append_be64(result, declarations->entries().size());
         append_be64(result, handle_count);
-        append_be64(result, handle_count == 0 ? 0 : 1);
+        append_be64(result, handle_count == 0 ? 0 : block_count);
         append_u8(result, static_cast<std::uint8_t>(timescale_exponent));
         const auto profile = compression == FstWriterCompression::Deterministic
             ? kFstDeterministicContainerProfile
@@ -1550,8 +1620,9 @@ struct FstWriter::Impl {
         constexpr std::size_t chunk_size = 64U * 1024U;
         while (size != 0U) {
             const auto count = std::min(size, chunk_size);
-            output.write(data, static_cast<std::streamsize>(count));
-            if (!output) {
+            auto& target = sink != nullptr ? *sink : output;
+            target.write(data, static_cast<std::streamsize>(count));
+            if (!target) {
                 throw std::runtime_error("failed to publish FST output");
             }
             data += count;
@@ -1626,29 +1697,118 @@ struct FstWriter::Impl {
         }
         ensure_workspace();
 
-        const auto times_path = workspace->named_path("timestamps.bin");
-        auto times_output = support::native_fs::open_ofstream(
-            times_path, std::ios::binary | std::ios::trunc);
-        if (!times_output) {
-            throw std::runtime_error(
-                "failed to create FST temporary work file");
+        // The per-handle signals and the frame layout.
+        std::vector<TraceSignalId> signals(types.size());
+        for (const auto& [signal, handle] : handles) {
+            if (handle == 0U || handle > signals.size()) {
+                throw std::logic_error(
+                    "FST signal handle is outside its geometry block");
+            }
+            signals[static_cast<std::size_t>(handle - 1U)] = { signal };
         }
-        std::size_t times_size = 0;
+        std::size_t bits_size = 0;
+        Bytes initial_bits;
+        std::vector<std::size_t> frame_offsets(types.size());
+        for (std::size_t index = 0; index < types.size(); ++index) {
+            const auto width = fst_storage_width(*types[index]);
+            if (width > limits.maximum_container_bytes - bits_size) {
+                throw std::length_error(
+                    "FST initial value frame exceeds its limit");
+            }
+            frame_offsets[index] = bits_size;
+            bits_size += width;
+            append_unknown_initial_value(initial_bits, *types[index]);
+        }
+        if (initial_bits.size() != bits_size) {
+            throw std::logic_error("FST initial value width is inconsistent");
+        }
+        // The values the changes so far leave: the frame a later block
+        // starts from.
+        auto state_bits = initial_bits;
+        for (std::size_t index = 0; index < types.size(); ++index) {
+            const auto found = initial_values.find(signals[index].value);
+            if (found == initial_values.end()) {
+                continue;
+            }
+            const auto& value = found->second;
+            store_frame_value(state_bits, frame_offsets[index], *types[index],
+                value.payload_kind(),
+                value.payload_kind() == FstPayloadKind::Real
+                    ? std::string_view { }
+                    : value.payload_kind() == FstPayloadKind::String
+                    ? value.string_bytes()
+                    : value.symbols(),
+                value.real_bits());
+        }
+
+        // Value changes go in blocks cut between timestamps, each block's
+        // changes within half the container limit by estimate (the limit
+        // itself is checked as each block is written).
+        struct BlockPlan {
+            SimulationTick start { };
+            SimulationTick end { };
+            std::size_t timestamp_count { };
+            std::size_t times_size { };
+        };
+        const auto block_name = [](const std::string_view kind, const std::size_t block) {
+            return std::string { kind } + "-" + std::to_string(block) + ".bin";
+        };
+        const auto block_budget = limits.maximum_container_bytes / 2U;
+        std::vector<BlockPlan> blocks;
+        std::ofstream times_output;
+        std::size_t block_estimate = 0;
         std::size_t timestamp_count = 0;
         std::optional<SimulationTick> previous_timestamp;
+        const auto open_block = [&](const SimulationTick start) {
+            if (times_output.is_open()) {
+                times_output.close();
+                if (!times_output) {
+                    throw std::runtime_error(
+                        "failed to finish FST temporary work file");
+                }
+            }
+            const auto block = blocks.size();
+            if (block != 0U) {
+                // The frame of a later block: the values at its start.
+                auto frame_output = support::native_fs::open_ofstream(
+                    workspace->named_path(block_name("frame", block)),
+                    std::ios::binary | std::ios::trunc);
+                frame_output.write(reinterpret_cast<const char*>(state_bits.data()),
+                    static_cast<std::streamsize>(state_bits.size()));
+                frame_output.close();
+                if (!frame_output) {
+                    throw std::runtime_error(
+                        "failed to write FST temporary work file");
+                }
+            }
+            blocks.push_back({ start, start, 0U, 0U });
+            block_estimate = 0;
+            times_output = support::native_fs::open_ofstream(
+                workspace->named_path(block_name("timestamps", block)),
+                std::ios::binary | std::ios::trunc);
+            if (!times_output) {
+                throw std::runtime_error(
+                    "failed to create FST temporary work file");
+            }
+        };
         const auto append_timestamp = [&](const SimulationTick timestamp) {
             if (timestamp_count == limits.maximum_timestamps) {
                 throw std::length_error(
                     "FST timestamp count exceeds its limit");
             }
-            const auto delta = previous_timestamp
+            auto& block = blocks.back();
+            // A block's time table starts from zero.
+            const auto delta = block.timestamp_count != 0U
                 ? timestamp - *previous_timestamp
                 : timestamp;
             append_varint_to_stream(times_output, delta);
-            checked_add_size(times_size, varint_size(delta));
+            checked_add_size(block.times_size, varint_size(delta));
             previous_timestamp = timestamp;
+            block.end = timestamp;
+            ++block.timestamp_count;
             ++timestamp_count;
         };
+        open_block(initial_time);
         if (!initial_values.empty()) {
             append_timestamp(initial_time);
         }
@@ -1681,11 +1841,24 @@ struct FstWriter::Impl {
                 }
                 if (!previous_timestamp
                     || event.event.time != *previous_timestamp) {
+                    if (block_estimate >= block_budget
+                        && blocks.back().timestamp_count != 0U) {
+                        open_block(event.event.time);
+                    }
                     append_timestamp(event.event.time);
                 }
                 event.handle = handle->second;
+                event.block = blocks.size() - 1U;
                 event.time_index
-                    = static_cast<std::uint64_t>(timestamp_count - 1U);
+                    = static_cast<std::uint64_t>(blocks.back().timestamp_count - 1U);
+                const auto handle_index = static_cast<std::size_t>(event.handle - 1U);
+                const auto& type = *types[handle_index];
+                checked_add_size(block_estimate,
+                    (type.kind == TraceTypeKind::VhdlLogic9 ? 4U : 1U)
+                            * event.payload.size()
+                        + 18U);
+                store_frame_value(state_bits, frame_offsets[handle_index], type,
+                    event.payload_kind, event.payload, event.real_bits);
                 stage_spool_event(
                     std::move(event), indexed_runs,
                     &indexed_event_order_less,
@@ -1704,58 +1877,48 @@ struct FstWriter::Impl {
             throw std::runtime_error(
                 "failed to finish FST temporary work file");
         }
+        blocks.back().end = final_time;
         spill_event_buffer(indexed_runs, &indexed_event_order_less);
         auto indexed_pass_runs = indexed_runs.finish(
             *workspace, limits, &indexed_event_order_less);
 
-        std::size_t bits_size = 0;
-        Bytes initial_bits;
-        std::vector<TraceSignalId> signals(types.size());
-        for (const auto& [signal, handle] : handles) {
-            if (handle == 0U || handle > signals.size()) {
-                throw std::logic_error(
-                    "FST signal handle is outside its geometry block");
-            }
-            signals[static_cast<std::size_t>(handle - 1U)] = { signal };
-        }
-        for (const auto* type : types) {
-            const auto width = fst_storage_width(*type);
-            if (width > limits.maximum_container_bytes - bits_size) {
-                throw std::length_error(
-                    "FST initial value frame exceeds its limit");
-            }
-            bits_size += width;
-            append_unknown_initial_value(initial_bits, *type);
-        }
-        if (initial_bits.size() != bits_size) {
-            throw std::logic_error("FST initial value width is inconsistent");
-        }
-        auto stored_bits = initial_bits;
         const auto& initial_compression = fst_compression_profile(
             FstCompressionKind::InitialValueZlibFixedV1);
-        if (compression == FstWriterCompression::Deterministic
-            && initial_bits.size()
-                >= initial_compression.minimum_input_bytes) {
-            stored_bits = compress_fst_block(initial_bits,
-                FstCompressionKind::InitialValueZlibFixedV1,
-                { limits.maximum_container_bytes,
-                    limits.maximum_container_bytes })
-                              .bytes;
-        }
 
-        const auto waves_path = workspace->named_path("waves.bin");
-        auto waves_output = support::native_fs::open_ofstream(
-            waves_path, std::ios::binary | std::ios::trunc);
-        if (!waves_output) {
+        // The blocks, assembled in a work file: nothing is published until
+        // the whole container is.
+        const auto blocks_path = workspace->named_path("blocks.bin");
+        auto blocks_output = support::native_fs::open_ofstream(
+            blocks_path, std::ios::binary | std::ios::trunc);
+        if (!blocks_output) {
             throw std::runtime_error(
                 "failed to create FST temporary work file");
         }
-        std::vector<std::optional<std::uint64_t>> wave_positions(types.size());
+        std::uint64_t blocks_size = 0;
+        std::size_t current_block = 0;
+        std::ofstream waves_output;
+        std::filesystem::path waves_path;
+        std::vector<std::optional<std::uint64_t>> wave_positions;
         std::uint64_t waves_size = 0;
         std::uint64_t active_chain_count = 0;
         std::size_t current_handle = 0;
         bool handle_started = false;
         std::optional<std::uint64_t> previous_time_index;
+        const auto begin_block = [&] {
+            waves_path = workspace->named_path(block_name("waves", current_block));
+            waves_output = support::native_fs::open_ofstream(
+                waves_path, std::ios::binary | std::ios::trunc);
+            if (!waves_output) {
+                throw std::runtime_error(
+                    "failed to create FST temporary work file");
+            }
+            wave_positions.assign(types.size(), std::nullopt);
+            waves_size = 0;
+            active_chain_count = 0;
+            current_handle = 0;
+            handle_started = false;
+            previous_time_index.reset();
+        };
         const auto append_wave_bytes = [&](const Bytes& bytes) {
             if (bytes.size()
                 > limits.maximum_container_bytes
@@ -1790,6 +1953,11 @@ struct FstWriter::Impl {
         const auto start_handle = [&](const std::size_t handle_index) {
             handle_started = true;
             previous_time_index.reset();
+            // The first block's chains start with the initial values; a
+            // later block's frame holds the values at its start.
+            if (current_block != 0U) {
+                return;
+            }
             const auto found = initial_values.find(
                 signals[handle_index].value);
             if (found != initial_values.end()) {
@@ -1802,7 +1970,124 @@ struct FstWriter::Impl {
                 previous_time_index = 0U;
             }
         };
+        const auto finish_block = [&] {
+            if (current_block == 0U) {
+                if (!handle_started) {
+                    current_handle = 0;
+                    start_handle(current_handle);
+                }
+                while (current_handle + 1U < types.size()) {
+                    ++current_handle;
+                    start_handle(current_handle);
+                }
+            }
+            waves_output.close();
+            if (!waves_output) {
+                throw std::runtime_error(
+                    "failed to finish FST temporary work file");
+            }
+            if (waves_size > limits.maximum_container_bytes
+                || active_chain_count > waves_size) {
+                throw std::length_error(
+                    "FST value frame exceeds its container limit");
+            }
+            const auto& plan = blocks[current_block];
+            const auto memory_required = waves_size - active_chain_count;
+            const auto positions = encode_positions(wave_positions);
+            Bytes frame_bits;
+            if (current_block == 0U) {
+                frame_bits = initial_bits;
+            } else {
+                frame_bits.resize(bits_size);
+                auto frame_input = support::native_fs::open_ifstream(
+                    workspace->named_path(block_name("frame", current_block)),
+                    std::ios::binary);
+                frame_input.read(reinterpret_cast<char*>(frame_bits.data()),
+                    static_cast<std::streamsize>(frame_bits.size()));
+                if (frame_input.gcount()
+                    != static_cast<std::streamsize>(frame_bits.size())) {
+                    throw std::runtime_error(
+                        "truncated FST temporary work file");
+                }
+            }
+            auto stored_bits = frame_bits;
+            if (compression == FstWriterCompression::Deterministic
+                && frame_bits.size()
+                    >= initial_compression.minimum_input_bytes) {
+                stored_bits = compress_fst_block(frame_bits,
+                    FstCompressionKind::InitialValueZlibFixedV1,
+                    { limits.maximum_container_bytes,
+                        limits.maximum_container_bytes })
+                                  .bytes;
+            }
+            std::size_t values_payload_size = 24U;
+            checked_add_size(values_payload_size, varint_size(bits_size));
+            checked_add_size(
+                values_payload_size, varint_size(stored_bits.size()));
+            checked_add_size(
+                values_payload_size, varint_size(types.size()));
+            checked_add_size(values_payload_size, stored_bits.size());
+            const auto encoded_chains
+                = active_chain_count == 0U ? 0U : types.size();
+            checked_add_size(
+                values_payload_size, varint_size(encoded_chains));
+            checked_add_size(values_payload_size, 1U);
+            if (waves_size > std::numeric_limits<std::size_t>::max()) {
+                throw std::length_error("FST value frame size overflows");
+            }
+            checked_add_size(
+                values_payload_size, static_cast<std::size_t>(waves_size));
+            checked_add_size(values_payload_size, positions.size());
+            checked_add_size(values_payload_size, 8U);
+            checked_add_size(values_payload_size, plan.times_size);
+            checked_add_size(values_payload_size, 8U);
+            checked_add_size(values_payload_size, 8U);
+            checked_add_size(values_payload_size, 8U);
+            if (values_payload_size > limits.maximum_container_bytes - 9U) {
+                throw std::length_error("FST value block exceeds its container limit");
+            }
+            struct SinkScope {
+                std::ostream*& sink;
+                ~SinkScope() { sink = nullptr; }
+            } scope { sink };
+            sink = &blocks_output;
+            const auto block_type = fst_block_value_changes;
+            write_output_bytes(
+                reinterpret_cast<const char*>(&block_type), sizeof(block_type));
+            write_output_be64(
+                static_cast<std::uint64_t>(values_payload_size) + 8U);
+            write_output_be64(plan.start);
+            write_output_be64(plan.end);
+            write_output_be64(memory_required);
+            write_output_varint(bits_size);
+            write_output_varint(stored_bits.size());
+            write_output_varint(types.size());
+            write_output_bytes(stored_bits);
+            write_output_varint(encoded_chains);
+            const auto marker = static_cast<std::uint8_t>('4');
+            write_output_bytes(
+                reinterpret_cast<const char*>(&marker), sizeof(marker));
+            copy_workspace_file(waves_path, waves_size);
+            write_output_bytes(positions);
+            write_output_be64(positions.size());
+            copy_workspace_file(
+                workspace->named_path(block_name("timestamps", current_block)),
+                plan.times_size);
+            write_output_be64(plan.times_size);
+            write_output_be64(plan.times_size);
+            write_output_be64(plan.timestamp_count);
+            blocks_size += 9U + static_cast<std::uint64_t>(values_payload_size);
+        };
         const auto append_event = [&](const SpoolEvent& event) {
+            if (event.block >= blocks.size() || event.block < current_block) {
+                throw std::runtime_error(
+                    "FST temporary event is outside its block");
+            }
+            while (current_block < event.block) {
+                finish_block();
+                ++current_block;
+                begin_block();
+            }
             const auto handle_index
                 = static_cast<std::size_t>(event.handle - 1U);
             if (handle_index >= types.size()
@@ -1832,6 +2117,9 @@ struct FstWriter::Impl {
             append_wave_bytes(change_bytes);
             previous_time_index = event.time_index;
         };
+        if (!types.empty()) {
+            begin_block();
+        }
         for_each_merged_run_event(
             *workspace, indexed_pass_runs, limits,
             &indexed_event_order_less,
@@ -1840,28 +2128,20 @@ struct FstWriter::Impl {
             workspace->remove_run(run_id);
         }
         if (!types.empty()) {
-            if (!handle_started) {
-                current_handle = 0;
-                start_handle(current_handle);
-            }
-            while (current_handle + 1U < types.size()) {
-                ++current_handle;
-                start_handle(current_handle);
+            while (true) {
+                finish_block();
+                if (current_block + 1U >= blocks.size()) {
+                    break;
+                }
+                ++current_block;
+                begin_block();
             }
         }
-        waves_output.close();
-        if (!waves_output) {
+        blocks_output.close();
+        if (!blocks_output) {
             throw std::runtime_error(
                 "failed to finish FST temporary work file");
         }
-        if (waves_size > limits.maximum_container_bytes
-            || active_chain_count > waves_size) {
-            throw std::length_error(
-                "FST value frame exceeds its container limit");
-        }
-        const auto memory_required
-            = waves_size - active_chain_count;
-        const auto positions = encode_positions(wave_positions);
 
         Bytes geometry;
         for (const auto* type : types) {
@@ -1884,48 +2164,20 @@ struct FstWriter::Impl {
             compressed_hierarchy.bytes.begin(),
             compressed_hierarchy.bytes.end());
 
-        const auto header_bytes = header(final_time, types.size());
-        std::size_t values_payload_size = 0;
-        if (!types.empty()) {
-            values_payload_size = 24U;
-            checked_add_size(values_payload_size, varint_size(bits_size));
-            checked_add_size(
-                values_payload_size, varint_size(stored_bits.size()));
-            checked_add_size(
-                values_payload_size, varint_size(types.size()));
-            checked_add_size(values_payload_size, stored_bits.size());
-            const auto encoded_chains
-                = active_chain_count == 0U ? 0U : types.size();
-            checked_add_size(
-                values_payload_size, varint_size(encoded_chains));
-            checked_add_size(values_payload_size, 1U);
-            if (waves_size > std::numeric_limits<std::size_t>::max()) {
-                throw std::length_error("FST value frame size overflows");
-            }
-            checked_add_size(
-                values_payload_size, static_cast<std::size_t>(waves_size));
-            checked_add_size(values_payload_size, positions.size());
-            checked_add_size(values_payload_size, 8U);
-            checked_add_size(values_payload_size, times_size);
-            checked_add_size(values_payload_size, 8U);
-            checked_add_size(values_payload_size, 8U);
-            checked_add_size(values_payload_size, 8U);
-        }
-
+        const auto header_bytes = header(final_time, types.size(), blocks.size());
         std::size_t total_size = header_bytes.size();
         if (types.empty()) {
             checked_add_size(total_size, 36U);
         } else {
-            checked_add_size(total_size, 9U);
-            checked_add_size(total_size, values_payload_size);
+            if (blocks_size > std::numeric_limits<std::size_t>::max()) {
+                throw std::length_error("FST container size overflows");
+            }
+            checked_add_size(total_size, static_cast<std::size_t>(blocks_size));
         }
         checked_add_size(total_size, 9U);
         checked_add_size(total_size, geometry_payload.size());
         checked_add_size(total_size, 9U);
         checked_add_size(total_size, hierarchy_payload.size());
-        if (total_size > limits.maximum_container_bytes) {
-            throw std::length_error("FST container exceeds its limit");
-        }
 
         write_output_bytes(header_bytes);
         if (types.empty()) {
@@ -1934,31 +2186,7 @@ struct FstWriter::Impl {
             write_output_bytes(reinterpret_cast<const char*>(skip_block.data()),
                 skip_block.size());
         } else {
-            const auto block_type = fst_block_value_changes;
-            write_output_bytes(
-                reinterpret_cast<const char*>(&block_type), sizeof(block_type));
-            write_output_be64(
-                static_cast<std::uint64_t>(values_payload_size) + 8U);
-            write_output_be64(initial_time);
-            write_output_be64(final_time);
-            write_output_be64(memory_required);
-            write_output_varint(bits_size);
-            write_output_varint(stored_bits.size());
-            write_output_varint(types.size());
-            write_output_bytes(stored_bits);
-            const auto encoded_chains
-                = active_chain_count == 0U ? 0U : types.size();
-            write_output_varint(encoded_chains);
-            const auto marker = static_cast<std::uint8_t>('4');
-            write_output_bytes(
-                reinterpret_cast<const char*>(&marker), sizeof(marker));
-            copy_workspace_file(waves_path, waves_size);
-            write_output_bytes(positions);
-            write_output_be64(positions.size());
-            copy_workspace_file(times_path, times_size);
-            write_output_be64(times_size);
-            write_output_be64(times_size);
-            write_output_be64(timestamp_count);
+            copy_workspace_file(blocks_path, blocks_size);
         }
 
         const auto geometry_type = fst_block_geometry;

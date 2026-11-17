@@ -156,6 +156,29 @@ public:
         return result;
     }
 
+    /// A signed varint (libfst's fstGetSVarint64): the last byte's bit 6
+    /// is the sign.
+    [[nodiscard]] std::int64_t svarint()
+    {
+        const auto start = offset();
+        std::uint64_t result = 0U;
+        unsigned shift = 0U;
+        while (true) {
+            const auto byte = u8();
+            if (shift > 63U) {
+                malformed("FST signed varint is unterminated", start);
+            }
+            result |= static_cast<std::uint64_t>(byte & 0x7fU) << shift;
+            shift += 7U;
+            if ((byte & 0x80U) == 0U) {
+                if (shift < 64U && (byte & 0x40U) != 0U) {
+                    result |= ~std::uint64_t { 0 } << shift;
+                }
+                return static_cast<std::int64_t>(result);
+            }
+        }
+    }
+
     [[nodiscard]] std::uint64_t varint()
     {
         const auto start = offset();
@@ -1020,7 +1043,8 @@ private:
 [[nodiscard]] std::vector<SimulationTick> read_timestamps(
     const std::span<const std::uint8_t> bytes,
     const std::size_t count,
-    const Header& header,
+    const SimulationTick start,
+    const SimulationTick end,
     const FstReaderLimits& limits,
     const std::size_t offset)
 {
@@ -1037,7 +1061,7 @@ private:
             inconsistent("FST timestamp delta overflows", cursor.offset());
         }
         previous += delta;
-        if (previous < header.initial_time || previous > header.final_time
+        if (previous < start || previous > end
             || (!result.empty() && previous <= result.back())) {
             inconsistent("FST timestamps are outside or out of order", cursor.offset());
         }
@@ -1060,20 +1084,32 @@ private:
     result.reserve(handle_count);
     std::size_t previous = 0U;
     while (result.size() < handle_count) {
-        const auto code = cursor.varint();
-        if ((code & 1U) == 0U) {
-            const auto count = checked_size(code >> 1U, cursor.offset());
-            if (count == 0U || count > handle_count - result.size()) {
-                inconsistent("FST zero-position run is invalid", cursor.offset());
+        if (cursor.empty()) {
+            malformed("FST wave position table is truncated", cursor.offset());
+        }
+        // A position (odd) is a signed varint, a run of handles without a
+        // chain (even) an unsigned one (libfst's dynamic-alias table).
+        if ((bytes[cursor.local_offset()] & 1U) != 0U) {
+            const auto code = cursor.svarint();
+            if (code <= 0) {
+                inconsistent("FST wave position aliases another chain", cursor.offset());
             }
-            result.resize(result.size() + count);
-        } else {
-            const auto delta = checked_size(code >> 1U, cursor.offset());
+            const auto delta = checked_size(
+                static_cast<std::uint64_t>(code) >> 1U, cursor.offset());
             if (delta == 0U || delta > waves_size - previous) {
                 inconsistent("FST wave position delta is invalid", cursor.offset());
             }
             previous += delta;
             result.push_back(previous - 1U);
+            continue;
+        }
+        const auto code = cursor.varint();
+        {
+            const auto count = checked_size(code >> 1U, cursor.offset());
+            if (count == 0U || count > handle_count - result.size()) {
+                inconsistent("FST zero-position run is invalid", cursor.offset());
+            }
+            result.resize(result.size() + count);
         }
     }
     if (!cursor.empty()) {
@@ -1139,10 +1175,19 @@ void account_decoded_bytes(const std::size_t bytes,
     const std::size_t decoded_limit, const std::size_t offset)
 {
     account_decoded_bytes(1U, decoded_bytes, decoded_limit, offset);
-    constexpr std::array<char, 4> symbols { '0', 'x', '1', 'z' };
     result.payload_kind = FstPayloadKind::Symbols;
-    result.payload.assign(1U, symbols[code & 3U]);
-    return checked_size(code >> 2U, offset);
+    // libfst's one-bit codes: 0 and 1 in two tag bits, the others as an
+    // index into "xzhuwl-?" in four (the profile writes x and z).
+    if ((code & 1U) == 0U) {
+        result.payload.assign(1U, (code & 2U) != 0U ? '1' : '0');
+        return checked_size(code >> 2U, offset);
+    }
+    const auto index = (code >> 1U) & 7U;
+    if (index > 1U) {
+        inconsistent("FST scalar wave symbol is outside the profile", offset);
+    }
+    result.payload.assign(1U, index == 0U ? 'x' : 'z');
+    return checked_size(code >> 4U, offset);
 }
 
 [[nodiscard]] std::size_t read_real_wave(Cursor& cursor,
@@ -1246,6 +1291,8 @@ void account_decoded_bytes(const std::size_t bytes,
 }
 
 struct ValueFrame {
+    SimulationTick start { };
+    SimulationTick end { };
     std::size_t memory_required { };
     std::size_t handle_count { };
     std::size_t chain_slots { };
@@ -1258,8 +1305,9 @@ struct ValueFrame {
     const FstReaderLimits& limits)
 {
     Cursor cursor { block.payload, block.offset };
-    if (cursor.be64() != header.initial_time
-        || cursor.be64() != header.final_time) {
+    const SimulationTick start = cursor.be64();
+    const SimulationTick end = cursor.be64();
+    if (start < header.initial_time || end > header.final_time || start > end) {
         inconsistent("FST value frame times disagree with the header", block.offset);
     }
     const auto memory_required = checked_size(cursor.be64(), cursor.offset());
@@ -1301,7 +1349,7 @@ struct ValueFrame {
         || cursor.u8() != static_cast<std::uint8_t>('4')) {
         inconsistent("FST wave-chain header is invalid", cursor.offset());
     }
-    return { memory_required, handle_count, chain_slots,
+    return { start, end, memory_required, handle_count, chain_slots,
         block.payload.last(cursor.remaining()), cursor.offset() };
 }
 
@@ -1381,11 +1429,12 @@ void validate_wave_memory(const ValueFrame& frame,
 void decode_wave_chains(const ValueFrame& frame,
     const ValueSections& sections,
     const std::vector<std::optional<std::size_t>>& positions,
+    const std::vector<SimulationTick>& timestamps,
     const HierarchyResult& hierarchy, const FstReaderLimits& limits,
+    std::vector<std::size_t>& sequences, std::size_t& decoded_value_bytes,
     FstReaderTrace& trace)
 {
     const auto ends = chain_ends(positions, sections.waves.size());
-    std::size_t decoded_value_bytes = 0U;
     for (std::size_t handle = 0U; handle < frame.handle_count; ++handle) {
         if (!positions[handle]) {
             continue;
@@ -1404,35 +1453,58 @@ void decode_wave_chains(const ValueFrame& frame,
         const auto& declaration = hierarchy.declarations[
             hierarchy.handle_declarations[handle]];
         std::size_t time_index = 0U;
-        std::size_t sequence = 0U;
+        auto& sequence = sequences[handle];
         while (!chain.empty()) {
             if (trace.values.size() == limits.maximum_values) {
                 exhausted("FST value count exceeds its reader limit", chain.offset());
             }
             trace.values.push_back(read_wave_value(chain, declaration,
-                trace.timestamps, time_index, sequence++, chain.offset(),
+                timestamps, time_index, sequence++, chain.offset(),
                 decoded_value_bytes, limits.maximum_decoded_value_bytes));
         }
     }
 }
 
 void read_values(
-    const Block block,
+    const std::vector<Block>& blocks,
     const Header& header,
     const std::vector<std::size_t>& widths,
     const HierarchyResult& hierarchy,
     const FstReaderLimits& limits,
     FstReaderTrace& trace)
 {
-    const auto frame = read_value_frame(block, header, widths, limits);
-    const auto sections = split_value_sections(frame);
-    trace.timestamps = read_timestamps(sections.times,
-        sections.timestamp_count, header, limits, sections.times_offset);
-    const auto positions = read_positions(sections.positions,
-        frame.handle_count, sections.waves.size(), sections.positions_offset);
-    validate_wave_memory(frame, sections, positions);
-    decode_wave_chains(
-        frame, sections, positions, hierarchy, limits, trace);
+    // The blocks follow each other in time; a later block's frame is the
+    // values the earlier ones leave, which their chains already give.
+    std::vector<std::size_t> sequences(widths.size(), 0U);
+    std::size_t decoded_value_bytes = 0U;
+    for (std::size_t index = 0U; index < blocks.size(); ++index) {
+        const auto frame = read_value_frame(blocks[index], header, widths, limits);
+        if ((index == 0U && frame.start != header.initial_time)
+            || (index + 1U == blocks.size() && frame.end != header.final_time)
+            || (index != 0U && !trace.timestamps.empty()
+                && frame.start <= trace.timestamps.back())) {
+            inconsistent("FST value blocks are out of order", blocks[index].offset);
+        }
+        const auto sections = split_value_sections(frame);
+        if (sections.timestamp_count
+            > limits.maximum_timestamps - trace.timestamps.size()) {
+            exhausted("FST timestamp count exceeds its limit", sections.times_offset);
+        }
+        const auto timestamps = read_timestamps(sections.times,
+            sections.timestamp_count, frame.start, frame.end, limits,
+            sections.times_offset);
+        const auto positions = read_positions(sections.positions,
+            frame.handle_count, sections.waves.size(), sections.positions_offset);
+        validate_wave_memory(frame, sections, positions);
+        decode_wave_chains(frame, sections, positions, timestamps, hierarchy,
+            limits, sequences, decoded_value_bytes, trace);
+        trace.timestamps.insert(
+            trace.timestamps.end(), timestamps.begin(), timestamps.end());
+    }
+    if (blocks.size() > 1U) {
+        // By handle, then time: the order one block gives.
+        std::ranges::stable_sort(trace.values, { }, &FstReaderValue::handle);
+    }
 }
 
 void add_digest_field(support::Sha256& hash, const std::string_view value)
@@ -1507,7 +1579,7 @@ void add_digest_field(support::Sha256& hash, const std::string_view value)
     }
     Cursor cursor { bytes };
     const auto header = read_header(cursor);
-    std::optional<Block> values;
+    std::vector<Block> values;
     bool skipped = false;
     if (cursor.empty()) {
         malformed("FST container lacks data blocks", cursor.offset());
@@ -1525,7 +1597,10 @@ void add_digest_field(support::Sha256& hash, const std::string_view value)
         }
         skipped = true;
     } else {
-        values = read_block(cursor, fst_block_value_changes, limits);
+        do {
+            values.push_back(read_block(cursor, fst_block_value_changes, limits));
+        } while (!cursor.empty()
+            && bytes[cursor.local_offset()] == fst_block_value_changes);
     }
     const auto geometry_block = read_block(cursor, fst_block_geometry, limits);
     const auto hierarchy_block = read_block(cursor, fst_block_hierarchy, limits);
@@ -1537,9 +1612,9 @@ void add_digest_field(support::Sha256& hash, const std::string_view value)
         || header.handle_count > limits.maximum_declarations) {
         exhausted("FST header counts exceed reader limits", 0U);
     }
-    if (header.value_block_count != (header.handle_count == 0U ? 0U : 1U)
+    if (header.value_block_count != values.size()
         || skipped != (header.handle_count == 0U)
-        || values.has_value() != (header.handle_count != 0U)) {
+        || values.empty() != (header.handle_count == 0U)) {
         inconsistent("FST header counts exceed limits or disagree", 0U);
     }
     const auto widths = read_geometry(geometry_block, header, limits);
@@ -1553,8 +1628,8 @@ void add_digest_field(support::Sha256& hash, const std::string_view value)
     result.profile = header.profile;
     result.scopes = std::move(hierarchy.scopes);
     result.declarations = hierarchy.declarations;
-    if (values) {
-        read_values(*values, header, widths, hierarchy, limits, result);
+    if (!values.empty()) {
+        read_values(values, header, widths, hierarchy, limits, result);
     }
     result.semantic_digest = semantic_digest(result);
     return result;

@@ -1443,9 +1443,13 @@ std::unique_ptr<TraceState> attach_trace(
                         == project::TraceCompression::deterministic
                     ? runtime::FstWriterCompression::Deterministic
                     : runtime::FstWriterCompression::None;
+            // A run's trace takes every change: the writer spools them to
+            // disk and splits value-change blocks at its container limit.
+            runtime::FstWriterLimits limits;
+            limits.maximum_events = std::numeric_limits<std::size_t>::max();
+            limits.maximum_timestamps = std::numeric_limits<std::size_t>::max();
             trace->fst_writer = std::make_unique<runtime::FstWriter>(
-                trace->stream, *fst_exponent, runtime::FstWriterLimits { },
-                compression);
+                trace->stream, *fst_exponent, limits, compression);
             trace->fst_writer->declare(*trace->declarations);
             for (std::size_t signal = 0; signal < declaration_ids.size(); ++signal) {
                 for (const auto declaration : declaration_ids[signal]) {
