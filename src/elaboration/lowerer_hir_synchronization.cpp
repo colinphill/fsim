@@ -229,10 +229,156 @@ Lowerer::hir_typeless_mailbox_message(const semantic::ExpressionId message,
     // An enumeration literal has its enumeration's type (6.19.3), and a
     // cast to a named type has that type, not the type it is based on.
     std::optional<semantic::sv::TypeReference> declared;
+    // The scope the declared type's names resolve in: a function's return
+    // type is written in its declaration's scope.
+    auto declared_scope = hir_process_scope_;
     if (const auto expression = specialized_hir_unit_->find_expression(message);
         expression && expression->systemverilog != nullptr) {
         const auto& source = *expression->systemverilog;
-        if (source.kind == semantic::sv::ExpressionKind::name
+        // A function call's value has the function's return type (IEEE
+        // 1800-2023 13.4.1), a method's as its class declares it (8.10).
+        std::optional<semantic::DeclarationId> callee;
+        const auto builtin = semantic::sv::member_builtin_method(source);
+        const auto builtin_result = [&](const support::SystemVerilogBuiltinType kind) {
+            // The keyword type as a declaration writes it: its signedness
+            // and state count are the type's own (6.11).
+            semantic::sv::TypeReference type;
+            semantic::sv::set_builtin_type(type, kind);
+            type.signed_value = support::systemverilog_builtin_default_signed(kind);
+            type.four_state = support::systemverilog_four_state(kind);
+            declared = type;
+        };
+        using Method = support::BuiltinMethod;
+        using Builtin = support::SystemVerilogBuiltinType;
+        if (builtin != Method::none) {
+            const auto enumeration = hir_systemverilog_enumeration_method(message);
+            const auto receiver = enumeration
+                ? specialized_hir_unit_->find_declaration(
+                      enumeration->receiver_declaration)
+                : std::nullopt;
+            switch (builtin) {
+            // The string methods' results (IEEE 1800-2023 6.16).
+            case Method::len:
+            case Method::compare:
+            case Method::icompare:
+                builtin_result(Builtin::int_type);
+                break;
+            case Method::getc:
+                builtin_result(Builtin::byte);
+                break;
+            case Method::atoi:
+            case Method::atohex:
+            case Method::atooct:
+            case Method::atobin:
+                builtin_result(Builtin::integer);
+                break;
+            case Method::atoreal:
+                builtin_result(Builtin::real);
+                break;
+            case Method::toupper:
+            case Method::tolower:
+            case Method::substr:
+                builtin_result(Builtin::string);
+                break;
+            // An enumeration's first, last, next and prev are of its type,
+            // num is int and name a string (6.19.5); an array's size, num,
+            // exists and traversal methods are int (7.5.1, 7.9, 7.10.2).
+            case Method::first:
+            case Method::last:
+            case Method::next:
+            case Method::prev:
+                if (enumeration) {
+                    if (receiver && receiver->systemverilog != nullptr
+                        && receiver->systemverilog->type) {
+                        declared = receiver->systemverilog->type;
+                        declared_scope = receiver->systemverilog->scope;
+                    }
+                } else {
+                    builtin_result(Builtin::int_type);
+                }
+                break;
+            case Method::name:
+                if (enumeration) {
+                    builtin_result(Builtin::string);
+                }
+                break;
+            case Method::num:
+            case Method::size:
+            case Method::exists:
+                builtin_result(Builtin::int_type);
+                break;
+            default:
+                break;
+            }
+        } else if (source.kind == semantic::sv::ExpressionKind::call
+            && source.marker == support::ExpressionMarker::sv_dollar_cast) {
+            // $cast called as a function returns int (6.24.2).
+            builtin_result(Builtin::int_type);
+        } else if (source.call_kind == semantic::sv::CallKind::system) {
+            // A system function's value has the type its clause gives it:
+            // $time is time and $realtime realtime (20.3.1, 20.3.3),
+            // $urandom and $urandom_range int unsigned (18.13.1, 18.13.2),
+            // $random and the $dist_ functions integer (20.14), $sformatf
+            // and $typename string (21.3.3, 20.6.1), $isunbounded bit
+            // (20.6.3).
+            using Routine = support::SystemTf;
+            switch (source.system_tf) {
+            case Routine::time:
+                builtin_result(Builtin::time);
+                break;
+            case Routine::realtime:
+                builtin_result(Builtin::realtime);
+                break;
+            case Routine::urandom:
+            case Routine::urandom_range:
+                builtin_result(Builtin::int_type);
+                declared->signed_value = false;
+                break;
+            case Routine::random:
+            case Routine::dist_chi_square:
+            case Routine::dist_erlang:
+            case Routine::dist_exponential:
+            case Routine::dist_normal:
+            case Routine::dist_poisson:
+            case Routine::dist_t:
+            case Routine::dist_uniform:
+                builtin_result(Builtin::integer);
+                break;
+            case Routine::sformatf:
+            case Routine::typename_query:
+                builtin_result(Builtin::string);
+                break;
+            case Routine::isunbounded:
+                builtin_result(Builtin::bit);
+                break;
+            default:
+                break;
+            }
+        } else if (source.kind == semantic::sv::ExpressionKind::call
+            && source.marker == support::ExpressionMarker::none) {
+            callee = hir_referenced_declaration(message);
+        } else if (source.kind == semantic::sv::ExpressionKind::class_method_call
+            || source.kind
+                == semantic::sv::ExpressionKind::class_static_method_call) {
+            if (const auto profile
+                = hir_class_method_profile(message, hir_process_scope_);
+                profile
+                && profile->builtin == runtime::simir::ClassMethodHook::none) {
+                callee = profile->declaration;
+            }
+        }
+        const auto function = callee && callee->valid()
+            ? specialized_hir_unit_->find_declaration(*callee)
+            : std::nullopt;
+        if (declared) {
+            // A built-in method's result type, above.
+        } else if (function && function->systemverilog != nullptr
+            && function->systemverilog->callable
+            && function->systemverilog->callable->function
+            && function->systemverilog->type) {
+            declared = function->systemverilog->type;
+            declared_scope = function->systemverilog->scope;
+        } else if (source.kind == semantic::sv::ExpressionKind::name
             && source.referenced_name && source.referenced_name->selected) {
             const auto literal = specialized_hir_unit_->find_declaration(
                 *source.referenced_name->selected);
@@ -269,7 +415,7 @@ Lowerer::hir_typeless_mailbox_message(const semantic::ExpressionId message,
     }
     const auto described = declared
         ? semantic::describe_systemverilog_type(
-              *specialized_hir_unit_, *declared, hir_process_scope_)
+              *specialized_hir_unit_, *declared, declared_scope)
         : semantic::describe_systemverilog_expression_type(
               *specialized_hir_unit_, message);
     // The equivalence class of a message's element type (6.22.2): a

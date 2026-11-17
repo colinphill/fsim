@@ -13,7 +13,14 @@
 // enumeration's type (6.19.3, 6.24.1), which no other package's
 // enumeration of the same name shares; two specializations of one
 // parameterized class are different types, two handles of one are the
-// same (8.25, 6.22.1).
+// same (8.25, 6.22.1). A function call's message has the function's return
+// type (13.4.1) and a method call's the type its class declares (8.10); a
+// built-in method's has the type its clause gives: string methods (6.16),
+// an enumeration's first/next of the enumeration and num of int (6.19.5),
+// an array's size of int (7.5.1); a system function's has the type its
+// clause gives: $urandom and $urandom_range int unsigned (18.13), $random
+// integer (20.14.1), $time time and $realtime realtime (20.3), $sformatf
+// and $typename string (21.3.3, 20.6.1), $cast int (6.24.2).
 `define CHECK(what, ok) \
   if (!(ok)) begin \
     $display("FAIL %s", what); \
@@ -40,6 +47,27 @@ module sv_typeless_mailbox;
   class sized #(int W = 1);
     bit [W-1:0] value;
   endclass
+
+  class maker;
+    function packet make(int id);
+      make = new(id);
+    endfunction
+    function color_t pick();
+      return GREEN;
+    endfunction
+    function shortint narrow();
+      return 3;
+    endfunction
+  endclass
+  function int plain();
+    return 4;
+  endfunction
+  function color_t chosen();
+    return BLUE;
+  endfunction
+  function real half();
+    return 2.5;
+  endfunction
 
   mailbox box = new;
   mailbox bounded = new(1);
@@ -170,6 +198,110 @@ module sv_typeless_mailbox;
       `CHECK("other specialization", got < 0)
       got = box.try_get(four_again);
       `CHECK("same specialization", got > 0 && four_again.value == 4'hA)
+    end
+
+    // Call and method results.
+    begin
+      maker mk = new;
+      color_t color;
+      packet handle;
+      shortint narrow;
+      string text;
+      byte code;
+      integer number;
+      real value;
+      int got;
+      int whole;
+      int sizes[3];
+      box.put(plain());
+      got = box.try_peek(color);
+      `CHECK("function int not an enumeration", got < 0)
+      got = box.try_get(whole);
+      `CHECK("function int", got > 0 && whole == 4)
+      box.put(chosen());
+      got = box.try_peek(whole);
+      `CHECK("function enumeration not int", got < 0)
+      got = box.try_get(color);
+      `CHECK("function enumeration", got > 0 && color == BLUE)
+      box.put(half());
+      got = box.try_get(value);
+      `CHECK("function real", got > 0 && value == 2.5)
+      box.put(mk.make(9));
+      got = box.try_get(handle);
+      `CHECK("method class handle", got > 0 && handle.id == 9)
+      box.put(mk.pick());
+      got = box.try_get(color);
+      `CHECK("method enumeration", got > 0 && color == GREEN)
+      box.put(mk.narrow());
+      got = box.try_peek(whole);
+      `CHECK("method shortint not int", got < 0)
+      got = box.try_get(narrow);
+      `CHECK("method shortint", got > 0 && narrow == 3)
+      text = "abc";
+      box.put(text.len());
+      got = box.try_peek(narrow);
+      `CHECK("len not shortint", got < 0)
+      got = box.try_get(whole);
+      `CHECK("len int", got > 0 && whole == 3)
+      box.put(text.substr(1, 2));
+      got = box.try_get(text);
+      `CHECK("substr string", got > 0 && text == "bc")
+      box.put(text.getc(0));
+      got = box.try_get(code);
+      `CHECK("getc byte", got > 0 && code == "b")
+      text = "12";
+      box.put(text.atoi());
+      got = box.try_peek(whole);
+      `CHECK("atoi not int", got < 0)
+      got = box.try_get(number);
+      `CHECK("atoi integer", got > 0 && number == 12)
+      color = RED;
+      box.put(color.next());
+      got = box.try_get(color);
+      `CHECK("enumeration next", got > 0 && color == GREEN)
+      box.put(color.num());
+      got = box.try_get(whole);
+      `CHECK("enumeration num", got > 0 && whole == 3)
+      box.put(sizes.size());
+      got = box.try_get(whole);
+      `CHECK("array size", got > 0 && whole == 3)
+      `CHECK("results all taken", box.num() == 0)
+      begin
+        int unsigned draw;
+        time now;
+        box.put($urandom);
+        got = box.try_peek(whole);
+        `CHECK("urandom not int", got < 0)
+        got = box.try_get(draw);
+        `CHECK("urandom int unsigned", got > 0)
+        box.put($urandom_range(3, 1));
+        got = box.try_get(draw);
+        `CHECK("urandom_range int unsigned",
+               got > 0 && draw >= 1 && draw <= 3)
+        box.put($random);
+        got = box.try_peek(whole);
+        `CHECK("random not int", got < 0)
+        got = box.try_get(number);
+        `CHECK("random integer", got > 0)
+        box.put($time);
+        got = box.try_peek(number);
+        `CHECK("time not integer", got < 0)
+        got = box.try_get(now);
+        `CHECK("time", got > 0 && now == $time)
+        box.put($realtime);
+        got = box.try_get(value);
+        `CHECK("realtime", got > 0 && value == $realtime)
+        box.put($sformatf("%0d", 7));
+        got = box.try_get(text);
+        `CHECK("sformatf string", got > 0 && text == "7")
+        box.put($typename(whole));
+        got = box.try_get(text);
+        `CHECK("typename string", got > 0 && text == "int")
+        box.put($cast(color, 1));
+        got = box.try_get(whole);
+        `CHECK("cast int", got > 0 && whole == 1 && color == GREEN)
+        `CHECK("system results all taken", box.num() == 0)
+      end
     end
 
     if (failures == 0) begin
