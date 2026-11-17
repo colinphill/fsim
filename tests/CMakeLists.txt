@@ -6949,6 +6949,39 @@ if(FSIM_WITH_LLVM)
     TIMEOUT 600)
 endif()
 
+# String formatting ($sformatf, $sformat, $swrite, VHDL TextIO WRITE,
+# TO_HSTRING/TO_OSTRING), $realtime and VHDL NOW in the v4 kernel's own
+# instructions on every kernel tier, printing what the interpreter prints.
+if(FSIM_WITH_LLVM)
+  add_test(
+    NAME fsim.application.static-kernel-format
+    COMMAND "${CMAKE_COMMAND}"
+      "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+      "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/systemverilog/kernel_format"
+      -P
+      "${PROJECT_SOURCE_DIR}/tests/fixtures/systemverilog/kernel_format/run_kernel_format.cmake"
+  )
+  set_tests_properties(fsim.application.static-kernel-format PROPERTIES
+    LABELS "application;systemverilog;static-kernel;llvm;string;positive"
+    TIMEOUT 600)
+endif()
+
+# real, shortreal, realtime and time variables held by the v4 kernel on
+# every kernel tier, printing what the interpreter prints.
+if(FSIM_WITH_LLVM)
+  add_test(
+    NAME fsim.application.static-kernel-real
+    COMMAND "${CMAKE_COMMAND}"
+      "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+      "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/systemverilog/kernel_real"
+      -P
+      "${PROJECT_SOURCE_DIR}/tests/fixtures/systemverilog/kernel_real/run_kernel_real.cmake"
+  )
+  set_tests_properties(fsim.application.static-kernel-real PROPERTIES
+    LABELS "application;systemverilog;static-kernel;llvm;real;positive"
+    TIMEOUT 600)
+endif()
+
 # Code coverage counts in the v4 kernel's own instructions (hits and
 # toggles, SystemVerilog and VHDL) on every kernel tier, as the interpreter
 # counts them.

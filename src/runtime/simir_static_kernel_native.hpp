@@ -464,6 +464,34 @@ struct StaticKernelNativeHelpers {
     /// the run at operation `position`).
     void (*coverage_record)(StaticKernelNativeFrame*, std::uint32_t position,
         std::uint64_t counter) { };
+    /// `fsim_sk_str_method`: KOp::str method at instruction `at` by the
+    /// reference's execute_string_method (a pure fsim routine): the
+    /// operator word `operation` (imm_a) and `flags`, the strings `source`
+    /// and `argument` (null when unused), the integer words (first_a,
+    /// first_b) and (second_a, second_b), a string result to `destination`
+    /// (null when none). Returns the 64-bit result. An error fails the run.
+    std::uint64_t (*str_method)(StaticKernelNativeFrame*, std::uint32_t at,
+        std::uint64_t operation, std::uint32_t flags, void* source, const void* argument,
+        std::uint64_t first_a, std::uint64_t first_b, std::uint64_t second_a,
+        std::uint64_t second_b, void* destination) { };
+    /// `fsim_sk_str_radix`: KOp::str radix, the string `destination` =
+    /// TO_HSTRING or TO_OSTRING of the string `source` (flags: imm_a), by
+    /// the reference's vhdl_logic9_radix_string (a pure fsim routine). An
+    /// error (an allocation failure) fails the run.
+    void (*str_radix)(StaticKernelNativeFrame*, void* destination, const void* source,
+        std::uint32_t flags) { };
+    /// `fsim_sk_str_format`: KOp::str format at instruction `at` by the
+    /// reference formatter (execute_string_format, a pure fsim routine):
+    /// appends to the string `destination` the format record at `record`
+    /// applied to the value of `bits` bits (`value`: the word, its 'U' mask
+    /// and its weak mask; or, when `registers` is not null, the chunked
+    /// storage `entry` of that register file; none when bits is 0) or to the
+    /// string `argument`, with the field width `field` (word, 'U' mask, weak
+    /// mask) of `field_bits` bits. An error fails the run.
+    void (*str_format)(StaticKernelNativeFrame*, std::uint32_t at, const std::uint64_t* record,
+        void* destination, const std::uint64_t* value, const void* registers,
+        std::uint32_t entry, std::uint32_t bits, const void* argument,
+        const std::uint64_t* field, std::uint32_t field_bits) { };
     /// Wide-register instructions by kind (`fsim_sk_wide_<op>`): instruction
     /// `at` with the caller's register file, where wide values live, and the
     /// narrow operand words x, y and z; `out` receives a narrow result and

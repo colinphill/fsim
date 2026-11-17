@@ -322,8 +322,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         stage_begin = now;
     };
     // Every signal stays a host signal, which members write through the
-    // host commit path, for a VCD control operation in the design or a VHDL
-    // opaque process (raised below).
+    // host commit path, for a VHDL opaque process (raised below).
     bool observe_all = false;
     // Census (FSIM_PROFILE_PHASES): the first reason each process stays on
     // the host. Opaque accesses come first: they refuse the whole design.
@@ -440,14 +439,12 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         worker_vcd_operations[worker].visit_stored(views[index].operations(),
             [&](std::size_t, const Operation&) { vcd_control[index] = 1U; });
     });
-    if (std::ranges::any_of(vcd_control,
+    // $dumpvars scopes are run-time values (IEEE 1800-2023 21.7): the dump
+    // watches the signals it selects when it begins, as a trace does (S19).
+    if (!access_plans
+        && std::ranges::any_of(vcd_control,
             [](const std::uint8_t control) { return control != 0U; })) {
-        if (!access_plans) {
-            return disable("vcd_control");
-        }
-        // $dumpvars scopes are run-time values and a dump records any
-        // signal's changes (IEEE 1800-2023 21.7).
-        observe_all = true;
+        return disable("vcd_control");
     }
     if (std::ranges::any_of(signals_, [](const auto& signal) {
             return signal.initial_value.width()
@@ -3539,7 +3536,11 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 // four-state mapping of the port (IEEE 1800-2023 6.6).
                 || (undriven && !vhdl_mode)
                 || resolved_net(signal))
-            && info.systemverilog_scalar == runtime::SystemVerilogScalarKind::None
+            // A real, shortreal, realtime or time variable is a 64-bit (32-bit)
+            // payload of its kind (IEEE 1800-2023 6.12, 6.11; the canonical
+            // SimIR payload), held as its plain bits; a chandle is a host
+            // handle.
+            && info.systemverilog_scalar != runtime::SystemVerilogScalarKind::Chandle
             && !info.event_variable && (undriven || !info.implicit_driver)
             && !info.charge_strength
             && signals_[signal].initial_value.width() != 0U

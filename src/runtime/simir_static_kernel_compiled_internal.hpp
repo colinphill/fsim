@@ -688,10 +688,16 @@ inline void kinst_flow(const KInst& inst, const std::uint32_t at,
         if (str_reads_index(op)) {
             use.push_back(inst.y);
         }
-        if (str_reads_byte(op)) {
+        if (str_reads_byte(op) || str_format_reads_narrow(inst)) {
             use.push_back(inst.x);
         }
-        if (str_writes_register(op)) {
+        if (str_format_reads_width(inst) || str_method_reads_second(inst)) {
+            use.push_back(inst.y);
+        }
+        if (str_method_reads_first(inst)) {
+            use.push_back(inst.x);
+        }
+        if (str_inst_writes_register(inst)) {
             def = inst.d;
         }
         fall();
@@ -1014,6 +1020,7 @@ public:
         grouped(body.string_operands);
         text(body.string_bytes);
         grouped(body.coverage_counters);
+        grouped(body.string_formats);
         grouped(body.predicate_words);
         grouped(body.return_targets);
         grouped(body.live_at_entry);
@@ -1389,6 +1396,7 @@ public:
             && grouped(body.wide_base) && grouped(body.wide_constants)
             && grouped(body.string_operands) && text(body.string_bytes)
             && grouped(body.coverage_counters)
+            && grouped(body.string_formats)
             && grouped(body.predicate_words)
             && grouped(body.return_targets) && grouped(body.live_at_entry)
             && get(body.shadow_base) && get(body.weak) && raw(body.tracked)

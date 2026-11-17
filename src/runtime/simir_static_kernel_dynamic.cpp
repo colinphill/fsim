@@ -1079,14 +1079,65 @@ DynFailure execute_str(const KInst& inst, const CompiledBody& body, std::string*
             string_method_integer(registers[inst.y], inst.width).value_or(0),
             static_cast<unsigned>(inst.imm_a));
         return DynFailure::none;
+    case StrOp::radix:
+        strings[inst.offset] = vhdl_logic9_radix_string(
+            strings[inst.z], (inst.imm_a & 1U) != 0U, (inst.imm_a & 2U) != 0U);
+        return DynFailure::none;
     case StrOp::plusarg:
     case StrOp::read_object:
     case StrOp::write_object:
     case StrOp::write_object_nba:
-        // The kernel's own (they read the run's plusargs and variables).
+    case StrOp::format:
+    case StrOp::method:
+        // The kernel's own (they read the run's plusargs, variables and
+        // time).
         break;
     }
     return DynFailure::none;
+}
+
+std::uint64_t execute_str_method(const std::uint64_t operation, const std::uint8_t flags,
+    std::string& source, const std::string_view argument, const Word first, const Word second,
+    std::string* destination)
+{
+    const auto operand = [&](const std::uint8_t flag, const Word word, const unsigned shift) {
+        return (flags & flag) != 0U
+            ? string_method_integer(word, static_cast<std::uint32_t>((operation >> shift) & 0xffU))
+            : std::nullopt;
+    };
+    auto result = execute_string_method(static_cast<StringMethodOperator>(operation & 0xffU),
+        source, argument, operand(str_method_first, first, 8U),
+        operand(str_method_second, second, 16U));
+    if ((flags & str_method_string) != 0U) {
+        if (!result.string || destination == nullptr) {
+            throw std::logic_error { "string method produced no string result" };
+        }
+        *destination = std::move(*result.string);
+        return 0U;
+    }
+    if (!result.scalar_bits) {
+        throw std::logic_error { "string method produced no scalar result" };
+    }
+    return *result.scalar_bits;
+}
+
+void append_str_format(const std::uint64_t* record, std::string& destination,
+    const PackedLogic4& value, const std::string_view argument,
+    const PackedLogic4& field_width, const std::uint64_t tick,
+    const SystemVerilogTimeFormat& time_format)
+{
+    using M = StringMethodOperator;
+    auto method = string_format_method(record);
+    // The reference's execute_string: a dynamic field width becomes the
+    // minimum width of the static form.
+    if (method.operation == M::format_string_dynamic_field
+        || method.operation == M::format_packed_dynamic_field) {
+        method.minimum_width = checked_vhdl_textio_field_width(field_width);
+        method.operation = method.operation == M::format_string_dynamic_field
+            ? M::format_string
+            : M::format_packed;
+    }
+    execute_string_format(method, destination, value, argument, tick, time_format);
 }
 
 std::string scalar_failure_message(const KInst& inst, const std::uint32_t error)

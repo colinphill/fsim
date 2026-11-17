@@ -1247,6 +1247,10 @@ private:
         /// One member process drives the signal (StaticKernelRuntimeSpec::
         /// sole_writer_inputs).
         bool sole_writer { };
+        /// The sole writer's Active update is in `cached` ahead of the host's
+        /// commit (deliver_host_write): the commit's revision bump is that
+        /// update, which already woke the readers, not a new event.
+        bool mirrored_ahead { };
     };
 
     struct Container {
@@ -1883,6 +1887,17 @@ private:
     /// fsim_sk_coverage_record: KOp::coverage's reference update.
     static void native_coverage_record(StaticKernelNativeFrame* frame,
         std::uint32_t position, std::uint64_t counter);
+    /// fsim_sk_str_format: KOp::str format by the reference formatter.
+    static std::uint64_t native_str_method(StaticKernelNativeFrame* frame, std::uint32_t at,
+        std::uint64_t operation, std::uint32_t flags, void* source, const void* argument,
+        std::uint64_t first_a, std::uint64_t first_b, std::uint64_t second_a,
+        std::uint64_t second_b, void* destination);
+    static void native_str_radix(StaticKernelNativeFrame* frame, void* destination,
+        const void* source, std::uint32_t flags);
+    static void native_str_format(StaticKernelNativeFrame* frame, std::uint32_t at,
+        const std::uint64_t* record, void* destination, const std::uint64_t* value,
+        const void* registers, std::uint32_t entry, std::uint32_t bits, const void* argument,
+        const std::uint64_t* field, std::uint32_t field_bits);
     /// One counter update as the reference makes it (CodeCoverageHit of
     /// member `member_index` at operation `pc`).
     void record_coverage(std::uint32_t member_index, std::uint32_t pc,

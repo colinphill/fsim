@@ -484,8 +484,6 @@ std::optional<std::vector<std::string>> vhdl_composite_value_elements(
     return elements;
 }
 
-namespace {
-
 // TO_HSTRING and TO_OSTRING of STD_ULOGIC_VECTOR (IEEE 1076-2019 16.7):
 // the vector is padded on the left with 'Z' when its leftmost element is 'Z'
 // and with '0' otherwise, each group of 4 (3) elements is converted by
@@ -494,7 +492,7 @@ namespace {
 // to whole groups with its leftmost element.
 std::string vhdl_logic9_radix_string(
     const std::string_view elements, const bool hexadecimal,
-    const bool sign_extend = false)
+    const bool sign_extend)
 {
     if (elements.empty()) {
         return { };
@@ -523,8 +521,6 @@ std::string vhdl_logic9_radix_string(
     }
     return result;
 }
-
-} // namespace
 
 StringMethodResult execute_string_method(
     const StringMethodOperator operation,

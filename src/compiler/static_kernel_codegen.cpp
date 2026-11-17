@@ -38,6 +38,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cfenv>
 #include <cmath>
 #include <atomic>
 #include <optional>
@@ -5517,10 +5518,16 @@ private:
                 if (detail::str_reads_index(op)) {
                     reads.push_back(inst.y);
                 }
-                if (detail::str_reads_byte(op)) {
+                if (detail::str_reads_byte(op) || detail::str_format_reads_narrow(inst)) {
                     reads.push_back(inst.x);
                 }
-                writes = detail::str_writes_register(op);
+                if (detail::str_format_reads_width(inst) || detail::str_method_reads_second(inst)) {
+                    reads.push_back(inst.y);
+                }
+                if (detail::str_method_reads_first(inst)) {
+                    reads.push_back(inst.x);
+                }
+                writes = detail::str_inst_writes_register(inst);
                 return true;
             }
             case KOp::wide_move:
@@ -8678,6 +8685,100 @@ private:
             str_reserve(target, size, at);
             str_copy_bytes(str_data(target), str_data(source), size);
             str_set_size(target, size);
+            break;
+        }
+        case StrOp::method: {
+            // The reference's pure parse and split routines (IEEE 1076-2019
+            // 16.2.2 'VALUE, 9.3.7; IEEE 1800-2023 6.16.11 atoreal).
+            const auto flags = inst.flags;
+            auto* null = llvm::ConstantPointerNull::get(llvm::PointerType::get(context_, 0U));
+            const auto first = (flags & detail::str_method_first) != 0U ? load_register(inst.x)
+                                                                         : zero_pair();
+            const auto second = (flags & detail::str_method_second) != 0U ? load_register(inst.y)
+                                                                           : zero_pair();
+            llvm::Value* argument = null;
+            if ((flags & detail::str_method_argument) != 0U) {
+                argument = str_object(file, static_cast<std::uint32_t>(inst.imm_b));
+            }
+            llvm::Value* destination = null;
+            if ((flags & detail::str_method_string) != 0U) {
+                destination = str_object(file, inst.offset);
+            }
+            auto* type = llvm::FunctionType::get(i64_,
+                { ptr_, i32_, i64_, i32_, ptr_, ptr_, i64_, i64_, i64_, i64_, ptr_ }, false);
+            auto* result = builder_.CreateCall(type, helper_symbol("fsim_sk_str_method", type),
+                { frame_, llvm::ConstantInt::get(i32_, at), constant(inst.imm_a),
+                    llvm::ConstantInt::get(i32_, static_cast<std::uint32_t>(flags)),
+                    str_object(file, inst.z), argument, first.a, first.b, second.a, second.b,
+                    destination });
+            check_status();
+            if ((flags & detail::str_method_scalar) != 0U) {
+                last_unknown_ = constant(0U);
+                store_register(inst.d, { result, constant(0U) });
+            }
+            break;
+        }
+        case StrOp::radix: {
+            // TO_HSTRING and TO_OSTRING by the reference's routine, a pure
+            // fsim formatter (IEEE 1076-2019 16.7).
+            auto* type = llvm::FunctionType::get(llvm::Type::getVoidTy(context_),
+                { ptr_, ptr_, ptr_, i32_ }, false);
+            builder_.CreateCall(type, helper_symbol("fsim_sk_str_radix", type),
+                { frame_, str_object(file, inst.offset), str_object(file, inst.z),
+                    llvm::ConstantInt::get(i32_, static_cast<std::uint32_t>(inst.imm_a)) });
+            check_status();
+            break;
+        }
+        case StrOp::format: {
+            // The reference formatter, a pure fsim routine (IEEE 1800-2023
+            // 21.3.3, IEEE 1076-2019 16.4): the record, a narrow value and
+            // the field width as words in the frame, a wide value in the
+            // register file.
+            const auto* record = body_.string_formats.data() + inst.imm_a;
+            const bool wide = (inst.flags & detail::str_format_wide) != 0U;
+            const auto words = [&](std::initializer_list<llvm::Value*> values) {
+                auto* slot = entry_builder().CreateAlloca(
+                    llvm::ArrayType::get(i64_, values.size()));
+                std::uint64_t index = 0U;
+                for (auto* value : values) {
+                    builder_.CreateStore(value,
+                        builder_.CreateConstInBoundsGEP1_64(i64_, slot, index++));
+                }
+                return slot;
+            };
+            // A narrow register's word, 'U' mask and weak mask.
+            const auto narrow_words = [&](const std::uint32_t reg) {
+                const auto word = load_register(reg);
+                auto* unknown = !two_state_ && tracked(reg) ? unknown_of(reg) : constant(0U);
+                auto* weak = weak_mode() && tracked(reg) ? weak_of(reg) : constant(0U);
+                return words({ word.a, word.b, unknown, weak });
+            };
+            auto* null = llvm::ConstantPointerNull::get(llvm::PointerType::get(context_, 0U));
+            llvm::Value* value = null;
+            llvm::Value* file_words = null;
+            std::uint32_t entry = 0U;
+            if (inst.width != 0U && wide) {
+                file_words = registers_;
+                entry = inst.x
+                    | ((inst.flags & detail::str_format_masks) != 0U ? detail::wide_unknown_flag
+                                                                     : 0U);
+            } else if (inst.width != 0U) {
+                value = narrow_words(inst.x);
+            }
+            llvm::Value* field = null;
+            if (inst.imm_b != 0U) {
+                field = narrow_words(inst.y);
+            }
+            auto* type = llvm::FunctionType::get(llvm::Type::getVoidTy(context_),
+                { ptr_, i32_, ptr_, ptr_, ptr_, ptr_, i32_, i32_, ptr_, ptr_, i32_ }, false);
+            builder_.CreateCall(type, helper_symbol("fsim_sk_str_format", type),
+                { frame_, llvm::ConstantInt::get(i32_, at),
+                    words({ constant(record[0]), constant(record[1]), constant(record[2]) }),
+                    str_object(file, inst.offset), value, file_words,
+                    llvm::ConstantInt::get(i32_, entry), llvm::ConstantInt::get(i32_, inst.width),
+                    str_object(file, inst.z), field,
+                    llvm::ConstantInt::get(i32_, static_cast<std::uint32_t>(inst.imm_b)) });
+            check_status();
             break;
         }
         }
@@ -18620,6 +18721,23 @@ private:
                     builder_.CreateLoad(ptr_,
                         builder_.CreateConstInBoundsGEP1_64(i8_, table, 40U)));
                 const auto ticks = inst.imm_a;
+                if (inst.sub == 2U) {
+                    // $realtime: the real quotient, in the nearest rounding
+                    // mode only (another one runs the bytecode tier, which
+                    // reports the reference's error).
+                    auto* type = llvm::FunctionType::get(i32_, { }, false);
+                    auto* mode = builder_.CreateCall(type, helper_symbol("fegetround", type), { });
+                    check_or_fail(builder_.CreateICmpEQ(mode,
+                                      llvm::ConstantInt::get(i32_, FE_TONEAREST)),
+                        at, 2U);
+                    auto* quotient = builder_.CreateFDiv(
+                        builder_.CreateUIToFP(now, llvm::Type::getDoubleTy(context_)),
+                        llvm::ConstantFP::get(llvm::Type::getDoubleTy(context_),
+                            static_cast<double>(ticks)));
+                    store_register(inst.d,
+                        { builder_.CreateBitCast(quotient, i64_), constant(0U) });
+                    break;
+                }
                 auto* units = builder_.CreateUDiv(now, constant(ticks));
                 auto* round = builder_.CreateICmpUGE(
                     builder_.CreateURem(now, constant(ticks)),
@@ -21462,6 +21580,10 @@ private:
         add("fsim_sk_dyn_stream_wide", helpers.dyn_stream_wide);
         add("fsim_sk_scalar_fail", helpers.scalar_fail);
         add("fsim_sk_coverage_record", helpers.coverage_record);
+        add("fsim_sk_str_format", helpers.str_format);
+        add("fsim_sk_str_radix", helpers.str_radix);
+        add("fsim_sk_str_method", helpers.str_method);
+        add("fegetround", static_cast<int (*)()>(&::fegetround));
         // The math library (KOp::scalar; the reference's std:: calls, and
         // the library forms of rounding and remainder).
         using Unary = double (*)(double);
@@ -22059,6 +22181,7 @@ private:
         append_all(body.wide_base);
         append_all(body.string_operands);
         append_all(body.coverage_counters);
+        append_all(body.string_formats);
         append(body.string_bytes.size());
         text.append(body.string_bytes);
         append(body.wide_constants.size());

@@ -1792,8 +1792,9 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
             }
             const auto& info = impl_.get_signal(signal);
             const auto width = static_cast<std::uint32_t>(info.initial_value.width());
-            if (width == 0U
-                || info.systemverilog_scalar != SystemVerilogScalarKind::None) {
+            // Real, shortreal, realtime and time payloads mirror as their
+            // plain bits; a chandle is a host handle.
+            if (width == 0U || info.systemverilog_scalar == SystemVerilogScalarKind::Chandle) {
                 continue;
             }
             // Wide mirrors are read in place by narrow selections.
@@ -6502,22 +6503,28 @@ bool Interpreter::Impl::StaticKernel::deliver_host_write(const std::uint32_t mem
         && domain == SignalUpdateDomain::systemverilog_active) {
         // The host applies this update unchanged; members that run after
         // this write read it (see sole_writer_inputs).
+        // An update to the value the signal holds is no change, so no
+        // event (IEEE 1800-2023 4.3, 9.4.2): it wakes nothing.
         auto& mirrored = inputs_[input];
         auto next = mirrored.cached;
+        const auto mirror = [&](PackedLogic4 updated) {
+            auto normalized = Impl::coerce_value_kind(
+                impl_.normalize_signal_value(signal, std::move(updated)), ValueKind::logic4);
+            if (!(normalized == mirrored.cached)) {
+                apply_input(mirrored, std::move(normalized));
+            }
+            mirrored.mirrored_ahead = true;
+            mirrored_now = true;
+        };
         if (offset) {
             if (*offset <= next.width() && value.width() <= next.width() - *offset) {
                 for (std::uint32_t bit = 0U; bit < value.width(); ++bit) {
                     next.set(*offset + bit, value.get(bit));
                 }
-                apply_input(mirrored, Impl::coerce_value_kind(
-                    impl_.normalize_signal_value(signal, std::move(next)),
-                    ValueKind::logic4));
-                mirrored_now = true;
+                mirror(std::move(next));
             }
         } else if (value.width() == next.width()) {
-            apply_input(mirrored, Impl::coerce_value_kind(
-                impl_.normalize_signal_value(signal, value), ValueKind::logic4));
-            mirrored_now = true;
+            mirror(value);
         }
     }
     // The Active update events of one activation are performed in the order
@@ -10669,6 +10676,9 @@ bool Interpreter::Impl::StaticKernel::refresh_input_from_host(Input& input)
     }
     const bool bumped = revision != input.revision;
     input.revision = revision;
+    // The host committed the sole writer's updates the kernel mirrored at
+    // once (deliver_host_write).
+    const bool mirrored_ahead = std::exchange(input.mirrored_ahead, false);
     const auto seen = std::exchange(
         input.event_seen, impl_.signal_events[input.signal]);
     const HostWakeScope wakes { *this, input.signal };
@@ -10702,7 +10712,7 @@ bool Interpreter::Impl::StaticKernel::refresh_input_from_host(Input& input)
         // event for the members.
         const bool events = vhdl_
             ? input.event_seen && input.event_seen != seen
-            : bumped;
+            : bumped && !mirrored_ahead;
         if (!events
             || (input.signal < slot_of_signal_.size()
                 && slot_of_signal_[input.signal] != no_slot)) {
@@ -10927,6 +10937,7 @@ bool Interpreter::Impl::StaticKernel::activate()
          && !initial_update_pending_ && !initial_update_running_
          && !host_active_staged_
          && !(host_nba_staged_ && host_nba_time_ == impl_.scheduler.now())
+         && impl_.vcd_begins_pending == 0U
          && step < max_warp_steps; ++step) {
         const auto next = next_timer();
         if (!next) {

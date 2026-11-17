@@ -367,6 +367,7 @@ void Kernel::run_state_io(RunStateArchive& ar)
         FSIM_RS_IO("kernel.input", deposited, ar, input);
         FSIM_RS_IO("kernel.input", transaction_seen, ar, input);
         FSIM_RS_IO("kernel.input", unwritten, ar, input);
+        FSIM_RS_IO("kernel.input", mirrored_ahead, ar, input);
     });
     // The inputs whose host revision changed since the kernel last read them
     // (Impl::note_signal_revision): the kernel's next scan reads only these,

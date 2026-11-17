@@ -39,6 +39,11 @@ void string_putc(
     std::string_view value, unsigned radix);
 [[nodiscard]] std::string string_from_integer(
     std::int32_t value, unsigned radix);
+// TO_HSTRING and TO_OSTRING (IEEE 1076-2019 16.7) of the STD_ULOGIC_VECTOR
+// whose element characters are `elements`; a SIGNED value (sign_extend)
+// extends to whole groups with its leftmost element.
+[[nodiscard]] std::string vhdl_logic9_radix_string(
+    std::string_view elements, bool hexadecimal, bool sign_extend = false);
 [[nodiscard]] std::uint32_t checked_vhdl_textio_field_width(
     const PackedLogic4& value);
 // The element representations in the string representation of a

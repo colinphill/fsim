@@ -17909,12 +17909,17 @@ std::optional<frontend::ValueDomain> Lowerer::hir_expression_domain(
             // hierarchy identities, not in declaration HIR.
             return frontend::ValueDomain::Integer;
         }
-        if (source.kind == semantic::sv::ExpressionKind::call
-            && (semantic::sv::member_builtin_method(source) == support::BuiltinMethod::size || semantic::sv::member_builtin_method(source) == support::BuiltinMethod::num)
-            && source.operands.size() == 1U
-            && (hir_container_object_binding(source.operands.front())
-                || hir_static_container_expression_type(source.operands.front()))) {
-            return frontend::ValueDomain::Bit2;
+        // A built-in method's value of an integral keyword type has that
+        // type's states (support::builtin_method_result_type; 6.11): int
+        // and byte two-state, integer four-state.
+        if (source.kind == semantic::sv::ExpressionKind::call) {
+            const auto kind = support::builtin_method_result_type(
+                semantic::sv::member_builtin_method(source));
+            if (support::systemverilog_builtin_width(kind) != 0U) {
+                return kind == support::SystemVerilogBuiltinType::integer
+                    ? frontend::ValueDomain::Integer
+                    : frontend::ValueDomain::Bit2;
+            }
         }
         // A pop method returns the queue's element type (7.10.2).
         if (source.kind == semantic::sv::ExpressionKind::call
@@ -18061,27 +18066,14 @@ std::optional<frontend::ValueDomain> Lowerer::hir_expression_domain(
                 || source.text == "$urandom_range")) {
             return frontend::ValueDomain::Bit2;
         }
+        // atoreal's real value is carried as the 64-bit pattern of its
+        // integer-domain register (6.16.9, 6.12).
         if (source.kind == semantic::sv::ExpressionKind::call
-            && semantic::sv::member_builtin_method(source) == support::BuiltinMethod::len && source.operands.size() == 1U
-            && hir_expression_is_string(
-                source.operands.front(), process_scope)) {
-            return frontend::ValueDomain::Bit2;
-        }
-        if (source.kind == semantic::sv::ExpressionKind::call
-            && (semantic::sv::member_builtin_method(source) == support::BuiltinMethod::getc
-                || semantic::sv::member_builtin_method(source) == support::BuiltinMethod::compare
-                || semantic::sv::member_builtin_method(source) == support::BuiltinMethod::icompare
-                || semantic::sv::member_builtin_method(source) == support::BuiltinMethod::atoi
-                || semantic::sv::member_builtin_method(source) == support::BuiltinMethod::atohex
-                || semantic::sv::member_builtin_method(source) == support::BuiltinMethod::atooct
-                || semantic::sv::member_builtin_method(source) == support::BuiltinMethod::atobin
-                || semantic::sv::member_builtin_method(source) == support::BuiltinMethod::atoreal)
+            && semantic::sv::member_builtin_method(source) == support::BuiltinMethod::atoreal
             && !source.operands.empty()
             && hir_expression_is_string(
                 source.operands.front(), process_scope)) {
-            return semantic::sv::member_builtin_method(source) == support::BuiltinMethod::getc
-                ? frontend::ValueDomain::Bit2
-                : frontend::ValueDomain::Integer;
+            return frontend::ValueDomain::Integer;
         }
         if (source.kind == semantic::sv::ExpressionKind::index
             && source.operands.size() == 2U

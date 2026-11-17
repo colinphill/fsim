@@ -245,9 +245,10 @@ state, S3):
     commit each source as its process's driver, so the host's resolution
     agrees. Writers of a resolved slot stay
     off the multi-thread lanes and out of delta collapse.
-  - Signals with event variables, implicit drivers, charge strength or SV
-    scalar kinds are never owned. Memories are owned when all accessors are
-    members.
+  - Signals with event variables, implicit drivers, charge strength or a
+    chandle are never owned. A real, shortreal, realtime or time variable
+    is owned as the plain bits of its canonical payload (IEEE 1800-2023
+    6.12, 6.11). Memories are owned when all accessors are members.
   - Aggregate alias families (per-element arrays with a proxy) are owned as a
     unit.
 - **Witness.** T-sv (netlist, memories, net array), T-cone (hidden nets read
@@ -477,7 +478,10 @@ state, S3):
     hook they reach (`Interpreter::current_time()`/`current_delta()`).
   - Warp is refused under: a run limit, active PSL directives, any signal,
     scalar, driver or container change hook, an execution-point hook,
-    safe-point observers, VPI handles or runtime updates, SystemC.
+    safe-point observers, VPI handles or runtime updates, SystemC. A warp
+    stops at a time step whose `$dumpvars` or `$dumpports` dump begins in
+    its Postponed region (1800 §21.7.1.2): the dump records that step's
+    values and then watches its signals, a change hook.
 - **Basis.** 1800 §4.3, §4.5 (time advances only when no events remain);
   1076 §14.7.5.3 (simulation cycle).
 - **Status:** *implemented* for warp (`FSIM_STATIC_KERNEL_TIME_WARP=0`

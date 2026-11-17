@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cfenv>
 #include <cctype>
 #include <cstdlib>
 #include <cxxabi.h>
@@ -370,6 +371,14 @@ void Interpreter::Impl::StaticKernel::execute_body(
             execute_sva_report(inst, member_index);
             break;
         case KOp::sva_sampled_load:
+            if (inst.aux == 4U && inst.sub == 2U && std::fegetround() != FE_TONEAREST) {
+                // $realtime's division is defined in the nearest rounding
+                // mode only (systemverilog_time_function).
+                fail_at(at, "SystemVerilog time query failed (error "
+                        + std::to_string(static_cast<unsigned>(
+                            SystemVerilogScalarError::UnsupportedRoundingMode))
+                        + ")");
+            }
             execute_sva_sampled_load(body, registers, inst, member_index);
             break;
         case KOp::constant:
@@ -707,6 +716,57 @@ void Interpreter::Impl::StaticKernel::execute_body(
                 == static_kernel_detail::StrOp::write_object_nba) {
                 queue_string_update(member_index,
                     static_cast<StringObjectId>(inst.imm_a), strings[inst.z]);
+                break;
+            }
+            if (static_cast<static_kernel_detail::StrOp>(inst.sub)
+                == static_kernel_detail::StrOp::format) {
+                try {
+                    const auto* record = body.string_formats.data() + inst.imm_a;
+                    const auto kind = static_kernel_detail::string_format_value_kind(record);
+                    const auto value = inst.width == 0U ? PackedLogic4 { 1, Logic4::zero }
+                        : (inst.flags & static_kernel_detail::str_format_wide) != 0U
+                        ? wide_value_at(registers,
+                              inst.x
+                                  | ((inst.flags & static_kernel_detail::str_format_masks) != 0U
+                                          ? static_kernel_detail::wide_unknown_flag
+                                          : 0U),
+                              inst.width, kind)
+                        : static_kernel_detail::uword_value(registers[inst.x], unknown(inst.x),
+                              inst.width, kind, weak(inst.x));
+                    const auto field_width = inst.imm_b == 0U
+                        ? PackedLogic4 { 1, Logic4::zero }
+                        : static_kernel_detail::uword_value(registers[inst.y], unknown(inst.y),
+                              static_cast<std::uint32_t>(inst.imm_b),
+                              static_kernel_detail::string_format_width_kind(record),
+                              weak(inst.y));
+                    static_kernel_detail::append_str_format(record, strings[inst.offset], value,
+                        strings[inst.z], field_width, kernel_now(), impl_.time_format);
+                } catch (const std::exception& error) {
+                    fail_at(at, error.what());
+                }
+                break;
+            }
+            if (static_cast<static_kernel_detail::StrOp>(inst.sub)
+                == static_kernel_detail::StrOp::method) {
+                try {
+                    const auto flags = inst.flags;
+                    const auto value = static_kernel_detail::execute_str_method(inst.imm_a, flags,
+                        strings[inst.z],
+                        (flags & static_kernel_detail::str_method_argument) != 0U
+                            ? std::string_view { strings[static_cast<std::size_t>(inst.imm_b)] }
+                            : std::string_view { },
+                        (flags & static_kernel_detail::str_method_first) != 0U
+                            ? registers[inst.x] : Word { },
+                        (flags & static_kernel_detail::str_method_second) != 0U
+                            ? registers[inst.y] : Word { },
+                        (flags & static_kernel_detail::str_method_string) != 0U
+                            ? &strings[inst.offset] : nullptr);
+                    if ((flags & static_kernel_detail::str_method_scalar) != 0U) {
+                        registers[inst.d] = { value, 0U };
+                    }
+                } catch (const std::exception& error) {
+                    fail_at(at, error.what());
+                }
                 break;
             }
             const auto failure = static_kernel_detail::execute_str(inst, body, strings.data(),
@@ -1714,8 +1774,15 @@ void Interpreter::Impl::StaticKernel::execute_sva_sampled_load(
     }
     if (inst.aux == 4U) {
         // $time (sub 0) or $stime (sub 1): the time step in the unit's ticks
-        // (imm_a each), rounded half up (systemverilog_time_function).
+        // (imm_a each), rounded half up; $realtime (sub 2) the real quotient
+        // (systemverilog_time_function).
         const auto now = static_cast<std::uint64_t>(kernel_now());
+        if (inst.sub == 2U) {
+            registers[inst.d] = { std::bit_cast<std::uint64_t>(static_cast<double>(now)
+                                      / static_cast<double>(inst.imm_a)),
+                0U };
+            return;
+        }
         auto units = now / inst.imm_a;
         if (now % inst.imm_a >= inst.imm_a / 2U + inst.imm_a % 2U) {
             ++units;
@@ -3041,6 +3108,9 @@ void Interpreter::Impl::StaticKernel::set_instruction_helpers(
     helpers.dyn_stream_wide = &StaticKernel::native_dyn_stream_wide;
     helpers.scalar_fail = &StaticKernel::native_scalar_fail;
     helpers.coverage_record = &StaticKernel::native_coverage_record;
+    helpers.str_format = &StaticKernel::native_str_format;
+    helpers.str_radix = &StaticKernel::native_str_radix;
+    helpers.str_method = &StaticKernel::native_str_method;
     helpers.sva_post = &StaticKernel::native_sva_post;
     helpers.sva_filter = &StaticKernel::native_sva_filter;
     helpers.sva_check = &StaticKernel::native_sva_check;

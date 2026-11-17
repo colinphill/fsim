@@ -133,6 +133,26 @@ private:
 [[nodiscard]] DynFailure execute_str(const KInst& inst, const CompiledBody& body,
     std::string* strings, kernel_word::Word* registers);
 
+/// KOp::str method: the reference's execute_string_method of the operator
+/// in `operation` (KInst::imm_a, with the integer operands' widths) on
+/// `source`, `argument` and the integer words `first` and `second` (none
+/// when unknown, or when `flags` names no such operand). Returns the 64-bit
+/// result (flags str_method_scalar); a string result goes to `destination`.
+/// Throws the reference's errors.
+[[nodiscard]] std::uint64_t execute_str_method(std::uint64_t operation, std::uint8_t flags,
+    std::string& source, std::string_view argument, kernel_word::Word first,
+    kernel_word::Word second, std::string* destination);
+
+/// KOp::str format: appends to `destination` the reference's
+/// execute_string_format of the format record `record`
+/// (string_format_method) on `value` (unused when the record reads none)
+/// or on `argument`, a dynamic field form with the field width
+/// `field_width` (checked_vhdl_textio_field_width). Throws the reference's
+/// errors.
+void append_str_format(const std::uint64_t* record, std::string& destination,
+    const PackedLogic4& value, std::string_view argument, const PackedLogic4& field_width,
+    std::uint64_t tick, const SystemVerilogTimeFormat& time_format);
+
 /// Executes KOp::scalar `inst` on the bytecode tier with the reference's
 /// scalar routines. Returns the reference's failure message, or nothing.
 [[nodiscard]] std::optional<std::string> execute_scalar(const KInst& inst,

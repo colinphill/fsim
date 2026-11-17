@@ -116,6 +116,7 @@ void run_io(RunStateArchive& ar, Impl& impl)
     FSIM_RS_IO("interp.impl", monitor_generation, ar, impl);
     FSIM_RS_IO("interp.impl", monitor_publication, ar, impl);
     FSIM_RS_IO("interp.impl", monitor_systemverilog_publication, ar, impl);
+    FSIM_RS_IO("interp.impl", vcd_begins_pending, ar, impl);
     FSIM_RS_IO("interp.impl", started, ar, impl);
     FSIM_RS_IO("interp.impl", late_process_registration, ar, impl);
     FSIM_RS_IO("interp.impl", late_process_kernel_member, ar, impl);

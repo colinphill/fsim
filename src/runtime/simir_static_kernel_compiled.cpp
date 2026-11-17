@@ -56,7 +56,7 @@ namespace {
 
 namespace {
 
-constexpr std::string_view bodies_magic { "fsim-static-kernel-bodies-v13" };
+constexpr std::string_view bodies_magic { "fsim-static-kernel-bodies-v14" };
 
 // The not-compiled reason of an operation kind the compiled tier has no form
 // for: "operation:" and the kind's name. The text lives for the process.
@@ -525,6 +525,8 @@ void Interpreter::Impl::StaticKernel::compile_members()
                             differs = "strings";
                         } else if (a->coverage_counters != b->coverage_counters) {
                             differs = "coverage_counters";
+                        } else if (a->string_formats != b->string_formats) {
+                            differs = "string_formats";
                         } else if (a->live_at_entry != b->live_at_entry) {
                             differs = "live_at_entry";
                         } else if (a->shadow_base != b->shadow_base) {
@@ -1512,13 +1514,15 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
     // computed inline (KOp::sva_sampled_load, aux 4; IEEE 1800-2023 20.3):
     // the unit and precision of the design unit, each the project resolution
     // when the unit has no timescale, as systemverilog_time_function takes
-    // them. Empty for $realtime (a rounding-mode dependent real) and for a
-    // context the library rejects, which keep the library call.
+    // them ($realtime divides the time by them). Empty for a context the
+    // library rejects, which keeps the library call.
     const auto time_query_ticks = [&](const SystemVerilogMath& op)
         -> std::optional<std::uint64_t> {
-        if (vhdl
-            || (op.function != SystemVerilogMathFunction::Time
-                && op.function != SystemVerilogMathFunction::Stime)) {
+        // VHDL's NOW is $time without a timescale: the count of resolution
+        // limits (IEEE 1076-2019 16.3).
+        if (op.function != SystemVerilogMathFunction::Time
+            && op.function != SystemVerilogMathFunction::Stime
+            && op.function != SystemVerilogMathFunction::Realtime) {
             return std::nullopt;
         }
         const auto resolution = time_resolution_ != 0U
@@ -3054,6 +3058,28 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                 inst.imm_a = w(op.second);
                 inst.imm_b = 1U;
                 return true;
+            case StringMethodOperator::vhdl_logic9_hstring:
+            case StringMethodOperator::vhdl_logic9_ostring:
+            case StringMethodOperator::vhdl_logic9_hstring_signed:
+            case StringMethodOperator::vhdl_logic9_ostring_signed:
+                // TO_HSTRING and TO_OSTRING (IEEE 1076-2019 16.7).
+                if (!string(op.source) || !string(op.string_destination)) {
+                    return false;
+                }
+                set(StrOp::radix);
+                inst.offset = op.string_destination;
+                inst.z = op.source;
+                inst.imm_a = (op.operation == StringMethodOperator::vhdl_logic9_hstring
+                                     || op.operation
+                                         == StringMethodOperator::vhdl_logic9_hstring_signed
+                                 ? 1U
+                                 : 0U)
+                    | (op.operation == StringMethodOperator::vhdl_logic9_hstring_signed
+                                || op.operation
+                                    == StringMethodOperator::vhdl_logic9_ostring_signed
+                            ? 2U
+                            : 0U);
+                return true;
             case StringMethodOperator::toupper:
             case StringMethodOperator::tolower:
                 if (!string(op.source) || !string(op.string_destination)) {
@@ -3113,6 +3139,55 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                 inst.width = w(op.first);
                 inst.imm_a = radix(op.operation);
                 return true;
+            case StringMethodOperator::vhdl_integer_value:
+            case StringMethodOperator::vhdl_enumeration_value:
+            case StringMethodOperator::vhdl_physical_value:
+            case StringMethodOperator::atoreal:
+            case StringMethodOperator::vhdl_composite_element:
+            case StringMethodOperator::vhdl_character_element:
+            case StringMethodOperator::vhdl_string_fill: {
+                // The reference's pure parse and split routines
+                // (execute_string_method), with its operands: the argument
+                // string of an enumeration's literals or a physical type's
+                // units, the element index and count (or a fill's length
+                // and character), a 64-bit result or a string.
+                using M = StringMethodOperator;
+                const bool element = op.operation == M::vhdl_composite_element
+                    || op.operation == M::vhdl_character_element
+                    || op.operation == M::vhdl_string_fill;
+                const bool argument = op.operation == M::vhdl_enumeration_value
+                    || op.operation == M::vhdl_physical_value;
+                if (!string(op.source) || (argument && !string(op.argument))) {
+                    return false;
+                }
+                set(StrOp::method);
+                inst.z = op.source;
+                inst.imm_a = static_cast<std::uint64_t>(op.operation);
+                std::uint8_t flags = argument ? str_method_argument : 0U;
+                if (argument) {
+                    inst.imm_b = op.argument;
+                }
+                if (element) {
+                    if (!integer(op.first) || !integer(op.second)
+                        || !string(op.string_destination)) {
+                        return false;
+                    }
+                    inst.x = narrow(op.first);
+                    inst.y = narrow(op.second);
+                    inst.imm_a |= static_cast<std::uint64_t>(w(op.first)) << 8U
+                        | static_cast<std::uint64_t>(w(op.second)) << 16U;
+                    inst.offset = op.string_destination;
+                    flags |= str_method_first | str_method_second | str_method_string;
+                } else {
+                    if (op.destination >= register_count || w(op.destination) != 64U) {
+                        return false;
+                    }
+                    inst.d = narrow(op.destination);
+                    flags |= str_method_scalar;
+                }
+                inst.flags = flags;
+                return true;
+            }
             default:
                 return false;
             }
@@ -3276,6 +3351,68 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
     // every chunked VHDL register has 'U' masks.
     const auto has_unknowns = [&](const RegisterId reg) {
         return vhdl || kind_of(reg) == ValueKind::logic9;
+    };
+    // KOp::str format for an argument of $sformatf, $sformat or $swrite
+    // (IEEE 1800-2023 21.3.3) or a VHDL TextIO WRITE (IEEE 1076-2019 16.4):
+    // its record in the body's string_formats, a narrow or chunked value
+    // register (with 'U' and weak masks when it has unknowns) and a narrow
+    // field width register.
+    const auto emit_str_format = [&](KInst& inst, const StringMethod& op) -> bool {
+        using M = StringMethodOperator;
+        if (member.string_file == no_slot || op.source >= string_count
+            || !string_format_operation(op.operation)) {
+            return false;
+        }
+        const bool dynamic_string = op.operation == M::format_string_dynamic_field;
+        const bool dynamic_packed = op.operation == M::format_packed_dynamic_field;
+        const bool reads_value = op.operation == M::format_packed || dynamic_packed
+            || op.operation == M::format_vhdl_time
+            || (op.operation == M::format_time && op.time_unit_femtoseconds != 0U);
+        const auto valid = [&](const RegisterId reg) {
+            return reg < register_count && width[reg] != 0U && width[reg] != polymorphic;
+        };
+        inst = KInst { };
+        inst.op = KOp::str;
+        inst.sub = static_cast<std::uint8_t>(StrOp::format);
+        inst.aux = member.string_file;
+        inst.offset = op.source;
+        if (op.operation == M::format_string || dynamic_string) {
+            if (op.argument >= string_count) {
+                return false;
+            }
+            inst.z = op.argument;
+        }
+        auto value_kind = ValueKind::logic4;
+        if (reads_value) {
+            if (!valid(op.first)) {
+                return false;
+            }
+            if (chunked(op.first)) {
+                inst.flags = static_cast<std::uint8_t>(str_format_wide
+                    | (has_unknowns(op.first) ? str_format_masks : 0U));
+                inst.x = op.first;
+            } else if (width[op.first] <= 64U) {
+                inst.x = narrow(op.first);
+            } else {
+                return false;
+            }
+            inst.width = static_cast<std::uint32_t>(width[op.first]);
+            value_kind = kind_of(op.first);
+        }
+        auto width_kind = ValueKind::logic4;
+        if (dynamic_string || dynamic_packed) {
+            const auto field = dynamic_string ? op.first : op.second;
+            if (!valid(field) || width[field] > 64U) {
+                return false;
+            }
+            inst.y = narrow(field);
+            inst.imm_b = width[field];
+            width_kind = kind_of(field);
+        }
+        inst.imm_a = body.string_formats.size();
+        const auto record = string_format_record(op, value_kind, width_kind);
+        body.string_formats.insert(body.string_formats.end(), record.begin(), record.end());
+        return true;
     };
     // A sampled-value read the kernel loads inline (KOp::sva_sampled_load;
     // KOp::wide_load sub 4 and 5 for a wide result): $sampled of the Preponed
@@ -4131,6 +4268,11 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                     || std::is_same_v<T, ReadStringObject>
                     || std::is_same_v<T, WriteStringObject>) {
                     if (emit_str(inst, op)) {
+                        return;
+                    }
+                }
+                if constexpr (std::is_same_v<T, StringMethod>) {
+                    if (emit_str_format(inst, op)) {
                         return;
                     }
                 }
@@ -5298,8 +5440,8 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                     || std::is_same_v<T, SystemVerilogMath>
                     || std::is_same_v<T, SystemVerilogScalarBinary>) {
                     if constexpr (std::is_same_v<T, SystemVerilogMath>) {
-                        // $time and $stime are an inline load of the kernel's
-                        // time (below).
+                        // $time, $stime and $realtime are an inline load of
+                        // the kernel's time (below).
                         if (time_query_ticks(op)) {
                             return;
                         }
@@ -6334,10 +6476,11 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                     inst.imm_a = containers_[inst.d].type.element_width;
                 }
             } else if constexpr (std::is_same_v<T, SystemVerilogMath>) {
-                // $time and $stime (IEEE 1800-2023 20.3; the classification
-                // above leaves no other form here): the kernel's time in the
-                // unit's ticks, rounded to the nearest unit, from the SVA
-                // table's time (aux 4; sub 0 $time, 1 $stime).
+                // $time, $stime and $realtime (IEEE 1800-2023 20.3; the
+                // classification above leaves no other form here): the
+                // kernel's time in the unit's ticks, rounded to the nearest
+                // unit, or as a real (sub 2), from the SVA table's time (aux 4;
+                // sub 0 $time, 1 $stime).
                 const auto ticks = time_query_ticks(op);
                 if (!ticks) {
                     throw reject("operation");
@@ -6346,7 +6489,9 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                 sva_table_used_ = true;
                 inst.d = narrow(op.destination);
                 inst.aux = 4U;
-                inst.sub = op.function == SystemVerilogMathFunction::Stime ? 1U : 0U;
+                inst.sub = op.function == SystemVerilogMathFunction::Stime ? 1U
+                    : op.function == SystemVerilogMathFunction::Realtime   ? 2U
+                                                                           : 0U;
                 inst.width = op.function == SystemVerilogMathFunction::Stime ? 32U : 64U;
                 inst.imm_a = *ticks;
             } else if constexpr (std::is_same_v<T, HostRequest>) {
@@ -6800,6 +6945,12 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                     if ((inst.sub & coverage_wide) != 0U) {
                         place(inst.x);
                         place(inst.y);
+                    }
+                    break;
+                case KOp::str:
+                    if (static_cast<StrOp>(inst.sub) == StrOp::format
+                        && (inst.flags & str_format_wide) != 0U) {
+                        place(inst.x);
                     }
                     break;
                 default:

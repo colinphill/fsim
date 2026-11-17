@@ -2147,6 +2147,7 @@ tests/fixtures/compliance/sv_string_nonblocking_order.sv
 tests/fixtures/compliance/sv_sva_clock_declaration_forms.sv
 tests/fixtures/compliance/sv_sva_recursive_properties.sv
 tests/fixtures/compliance/sv_sva_sequence_endpoints.sv
+tests/fixtures/compliance/sv_sync_method_contexts.sv
 tests/fixtures/compliance/sv_sync_method_receivers.sv
 tests/fixtures/compliance/sv_task_copyout_signedness_batch56.sv
 tests/fixtures/compliance/sv_time_without_timescale.sv
@@ -3178,9 +3179,14 @@ tests/fixtures/systemverilog/delta_collapse/run_delta_collapse.cmake
 tests/fixtures/systemverilog/kernel_coverage/kernel_coverage.sv
 tests/fixtures/systemverilog/kernel_coverage/kernel_coverage.vhd
 tests/fixtures/systemverilog/kernel_coverage/run_kernel_coverage.cmake
+tests/fixtures/systemverilog/kernel_format/kernel_format.sv
+tests/fixtures/systemverilog/kernel_format/kernel_format.vhd
+tests/fixtures/systemverilog/kernel_format/run_kernel_format.cmake
 tests/fixtures/systemverilog/kernel_image/kernel_image_lanes.sv
 tests/fixtures/systemverilog/kernel_image/kernel_image_vhdl.vhd
 tests/fixtures/systemverilog/kernel_image/run_kernel_image.cmake
+tests/fixtures/systemverilog/kernel_real/kernel_real.sv
+tests/fixtures/systemverilog/kernel_real/run_kernel_real.cmake
 tests/fixtures/systemverilog/mixed_standard/call_2017.sv
 tests/fixtures/systemverilog/mixed_standard/extends_2012.sv
 tests/fixtures/systemverilog/mixed_standard/import_2023.sv

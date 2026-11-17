@@ -9,6 +9,7 @@
 #include "fsim/semantic/sva_plan.hpp"
 #include "simir_kernel_word_ops.hpp"
 
+#include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -446,13 +447,133 @@ enum class StrOp : std::uint8_t {
     /// nonblocking write, IEEE 1800-2023 10.4.2): queued among the
     /// thread's nonblocking updates in execution order (fsim_sk_str_nba).
     write_object_nba,
+    /// String offset += one formatted value: an argument of $sformatf,
+    /// $sformat and $swrite (IEEE 1800-2023 21.3.3, 21.2.1) or a VHDL TextIO
+    /// WRITE (IEEE 1076-2019 16.4): the StringMethod format record
+    /// CompiledBody::string_formats[imm_a .. imm_a + 3)
+    /// (string_format_method) applied to register x of width bits (the
+    /// storage of a chunked register when flags has str_format_wide, its
+    /// 'U' and weak masks after the chunks with str_format_masks; width 0
+    /// reads no value) or to string z, with a dynamic field width in the
+    /// narrow register y of imm_b bits, by the reference's
+    /// execute_string_format (fsim_sk_str_format in generated code, a pure
+    /// fsim formatter).
+    format,
+    /// String offset = TO_HSTRING (imm_a bit 0) or TO_OSTRING of the
+    /// element characters in string z, sign extended when imm_a has bit 1
+    /// (IEEE 1076-2019 16.7; vhdl_logic9_radix_string, fsim_sk_str_radix in
+    /// generated code, a pure fsim formatter).
+    radix,
+    /// A StringMethod value parse or split (str_method_operation: 'VALUE
+    /// of an integer, enumeration, physical or real type, the elements of a
+    /// composite value's string representation, an allocator's fill; IEEE
+    /// 1076-2019 16.2.2, 9.3.7; atoreal, IEEE 1800-2023 6.16.11) by the
+    /// reference's execute_string_method (fsim_sk_str_method in generated
+    /// code, a pure fsim routine): the operator in imm_a bits 0-7, string z
+    /// the source, string imm_b the argument (flags str_method_argument),
+    /// the integer registers x (first, imm_a bits 8-15 its width) and y
+    /// (second, bits 16-23) when flags has str_method_first/second; the
+    /// result's 64 bits in d (str_method_scalar) or its string in string
+    /// offset (str_method_string).
+    method,
 };
+
+/// KOp::str method flags.
+inline constexpr std::uint8_t str_method_first = 1U;
+inline constexpr std::uint8_t str_method_second = 2U;
+inline constexpr std::uint8_t str_method_argument = 4U;
+inline constexpr std::uint8_t str_method_scalar = 8U;
+inline constexpr std::uint8_t str_method_string = 16U;
+
+/// KOp::str format: register x is a chunked wide register.
+inline constexpr std::uint8_t str_format_wide = 1U;
+/// KOp::str format: the chunked register x has 'U' and weak masks.
+inline constexpr std::uint8_t str_format_masks = 2U;
+/// The words of one StringMethod format record in
+/// CompiledBody::string_formats.
+inline constexpr std::size_t string_format_words = 3U;
+
+/// A StringMethod format operation (format_packed, format_string,
+/// format_time, format_vhdl_time and the dynamic field forms) as the three
+/// words string_format_method reads back, with the value kinds of its value
+/// register and of its field width register (string_format_value_kind,
+/// string_format_width_kind).
+[[nodiscard]] inline std::array<std::uint64_t, string_format_words>
+string_format_record(const StringMethod& method, const ValueKind value_kind,
+    const ValueKind width_kind) noexcept
+{
+    const auto flag = [](const bool value, const unsigned bit) {
+        return value ? std::uint64_t { 1 } << bit : std::uint64_t { 0 };
+    };
+    return {
+        static_cast<std::uint64_t>(method.operation)
+            | static_cast<std::uint64_t>(method.format) << 8U
+            | static_cast<std::uint64_t>(method.scalar_kind) << 16U
+            | flag(method.signed_decimal, 24U) | flag(method.suppress_leading_zero, 25U)
+            | flag(method.left_justify, 26U) | flag(method.zero_pad, 27U)
+            | flag(method.use_timeformat_width, 28U) | flag(method.time_signed, 29U)
+            | static_cast<std::uint64_t>(method.minimum_width) << 32U,
+        method.precision | static_cast<std::uint64_t>(value_kind) << 32U
+            | static_cast<std::uint64_t>(width_kind) << 40U,
+        method.time_unit_femtoseconds,
+    };
+}
+
+[[nodiscard]] inline ValueKind string_format_value_kind(const std::uint64_t* words) noexcept
+{
+    return static_cast<ValueKind>((words[1] >> 32U) & 0xffU);
+}
+
+[[nodiscard]] inline ValueKind string_format_width_kind(const std::uint64_t* words) noexcept
+{
+    return static_cast<ValueKind>((words[1] >> 40U) & 0xffU);
+}
+
+/// The StringMethod operations KOp::str method carries out: pure functions
+/// of the source string, the argument string and two integers.
+[[nodiscard]] inline bool str_method_operation(const StringMethodOperator operation) noexcept
+{
+    using M = StringMethodOperator;
+    return operation == M::vhdl_integer_value || operation == M::vhdl_enumeration_value
+        || operation == M::vhdl_physical_value || operation == M::atoreal
+        || operation == M::vhdl_composite_element || operation == M::vhdl_character_element
+        || operation == M::vhdl_string_fill;
+}
+
+/// The StringMethod format operations KOp::str format carries out.
+[[nodiscard]] inline bool string_format_operation(const StringMethodOperator operation) noexcept
+{
+    using M = StringMethodOperator;
+    return operation == M::format_packed || operation == M::format_string
+        || operation == M::format_time || operation == M::format_vhdl_time
+        || operation == M::format_packed_dynamic_field
+        || operation == M::format_string_dynamic_field;
+}
+
+[[nodiscard]] inline StringMethod string_format_method(const std::uint64_t* words) noexcept
+{
+    const auto bit = [&](const unsigned at) { return ((words[0] >> at) & 1U) != 0U; };
+    StringMethod method;
+    method.operation = static_cast<StringMethodOperator>(words[0] & 0xffU);
+    method.format = static_cast<OutputFormat>((words[0] >> 8U) & 0xffU);
+    method.scalar_kind = static_cast<SystemVerilogScalarKind>((words[0] >> 16U) & 0xffU);
+    method.signed_decimal = bit(24U);
+    method.suppress_leading_zero = bit(25U);
+    method.left_justify = bit(26U);
+    method.zero_pad = bit(27U);
+    method.use_timeformat_width = bit(28U);
+    method.time_signed = bit(29U);
+    method.minimum_width = static_cast<std::uint32_t>(words[0] >> 32U);
+    method.precision = static_cast<std::uint32_t>(words[1]);
+    method.time_unit_femtoseconds = words[2];
+    return method;
+}
 
 [[nodiscard]] inline bool str_writes_string(const StrOp op) noexcept
 {
     return op == StrOp::copy || op == StrOp::load_constant || op == StrOp::concat
         || op == StrOp::replace_byte || op == StrOp::change_case || op == StrOp::substr
-        || op == StrOp::from_integer;
+        || op == StrOp::from_integer || op == StrOp::radix;
 }
 
 /// Writes register d.
@@ -474,6 +595,7 @@ enum class StrOp : std::uint8_t {
 {
     return op == StrOp::replace_byte || op == StrOp::substr;
 }
+
 
 /// KOp::dyn operations (KInst::sub), the SimIR container operations they
 /// carry out on a kernel queue or dynamic array.
@@ -862,6 +984,43 @@ struct KInst {
     std::uint64_t imm_b { };
 };
 
+/// KOp::str format reading the narrow register x (a wide one is chunked
+/// storage, which no use list names).
+[[nodiscard]] inline bool str_format_reads_narrow(const KInst& inst) noexcept
+{
+    return static_cast<StrOp>(inst.sub) == StrOp::format && inst.width != 0U
+        && (inst.flags & str_format_wide) == 0U;
+}
+
+/// KOp::str method reading its first integer from register x.
+[[nodiscard]] inline bool str_method_reads_first(const KInst& inst) noexcept
+{
+    return static_cast<StrOp>(inst.sub) == StrOp::method
+        && (inst.flags & str_method_first) != 0U;
+}
+
+/// KOp::str method reading its second integer from register y.
+[[nodiscard]] inline bool str_method_reads_second(const KInst& inst) noexcept
+{
+    return static_cast<StrOp>(inst.sub) == StrOp::method
+        && (inst.flags & str_method_second) != 0U;
+}
+
+/// KOp::str writing register d.
+[[nodiscard]] inline bool str_inst_writes_register(const KInst& inst) noexcept
+{
+    const auto op = static_cast<StrOp>(inst.sub);
+    return str_writes_register(op)
+        || (op == StrOp::method && (inst.flags & str_method_scalar) != 0U);
+}
+
+/// KOp::str format reading a dynamic field width from the narrow register
+/// y (imm_b bits).
+[[nodiscard]] inline bool str_format_reads_width(const KInst& inst) noexcept
+{
+    return static_cast<StrOp>(inst.sub) == StrOp::format && inst.imm_b != 0U;
+}
+
 /// An associative array with string keys (dyn_layout_text_keys): its key
 /// operand y is a string register of the member's string file (z), not a
 /// register, and a traversal writes that string.
@@ -1107,6 +1266,9 @@ struct CompiledBody {
     /// KOp::coverage toggles: each bit's rise and fall counters (imm_a the
     /// first); a native template binds them instead.
     std::vector<std::uint32_t> coverage_counters;
+    /// KOp::str format: StringMethod format records (string_format_words
+    /// words each).
+    std::vector<std::uint64_t> string_formats;
     /// KOp::dyn: container predicate graphs (dyn_graph_node_words words a
     /// node).
     std::vector<std::uint64_t> predicate_words;

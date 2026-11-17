@@ -1703,6 +1703,7 @@ void Interpreter::Impl::control_vcd(const ProcessId process,
         const auto begin_kind = operation.kind == VcdControlKind::variables
             ? VcdControlKind::begin_variables
             : VcdControlKind::begin_ports;
+        ++vcd_begins_pending;
         scheduler.schedule_internal(
             SchedulerPhase::postponed,
             process,

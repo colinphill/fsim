@@ -1785,7 +1785,11 @@ namespace {
     {
         const auto kind = state.scalar_kinds.at(signal);
         for (const auto handle : state.handles.at(signal)) {
-            if (kind == runtime::SystemVerilogScalarKind::None) {
+            // A time variable is a four-state 64-bit unsigned integer (IEEE
+            // 1800-2023 6.11.1), x until its first assignment: the dump
+            // records its bits, as the run trace does.
+            if (kind == runtime::SystemVerilogScalarKind::None
+                || kind == runtime::SystemVerilogScalarKind::Time) {
                 state.writer->change(handle, value);
                 continue;
             }
@@ -2215,6 +2219,15 @@ namespace {
                 return true;
             }
             state.activate_observer();
+            // The ports' kernel-owned signals publish their changes to the
+            // dump from here on (Simulation::watch_signal_changes).
+            std::vector<runtime::simir::SignalId> watched;
+            for (const auto& file : state.extended_files) {
+                for (const auto port : file->ports) {
+                    watched.push_back(state.extended_ports.at(port).signal);
+                }
+            }
+            state.simulation->watch_signal_changes(watched);
             for (auto& file : state.extended_files) {
                 begin_extended_vcd_file(state, *file, event.time);
             }
@@ -2372,6 +2385,15 @@ void attach_hdl_vcd_control(
                     return;
                 }
                 state.activate_observer();
+                // The selected kernel-owned signals publish their changes to
+                // the dump from here on (Simulation::watch_signal_changes).
+                std::vector<runtime::simir::SignalId> watched;
+                for (const auto& [path, signal] : state.objects) {
+                    if (state.selected.at(signal)) {
+                        watched.push_back(signal);
+                    }
+                }
+                state.simulation->watch_signal_changes(watched);
                 if (state.path.empty()) {
                     state.path = hdl_vcd_path(state, { });
                 }

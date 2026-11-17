@@ -253,6 +253,7 @@ void MonitorPublishVhdl::dispatch(Scheduler& runtime, const Payload& scheduled)
 void VcdBegin::dispatch(Scheduler& runtime, const Payload& scheduled)
 {
     auto& owner = *scheduled.owner;
+    --owner.vcd_begins_pending;
     if (!owner.vcd_control_hook) {
         return;
     }

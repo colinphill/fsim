@@ -5,6 +5,7 @@
 #include "simir_static_kernel_compiled_internal.hpp"
 #include "simir_static_kernel_dynamic.hpp"
 #include "fsim/runtime/simir_interpreter.hpp"
+#include "fsim/runtime/string_methods.hpp"
 #include "fsim/support/parallel_for.hpp"
 
 #include <algorithm>
@@ -24,7 +25,7 @@ using namespace static_kernel_compiled_detail;
 namespace kw = kernel_word;
 
 namespace {
-constexpr std::string_view native_magic { "fsim-static-kernel-templates-v5" };
+constexpr std::string_view native_magic { "fsim-static-kernel-templates-v6" };
 
 /// The operands build_native binds to slots (bind_slot), in binding order:
 /// the field, and whether it holds the slot's arena offset (else its index;
@@ -109,6 +110,7 @@ bool same_body(const CompiledBody& left, const CompiledBody& right, const bool s
         || left.wide_constants.size() != right.wide_constants.size()
         || left.string_operands != right.string_operands
         || left.coverage_counters != right.coverage_counters
+        || left.string_formats != right.string_formats
         || left.string_bytes != right.string_bytes
         || left.predicate_words != right.predicate_words
         || left.sva_plans != right.sva_plans) {
@@ -1164,6 +1166,79 @@ void Interpreter::Impl::StaticKernel::native_coverage_record(StaticKernelNativeF
     try {
         kernel.record_coverage(frame->member, position,
             CodeCoverageCounterId { static_cast<std::uint32_t>(counter) });
+    } catch (...) {
+        kernel.scratch().native_exception = std::current_exception();
+        frame->status = 1U;
+    }
+}
+
+std::uint64_t Interpreter::Impl::StaticKernel::native_str_method(StaticKernelNativeFrame* frame,
+    const std::uint32_t at, const std::uint64_t operation, const std::uint32_t flags, void* source,
+    const void* argument, const std::uint64_t first_a, const std::uint64_t first_b,
+    const std::uint64_t second_a, const std::uint64_t second_b, void* destination)
+{
+    auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
+    try {
+        try {
+            return static_kernel_detail::execute_str_method(operation,
+                static_cast<std::uint8_t>(flags), *static_cast<std::string*>(source),
+                argument != nullptr ? std::string_view { *static_cast<const std::string*>(argument) }
+                                    : std::string_view { },
+                Word { first_a, first_b }, Word { second_a, second_b },
+                static_cast<std::string*>(destination));
+        } catch (const std::exception& error) {
+            const auto& member = kernel.members_[frame->member];
+            kernel.fail(frame->member, (member.vhdl ? 0U : member.body_begin) + at,
+                error.what());
+        }
+    } catch (...) {
+        kernel.scratch().native_exception = std::current_exception();
+        frame->status = 1U;
+    }
+    return 0U;
+}
+
+void Interpreter::Impl::StaticKernel::native_str_radix(StaticKernelNativeFrame* frame,
+    void* destination, const void* source, const std::uint32_t flags)
+{
+    auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
+    try {
+        *static_cast<std::string*>(destination) = vhdl_logic9_radix_string(
+            *static_cast<const std::string*>(source), (flags & 1U) != 0U, (flags & 2U) != 0U);
+    } catch (...) {
+        kernel.scratch().native_exception = std::current_exception();
+        frame->status = 1U;
+    }
+}
+
+void Interpreter::Impl::StaticKernel::native_str_format(StaticKernelNativeFrame* frame,
+    const std::uint32_t at, const std::uint64_t* record, void* destination,
+    const std::uint64_t* value, const void* registers, const std::uint32_t entry,
+    const std::uint32_t bits, const void* argument, const std::uint64_t* field,
+    const std::uint32_t field_bits)
+{
+    auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
+    try {
+        try {
+            const auto kind = static_kernel_detail::string_format_value_kind(record);
+            const auto packed = bits == 0U ? PackedLogic4 { 1, Logic4::zero }
+                : registers != nullptr
+                ? wide_value_at(static_cast<const Word*>(registers), entry, bits, kind)
+                : static_kernel_detail::uword_value(Word { value[0], value[1] }, value[2], bits,
+                      kind, value[3]);
+            const auto width = field_bits == 0U ? PackedLogic4 { 1, Logic4::zero }
+                : static_kernel_detail::uword_value(Word { field[0], field[1] }, field[2],
+                      field_bits, static_kernel_detail::string_format_width_kind(record),
+                      field[3]);
+            static_kernel_detail::append_str_format(record,
+                *static_cast<std::string*>(destination), packed,
+                *static_cast<const std::string*>(argument), width, kernel.kernel_now(),
+                kernel.impl_.time_format);
+        } catch (const std::exception& error) {
+            const auto& member = kernel.members_[frame->member];
+            kernel.fail(frame->member, (member.vhdl ? 0U : member.body_begin) + at,
+                error.what());
+        }
     } catch (...) {
         kernel.scratch().native_exception = std::current_exception();
         frame->status = 1U;
@@ -2887,6 +2962,9 @@ void Interpreter::Impl::StaticKernel::concatenate_members(CompiledBody& program,
         const auto coverage_base = program.coverage_counters.size();
         program.coverage_counters.insert(program.coverage_counters.end(),
             body.coverage_counters.begin(), body.coverage_counters.end());
+        const auto string_format_base = program.string_formats.size();
+        program.string_formats.insert(program.string_formats.end(),
+            body.string_formats.begin(), body.string_formats.end());
         const auto predicate_base = program.predicate_words.size() / dyn_graph_node_words;
         program.predicate_words.insert(program.predicate_words.end(),
             body.predicate_words.begin(), body.predicate_words.end());
@@ -3132,13 +3210,28 @@ void Interpreter::Impl::StaticKernel::concatenate_members(CompiledBody& program,
                 if (str_reads_byte(op)) {
                     reg(inst.x);
                 }
-                if (str_writes_register(op)) {
+                if (str_inst_writes_register(inst)) {
                     reg(inst.d);
+                }
+                if (str_method_reads_first(inst)) {
+                    reg(inst.x);
+                }
+                if (str_method_reads_second(inst)) {
+                    reg(inst.y);
+                }
+                if (op == StrOp::format && inst.width != 0U) {
+                    // A narrow or chunked value register.
+                    reg(inst.x);
+                }
+                if (str_format_reads_width(inst)) {
+                    reg(inst.y);
                 }
                 if (op == StrOp::concat) {
                     inst.imm_a += string_operand_base;
                 } else if (op == StrOp::load_constant) {
                     inst.imm_a += string_byte_base;
+                } else if (op == StrOp::format) {
+                    inst.imm_a += string_format_base;
                 }
                 break;
             }

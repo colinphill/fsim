@@ -2336,6 +2336,10 @@ struct Interpreter::Impl : SchedulerBatchTask {
     CodeCoverageOverflowHook code_coverage_overflow_hook;
     SystemCommandHook system_command_hook;
     VcdControlHook vcd_control_hook;
+    /// $dumpvars/$dumpports calls whose dump begins in the Postponed region
+    /// of their time step (events::VcdBegin): the kernel's time warp stops
+    /// at that step, since the dump records it.
+    std::uint32_t vcd_begins_pending { };
     HostRequestHook host_request_hook;
     // The outcome and pending requests of concurrent assertions run in a
     // region, delivered in order when the region ends

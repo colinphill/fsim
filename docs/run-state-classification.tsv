@@ -422,6 +422,7 @@ interp.impl	monitor_process	P	plain run state
 interp.impl	monitor_file_handle	P	plain run state
 interp.impl	monitor_enabled	P	plain run state
 interp.impl	monitor_generation	P	plain run state
+interp.impl	vcd_begins_pending	P	plain run state; counts the saved VcdBegin events
 interp.impl	monitor_publication	P	plain run state
 interp.impl	monitor_systemverilog_publication	P	plain run state
 interp.impl	update_commit_scheduled	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
@@ -1302,6 +1303,7 @@ kernel.input	readers	D	input structure from the artifact
 kernel.input	edges	D	input structure from the artifact
 kernel.input	unwritten	P	input state; revision pairs with the host signal_value_revisions
 kernel.input	sole_writer	D	input structure from the artifact
+kernel.input	mirrored_ahead	P	input state; pairs with revision (the host's commit of a mirrored update)
 kernel.container	object	D	container map from the artifact
 kernel.container	type	D	container map from the artifact
 kernel.container	count	D	container map from the artifact
