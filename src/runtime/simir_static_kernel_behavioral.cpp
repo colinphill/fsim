@@ -970,24 +970,22 @@ std::uint32_t Interpreter::Impl::StaticKernel::next_member_random(
     return Impl::next_random(*random_state_table()[member]);
 }
 
-std::uint64_t* const* Interpreter::Impl::StaticKernel::random_state_table()
+std::uint64_t* const* Interpreter::Impl::StaticKernel::build_random_state_table()
 {
-    if (random_states_.size() != members_.size()) {
-        random_states_.resize(members_.size());
-        random_live_.assign(members_.size(), 0U);
-        random_live_thread_.assign(members_.size(), no_slot);
-        for (std::size_t member = 0U; member < members_.size(); ++member) {
-            random_states_[member]
-                = &impl_.get_process(members_[member].process).cold().random_state;
-        }
+    random_states_.resize(members_.size());
+    random_live_.assign(members_.size(), 0U);
+    random_live_thread_.assign(members_.size(), no_slot);
+    for (std::size_t member = 0U; member < members_.size(); ++member) {
+        random_states_[member]
+            = &impl_.get_process(members_[member].process).cold().random_state;
     }
     return random_states_.data();
 }
 
-const StaticKernelStringCell* Interpreter::Impl::StaticKernel::string_object_table()
+const StaticKernelStringCell* Interpreter::Impl::StaticKernel::build_string_object_table()
 {
     const auto count = impl_.string_objects.size();
-    if (string_object_cells_.size() != count) {
+    {
         string_object_pointers_.assign(count, nullptr);
         string_object_cells_.assign(count, { });
         for (std::size_t id = 0U; id < count; ++id) {

@@ -5072,7 +5072,7 @@ public:
         const detail::CompiledBody& body,
         const bool local_registers, const bool optimizing, const bool flush_locals,
         const bool two_state, std::vector<std::uint32_t>* const resume_points,
-        const bool vhdl)
+        const bool vhdl, const bool observer_hooks)
         : context_(module.getContext())
         , module_(module)
         , function_(function)
@@ -5089,6 +5089,7 @@ public:
         , two_state_(two_state)
         , resume_points_(resume_points)
         , vhdl_(vhdl)
+        , observer_hooks_(observer_hooks)
     {
         if (resume_points_ != nullptr) {
             resume_seen_.insert(resume_points_->begin(), resume_points_->end());
@@ -5874,10 +5875,13 @@ private:
     /// change (IEEE 1800-2023 38.36.1 cbValueChange, and the Tcl
     /// value-change hooks alike), not only the value the activation leaves,
     /// and the stores of one continuous assignment's update stay one
-    /// change. Nothing but a null test runs while nothing is watched.
+    /// change. Only code compiled for an observer has them
+    /// (StaticKernelTemplate::observer_hooks); a null test is all that runs
+    /// there while nothing is watched.
     void emit_statement_flush(const std::uint32_t at)
     {
-        if (at >= body_.statement_starts.size() || body_.statement_starts[at] == 0U) {
+        if (!observer_hooks_ || at >= body_.statement_starts.size()
+            || body_.statement_starts[at] == 0U) {
             return;
         }
         if (builder_.GetInsertBlock() == nullptr
@@ -5917,7 +5921,7 @@ private:
     /// in the full code when the register now holds unknown bits.
     void emit_variable_store_hook(const std::uint32_t at)
     {
-        if (at >= body_.variable_stores.size()
+        if (!observer_hooks_ || at >= body_.variable_stores.size()
             || body_.variable_stores[at] == detail::no_variable_store
             || builder_.GetInsertBlock() == nullptr
             || builder_.GetInsertBlock()->getTerminator() != nullptr) {
@@ -20774,6 +20778,8 @@ private:
     std::unordered_set<std::uint32_t> resume_seen_;
     /// The template has a VHDL instance (prologue entry).
     bool vhdl_ { };
+    /// StaticKernelTemplate::observer_hooks.
+    bool observer_hooks_ { };
     std::uint32_t at_ { };
     llvm::Value* guarded_unknown_ { };
     /// Per register: its local slot, or null when it lives in the frame.
@@ -21476,7 +21482,8 @@ private:
                 vhdl_locals || !templates[index].vhdl, tier == 2U,
                 templates[index].vhdl,
                 templates[index].two_state,
-                templates[index].resume_points, templates[index].vhdl);
+                templates[index].resume_points, templates[index].vhdl,
+                templates[index].observer_hooks);
             // Cold tiering is static, so small cold templates include the
             // most frequently run members: outlining them costs 3-5% run
             // instructions, and it is runtime-neutral only from about 1024
@@ -21905,9 +21912,13 @@ private:
         append_all(body.u_operands);
         append(body.call_stack_base);
         append_all(body.resume_entries);
-        append_all(body.statement_starts);
-        // The reports of VHDL variable stores are generated code too.
-        append_all(body.variable_stores);
+        // The observer hooks are generated from the statement starts and
+        // the VHDL variable stores; code without them reads neither.
+        append(code.observer_hooks);
+        if (code.observer_hooks) {
+            append_all(body.statement_starts);
+            append_all(body.variable_stores);
+        }
         // A content key for this process's cache and the ahead-of-time
         // image (not an integrity check: the image's objects are checksummed
         // by the cache). Keys are computed for every template a simulation

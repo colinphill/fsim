@@ -2002,6 +2002,9 @@ void Interpreter::Impl::StaticKernel::pin_members()
     for (const auto member : pending) {
         pin_member(member);
     }
+    // The hooked members report their variable stores (and a pinned member's
+    // new unit keeps the hooks it had).
+    observe_units();
 }
 
 void Interpreter::Impl::StaticKernel::pin_member(const std::uint32_t index)

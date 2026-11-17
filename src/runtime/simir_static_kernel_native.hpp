@@ -506,6 +506,14 @@ struct StaticKernelTemplate {
     /// Two-state code appends the instructions it may continue at; the full
     /// code of the same template accepts them as entries (in `reserved`).
     std::vector<std::uint32_t>* resume_points { };
+    /// Code for an observed member: the write flushes before each statement
+    /// (CompiledBody::statement_starts, `fsim_sk_flush_writes`) and the VHDL
+    /// variable-store reports (CompiledBody::variable_stores,
+    /// `fsim_sk_variable_store`). A kernel compiles its templates without
+    /// them and recompiles a unit with them when an observer first watches
+    /// a slot it writes or hooks a variable of its member
+    /// (StaticKernel::observe_units).
+    bool observer_hooks { };
 };
 
 /// How a code generator used the code built ahead of time (elaborate --aot):

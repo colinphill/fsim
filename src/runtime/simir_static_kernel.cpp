@@ -12598,6 +12598,9 @@ void Interpreter::Impl::StaticKernel::apply_watches()
         std::ranges::fill(unit_parallel_, std::uint8_t { 0U });
     }
     std::vector<std::uint32_t> watched;
+    // Every slot an observer watches, outputs too: their writers get code
+    // with the observer hooks (observe_units).
+    watched_slot_.resize(slots_.size(), 0U);
     for (const auto signal : requested) {
         if (signal >= slot_of_signal_.size()) {
             continue;
@@ -12605,9 +12608,11 @@ void Interpreter::Impl::StaticKernel::apply_watches()
         if (const auto family = family_of_signal_[signal]; family != no_slot) {
             for (const auto& leaf : families_[family].leaves) {
                 watched.push_back(leaf.slot);
+                watched_slot_[leaf.slot] = 1U;
             }
         } else if (slot_of_signal_[signal] != no_slot) {
             auto slot = slot_of_signal_[signal];
+            watched_slot_[slot] = 1U;
             // A split formal's host copy follows its actual's: the actual is
             // watched (a chain of formals leads back to the resolved one).
             for (bool followed = true; followed
@@ -12624,6 +12629,7 @@ void Interpreter::Impl::StaticKernel::apply_watches()
                 }
             }
             watched.push_back(slot);
+            watched_slot_[slot] = 1U;
         }
     }
     std::erase_if(watched, [&](const std::uint32_t slot) { return slots_[slot].output; });
@@ -12749,6 +12755,8 @@ void Interpreter::Impl::StaticKernel::apply_watches()
         }
         respecialize_silent(unsilenced);
     }
+    // The watched slots' writers report each write (after the rebinds above).
+    observe_units();
 }
 
 std::uint32_t Interpreter::Impl::StaticKernel::import_slot(const SignalId signal)
@@ -14469,6 +14477,7 @@ ReplanResult Interpreter::Impl::StaticKernel::split_gate_delay(
     build_level_queues();
     rebuild_notify_tables();
     refresh_fast_run(found);
+    observe_units();
     if (parallel_planned_ && pool_ != nullptr) {
         parallel_planned_ = false;
         build_parallel_plan();

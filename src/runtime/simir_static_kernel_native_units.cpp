@@ -1459,6 +1459,10 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
         if (templates[index].two_state) {
             templates[index].resume_points = &continuations_[index];
         }
+        // A debug-point kernel (a debugger plan, foreign statement probes)
+        // stops in the middle of an activation, where an observer may watch
+        // or force anything: all of its code has the hooks.
+        templates[index].observer_hooks = debug_points_;
     }
     template_codes_ = templates;
     StaticKernelNativeHelpers helpers;
@@ -1897,13 +1901,16 @@ void Interpreter::Impl::StaticKernel::rebuild_unit_lists()
 
 void Interpreter::Impl::StaticKernel::bind_native_unit(NativeUnit& unit,
     std::unique_ptr<CompiledBody> canonical, std::vector<std::uint32_t> bindings,
-    const bool partition_like)
+    const bool partition_like, bool observed, const StaticKernelTemplate* const source)
 {
     detach_native_unit(unit);
     unit.bindings = std::move(bindings);
     unit.entry = nullptr;
     unit.two_state = false;
     unit.program = nullptr;
+    // A debug-point kernel's code has the hooks throughout (build_native).
+    observed = observed || debug_points_;
+    unit.observed = observed;
     if (codegen_ == nullptr || template_codes_.size() != templates_.size()) {
         // No native code (FSIM_STATIC_KERNEL_GENERIC): the unit runs its
         // kernel bytecode.
@@ -1911,7 +1918,9 @@ void Interpreter::Impl::StaticKernel::bind_native_unit(NativeUnit& unit,
     }
     std::uint32_t index = no_slot;
     for (std::uint32_t at = 0U; at < templates_.size(); ++at) {
-        if (same_body(*templates_[at], *canonical, false)) {
+        if (template_codes_[at].observer_hooks == observed
+            && (source == nullptr || template_codes_[at].vhdl == source->vhdl)
+            && same_body(*templates_[at], *canonical, false)) {
             index = at;
             break;
         }
@@ -1924,6 +1933,13 @@ void Interpreter::Impl::StaticKernel::bind_native_unit(NativeUnit& unit,
         code.body = templates_.back().get();
         code.tier = static_cast<std::uint8_t>(
             size < 64U ? 0U : partition_like ? 2U : 1U);
+        if (source != nullptr) {
+            // The same code but for the hooks: the source's tier and VHDL
+            // prologue.
+            code.tier = source->tier;
+            code.vhdl = source->vhdl;
+        }
+        code.observer_hooks = observed;
         template_codes_.push_back(code);
     }
     unit.program = templates_[index].get();
@@ -1971,6 +1987,116 @@ void Interpreter::Impl::StaticKernel::bind_native_unit(NativeUnit& unit,
     if (!entries.empty() && entries.front() != nullptr) {
         unit.entry = entries.front();
         ++native_units_;
+    }
+}
+
+bool Interpreter::Impl::StaticKernel::member_writes_watched(
+    const std::uint32_t index) const
+{
+    const auto watched = [&](const SignalId signal) {
+        if (signal >= slot_of_signal_.size()) {
+            return false;
+        }
+        const auto slot_watched = [&](const std::uint32_t slot) {
+            return slot < watched_slot_.size() && watched_slot_[slot] != 0U;
+        };
+        if (const auto family = family_of_signal_[signal]; family != no_slot) {
+            return std::ranges::any_of(families_[family].leaves,
+                [&](const auto& leaf) { return slot_watched(leaf.slot); });
+        }
+        return slot_of_signal_[signal] != no_slot
+            && slot_watched(slot_of_signal_[signal]);
+    };
+    // The stores are the operations naming the signal they write (the
+    // statement starts' rule, compile).
+    for (const auto& operation : members_[index].operations()) {
+        bool stores = false;
+        visit_operation([&](const auto& op) {
+            using T = std::decay_t<decltype(op)>;
+            if constexpr (requires { op.signal; }) {
+                if constexpr (std::is_same_v<std::decay_t<decltype(op.signal)>, SignalId>
+                    && !std::is_same_v<T, ReadSignal>) {
+                    stores = watched(op.signal);
+                }
+            }
+        }, operation);
+        if (stores) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool Interpreter::Impl::StaticKernel::observe_unit(NativeUnit& unit,
+    const bool partition_like)
+{
+    if (unit.observed || unit.program == nullptr) {
+        return false;
+    }
+    const auto& body = *unit.program;
+    const bool hooks = std::ranges::any_of(body.statement_starts,
+                           [](const std::uint8_t start) { return start != 0U; })
+        || std::ranges::any_of(body.variable_stores,
+            [](const std::uint32_t reg) { return reg != no_variable_store; });
+    if (!hooks) {
+        unit.observed = true;
+        return false;
+    }
+    const auto found = std::ranges::find_if(templates_,
+        [&](const auto& entry) { return entry.get() == unit.program; });
+    if (found == templates_.end()
+        || static_cast<std::size_t>(found - templates_.begin()) >= template_codes_.size()) {
+        throw std::logic_error("static kernel observed unit's template is unknown");
+    }
+    const auto source = template_codes_[static_cast<std::size_t>(found - templates_.begin())];
+    auto bindings = unit.bindings;
+    bind_native_unit(unit, std::make_unique<CompiledBody>(body), std::move(bindings),
+        partition_like, true, &source);
+    return true;
+}
+
+void Interpreter::Impl::StaticKernel::observe_units()
+{
+    if (codegen_ == nullptr || template_codes_.size() != templates_.size()
+        || debug_points_ || (!watch_writes_ && !variable_hooks_active_)) {
+        return;
+    }
+    std::vector<std::uint8_t> needs(members_.size(), 0U);
+    bool any = false;
+    for (std::uint32_t index = 0U; index < members_.size(); ++index) {
+        if (members_[index].native.observed) {
+            continue;
+        }
+        if ((variable_hooks_active_ && index < variable_hook_members_.size()
+                && variable_hook_members_[index] != 0U)
+            || (watch_writes_ && member_writes_watched(index))) {
+            needs[index] = 1U;
+            any = true;
+        }
+    }
+    if (!any) {
+        return;
+    }
+    for (std::uint32_t index = 0U; index < members_.size(); ++index) {
+        if (needs[index] != 0U && observe_unit(members_[index].native, false)
+            && index < fast_runs_.size()) {
+            refresh_fast_run(index);
+        }
+    }
+    const auto needed = [&](const std::vector<std::uint32_t>& members) {
+        return std::ranges::any_of(members, [&](const std::uint32_t member) {
+            return member < needs.size() && needs[member] != 0U;
+        });
+    };
+    for (auto& state : partitions_) {
+        if (needed(state.members)) {
+            (void)observe_unit(state.native, true);
+        }
+    }
+    for (auto& group : dispatch_groups_) {
+        if (needed(group.members)) {
+            (void)observe_unit(group.native, true);
+        }
     }
 }
 
@@ -2179,6 +2305,7 @@ void Interpreter::Impl::StaticKernel::graft_rebind_native(
                 false);
         }
     }
+    observe_units();
 }
 
 void Interpreter::Impl::StaticKernel::note_partition_wake(const std::uint32_t partition,

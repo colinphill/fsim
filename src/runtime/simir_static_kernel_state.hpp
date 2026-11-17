@@ -786,6 +786,9 @@ private:
         /// its members needs it (full_templates_).
         StaticKernelNativeEntry full_entry { };
         std::uint32_t full_template { static_kernel_detail::no_slot };
+        /// The code has the observer hooks (StaticKernelTemplate::
+        /// observer_hooks), or its body has none to generate.
+        bool observed { };
     };
 
     struct Member {
@@ -2056,9 +2059,25 @@ private:
         std::unordered_map<std::uint64_t, std::uint32_t>& binding_of) const;
     /// Gives `unit` the template with `canonical`'s body and its native code:
     /// an equal template that exists shares its units' code, else a new
-    /// template is compiled.
+    /// template is compiled. `observed` code has the observer hooks; a
+    /// `source` template gives a new one its tier and VHDL prologue.
     void bind_native_unit(NativeUnit& unit, std::unique_ptr<CompiledBody> canonical,
-        std::vector<std::uint32_t> bindings, bool partition_like);
+        std::vector<std::uint32_t> bindings, bool partition_like,
+        bool observed = false, const StaticKernelTemplate* source = nullptr);
+    /// The units an observer needs hooked code in get it (at a point
+    /// between activations): a member that writes a watched slot
+    /// (watched_slot_), or whose VHDL variables the debug interface forces
+    /// or watches (variable_hook_members_), and the partitions and dispatch
+    /// groups that run such a member's code. Every other unit keeps the
+    /// code compiled without hooks.
+    void observe_units();
+    /// Recompiles `unit` with the observer hooks; false when it has no code
+    /// or nothing to hook.
+    bool observe_unit(NativeUnit& unit, bool partition_like);
+    /// Whether an operation of the member stores a watched slot.
+    [[nodiscard]] bool member_writes_watched(std::uint32_t member) const;
+    /// The slots observers watch (apply_watches), by slot.
+    std::vector<std::uint8_t> watched_slot_;
     /// Takes `unit` off the lazy and full template lists.
     void detach_native_unit(NativeUnit& unit);
     /// Fills the lazy and full templates' unit lists again from the units'
@@ -3622,10 +3641,24 @@ private:
     /// Per member, the stream it draws from (random_states_), built on
     /// first use: its process's state (which never moves) until a fork
     /// child of it runs.
-    [[nodiscard]] std::uint64_t* const* random_state_table();
+    [[nodiscard]] std::uint64_t* const* random_state_table()
+    {
+        if (random_states_.size() == members_.size()) [[likely]] {
+            return random_states_.data();
+        }
+        return build_random_state_table();
+    }
+    [[nodiscard]] std::uint64_t* const* build_random_state_table();
     /// Per string variable, where generated code finds it (built on first
     /// use; the variables and fixed string arrays never move).
-    [[nodiscard]] const StaticKernelStringCell* string_object_table();
+    [[nodiscard]] const StaticKernelStringCell* string_object_table()
+    {
+        if (string_object_cells_.size() == impl_.string_objects.size()) [[likely]] {
+            return string_object_cells_.data();
+        }
+        return build_string_object_table();
+    }
+    [[nodiscard]] const StaticKernelStringCell* build_string_object_table();
     /// A thread's random state: while it runs as a fork child, the live
     /// copy generated code draws from (random_live_).
     [[nodiscard]] std::uint64_t& thread_random_state(std::uint32_t thread);
