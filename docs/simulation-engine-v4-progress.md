@@ -138,6 +138,133 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-11-17: Gate BC checkpoint TA: native kernel containers, strings, random draws and real math, typed markers and identities, typed built-in methods, huge VPI memories, streaming unpack, typed patterns and block typedefs, debugger scopes, typedef aliases, mailboxes of any type, associative reads, loop variables, random stability (`d9609b05` .. `8bb3d234`, sweeps `bcTA2g`, `bcTA2ga`)
+
+This is checkpoint TA of gate BC (plan `.local-artifacts/followups/gate-bc-plan-1114.md`). It covers the 30 commits after checkpoint T's `35a54585` (`d9609b05` .. `c70b7380`) and the uncommitted change for item 92 (objects created by class services are seeded from the calling thread, IEEE 1800-2023 18.14.1). It closes items 56-57, 59 (kernel containers, strings, random draws, bit counts, real math and bit streams; the items' remaining stages stay open), 58, 60-68, 71, 73-76, 78-81, 83-89, 91 and 92 in code. Items 69, 70 and 72 are in progress or partly closed by these commits, and item 90 (hierarchical references to mailboxes and semaphores) stays open as a stage of block H. The Found entries F38-F72 are on the Found list; F38, F39, F36 and F40-F72 are fixed in these commits except where the plan says otherwise.
+
+**Contents:**
+- **Native kernel containers, strings, random draws and real math (items 56, 59, F40, F41):** the static kernel compiles, with dedicated KOps and generated code and no `KOp::generic`:
+  - queues, dynamic arrays and associative arrays with integral and string keys, and sparse fixed arrays (7.5-7.10), with the methods, whole-array compare, select, reductions, ordering and locators;
+  - string registers and string methods, containers of strings, and string variables (6.16);
+  - bit streams through queues and arrays (11.4.14);
+  - random draws and shuffle, `$countones`/`$countbits`/`$onehot*` and plusargs;
+  - real, shortreal and time arithmetic and the math functions (libm, as the reference calls it). Time rounds away from zero, `$rtoi` truncates, unknown bits read as zero in a real context.
+  - F40 and F41 are fixed on the way: a suspended thread's string registers survive save/restart, and `FSIM_KERNEL_VERIFY` replays a thread resuming inside a callable with its frame part.
+- **Retired scripts (item 57):** the V1-V3 qualification scripts and their ctests are deleted; the schema freeze composition check replaces `fsim.v3-schema-freeze`.
+- **Integer string conversions and streaming unpack (items 61, 62, 65, 66; F42, F44, F47, F48):**
+  - `atoi`, `atohex`, `atooct` and `atobin` are integers, so they are signed as operands (6.16.9-6.16.11).
+  - A variable-size streaming unpack target takes all the remaining bits (11.4.14.4). A partial last element is an error in both engines, including the kernel's `take_container` (`DynFailure stream_partial`), and at elaboration with constant widths (FSIM-ELAB-SVSTREAM-003; 11.4.14.4, 6.24.3). A streaming-concatenation source unpacks its whole bit stream (11.4.14.3).
+- **Huge VPI memories and native string NBAs (items 63, 64; F45, F46):** the 65,536-word descriptor cap is gone; words of a fixed memory have no object until one is needed and read and deposit in place. Zero-delay inertial puts to words are queued as (memory, index, value) in one batch per time slot, with cancellation of earlier puts (38.34). A 16M-word memory walks with about 129 MB resident; a 16M-word fill takes about 13 s and 1.1 GB. A nonblocking assignment to a string variable is a native kernel op (`StrOp write_object_nba`).
+- **Typed markers and generated-object origins (item 60 and its Found rows):** constraint items, class method hooks, VHDL aggregate choices, SVA monitor calls, DPI call identities (C name, phase, context, argument types), interface receivers, static storage keys, predefined VHDL types, call actual roles, configuration, aggregate and specparam identities, gate driver slots and `GeneratedObjectOrigin` replace spelled `@...`/`$...`/`__fsim_` text in names, keys and node text. VPI hides generated objects by typed origin and keeps the same set of objects as before.
+- **Process methods (items 67, 68; F49, F50):** `process` methods (9.7) apply to any expression whose static type is `std::process` (function and class-method results, popped queue elements, handle members); `status().name()` uses the 9.7 state names; concurrent kills in randomize keep one pending state per process. The non-LRM `completed()` is removed (an error like any unknown member) with its runtime operation `ProcessCompleted` (owner 11-16).
+- **Shared header units (no item number, found by the lead):** a package in a header that separately compiled sources include is one package (26.2). Each unit records a digest of its tokens, directive context and defining file; the linker keeps one copy and the workspace catalog (version 5) lets several objects own copies of equal digest. Differing copies are refused at compile.
+- **Typed built-in method calls (items 69, 70):** a method call on a string, enumeration, array, associative array or queue is resolved once into a `BuiltinMethod` (6.16, 6.19.5, 7.5-7.12), and the lowerer, specialization, constraint lowering and hierarchy read it from the call. Debug and VPI frame locals carry their callable and role (argument, result, local); a process debug local is kept per declaration and named-scope path, not per displayed name (F60).
+- **Typed patterns and block typedefs (items 72-75; F53-F56):** a typed assignment pattern `T'{...}` (10.9) has the type its name selects from its scope and is rebound when linked, like a typedef or class reference. A typedef declared in a procedural block or function names one type, so a typed pattern assigns to the variable and a block enumeration declares its literals once (6.18, 6.19). `$bits` of a typed pattern is its type's width (20.6.2).
+- **Debugger scopes (items 70, 79; F60, F61):** a debug local carries the named scopes enclosing it and its simple name, so an escaped name containing a period is one scope or variable (5.6.1). Each unnamed block, fork or loop that declares something is its own debugger scope named `$unnamed_<n>`, counted among its parent's such scopes in source order (owner 11-16). VPI naming is unchanged (9.3.5, 23.6).
+- **Scope roles, no placeholder names (items 76, 82; F57, F64):** a semantic scope records `Scope::role` (named, unnamed block, unnamed fork, loop region, case-matches pattern variables, unlabeled process), and the lowerer, hierarchy builder, resolver, VHDL validation and VHPI read the role instead of the placeholder names.
+- **Typedef aliases (item 78; F59):** a typedef that renames a type with nothing of its own is that type (6.18, 6.22.1 a): `TypeForm::alias`; structures assign to and from their aliases, an enumeration's alias has its methods, VPI typespecs keep the typedef chain (37.25).
+- **Unit legality and `$typename` (items 80, 81, 83; F62, F63, F65):** the unit legality checks run for every instance's unit as that instance specializes it, once per class of equal specializations; a type parameter's actual types the unit's variables (6.20.3), so a value of another type assigned to a variable bound to an unpacked structure is rejected in every assignment-like context (10.8, 6.22.3). `$typename` of a typedef, or of a type parameter bound to one, names the type it declares with its scope (20.6.1).
+- **Mailboxes (items 58, 71, 77, 87-89; F24, F52, F58, F66-F69):**
+  - A typeless mailbox (15.4) carries messages of any type with their 6.22.2 identity; get, peek and `try_*` into a non-equivalent variable are a run-time error or a negative try result (15.4.5, 15.4.9). The identity is the enumeration type or class specialization with no name in it (15.4.9, 6.22.1, 8.25), and a typedef-name element is the typedef's own type.
+  - A structure of packed and scalar members is a bit stream, and arrays, unions and other structures are container messages (`MailboxElementKind::container`) in typed and typeless mailboxes.
+  - `vpiMessages` returns every message in order, typeless strings and containers included; an aggregate message has no one value (37.33 detail 4, 37.26 detail 1, 38.15).
+  - Semaphore and mailbox methods resolve once to a typed `BuiltinMethod` with the receiver first, and discarded calls (`void'`, 13.4.1) lower to the same operation (15.3, 15.4).
+- **VPI class-property arrays (item 85, F38):** a multi-dimensional fixed array property is presented one dimension at a time, and a descending range keeps its declared bounds (37.18).
+- **Associative reads and loop variables (items 84, 86; F36, F39):**
+  - A read of a nonexistent associative-array entry, or with an x/z index, returns the Table 7-1 default (x for a 4-state element) with a warning, and an x/z index write is ignored with a warning (7.8.6), in the interpreter, the kernel bytecode and the native code. An update statement's own element is allocated first (7.8.7).
+  - A SystemVerilog for-loop variable is an ordinary variable its body may assign (12.7.1): such a loop takes the run-time loop path. FSIM-ELAB-074 is now only the VHDL rule (10.10).
+- **Random stability (items 91, 92; F71, F72; 18.14.1):**
+  - Each static process and static initializer takes the value of its instance's or package's initialization generator, indexed by its rank in declaration order. Every initialization generator takes the default seed, so all instances draw alike.
+  - A forked thread is seeded with its parent's next value, and an object with the creating thread's value only. Randomize, randc and solver streams are named by position, not by class text (which carries the unit digest).
+  - Item 92 (uncommitted): while a class allocate, method or static-method service runs for a thread (both engines, the kernel through the access boundary), the object takes the thread's next two values, drawn only when an object is created. That covers a shallow copy `new h`, objects created in methods, static factories and constructor-created members. An object created outside every thread takes the root's own `unthreaded` stream by ordinal, with no class text. The `sv_random_stability` fixture gains the shallow-copy check; it failed on the bcT16 build and passes on both engines now.
+
+- **Checkpoint TA sweep losses (F73-F80; items 93-98, fixes of items 79 and 83):** the first TA sweeps on `bcTA` lost 44 cases (17 sv-tests, 26 verilator, 1 ivtest; the same in AOT mode). The commit after `1422d567` fixes them all:
+  - Debugger scope names (fix of item 79, F73): an assertion's action block is copied to each outcome of its evaluator, so two copies of one source block shared a debugger path (`duplicate SimIR debug-local name '$unnamed_1.act.x'`; every UVM assertion case using `uvm_error`). Unnamed scopes are numbered per nearest scope of the path, each copy of a named scope gets a holder level of its own, and the error now names the duplicate.
+  - Per-instance validation (fix of item 83, F74): a child instance's specialization was checked with every rule of the root validator, without its interface-port bindings (25.10) and inside generate arms its decided conditions leave out (27.5). A child is now checked for type compatibility only (6.22.3, 10.8, 10.9; the item 83 rule), and `SpecializedHirUnit::unselected_generates()` records the arms the validator skips, at the root too.
+  - Item 93 (F75; 18.5.10, 18.12): a sampled domain offers uniform draws beside probe values (range ends, zero, all ones, single bits, low masks), and the implicit uniform distribution weighted them alike, so about 2.5% of draws of a constrained 32-bit value were a probe value (`t_rand_undefined_var` drew 0). Draws now weigh 2^20 against 1 for a probe (class `randomize` and `std::randomize`, only where no `dist` and no size applies), passed to the solver as per-value `value_weights`; 3000 calls run in 9.0 s (9.8 s before).
+  - Item 94 (F76; 11.4.14.3): a stream assigned to a queue or dynamic array resizes it to the fewest elements as wide as the stream and zero-fills the last one; item 65's partial-element error stays for casts and unpack. Both engines, the kernel through the `stream_to_container` operand.
+  - Item 95 (F77; 10.9.2): a `type: value` key also sets members of that type nested in member structures and arrays.
+  - Item 96 (F78; 6.18, 9.7): process methods on elements of arrays of a typedef of `process`.
+  - Item 97 (F79; 13.3.2, 25.3): a static interface task called through an interface port (directly or from a module task called by path) uses the connected instance's static formals; since `a05cfbc2` the key used the port path, so its formals fell back to frame locals and nonblocking writes to them were rejected.
+  - Item 98 (F80): the parser's statement recursion and the procedural-assertion extraction walk continue on fresh stack segments (`support::with_stack`); compile had overflowed at about 190 nested `if` statements (20 KB frames). Deeper nesting still overflows later walks (item 99, open).
+
+**Results:** see the table below (frozen archive `bcTA2`, BASE `bcT4g`/`bcT4ga`).
+
+| Suite | bcT4g passed / in scope | bcTA2g passed / in scope | Excluded (bcTA2g) |
+|---|---:|---:|---:|
+| ivtest | 2633 / 2633 | 2633 / 2633 | 278 |
+| nvc | 1257 / 1257 | 1257 / 1257 | 225 |
+| sv-tests | 1496 / 1496 | 1496 / 1496 | 1 |
+| verilator | 2073 / 2073 | 2073 / 2073 | 342 |
+| vests | 3663 / 3663 | 3663 / 3663 | 2 |
+| vhdl-compliance | 65 / 65 | 65 / 65 | 7 |
+| cocotb 2.1 Verilog | 708 / 708 | 708 / 708 | 1 |
+| cocotb 2.1 VHDL | 646 / 646 | 646 / 646 | 1 |
+| cocotb master Verilog | 735 / 735 | 735 / 735 | 1 |
+| cocotb master VHDL | 666 / 666 | 666 / 666 | 1 |
+
+The first TA sweeps on `bcTA` lost 44 cases (17 sv-tests, 26 verilator, 1 ivtest; the same in AOT mode), fixed by `8bb3d234` above. On `bcTA2` the normal and AOT sweeps (`bcTA2g`, `bcTA2ga`) match `bcT4g`/`bcT4ga` case for case: 0 losses, 0 gains, the same exclusions. cocotb on `bcTA2` in all four configurations: +0 -0 against `bcT4`.
+
+Known gap left by the loss fix (F83, item 101): a child instance is now checked for type compatibility only, so other rules (for example an unknown type, or a sized enum literal whose size differs from the base, 6.19) go unreported inside child modules, as before item 83. The corpus runner wraps every Verilator test in a shell module, so its `t` is a child: t_enum_size and t_static_elab pass only through this gap and become 6.19 exclusions when item 101 restores every rule. Item 102 (F84) tracks the D6 slowdown left after item 1: elaborate on mixed_codec is 79.29G instructions on `bcTA2` against 73.45G on `bag2` (79.89G on `bbg3`; item 1 took `vhdl_name_parts` from 2.07G to 0.77G).
+
+ctest on the tree committed as `8bb3d234`: non-UVM 2094/2094 passed (-j24), UVM 116/116 passed (-j8; a -j16 run was killed for low memory and rerun).
+
+**Changed test assertions (every one, with the reason):**
+
+*Schema pins* (from `35a54585`, the checkpoint T tree; `schema_identity_test`, `application_test_artifact_phases`, `runtime_direct_artifact_rows_test`, `object_artifact_test`, `library_artifact_test`, `compiled_hir_cache_application_test`), from the commits that bumped them (`8c2c1218`, `a05cfbc2`, `79f823c9`, `b0621673`, `29fcbc46`, `89f36fd2`, `02bac56e`, `c70b7380`):
+- Compiled HIR (library) 8 -> 14, and the compiled-HIR bundle 8 -> 14, with the matching rejection texts ("compiled-HIR schema 14"). Schemas 8, 9, 10, 11, 12 and 13 join the rejected prior schemas (`prior-compiled-hir-schema-v8` .. `-v13` in `object_artifact_test`; the `.fsimlib` loop is `{0..13, 15}`), and the future schema moves 9 -> 15. `compiled_hir_cache_application_test` pins the same version (9 -> 14).
+- Runtime state 128 -> 135, semantic state 6 -> 9, design IR 14 -> 18 (the rejection texts read "found schema 17; required schema 18" and "found schema 3; required schema 18"), SV constraint HIR 34 -> 39, coverage 7 -> 8, VHDL HIR 16 -> 18.
+- `workspace_store_test` (`df85192c`): workspace catalog version 4 -> 5. A version-4 catalog (no unit digests) joins version 3 as "recompile", and the tampered-version and foreign-table cases use 5.
+
+In `8c2c1218`, `a05cfbc2` (typed markers; exact marker equality replaces spelling checks, so each is at least as strict):
+- `systemverilog_hir_application_test`: `operands[2].text == "@dist-:/"` becomes empty text plus `ExpressionMarker::constraint_dist_divide`.
+- `elaborator_expression_test`: the malformed expression sets `marker = inside_range` instead of text `@inside-range`.
+- `frontend_statement_tests`, `frontend_statement_tests_part2`: inside-range choices and operands compare empty text plus `ExpressionMarker::inside_range`.
+- `frontend_interface_tests`: `$__fsim_sva_tick` becomes `ExpressionMarker::sva_tick`.
+- `frontend_vhdl_type_tests`, `frontend_vhdl_type_tests_part2`: aggregate choice texts `"@array"` become empty with `aggregate_choice_markers` equal to `vhdl_array_choice`.
+- `frontend_vhdl_time_file_tests`: `nominal_type == "@builtin:time"` becomes `builtin_nominal && nominal_type == "time"`.
+- `semantic/compiled_design_test`: the time type mark spells `time` with `builtin_declaration = true`.
+- `hir_lowering_application_test`: a DPI call asserts `call_kind == dpi_import`, an empty `method_identity`, `dpi.c_name`, and the typed argument (int, not by reference, no array), instead of `@dpi:dpi_identity_c#i:i`; the DPI service callback gets the call and the actual roles and asserts `dpi.c_name` and no roles.
+- `sdf_cell_resolution_test`, `vhdl_configuration_application_test`, `elaborator_sv_hierarchy_test`, `elaborator_vhdl_configuration_test`: the `__configuration` entry of `parameter_identity_values` is the `configuration_identity` field.
+- `elaborator_specify_test`, `elaborator_sv_constant_test`: `@specparam:NAME` entries of `parameter_identity_values` are the `specparam_identities` entries named `NAME`.
+
+In `a05cfbc2` (`process::completed()` removed, owner 11-16; item 67):
+- `fork_application_test`, `frontend_statement_tests_part2`, `elaborator_fork_test`: `handle.completed()` becomes `status() == FINISHED` (and `|| KILLED` where the old call covered kills).
+- REDUCTION: `elaborator_fork_test` drops `assert(has_operation(static_cast<ProcessCompleted*>(nullptr)))`, and `runtime_execution_lifecycle` drops the `ProcessCompleted` operations and the `value(2) == 0`, `value(4) == 1` and `value(6) == 1` checks (the Fork operation indices shift 14 -> 11 and 17 -> 14). The operation no longer exists; the status checks remain. The plan records the owner's 11-16 decision to remove `completed()` (item 67).
+- REDUCTION: `semantic/compiled_design_test` drops the `marked_bit_vector_2008` resolution of `"@builtin:std.standard.bit_vector"` (status unique, builtin type `std_standard_bit_vector`). The marked spelling no longer exists (predefined VHDL types are plain names with a builtin flag, item 60); the plain-name resolution assertions of the same test stay. No separate owner approval is recorded for this removal beyond the typed-marker decision of item 60.
+
+In `e5beb09f`, `89f36fd2` (debugger scopes, item 79, owner 11-16):
+- `scoped_local_application_test`, `elaborator_process_test`: the unnamed-block local expects `root_scope.$unnamed_1.anonymous` (was `root_scope.$block_<n>.anonymous` by prefix/suffix check), and the unlabeled loop's local `root_scope.$unnamed_2.each.scratch` (was `root_scope.each.scratch`), because each unnamed scope that declares something is a debugger scope.
+- `api_test` calls the new `test_lexical_scope_api` and `test_unnamed_scope_api` (added in `api_lexical_scope_test`).
+
+In `3774718e` (item 80, 83):
+- `elaborator_specialization_type_test` gains five modules and three checks: a value assigned to a variable of a type parameter bound to a struct, and an illegal nominal assignment in a child module, are rejected with FSIM-ELAB-SVTYPE-004; the matching legal host elaborates.
+
+In `02bac56e`:
+- `elaborator_selection_test`: the invalid-loop fixture `invalid_procedural_loops` (for body assigning `lane`, rejected with FSIM-ELAB-074) becomes `assigned_procedural_loops`: it elaborates, has no FSIM-ELAB-074, runs to completion and `passes` is 3 (12.7.1; item 84).
+- `runtime_container_tests`: a missing entry of a 4-state associative array reads `PackedLogic4(8, Logic4::x)` (was `value(8, 0)`); 7.8.6, Table 7-1 (item 86).
+
+In `2404e4c9` and `c70b7380`:
+- `foreign_vpi_class_containers` (`.sv`, `.expected`, plugin): `grid[2][3]` and `down[4:1]` are added with expected lines for each level, by index, by multi-index, a missing index and a value array (37.18, 38.16; item 85). Extended, not reduced.
+- `foreign_vpi_class_sync.expected`: `constraint operand type=vpiRefObj name=x value=5` becomes `value=9`. The pinned randomize value of the object changed because random seeds now follow the creating thread and not the class text (18.14.1; item 91, F71). The assertion pins a value the LRM does not fix, so it moved with the seeding; no output was dropped.
+
+In `d9609b05`:
+- `feature_matrix/v3_current_obligations.tsv`: `V3CUR-ABI-002` now names `cmake/CheckSchemaFreezeComposition.cmake` and `fsim.schema-freeze-composition` (was `CheckV3SchemaFreeze` and `fsim.v3-schema-freeze`). `v3_current_required_ctests.txt` lists six ctests added (`fsim.fst-release-audit`, `fsim.resource-portability-contract`, `fsim.sdf-application-release-audit`, `fsim.sdf-vital-release-audit`, `fsim.schema-freeze-composition`, `fsim.v2-input-rejection-ledger`) that now stand in for the retired V1-V3 scripts (item 57).
+
+Working tree (item 92): `tests/fixtures/compliance/sv_random_stability.sv` gains the shallow-copy check (`copy0`/`copy1` made by `new a` from one saved randstate, then `copy0.x == copy1.x && copy0.y == copy1.y`). No other test changes.
+
+Loss-fix commit: new compliance fixtures `sv_assertion_action_block_locals`, `sv_instance_validation_specialized`, `sv_randomize_uniform_samples`, `sv_stream_assign_widen`, `sv_pattern_nested_type_keys`, `sv_process_typedef_receivers`, `sv_interface_port_task_statics`, `sv_deep_statement_nesting` (250 levels); each fails on `bcTA` and passes on both engines. No existing test changes.
+
+REDUCTION summary: no expected output file shrinks. Assertions removed: the `ProcessCompleted` operation and value checks (`elaborator_fork_test`, `runtime_execution_lifecycle`; owner 11-16) and the `@builtin:std.standard.bit_vector` resolution (`semantic/compiled_design_test`; item 60, no separate approval recorded).
+
+*New tests*:
+- compliance fixtures: `sv_associative_invalid_index`, `sv_block_typedef_patterns`, `sv_for_assigns_loop_variable`, `sv_kernel_associative_sparse`, `sv_kernel_container_methods`, `sv_kernel_count_bits`, `sv_kernel_queue_dynamic_array`, `sv_kernel_random`, `sv_kernel_real_math`, `sv_kernel_string_containers`, `sv_kernel_string_ops`, `sv_kernel_string_variables`, `sv_mailbox_unpacked_messages`, `sv_process_method_receivers`, `sv_random_stability`, `sv_stream_unpack_resize`, `sv_stream_unpack_stream_source`, `sv_string_conversion_signed`, `sv_string_nonblocking_order`, `sv_sync_method_receivers`, `sv_typedef_alias`, `sv_typeless_mailbox`, `sv_typename_type_parameter`;
+- the elaboration error fixture `sv_stream_unpack_partial_element` and the new run-time error fixture kind `runtime_errors` (`run_runtime_error.cmake`) with `sv_stream_unpack_partial_element` and `sv_typeless_mailbox_get_mismatch` (ctests `fsim.runtime-error.*`);
+- foreign fixtures `foreign_vpi_huge_memory` (16M words, both engines, inertial fills, cancellation and bridged words) and `foreign_vpi_mailbox_messages`, with plugins;
+- `fsim.application.workspace-shared-header` (fixture `workspace_shared_header`);
+- `api_lexical_scope_test` (lexical and unnamed scope API) and the five added prior-schema rejection cases in `object_artifact_test`;
+- the six ctests of the schema/release audit set listed above.
+
 ### 2026-11-15: Gate BC checkpoint T: typed std classes and markers, defparam precedence, statement labels, sparse fixed arrays of any shape and their whole-array operations (`44c0446b`, `7494a1ff`, `2b8a062b`, `2af63b57`, sweeps `bcT4g`, `bcT4ga`)
 
 This is checkpoint T of gate BC (plan `.local-artifacts/followups/gate-bc-plan-1114.md`). The checkpoint T commit `44c0446b` was swept as `bcT` and lost 10 cases per mode. `7494a1ff` fixes them and adds whole-array operations on sparse arrays (item 26). `2b8a062b` updates test assertions that encoded behaviour `7494a1ff` corrected. `2af63b57` fixes a cocotb loss. Items 26 (static kernel, traces and the multi-dimensional class-property VPI view are left), 35 and 43-55 are in code. Items 15, 16, 18-25, 28, 31, 37, 41, 46 and 50-60 stay open. The new findings F33, F34 and F36 are on the Found list for the owner.
