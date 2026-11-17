@@ -123,6 +123,7 @@ class ApplicationTestFixture {
 
  private:
   void test_cli_trace_and_timescale();
+  void test_cli_trace_vhdl_hierarchy();
   void test_verilog_artifact_matrix(fsim::cli::Services& services);
   void create_common_sources();
   void create_mixed_language_sources();

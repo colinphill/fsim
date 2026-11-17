@@ -513,18 +513,21 @@ class DesignIrBuilder final {
         position->second.last = index;
       }
     }
+    // The parent is the nearest enclosing instance: a generate block between
+    // them is a scope of that instance, no instance of its own (IEEE
+    // 1800-2023 27.6, IEEE 1076-2019 11.8).
     for (auto& instance : instances) {
-      const auto parent = parent_path(paths_.view(instance.path));
-      if (parent.empty()) {
-        continue;
-      }
-      const auto parent_id = paths_.find(parent);
-      if (!parent_id) {
-        continue;
-      }
-      const auto found = instance_path_positions_.find(*parent_id);
-      if (found != instance_path_positions_.end()) {
-        instance.parent = instances[found->second.first].id;
+      auto parent = parent_path(paths_.view(instance.path));
+      while (!parent.empty()) {
+        const auto parent_id = paths_.find(parent);
+        if (parent_id) {
+          const auto found = instance_path_positions_.find(*parent_id);
+          if (found != instance_path_positions_.end()) {
+            instance.parent = instances[found->second.first].id;
+            break;
+          }
+        }
+        parent = parent_path(parent);
       }
     }
   }

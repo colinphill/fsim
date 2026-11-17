@@ -3,10 +3,12 @@
 #include "fsim/app/built_project.hpp"
 #include "../api/api_workspace_support.hpp"
 
+#include <algorithm>
 #include <cassert>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -126,6 +128,242 @@ endmodule
     assert(!fsim::app::build_project(
         timescale_config, coarse_time_diagnostics));
     assert(coarse_time_diagnostics.has_error());
+
+    test_cli_trace_vhdl_hierarchy();
+}
+
+namespace {
+
+    [[nodiscard]] std::string read_text(const std::filesystem::path& path)
+    {
+        std::ifstream stream(path);
+        return { std::istreambuf_iterator<char> { stream },
+            std::istreambuf_iterator<char> { } };
+    }
+
+    // Every `$var` is inside a `$scope` (IEEE 1800-2023 21.7.2.2), and the
+    // declarations name the hierarchical objects once each.
+    [[nodiscard]] std::vector<std::string> vcd_declarations(const std::string& vcd)
+    {
+        std::vector<std::string> names;
+        std::vector<std::string> scopes;
+        std::istringstream lines(vcd);
+        std::string word;
+        while (lines >> word) {
+            if (word == "$enddefinitions") {
+                break;
+            }
+            if (word == "$scope") {
+                std::string kind;
+                std::string name;
+                lines >> kind >> name;
+                scopes.push_back(name);
+            } else if (word == "$upscope") {
+                assert(!scopes.empty());
+                scopes.pop_back();
+            } else if (word == "$var") {
+                std::string kind;
+                std::string width;
+                std::string code;
+                std::string name;
+                lines >> kind >> width >> code >> name;
+                assert(!scopes.empty());
+                std::string path;
+                for (const auto& scope : scopes) {
+                    path += scope + ".";
+                }
+                names.push_back(path + name + "=" + code);
+            }
+        }
+        return names;
+    }
+
+    // The value changes of `code` after the definitions, as "time:value".
+    [[nodiscard]] std::vector<std::string> vcd_changes(
+        const std::string& vcd, const std::string& code)
+    {
+        std::vector<std::string> changes;
+        std::istringstream lines(vcd.substr(vcd.find("$enddefinitions")));
+        std::string line;
+        std::string time;
+        while (std::getline(lines, line)) {
+            if (line.starts_with("#")) {
+                time = line.substr(1U);
+            } else if (line.size() == 1U + code.size() && line.substr(1U) == code) {
+                changes.push_back(time + ":" + line.substr(0U, 1U));
+            }
+        }
+        return changes;
+    }
+
+    [[nodiscard]] std::string declared_code(
+        const std::vector<std::string>& declarations, const std::string& path)
+    {
+        const auto found = std::ranges::find_if(declarations,
+            [&](const std::string& entry) { return entry.starts_with(path + "="); });
+        assert(found != declarations.end());
+        return found->substr(path.size() + 1U);
+    }
+
+} // namespace
+
+void ApplicationTestFixture::test_cli_trace_vhdl_hierarchy()
+{
+    namespace workspace = fsim::tests::api_workspace;
+    // A traced VHDL process: its first run is its initialization (IEEE
+    // 1076-2019 14.7.5.2), so the clocked process assigns at the first
+    // rising edge only; the trace starts with the signals' initial values.
+    const auto clocked_workspace = directory / "vhdl-clocked-trace";
+    std::filesystem::create_directories(clocked_workspace);
+    {
+        std::ofstream output(clocked_workspace / "clocked.vhd");
+        output << R"(
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+entity clocked is
+end entity;
+architecture test of clocked is
+  signal clk : std_logic := '0';
+  signal resetn : std_logic := '0';
+  signal done : std_logic;
+  signal state : std_logic_vector(2 downto 0);
+begin
+  clk <= not clk after 5 ns when now < 40 ns;
+  resetn <= '1' after 12 ns;
+  process (clk)
+    variable count : unsigned(7 downto 0);
+    variable seen : boolean;
+  begin
+    if rising_edge(clk) then
+      if resetn = '0' then
+        state <= "000";
+        done <= '0';
+      else
+        done <= '0';
+        count := count + 1;
+        seen := count > 2;
+        case state is
+          when "000" => state <= "001";
+          when "001" => if seen then state <= "100"; end if;
+          when others => done <= '1';
+        end case;
+      end if;
+    end if;
+  end process;
+end architecture;
+)";
+    }
+    workspace::prepare(clocked_workspace,
+        "fsim::config set elaborate.time_resolution 1ns\n",
+        { "clocked.vhd" }, "vhdl:work.clocked");
+    const auto clocked = workspace::run_streams(clocked_workspace,
+        { "simulate", "--trace-output", "clocked.vcd", "--trace-format", "vcd" });
+    assert(clocked.status == 0);
+    const auto clocked_vcd = read_text(clocked_workspace / "clocked.vcd");
+    const auto clocked_names = vcd_declarations(clocked_vcd);
+    assert(clocked_names.size() == 4U);
+    const auto done = declared_code(clocked_names, "clocked.done");
+    assert((vcd_changes(clocked_vcd, done)
+        == std::vector<std::string> { "0:x", "5:0" }));
+
+    // A VHDL instance under a SystemVerilog root is declared once, in the
+    // root's scope (no root-relative lookup name is a scope).
+    const auto mixed_workspace = directory / "vhdl-under-sv-trace";
+    std::filesystem::create_directories(mixed_workspace);
+    {
+        std::ofstream output(mixed_workspace / "child.vhd");
+        output << R"(
+library ieee;
+use ieee.std_logic_1164.all;
+entity child is
+  port (a : in std_logic; y : out std_logic);
+end entity;
+architecture rtl of child is
+  signal inner : std_logic;
+begin
+  inner <= not a;
+  y <= inner;
+end architecture;
+)";
+    }
+    {
+        std::ofstream output(mixed_workspace / "top.sv");
+        output << R"(
+module top;
+  logic a = 0;
+  logic y;
+  child u (.a(a), .y(y));
+  initial begin
+    #5 a = 1;
+    #5 $finish;
+  end
+endmodule
+)";
+    }
+    workspace::isolate_user_configuration(mixed_workspace / "user-configuration");
+    workspace::write_configuration(mixed_workspace,
+        "fsim::config set elaborate.time_resolution 1ns\n");
+    workspace::expect(mixed_workspace, { "compile", "child.vhd" });
+    workspace::expect(mixed_workspace, { "compile", "top.sv" });
+    workspace::expect(mixed_workspace, { "elaborate", "sv:work.top" });
+    const auto mixed = workspace::run_streams(mixed_workspace,
+        { "simulate", "--trace-output", "mixed.vcd", "--trace-format", "vcd" });
+    assert(mixed.status == 0);
+    auto mixed_names = vcd_declarations(read_text(mixed_workspace / "mixed.vcd"));
+    for (auto& entry : mixed_names) {
+        entry.erase(entry.find('='));
+    }
+    std::ranges::sort(mixed_names);
+    assert((mixed_names
+        == std::vector<std::string> {
+            "top.a", "top.u.a", "top.u.inner", "top.u.y", "top.y" }));
+
+    // An instance inside a generate block belongs to the enclosing
+    // instance's hierarchy (IEEE 1076-2019 11.8): its FST scope is under
+    // the root.
+    const auto generate_workspace = directory / "vhdl-generate-fst";
+    std::filesystem::create_directories(generate_workspace);
+    {
+        std::ofstream output(generate_workspace / "gen.vhd");
+        output << R"(
+library ieee;
+use ieee.std_logic_1164.all;
+entity leaf is
+  port (a : in std_logic; y : out std_logic);
+end entity;
+architecture rtl of leaf is
+begin
+  y <= not a;
+end architecture;
+
+library ieee;
+use ieee.std_logic_1164.all;
+entity gentop is
+  generic (USE_LEAF : integer := 1);
+end entity;
+architecture test of gentop is
+  signal a : std_logic := '0';
+  signal y : std_logic;
+begin
+  a <= '1' after 5 ns;
+  g_on : if USE_LEAF /= 0 generate
+    u_leaf : entity work.leaf port map (a => a, y => y);
+  end generate;
+  g_off : if USE_LEAF = 0 generate
+    y <= a;
+  end generate;
+end architecture;
+)";
+    }
+    workspace::prepare(generate_workspace,
+        "fsim::config set elaborate.time_resolution 1ns\n",
+        { "gen.vhd" }, "vhdl:work.gentop");
+    const auto generated = workspace::run_streams(generate_workspace,
+        { "simulate", "--trace-output", "gen.fst", "--trace-format", "fst" });
+    assert(generated.status == 0);
+    assert(generated.error.find("FSIM-TRACE") == std::string::npos);
+    assert(std::filesystem::file_size(generate_workspace / "gen.fst") != 0U);
 }
 
 } // namespace fsim::test

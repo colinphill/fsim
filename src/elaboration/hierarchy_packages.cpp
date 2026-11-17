@@ -25959,16 +25959,18 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
         if (design_.roots_.size() != 1U) {
             return;
         }
+        // A lookup key, no hierarchical name: traces leave it out.
         if (signal_path == active_root_) {
-            design_.signal_by_name_.emplace(name, signal);
+            note_root_relative_name(
+                design_.signal_by_name_, std::string { name }, signal, false);
             return;
         }
         const auto root_prefix = active_root_ + ".";
         if (signal_path.starts_with(root_prefix)) {
-            design_.signal_by_name_.emplace(
+            note_root_relative_name(design_.signal_by_name_,
                 std::string { signal_path.substr(root_prefix.size()) }
                     + "." + std::string { name },
-                signal);
+                signal, false);
         }
     };
     using Form = semantic::vhdl::DeclarationForm;
