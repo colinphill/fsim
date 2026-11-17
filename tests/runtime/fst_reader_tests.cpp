@@ -472,7 +472,7 @@ void test_typed_leaf_initial_value_equivalence()
     assert(find_value(trace, logic9, 0U).payload == "ux01zwlh-");
     std::size_t offset = 363U;
     const auto initial_size = read_varint(bytes, offset);
-    assert(initial_size == 44U);
+    assert(initial_size == 17U);
     assert(read_varint(bytes, offset) == initial_size);
     assert(read_varint(bytes, offset) == 3U);
     offset += static_cast<std::size_t>(initial_size);
@@ -487,9 +487,9 @@ void test_typed_leaf_initial_value_equivalence()
     assert(static_cast<unsigned char>(bytes.at(offset)) == 0xa0U);
     ++offset;
     assert(read_varint(bytes, offset) == 0U);
-    assert(read_varint(bytes, offset) == 0U);
-    const std::string logic9_bytes { "\x01\x23\x45\x67\x80", 5U };
-    assert(bytes.substr(offset, 5U) == logic9_bytes);
+    // std_logic as its own symbols.
+    const std::string logic9_bytes { "\x01ux01zwlh-", 10U };
+    assert(bytes.substr(offset, logic9_bytes.size()) == logic9_bytes);
 }
 
 void test_ordered_change_equivalence()
@@ -797,10 +797,9 @@ void test_value_time_and_compression_rejections()
     expect_failure(bad_string, "FSIM-FST-READ-002");
 
     auto bad_logic9 = bytes;
-    const std::string logic9_payload { "\x01\x23\x45\x67\x80", 5U };
-    const auto logic9 = bad_logic9.find(logic9_payload);
+    const auto logic9 = bad_logic9.find("ux01zwlh-");
     assert(logic9 != std::string::npos);
-    bad_logic9[logic9] = static_cast<char>(0x91U);
+    bad_logic9[logic9 + 4U] = 'q';
     expect_failure(bad_logic9, "FSIM-FST-READ-002");
 
     auto bad_real = bytes;

@@ -321,7 +321,8 @@ void test_logic9_value(const std::filesystem::path& directory)
     const auto path = directory / "logic9.fst";
     check_fst(path, 1U, 1U);
     const auto bytes = read_bytes(path);
-    assert(bytes.find(std::string_view { "logic9_value\0\x24", 14U })
+    // One storage bit per std_logic element: the length is nine.
+    assert(bytes.find(std::string_view { "logic9_value\0\x09", 14U })
         != std::string::npos);
 }
 

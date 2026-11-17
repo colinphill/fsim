@@ -15,11 +15,11 @@ inline constexpr std::string_view kFstCompressionBundleIdentity =
 inline constexpr std::string_view kFstStoredBundleIdentity =
     "fst-compression-bundle-v1:gzip-store-v1:values-none";
 inline constexpr std::string_view kFstContainerProfileIdentity =
-    "fst-clean-room-profile-v3:declaration-metadata-v1";
+    "fst-clean-room-profile-v4:declaration-metadata-v1";
 inline constexpr std::string_view kFstDeterministicContainerProfile =
-    "fsim clean-room FST profile 3; gzip-store-v1; zlib-fixed-rle-v1; metadata-v1";
+    "fsim clean-room FST profile 4; gzip-store-v1; zlib-fixed-rle-v1; metadata-v1";
 inline constexpr std::string_view kFstStoredContainerProfile =
-    "fsim clean-room FST profile 3; gzip-store-v1; values-none; metadata-v1";
+    "fsim clean-room FST profile 4; gzip-store-v1; values-none; metadata-v1";
 
 enum class FstCompressionKind : std::uint8_t {
   HierarchyGzipStoreV1,

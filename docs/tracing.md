@@ -39,7 +39,9 @@ and C++ requests all pass through one transactional control model.
 The FST writer preserves arbitrary-width two- and four-state packed values,
 SystemVerilog `bit`, `logic`, `reg`, `time`, `realtime`, `shortreal`, real,
 chandle, strings including embedded NUL bytes, enumerations, and VHDL
-physical/time values. VHDL Logic9 retains all nine states. Aggregate, class,
+physical/time values. VHDL Logic9 retains all nine states: each element is
+stored as its own symbol (`u x 0 1 z w l h -`), one per bit of the variable's
+length, as libfst stores std_logic. Aggregate, class,
 container, coverage, assertion, and resolved-strength observations use stable
 owner-qualified leaf declarations with exact type and shape metadata.
 
@@ -48,6 +50,11 @@ SystemC roots, logical libraries, source provenance, and forward aliases.
 Events retain `(time, delta, region, sequence, stable-id)` order, including
 multiple changes at one source time and late snapshots. VCD consumes the same
 declarations and events while retaining its established byte contract.
+
+Both formats spell names the same way: a generate iteration is `name[i]`,
+not escaped, and only an escaped identifier keeps its backslash. VCD writes a
+design-unit instance as a `module` scope and a block inside one (a generate
+block, a named block, a VHDL block or process) as a `begin` scope.
 
 ## Selection and lifecycle
 

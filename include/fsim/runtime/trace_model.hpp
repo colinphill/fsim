@@ -133,12 +133,20 @@ enum class TraceRegion : std::uint8_t {
     Callback
 };
 
+/// An instance of a design unit, or a block inside one (a generate
+/// block, a named block, a VHDL block or process).
+enum class TraceScopeKind : std::uint8_t {
+    Instance,
+    Block
+};
+
 struct TraceScopeDeclaration {
     TraceScopeId id;
     TraceScopeId parent;
     TraceSourceId source;
     std::string name;
     TracePathName path;
+    TraceScopeKind kind { TraceScopeKind::Instance };
 };
 
 struct TraceTypeDeclaration {
@@ -245,6 +253,10 @@ public:
         std::string_view hierarchical_name,
         TraceSignalId target,
         const TraceSourceMetadata& source_metadata);
+    /// The design's instance paths, in the builder's path table: a scope at
+    /// none of them is a block. A model built without them has instance
+    /// scopes only.
+    void set_instance_paths(std::span<const semantic::HierarchyPathId> paths);
     [[nodiscard]] TraceDeclarationModel freeze() &&;
 
 private:

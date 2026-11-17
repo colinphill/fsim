@@ -309,12 +309,8 @@ namespace {
             && (frontend::is_real_scalar_kind(type.scalar_kind))) {
             return 8;
         }
-        if (type.kind == TraceTypeKind::VhdlLogic9) {
-            if (type.width > std::numeric_limits<std::size_t>::max() / 4U) {
-                throw std::length_error("FST Logic9 storage width overflows");
-            }
-            return type.width * 4U;
-        }
+        // A std_logic element is one symbol (u x 0 1 z w l h -), as
+        // libfst stores it.
         return type.width;
     }
 
@@ -444,24 +440,6 @@ namespace {
         }
     }
 
-    [[nodiscard]] std::string logic9_binary_symbols(
-        const std::string_view symbols)
-    {
-        std::string result;
-        result.reserve(symbols.size() * 4U);
-        for (const auto symbol : symbols) {
-            const auto parsed = parse_logic9(symbol);
-            if (!parsed) {
-                throw std::invalid_argument("unsupported FST Logic9 symbol");
-            }
-            const auto encoded = static_cast<std::uint8_t>(*parsed);
-            for (int shift = 3; shift >= 0; --shift) {
-                result.push_back((encoded & (1U << shift)) != 0U ? '1' : '0');
-            }
-        }
-        return result;
-    }
-
     void append_timed_wave_change(
         Bytes& output,
         const std::uint64_t time_delta,
@@ -469,7 +447,8 @@ namespace {
     {
         if (symbols.size() == 1U) {
             // As libfst codes a one-bit change: 0 and 1 in two tag bits,
-            // the others as an index into "xzhuwl-?" in four.
+            // the others (std_logic's too) as an index into "xzhuwl-?" in
+            // four.
             const auto symbol = symbols.front();
             if (symbol == '0' || symbol == '1') {
                 if (time_delta > (std::numeric_limits<std::uint64_t>::max() >> 2U)) {
@@ -478,9 +457,12 @@ namespace {
                 append_varint(output, (time_delta << 2U) | (symbol == '1' ? 2U : 0U));
                 return;
             }
-            const auto index = symbol == 'x' ? 0U
-                : symbol == 'z'              ? 1U
-                                             : throw std::invalid_argument("unsupported FST scalar symbol");
+            constexpr std::string_view others { "xzhuwl-" };
+            const auto found = others.find(symbol);
+            if (found == std::string_view::npos) {
+                throw std::invalid_argument("unsupported FST scalar symbol");
+            }
+            const auto index = static_cast<std::uint64_t>(found);
             if (time_delta > (std::numeric_limits<std::uint64_t>::max() >> 4U)) {
                 throw std::length_error("FST scalar time delta overflows");
             }
@@ -502,7 +484,7 @@ namespace {
     void append_timed_wave_change(
         Bytes& output,
         const std::uint64_t time_delta,
-        const TraceTypeDeclaration& type,
+        const TraceTypeDeclaration&,
         const FstPayloadKind payload_kind,
         const std::string_view payload,
         const std::uint64_t real_bits)
@@ -520,11 +502,6 @@ namespace {
             append_varint(output, payload.size());
             output.insert(
                 output.end(), payload.begin(), payload.end());
-            return;
-        }
-        if (type.kind == TraceTypeKind::VhdlLogic9) {
-            append_timed_wave_change(
-                output, time_delta, logic9_binary_symbols(payload));
             return;
         }
         append_timed_wave_change(output, time_delta, payload);
@@ -578,9 +555,6 @@ namespace {
         Bytes value;
         if (payload_kind == FstPayloadKind::Real) {
             append_le64(value, real_bits);
-        } else if (type.kind == TraceTypeKind::VhdlLogic9) {
-            const auto symbols = logic9_binary_symbols(payload);
-            value.assign(symbols.begin(), symbols.end());
         } else {
             value.assign(payload.begin(), payload.end());
         }
@@ -1853,10 +1827,7 @@ struct FstWriter::Impl {
                     = static_cast<std::uint64_t>(blocks.back().timestamp_count - 1U);
                 const auto handle_index = static_cast<std::size_t>(event.handle - 1U);
                 const auto& type = *types[handle_index];
-                checked_add_size(block_estimate,
-                    (type.kind == TraceTypeKind::VhdlLogic9 ? 4U : 1U)
-                            * event.payload.size()
-                        + 18U);
+                checked_add_size(block_estimate, event.payload.size() + 18U);
                 store_frame_value(state_bits, frame_offsets[handle_index], type,
                     event.payload_kind, event.payload, event.real_bits);
                 stage_spool_event(

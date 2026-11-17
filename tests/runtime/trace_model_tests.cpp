@@ -2,6 +2,7 @@
 #include "fsim/runtime/trace_model.hpp"
 #include "fsim/runtime/vcd_writer.hpp"
 
+#include <array>
 #include <cassert>
 #include <cstdint>
 #include <sstream>
@@ -393,6 +394,54 @@ void test_vcd_model_equivalence()
     assert(backward_rejected);
 }
 
+// Scopes at none of the design's instance paths are blocks: VCD writes
+// them as `begin` scopes and, like FST, spells a generate iteration's
+// index without escaping; instances stay `module` scopes.
+void test_vcd_block_scopes()
+{
+    using namespace fsim::runtime;
+    using fsim::semantic::HierarchyPathTable;
+    HierarchyPathTable::Builder path_builder;
+    const auto top = path_builder.intern("top");
+    const auto child = path_builder.intern("top.gen[1].u");
+    static_cast<void>(path_builder.intern("top.gen[1]"));
+    static_cast<void>(path_builder.intern("top.gen[1].u.q"));
+    static_cast<void>(path_builder.intern("top.named"));
+    static_cast<void>(path_builder.intern("top.named.v"));
+    const auto paths = std::move(path_builder).freeze();
+
+    TraceDeclarationBuilder builder { paths };
+    static_cast<void>(builder.add_variable("top.gen[1].u.q", 1));
+    static_cast<void>(builder.add_variable("top.named.v", 1));
+    const std::array instances { top, child };
+    builder.set_instance_paths(instances);
+    const auto model = std::move(builder).freeze();
+    for (const auto& scope : model.scopes()) {
+        const bool block = scope.path == "top.gen[1]" || scope.path == "top.named";
+        assert((scope.kind == TraceScopeKind::Block) == block);
+    }
+
+    std::ostringstream output;
+    VcdWriter writer { output, "1ns", 256 };
+    static_cast<void>(writer.declare_model(model));
+    writer.begin();
+    writer.flush();
+    const auto text = output.str();
+    assert(text.find("$scope module top $end") != std::string::npos);
+    assert(text.find("$scope begin gen[1] $end") != std::string::npos);
+    assert(text.find("$scope module u $end") != std::string::npos);
+    assert(text.find("$scope begin named $end") != std::string::npos);
+    assert(text.find('\\') == std::string::npos);
+
+    // Without instance paths every scope is an instance.
+    TraceDeclarationBuilder plain { paths };
+    static_cast<void>(plain.add_variable("top.gen[1].u.q", 1));
+    const auto plain_model = std::move(plain).freeze();
+    for (const auto& scope : plain_model.scopes()) {
+        assert(scope.kind == TraceScopeKind::Instance);
+    }
+}
+
 void test_vcd_reused_encoding_buffers()
 {
     using namespace fsim::runtime;
@@ -482,4 +531,5 @@ int main()
     test_event_identity_and_order();
     test_vcd_model_equivalence();
     test_vcd_reused_encoding_buffers();
+    test_vcd_block_scopes();
 }

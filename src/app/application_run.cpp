@@ -58,6 +58,7 @@
 #include <string_view>
 #include <system_error>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -1259,6 +1260,14 @@ std::unique_ptr<TraceState> attach_trace(
         trace->tick_multiplier = scale->tick_multiplier;
         runtime::TraceDeclarationBuilder declaration_builder {
             simulation.design_ir().hierarchy_paths() };
+        {
+            std::vector<semantic::HierarchyPathId> instance_paths;
+            instance_paths.reserve(simulation.design_ir().instances().size());
+            for (const auto& instance : simulation.design_ir().instances()) {
+                instance_paths.push_back(instance.path);
+            }
+            declaration_builder.set_instance_paths(instance_paths);
+        }
         trace->handles.resize(simulation.runtime_adapter().signals().size());
         trace->signal_trace_ids.resize(
             simulation.runtime_adapter().signals().size());
@@ -2387,6 +2396,26 @@ void attach_hdl_vcd_control(
                 state.tick_multiplier = scale->tick_multiplier;
                 state.writer = std::make_unique<runtime::VcdWriter>(
                     state.stream, scale->timescale);
+                // A scope at no instance's path is a block in one (a
+                // generate or named block).
+                const std::unordered_set<std::string_view> instance_paths {
+                    state.instances.begin(), state.instances.end() };
+                std::unordered_set<std::string_view> block_scopes;
+                for (const auto& [path, signal] : state.objects) {
+                    if (!state.selected.at(signal)) {
+                        continue;
+                    }
+                    const std::string_view name { path };
+                    for (auto separator = name.find('.');
+                         separator != std::string_view::npos;
+                         separator = name.find('.', separator + 1U)) {
+                        const auto scope = name.substr(0U, separator);
+                        if (!instance_paths.contains(scope)
+                            && block_scopes.insert(scope).second) {
+                            state.writer->declare_block_scope(scope);
+                        }
+                    }
+                }
                 for (const auto& [path, signal] : state.objects) {
                     if (!state.selected.at(signal)) {
                         continue;

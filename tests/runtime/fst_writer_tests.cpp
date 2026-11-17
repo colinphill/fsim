@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cassert>
 #include <chrono>
 #include <cstdint>
@@ -1172,17 +1173,17 @@ void test_logic9_storage_profile()
     writer.close(0U);
 
     const auto bytes = output.str();
+    // One storage bit per element, holding the element's own symbol.
     std::size_t offset = 363U;
-    assert(read_varint(bytes, offset) == 36U);
-    assert(read_varint(bytes, offset) == 36U);
+    assert(read_varint(bytes, offset) == 9U);
+    assert(read_varint(bytes, offset) == 9U);
     assert(read_varint(bytes, offset) == 1U);
-    offset += 36U;
+    offset += 9U;
     assert(read_varint(bytes, offset) == 1U);
     assert(bytes.at(offset++) == '4');
     assert(read_varint(bytes, offset) == 0U);
-    assert(read_varint(bytes, offset) == 0U);
-    const std::string packed { "\x01\x23\x45\x67\x80", 5U };
-    assert(bytes.substr(offset, packed.size()) == packed);
+    const std::string symbols { "\x01ux01zwlh-", 10U };
+    assert(bytes.substr(offset, symbols.size()) == symbols);
 }
 
 // The same changes in one value-change block and, under a small container
@@ -1300,6 +1301,78 @@ void test_scalar_wave_codes()
         assert(parsed.trace->values[at].payload == values[at]);
         assert(parsed.trace->values[at].time == at + 1U);
     }
+}
+
+// std_logic is stored as its own symbols, as libfst stores it: a one-bit
+// value's non-binary states as indexes into "xzhuwl-?", a vector as packed
+// binary or raw symbols, one storage bit per element.
+void test_logic9_symbols()
+{
+    using namespace fsim::runtime;
+    FstExtendedTypeMetadata scalar;
+    scalar.kind = FstExtendedTypeKind::VhdlLogic9;
+    scalar.language = FstTypeLanguage::Vhdl;
+    scalar.nominal_name = "std_logic";
+    scalar.width = 1U;
+    scalar.enumeration_literals = {
+        "'U'", "'X'", "'0'", "'1'", "'Z'", "'W'", "'L'", "'H'", "'-'"
+    };
+    auto vector = scalar;
+    vector.nominal_name = "std_logic_vector";
+    vector.width = 4U;
+    TraceDeclarationBuilder builder;
+    const auto bit = builder.add_typed_variable("top.bit",
+        TraceTypeKind::VhdlLogic9, 1U, SystemVerilogScalarKind::None,
+        canonical_fst_type_metadata(scalar));
+    const auto bus = builder.add_typed_variable("top.bus",
+        TraceTypeKind::VhdlLogic9, 4U, SystemVerilogScalarKind::None,
+        canonical_fst_type_metadata(vector));
+    const auto model = std::move(builder).freeze();
+    std::ostringstream output;
+    FstWriter writer { output, -9, { }, FstWriterCompression::None };
+    writer.declare(model);
+    writer.begin();
+    constexpr std::array<std::string_view, 9> bits {
+        "U", "X", "0", "1", "Z", "W", "L", "H", "-" };
+    for (std::size_t at = 0U; at < bits.size(); ++at) {
+        writer.change({ bit, static_cast<SimulationTick>(at + 1U), 0U,
+                          TraceRegion::Active, 0U },
+            encode_fst_extended_value(PackedLogic4::from_logic9_msb_string(bits[at]),
+                FstValueProfile::VhdlLogic9, scalar));
+    }
+    constexpr std::array<std::string_view, 2> buses { "UH0L", "1010" };
+    for (std::size_t at = 0U; at < buses.size(); ++at) {
+        writer.change({ bus, static_cast<SimulationTick>(at + 1U), 0U,
+                          TraceRegion::Active, 1U },
+            encode_fst_extended_value(PackedLogic4::from_logic9_msb_string(buses[at]),
+                FstValueProfile::VhdlLogic9, vector));
+    }
+    writer.close(9U);
+    const auto bytes = output.str();
+    // The one-bit chain: its sentinel, then u x 0 1 z w l h -, each one
+    // time index after the last.
+    const std::string bit_chain {
+        "\x00\x07\x11\x04\x06\x13\x19\x1b\x15\x1d", 10U };
+    assert(bytes.find(bit_chain) != std::string::npos);
+    // The vector: raw symbols, then packed binary.
+    const std::string bus_chain { "\x00\x01uh0l\x02\xa0", 8U };
+    assert(bytes.find(bus_chain) != std::string::npos);
+    const auto parsed = read_fst(bytes);
+    assert(parsed.ok());
+    std::vector<std::string> bit_values;
+    std::vector<std::string> bus_values;
+    for (const auto& value : parsed.trace->values) {
+        (value.payload.size() == 1U ? bit_values : bus_values)
+            .push_back(value.payload);
+    }
+    assert(bit_values.size() == bits.size() && bus_values.size() == buses.size());
+    for (std::size_t at = 0U; at < bits.size(); ++at) {
+        std::string expected { bits[at] };
+        expected[0] = static_cast<char>(std::tolower(
+            static_cast<unsigned char>(expected[0])));
+        assert(bit_values[at] == expected);
+    }
+    assert(bus_values[0] == "uh0l" && bus_values[1] == "1010");
 }
 
 void test_ordered_changes_and_validation()
@@ -1670,6 +1743,7 @@ int main(const int argc, const char* const argv[])
     test_compression_profiles();
     test_value_blocks();
     test_scalar_wave_codes();
+    test_logic9_symbols();
     if (argc == 3 && std::string_view { argv[1] } == "--emit-blocks") {
         const auto bytes = write_block_container(2048U);
         std::ofstream output { argv[2], std::ios::binary | std::ios::trunc };

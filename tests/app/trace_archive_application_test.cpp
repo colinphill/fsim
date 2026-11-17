@@ -83,11 +83,11 @@ void test_round_trip_all_boundaries()
         app::TraceArchiveKind::NativeCache,
         app::TraceArchiveKind::Checkpoint };
     constexpr std::array expected_hashes {
-        "779b6f8f73006db685a29a72afd415bc80fc7240e3be9ecc334f1fa5efd9a23c",
-        "3b7f57e090543871596304d12291182a170c4a14e022b72a3b28718f710de9c8",
-        "333c37fafb09d13fffab3484e448b4789159b901aade4ce042b4aa7452ea41b4",
-        "c95a75f9f7cc2a147ff32425296a4e24ffe53c1e770baf21814a3b887a6fb98e",
-        "0add33956b36eebfd19d8ba43ae53b629f6c4b70549919c85582036f5bc406f5",
+        "9794ce8051a7fc44f2b183fd18ed2a6555505649d5441e14d0a3228055955383",
+        "6e7f79343576ece34d9ce11e799b1240b4758cf1c6bd5e8009761762522ff2ce",
+        "73886a7b2f7d2ac947cfcf1e9310869f5eba7950409222fd9d9dbeb16b35375e",
+        "0edad0275c9e51903fb676cbc62188eb45d04cf66dcc5d3248e424ec38514ea2",
+        "1d57dd521ff766a7957123f6cc05d4eb784204e3ef103bf38ebaf5fc98088ca1",
     };
     const auto expected = snapshot();
     auto wire_fixture = expected;
@@ -97,7 +97,8 @@ void test_round_trip_all_boundaries()
         const auto fixture_hash = support::Sha256::hex(
             support::Sha256::digest(std::span { fixture_encoded.archive }));
         require(fixture_hash == expected_hashes[static_cast<std::size_t>(kind)],
-            "archive wire bytes must match the frozen pre-migration fixture");
+            "archive wire bytes must match the frozen pre-migration fixture, not "
+                + fixture_hash);
         const auto encoded = app::encode_trace_archive(expected, kind);
         for (std::size_t length = 0U; length < 20U; ++length) {
             require(!app::decode_trace_archive(

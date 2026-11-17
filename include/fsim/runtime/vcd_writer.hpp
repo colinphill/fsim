@@ -43,8 +43,12 @@ public:
     [[nodiscard]] VcdSignal declare_systemverilog_scalar(
         std::string_view hierarchical_name,
         SystemVerilogScalarKind kind);
+    /// Also declares the model's block scopes (declare_block_scope).
     [[nodiscard]] std::vector<VcdSignal> declare_model(
         const TraceDeclarationModel& model);
+    /// The scope at this hierarchical path is a block in an instance (a
+    /// generate or named block): it is written as a `begin` scope.
+    void declare_block_scope(std::string_view hierarchical_path);
 
     /// Emit the header and position the dump at initial_time.
     void begin(SimulationTick initial_time = 0);

@@ -5,13 +5,13 @@
 #include <array>
 #include <charconv>
 #include <cstddef>
-#include <cctype>
 #include <limits>
 #include <ostream>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace fsim::runtime {
@@ -40,24 +40,17 @@ namespace {
   return result;
 }
 
-[[nodiscard]] std::string escaped_name(std::string_view value) {
-  // An escaped identifier is written as declared; its terminating space is
-  // the token separator the caller appends (IEEE 1800-2023 5.6.1, 21.7.2).
+[[nodiscard]] std::string_view vcd_name(std::string_view value) {
+  // A name is written as declared, as the FST trace spells it: a generate
+  // iteration's index is not escaped. An escaped identifier keeps its
+  // backslash; its terminating space is the token separator the caller
+  // appends (IEEE 1800-2023 5.6.1, 21.7.2).
   if (value.size() > 1U && value.front() == '\\') {
     while (value.size() > 1U && value.back() == ' ') {
       value.remove_suffix(1U);
     }
-    return std::string(value);
   }
-  const auto simple = !value.empty() &&
-                      std::all_of(value.begin(), value.end(), [](char c) {
-                        const auto byte = static_cast<unsigned char>(c);
-                        return std::isalnum(byte) != 0 || c == '_' || c == '$';
-                      });
-  if (simple) {
-    return std::string(value);
-  }
-  return "\\" + std::string(value);
+  return value;
 }
 
 [[nodiscard]] constexpr char vcd_char(Logic4 value) noexcept {
@@ -127,6 +120,9 @@ struct Scope {
   std::string name;
   std::vector<std::uint32_t> declarations;
   std::vector<Scope> children;
+  // A block in an instance (a generate or named block) rather than an
+  // instance: written as a VCD `begin` scope (IEEE 1800-2023 21.7.2.1).
+  bool block{};
 };
 
 Scope &find_or_add_scope(Scope &parent, std::string_view name) {
@@ -136,7 +132,7 @@ Scope &find_or_add_scope(Scope &parent, std::string_view name) {
   if (found != parent.children.end()) {
     return *found;
   }
-  parent.children.push_back(Scope{std::string(name), {}, {}});
+  parent.children.push_back(Scope{std::string(name), {}, {}, false});
   return parent.children.back();
 }
 
@@ -180,6 +176,7 @@ struct VcdWriter::Impl {
   std::optional<TraceEvent> last_event;
   std::optional<TraceSelection> selected_trace;
   std::unordered_map<std::uint64_t, TraceSelection> trace_signals;
+  std::unordered_set<std::string> block_scopes;
 
   void append(std::string_view value) {
     buffer.append(value);
@@ -216,8 +213,8 @@ struct VcdWriter::Impl {
 
   void emit_scope(const Scope &scope) {
     if (!scope.name.empty()) {
-      append("$scope module ");
-      append(escaped_name(scope.name));
+      append(scope.block ? "$scope begin " : "$scope module ");
+      append(vcd_name(scope.name));
       append(" $end\n");
     }
 
@@ -229,7 +226,7 @@ struct VcdWriter::Impl {
       append(" ");
       append(declaration.identifier);
       append(" ");
-      append(escaped_name(declaration.reference));
+      append(vcd_name(declaration.reference));
       append(" $end\n");
     }
     for (const auto &child : scope.children) {
@@ -459,7 +456,19 @@ std::vector<VcdSignal> VcdWriter::declare_model(
         Impl::TraceSelection{selection.identity.value, signal});
     result.push_back(signal);
   }
+  for (const auto& scope : model.scopes()) {
+    if (scope.kind == TraceScopeKind::Block) {
+      declare_block_scope(scope.path.view());
+    }
+  }
   return result;
+}
+
+void VcdWriter::declare_block_scope(std::string_view hierarchical_path) {
+  if (impl_->started) {
+    throw std::logic_error("cannot declare a VCD scope after begin");
+  }
+  impl_->block_scopes.emplace(hierarchical_path);
 }
 
 void VcdWriter::begin(SimulationTick initial_time) {
@@ -482,6 +491,11 @@ void VcdWriter::begin(SimulationTick initial_time) {
         throw std::invalid_argument("VCD signal name has an empty scope");
       }
       scope = &find_or_add_scope(*scope, component);
+      if (!impl_->block_scopes.empty()) {
+        const auto path = std::string_view{declaration.hierarchical_name}.substr(
+            0, static_cast<std::size_t>(remaining.data() - declaration.hierarchical_name.data()) + separator);
+        scope->block = impl_->block_scopes.contains(std::string{path});
+      }
       remaining.remove_prefix(separator + 1);
     }
     scope->declarations.push_back(index);

@@ -867,14 +867,12 @@ const auto verify_generated_behavior =
         if (local_separator != std::string_view::npos) {
           const auto local_scope =
               local_path.substr(0, local_separator);
-          const auto vcd_scope =
-              local_scope.find_first_of("[]")
-                      == std::string_view::npos
-                  ? std::string{local_scope}
-                  : "\\" + std::string{local_scope};
+          // The fixture's writer declares no block scopes; a scope keeps
+          // its name as declared, a generate iteration `name[i]` unescaped
+          // (IEEE 1800-2023 21.7.2.2, 27.6).
           assert(
               cold.simulation.normalized_vcd.find(
-                  "$scope module " + vcd_scope
+                  "$scope module " + std::string{local_scope}
                   + " $end")
               != std::string::npos);
         }

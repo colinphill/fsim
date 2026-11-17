@@ -4,9 +4,11 @@
 #include <algorithm>
 #include <functional>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -266,6 +268,7 @@ struct TraceDeclarationBuilder::Impl {
         TracePathHash, TracePathEqual> scope_ids;
     std::unordered_map<std::string_view, TraceSignalId,
         TracePathHash, TracePathEqual> signal_ids;
+    std::optional<std::unordered_set<std::uint32_t>> instance_paths;
 
     explicit Impl(semantic::HierarchyPathTable paths)
         : source_paths(std::move(paths))
@@ -618,6 +621,20 @@ TraceSignalId TraceDeclarationBuilder::add_alias(
     return id;
 }
 
+void TraceDeclarationBuilder::set_instance_paths(
+    const std::span<const semantic::HierarchyPathId> paths)
+{
+    if (!impl_) {
+        throw std::logic_error("trace declaration builder was already frozen");
+    }
+    auto& instances = impl_->instance_paths.emplace();
+    for (const auto path : paths) {
+        if (path.valid()) {
+            instances.insert(path.value());
+        }
+    }
+}
+
 TraceDeclarationModel TraceDeclarationBuilder::freeze() &&
 {
     if (!impl_) {
@@ -637,8 +654,14 @@ TraceDeclarationModel TraceDeclarationBuilder::freeze() &&
         return TracePathName { owner, path.id };
     };
     for (std::size_t index = 0; index < impl_->model->scopes.size(); ++index) {
-        impl_->model->scopes[index].path
-            = declaration_path(impl_->scope_paths[index]);
+        const auto reference = impl_->scope_paths[index];
+        auto& scope = impl_->model->scopes[index];
+        scope.path = declaration_path(reference);
+        if (impl_->instance_paths
+            && (reference.is_fallback
+                || !impl_->instance_paths->contains(reference.id.value()))) {
+            scope.kind = TraceScopeKind::Block;
+        }
     }
     for (std::size_t index = 0; index < impl_->model->sources.size(); ++index) {
         impl_->model->sources[index].canonical_name

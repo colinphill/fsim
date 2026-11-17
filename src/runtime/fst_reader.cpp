@@ -695,12 +695,7 @@ private:
         && (frontend::is_real_scalar_kind(value.scalar_kind))) {
         return 8U;
     }
-    if (value.type_kind == TraceTypeKind::VhdlLogic9) {
-        if (value.width > std::numeric_limits<std::size_t>::max() / 4U) {
-            exhausted("FST Logic9 width overflows", 0U);
-        }
-        return value.width * 4U;
-    }
+    // A std_logic element is one symbol.
     return value.width;
 }
 
@@ -1131,28 +1126,6 @@ private:
     return result;
 }
 
-[[nodiscard]] std::string decode_logic9(const std::string_view bits,
-    const std::size_t offset)
-{
-    constexpr std::string_view symbols = "ux01zwlh-";
-    std::string result;
-    result.reserve(bits.size() / 4U);
-    for (std::size_t index = 0U; index < bits.size(); index += 4U) {
-        std::uint8_t value = 0U;
-        for (std::size_t bit = 0U; bit < 4U; ++bit) {
-            const auto bit_value = static_cast<std::uint8_t>(
-                bits[index + bit] == '1' ? 1U : 0U);
-            value = static_cast<std::uint8_t>(
-                static_cast<std::uint8_t>(value << 1U) | bit_value);
-        }
-        if (value >= symbols.size()) {
-            inconsistent("FST Logic9 ordinal is invalid", offset + index / 8U);
-        }
-        result.push_back(symbols[value]);
-    }
-    return result;
-}
-
 void account_decoded_bytes(const std::size_t bytes,
     std::size_t& decoded_bytes, const std::size_t limit,
     const std::size_t offset)
@@ -1171,22 +1144,25 @@ void account_decoded_bytes(const std::size_t bytes,
 }
 
 [[nodiscard]] std::size_t read_scalar_wave(const std::uint64_t code,
+    const FstReaderDeclaration& declaration,
     FstReaderValue& result, std::size_t& decoded_bytes,
     const std::size_t decoded_limit, const std::size_t offset)
 {
     account_decoded_bytes(1U, decoded_bytes, decoded_limit, offset);
     result.payload_kind = FstPayloadKind::Symbols;
     // libfst's one-bit codes: 0 and 1 in two tag bits, the others as an
-    // index into "xzhuwl-?" in four (the profile writes x and z).
+    // index into "xzhuwl-?" in four (x and z, and for std_logic h u w l -).
     if ((code & 1U) == 0U) {
         result.payload.assign(1U, (code & 2U) != 0U ? '1' : '0');
         return checked_size(code >> 2U, offset);
     }
-    const auto index = (code >> 1U) & 7U;
-    if (index > 1U) {
+    constexpr std::string_view others { "xzhuwl-?" };
+    const auto index = static_cast<std::size_t>((code >> 1U) & 7U);
+    const auto limit = declaration.type_kind == TraceTypeKind::VhdlLogic9 ? 7U : 2U;
+    if (index >= limit) {
         inconsistent("FST scalar wave symbol is outside the profile", offset);
     }
-    result.payload.assign(1U, index == 0U ? 'x' : 'z');
+    result.payload.assign(1U, others[index]);
     return checked_size(code >> 4U, offset);
 }
 
@@ -1235,16 +1211,16 @@ void account_decoded_bytes(const std::size_t bytes,
         const auto bytes = cursor.raw(declaration.storage_width);
         result.payload.assign(
             reinterpret_cast<const char*>(bytes.data()), bytes.size());
+        const std::string_view allowed
+            = declaration.type_kind == TraceTypeKind::VhdlLogic9
+            ? std::string_view { "ux01zwlh-" }
+            : std::string_view { "01xz" };
         if (!std::all_of(result.payload.begin(), result.payload.end(),
-                [](const char symbol) {
-                    return symbol == '0' || symbol == '1'
-                        || symbol == 'x' || symbol == 'z';
+                [&](const char symbol) {
+                    return allowed.find(symbol) != std::string_view::npos;
                 })) {
             inconsistent("FST vector wave contains an invalid symbol", offset);
         }
-    }
-    if (declaration.type_kind == TraceTypeKind::VhdlLogic9) {
-        result.payload = decode_logic9(result.payload, offset);
     }
     return checked_size(code >> 1U, offset);
 }
@@ -1267,7 +1243,7 @@ void account_decoded_bytes(const std::size_t bytes,
     std::size_t time_delta { };
     if (declaration.storage_width == 1U
         && declaration.type_kind != TraceTypeKind::SystemVerilogString) {
-        time_delta = read_scalar_wave(code, result,
+        time_delta = read_scalar_wave(code, declaration, result,
             decoded_bytes, decoded_limit, value_offset);
     } else if (is_real_declaration(declaration)) {
         time_delta = read_real_wave(cursor, code, result,
