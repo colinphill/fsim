@@ -152,6 +152,9 @@ interp.impl	container_objects	P+ids	object tables; write values, keep ids
 interp.impl	container_value_reference_exposed	D	derived tables rebuilt from the artifact or from saved values
 interp.impl	container_value_reference_exposure_in_progress	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
 interp.impl	exposed_container_value_references	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	exposed_container_dependents	D	index of exposed_container_value_references by signal, rebuilt when exposed_container_revision moves
+interp.impl	exposed_container_revision	D	counts exposures and alias registrations (exposed_container_dependents)
+interp.impl	exposed_container_dependents_revision	D	the exposed_container_revision exposed_container_dependents was built at
 interp.impl	active_container_reference_refresh	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
 interp.impl	default_container_values	Cfg	configuration from the artifact or command line
 interp.impl	container_signal_aliases	D	derived tables rebuilt from the artifact or from saved values
@@ -1050,6 +1053,7 @@ kernel.impl	initial_update_running_	S	set only within the first simulation cycle
 kernel.impl	initial_commit_due_	S	set only within the first simulation cycle's update task; false at every save point
 kernel.impl	variable_hooks_active_	D	rebuilt from Impl::debug_local_hooks (debug_local_hooks_changed)
 kernel.impl	variable_hook_members_	D	rebuilt from Impl::debug_local_hooks (debug_local_hooks_changed)
+kernel.impl	watched_slot_	D	rebuilt from the watches (apply_watches); selects the members observe_units recompiles
 kernel.impl	member_pinned_	D	rebuilt from Impl::debug_local_hooks (debug_local_hooks_changed pins the members they name)
 kernel.impl	specialized_size_	D	fixed when the kernel specializes its members at construction
 kernel.impl	pending_pins_	D	the members whose pinning waits for the end of the running activation; empty between activations

@@ -188,6 +188,7 @@ void Interpreter::Impl::expose_container_value_reference(
         const auto position = std::ranges::lower_bound(exposed, object);
         if (position == exposed.end() || *position != object) {
             exposed.insert(position, object);
+            ++exposed_container_revision;
         }
         container_value_reference_exposed[object] = 1U;
     } catch (...) {

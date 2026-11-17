@@ -120,6 +120,11 @@ struct ContainerReferenceRefresh {
 
 struct PreparedContainerReferenceRefresh {
     std::vector<ContainerReferenceRefresh> flat_aliases;
+    /// The exposed references that depend on the changed signals, and the
+    /// revision of the exposed set they were found in
+    /// (Impl::exposed_container_revision).
+    std::vector<ContainerObjectId> dependents;
+    std::uint64_t revision { };
 };
 
 struct ActiveContainerReferenceRefresh {
@@ -1573,6 +1578,14 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::vector<std::uint8_t>
         container_value_reference_exposure_in_progress;
     std::vector<ContainerObjectId> exposed_container_value_references;
+    /// Per signal, the exposed container value references that depend on it
+    /// (container_value_reference_depends_on_signals), ascending; rebuilt
+    /// when a reference is exposed or an alias is registered.
+    std::vector<std::vector<ContainerObjectId>> exposed_container_dependents;
+    /// Changes with each exposure and alias registration; the index is of
+    /// exposed_container_dependents_revision.
+    std::uint64_t exposed_container_revision { 1U };
+    std::uint64_t exposed_container_dependents_revision { };
     ActiveContainerReferenceRefresh*
         active_container_reference_refresh { };
     std::vector<SharedContainerValue> default_container_values;
@@ -2751,6 +2764,11 @@ struct Interpreter::Impl : SchedulerBatchTask {
     [[nodiscard]] bool container_value_reference_depends_on_signals(
         ContainerObjectId object,
         std::span<const SignalId> signals) const noexcept;
+    /// The exposed container value references that depend on one of
+    /// `signals`, ascending (exposed_container_dependents).
+    void exposed_container_references_depending_on(
+        std::span<const SignalId> signals,
+        std::vector<ContainerObjectId>& objects);
 
     [[nodiscard]] ProcessState& get_process(ProcessId id);
 

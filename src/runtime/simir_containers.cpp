@@ -506,17 +506,92 @@ bool Interpreter::Impl::container_value_reference_depends_on_signals(
     return false;
 }
 
+void Interpreter::Impl::exposed_container_references_depending_on(
+    const std::span<const SignalId> changed_signals,
+    std::vector<ContainerObjectId>& objects)
+{
+    objects.clear();
+    if (exposed_container_dependents_revision != exposed_container_revision) {
+        // The signals each reference depends on: the ones
+        // container_value_reference_depends_on_signals tests, along its
+        // slice chain.
+        exposed_container_dependents.assign(signals.size(), { });
+        const auto add = [&](const SignalId signal, const ContainerObjectId object) {
+            if (signal >= exposed_container_dependents.size()) {
+                return;
+            }
+            auto& dependents = exposed_container_dependents[signal];
+            if (dependents.empty() || dependents.back() != object) {
+                dependents.push_back(object);
+            }
+        };
+        for (const auto object : exposed_container_value_references) {
+            auto selected = object;
+            for (std::size_t depth = 0U; depth < container_objects.size(); ++depth) {
+                if (selected >= container_objects.size()) {
+                    break;
+                }
+                if (selected < container_signal_aliases.size()
+                    && container_signal_aliases[selected]) {
+                    const auto signal = container_signal_aliases[selected]->signal;
+                    add(signal, object);
+                    if (signal < signal_container_aggregate_aliases.size()
+                        && signal_container_aggregate_aliases[signal]) {
+                        const auto aggregate = *signal_container_aggregate_aliases[signal];
+                        if (aggregate < container_element_signal_aliases.size()) {
+                            for (const auto& alias :
+                                container_element_signal_aliases[aggregate]) {
+                                if (alias) {
+                                    add(alias->signal, object);
+                                }
+                            }
+                        }
+                    }
+                }
+                if (selected < container_element_signal_aliases.size()) {
+                    for (const auto& alias : container_element_signal_aliases[selected]) {
+                        if (alias) {
+                            add(alias->signal, object);
+                        }
+                    }
+                }
+                if (selected < container_aggregate_signal_aliases.size()
+                    && container_aggregate_signal_aliases[selected]) {
+                    add(container_aggregate_signal_aliases[selected]->signal, object);
+                }
+                const auto& container = container_objects[selected];
+                if (!container.slice_alias) {
+                    break;
+                }
+                selected = container.slice_alias->object;
+            }
+        }
+        exposed_container_dependents_revision = exposed_container_revision;
+    }
+    for (const auto signal : changed_signals) {
+        if (signal < exposed_container_dependents.size()) {
+            const auto& dependents = exposed_container_dependents[signal];
+            objects.insert(objects.end(), dependents.begin(), dependents.end());
+        }
+    }
+    if (changed_signals.size() > 1U) {
+        std::ranges::sort(objects);
+        objects.erase(std::unique(objects.begin(), objects.end()), objects.end());
+    }
+}
+
 PreparedContainerReferenceRefresh
 Interpreter::Impl::prepare_container_value_reference_refresh(
     const std::span<const SignalId> changed_signals)
 {
     PreparedContainerReferenceRefresh prepared;
+    prepared.revision = exposed_container_revision;
     if (changed_signals.empty() || exposed_container_value_references.empty()) {
         return prepared;
     }
-    prepared.flat_aliases.reserve(
-        exposed_container_value_references.size());
-    for (const auto object : exposed_container_value_references) {
+    exposed_container_references_depending_on(changed_signals, prepared.dependents);
+    prepared.flat_aliases.reserve(prepared.dependents.size());
+    for (const auto object : prepared.dependents) {
         if (object >= container_signal_aliases.size()
             || !container_signal_aliases[object]
             || !container_signal_aliases[object]->readable
@@ -714,7 +789,12 @@ void Interpreter::Impl::synchronize_container_value_references(
     };
 
     std::size_t prepared_index { };
-    for (const auto object : exposed_container_value_references) {
+    // The dependents prepare found, unless a reference was exposed since
+    // (then every exposed reference is tested).
+    const bool indexed = prepared.revision == exposed_container_revision;
+    for (const auto object : indexed
+            ? std::span<const ContainerObjectId> { prepared.dependents }
+            : std::span<const ContainerObjectId> { exposed_container_value_references }) {
         if (!container_value_reference_depends_on_signals(
                 object, changed_signals)) {
             continue;

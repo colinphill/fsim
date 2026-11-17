@@ -683,6 +683,7 @@ void Interpreter::add_container_signal_alias(
     }
     impl_->revoke_stable_writer_shadow_for_container_alias(alias.signal);
     impl_->container_signal_aliases[alias.object] = alias;
+    ++impl_->exposed_container_revision;
     reverse_aliases.push_back(alias.object);
     impl_->refresh_direct_single_driver_route(alias.signal);
 }
@@ -732,6 +733,7 @@ void Interpreter::add_container_element_signal_alias(
     }
     impl_->revoke_stable_writer_shadow_for_container_alias(alias.signal);
     impl_->container_element_signal_aliases[alias.object][alias.ordinal] = alias;
+    ++impl_->exposed_container_revision;
     impl_->signal_container_element_aliases[alias.signal]
         = std::pair { alias.object, static_cast<std::size_t>(alias.ordinal) };
     impl_->refresh_direct_single_driver_route(alias.signal);
@@ -814,6 +816,7 @@ void Interpreter::add_container_aggregate_signal_alias(
     }
     impl_->revoke_stable_writer_shadow_for_container_alias(alias.signal);
     impl_->container_aggregate_signal_aliases[alias.object] = alias;
+    ++impl_->exposed_container_revision;
     impl_->signal_container_aggregate_aliases[alias.signal] = alias.object;
     impl_->has_container_aggregate_aliases = true;
     impl_->aggregate_signal_current_projection[alias.signal].emplace(
