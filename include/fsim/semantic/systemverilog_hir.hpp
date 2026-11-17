@@ -8,6 +8,7 @@
 #include "fsim/support/gate_driver.hpp"
 #include "fsim/support/rare_vector.hpp"
 #include "fsim/support/sva_marker.hpp"
+#include "fsim/support/system_tf.hpp"
 #include "fsim/support/systemverilog_builtin_type.hpp"
 #include "fsim/support/uvm_role.hpp"
 
@@ -416,6 +417,10 @@ struct Expression {
     // `system` when the node names a system_tf_identifier: a system task or
     // function call, or a system function named without arguments (20.3).
     CallKind call_kind { CallKind::user };
+    // The system task or function a `system` node names (IEEE 1800-2023
+    // 20.1, 21.1), resolved once from its system_tf_identifier; none for a
+    // user-defined system task or function (36.1) and on every other node.
+    support::SystemTf system_tf { support::SystemTf::none };
     // Exact semantic type selected for an explicitly typed assignment pattern.
     // Invalid or unresolved names leave this disengaged.
     std::optional<TypeId> nominal_type_target;

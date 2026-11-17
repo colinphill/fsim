@@ -208,8 +208,12 @@ model `none`; enabled foundation coverage uses
 rejected directly.
 
 The compiled-HIR bundle is schema 14 and embeds semantic schema 9,
-SystemVerilog HIR schema 39, and VHDL HIR schema 18. Bundle schema 14
-(SystemVerilog HIR schema 39) records the method of a semaphore or mailbox
+SystemVerilog HIR schema 40, and VHDL HIR schema 18. SystemVerilog HIR
+schema 40 records the system task or function a system call names
+(`Expression::system_tf`; the lists of IEEE 1800-2023 20.1 and 21.1, 14.14,
+16.14.7, 32.3 and Annex D), resolved once from its system_tf_identifier, so
+a reader takes the routine from the call instead of its name. Bundle schema
+14 (SystemVerilog HIR schema 39) records the method of a semaphore or mailbox
 call (`Expression::builtin_method`: put, get, try_get, try_put, peek,
 try_peek and num; IEEE 1800-2023 15.3, 15.4), resolved once from the member
 name, and makes such a call written as a statement the member call with

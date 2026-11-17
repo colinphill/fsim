@@ -54,6 +54,17 @@ namespace sv = semantic::sv;
         : sv::CallKind::user;
 }
 
+// The system task or function a `system` node of `input` names (IEEE
+// 1800-2023 20.1, 21.1); none for a user-defined one and any other node.
+[[nodiscard]] inline support::SystemTf systemverilog_system_tf(
+    const frontend::Expression& input) noexcept
+{
+    return input.marker == support::ExpressionMarker::none
+            && systemverilog_call_kind(input) == sv::CallKind::system
+        ? support::system_tf_named(input.text)
+        : support::SystemTf::none;
+}
+
 inline void inherit_named_systemverilog_type_shape(
     sv::TypeReference& reference, const sv::Hir& hir)
 {
