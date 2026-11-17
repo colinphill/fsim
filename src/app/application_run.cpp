@@ -2275,8 +2275,13 @@ void initialize_hdl_vcd_inventory(HdlVcdState& state)
             simulation.design_ir().path(instance.path));
     }
     for (const auto& object : simulation.design_ir().objects()) {
+        // As the run trace: objects with a hierarchical name, declared in
+        // the source (IEEE 1800-2023 21.7.2.2, 21.7.2.3).
         if (!design_object_is_signal_bearing(object)
             || object.width == 0U
+            || object.no_hierarchical_name
+            || object.root_relative_alias
+            || object.origin != support::GeneratedObjectOrigin::none
             || object.runtime_index
                 > std::numeric_limits<runtime::simir::SignalId>::max()) {
             continue;
