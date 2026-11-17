@@ -24,7 +24,7 @@ using namespace static_kernel_compiled_detail;
 namespace kw = kernel_word;
 
 namespace {
-constexpr std::string_view native_magic { "fsim-static-kernel-templates-v4" };
+constexpr std::string_view native_magic { "fsim-static-kernel-templates-v5" };
 
 /// The operands build_native binds to slots (bind_slot), in binding order:
 /// the field, and whether it holds the slot's arena offset (else its index;
@@ -82,12 +82,16 @@ bool same_inst(const KInst& left, const KInst& right, const bool shape)
 {
     const bool field = shape && binding_offset_field(left);
     const bool open = shape && left.op == KOp::constant;
+    // A coverage update's counter is the instance's (a binding when the
+    // template's units differ in it); its toggle bit count is the shape's.
+    const bool counter = shape && left.op == KOp::coverage;
     return left.op == right.op && left.sub == right.sub
         && left.flags == right.flags && left.width == right.width
         && left.d == right.d && left.x == right.x && left.y == right.y
         && left.z == right.z && (field || left.offset == right.offset)
         && left.aux == right.aux
-        && (open || (left.imm_a == right.imm_a && left.imm_b == right.imm_b));
+        && (open
+            || ((counter || left.imm_a == right.imm_a) && left.imm_b == right.imm_b));
 }
 
 bool same_body(const CompiledBody& left, const CompiledBody& right, const bool shape)
@@ -104,6 +108,7 @@ bool same_body(const CompiledBody& left, const CompiledBody& right, const bool s
         || left.wide_base != right.wide_base
         || left.wide_constants.size() != right.wide_constants.size()
         || left.string_operands != right.string_operands
+        || left.coverage_counters != right.coverage_counters
         || left.string_bytes != right.string_bytes
         || left.predicate_words != right.predicate_words
         || left.sva_plans != right.sva_plans) {
@@ -164,8 +169,10 @@ std::uint64_t hash_body(const CompiledBody& body, const bool shape)
         mix(inst.y | static_cast<std::uint64_t>(inst.z) << 32U);
         mix((shape && binding_offset_field(inst) ? 0U : inst.offset)
             | static_cast<std::uint64_t>(inst.aux) << 32U);
-        if (!(shape && inst.op == KOp::constant)) {
+        if (!(shape && (inst.op == KOp::constant || inst.op == KOp::coverage))) {
             mix(inst.imm_a);
+            mix(inst.imm_b);
+        } else if (inst.op == KOp::coverage) {
             mix(inst.imm_b);
         }
     }
@@ -1134,6 +1141,35 @@ void Interpreter::Impl::StaticKernel::native_scalar_fail(StaticKernelNativeFrame
     }
 }
 
+void Interpreter::Impl::StaticKernel::record_coverage(const std::uint32_t member_index,
+    const std::uint32_t pc, const CodeCoverageCounterId counter)
+{
+    const auto update = impl_.code_coverage_counters.record(counter);
+    if (update == CodeCoverageCounterUpdate::Unavailable) {
+        fail(member_index, pc, "code coverage counter service is unavailable");
+    }
+    if (update == CodeCoverageCounterUpdate::OutOfRange) {
+        fail(member_index, pc, "code coverage counter is out of range");
+    }
+    if (update == CodeCoverageCounterUpdate::FirstOverflow
+        && impl_.code_coverage_overflow_hook) {
+        impl_.code_coverage_overflow_hook(counter);
+    }
+}
+
+void Interpreter::Impl::StaticKernel::native_coverage_record(StaticKernelNativeFrame* frame,
+    const std::uint32_t position, const std::uint64_t counter)
+{
+    auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
+    try {
+        kernel.record_coverage(frame->member, position,
+            CodeCoverageCounterId { static_cast<std::uint32_t>(counter) });
+    } catch (...) {
+        kernel.scratch().native_exception = std::current_exception();
+        frame->status = 1U;
+    }
+}
+
 void Interpreter::Impl::StaticKernel::native_fail(
     StaticKernelNativeFrame* frame, const std::uint32_t at,
     const std::uint32_t reason)
@@ -1249,6 +1285,23 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
             auto& state = canonicals[unit];
             canonicalize_unit(*units[unit].body, slot_of_offset, state.body,
                 state.bindings, state.binding_of);
+            // A toggle's counters are the instance's: each bit's rise and
+            // fall counters are a binding (sub coverage_bound, z the first).
+            auto& canonical = *state.body;
+            for (auto& inst : canonical.code) {
+                if (inst.op != KOp::coverage || (inst.sub & coverage_toggle) == 0U
+                    || (inst.sub & coverage_bound) != 0U) {
+                    continue;
+                }
+                const auto first = static_cast<std::uint32_t>(state.bindings.size() / 2U);
+                for (std::uint64_t at = 0U; at < 2U * inst.imm_b; ++at) {
+                    state.bindings.push_back(canonical.coverage_counters[inst.imm_a + at]);
+                }
+                inst.sub |= coverage_bound;
+                inst.z = first;
+                inst.imm_a = 0U;
+            }
+            canonical.coverage_counters.clear();
         }
         // Units are grouped by shape (constants and field offsets may differ)
         // and then by their exact canonical body: a 64-bit hash of the fields
@@ -1300,6 +1353,27 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
                                     inst.z = offset + 1U;
                                 }
                                 inst.offset = 0U;
+                            }
+                        }
+                        continue;
+                    }
+                    if (first[at].op == KOp::coverage) {
+                        // Units that update their own counters read the
+                        // counter (or the toggle's first counter) from a
+                        // binding (sub coverage_bound, z).
+                        const bool counters_differ = std::ranges::any_of(group,
+                            [&](const std::uint32_t unit) {
+                                return canonicals[unit].body->code[at].imm_a
+                                    != first[at].imm_a;
+                            });
+                        if (counters_differ) {
+                            for (const auto unit : group) {
+                                auto& state = canonicals[unit];
+                                auto& inst = state.body->code[at];
+                                inst.sub |= coverage_bound;
+                                inst.z = bind_in(state, 8U, at,
+                                    static_cast<std::uint32_t>(inst.imm_a), 0U);
+                                inst.imm_a = 0U;
                             }
                         }
                         continue;
@@ -2810,6 +2884,9 @@ void Interpreter::Impl::StaticKernel::concatenate_members(CompiledBody& program,
         program.string_operands.insert(program.string_operands.end(),
             body.string_operands.begin(), body.string_operands.end());
         program.string_bytes += body.string_bytes;
+        const auto coverage_base = program.coverage_counters.size();
+        program.coverage_counters.insert(program.coverage_counters.end(),
+            body.coverage_counters.begin(), body.coverage_counters.end());
         const auto predicate_base = program.predicate_words.size() / dyn_graph_node_words;
         program.predicate_words.insert(program.predicate_words.end(),
             body.predicate_words.begin(), body.predicate_words.end());
@@ -3027,6 +3104,15 @@ void Interpreter::Impl::StaticKernel::concatenate_members(CompiledBody& program,
                 reg(inst.x);
                 if (scalar_fields(inst.imm_a).has_second) {
                     reg(inst.y);
+                }
+                break;
+            case KOp::coverage:
+                if ((inst.sub & coverage_toggle) != 0U) {
+                    reg(inst.x);
+                    reg(inst.y);
+                    if ((inst.sub & coverage_bound) == 0U) {
+                        inst.imm_a += coverage_base;
+                    }
                 }
                 break;
             case KOp::random:

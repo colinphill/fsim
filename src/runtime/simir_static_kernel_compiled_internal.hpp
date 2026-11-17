@@ -665,6 +665,13 @@ inline void kinst_flow(const KInst& inst, const std::uint32_t at,
         def = inst.d;
         fall();
         break;
+    case KOp::coverage:
+        if ((inst.sub & coverage_toggle) != 0U) {
+            use.push_back(inst.x);
+            use.push_back(inst.y);
+        }
+        fall();
+        break;
     case KOp::random:
         if ((inst.imm_a & 1U) != 0U) {
             use.push_back(inst.x);
@@ -1006,6 +1013,7 @@ public:
         grouped(body.wide_constants);
         grouped(body.string_operands);
         text(body.string_bytes);
+        grouped(body.coverage_counters);
         grouped(body.predicate_words);
         grouped(body.return_targets);
         grouped(body.live_at_entry);
@@ -1380,6 +1388,7 @@ public:
             && list(body.wide_registers, [&](PackedLogic4& value) { return packed(value); })
             && grouped(body.wide_base) && grouped(body.wide_constants)
             && grouped(body.string_operands) && text(body.string_bytes)
+            && grouped(body.coverage_counters)
             && grouped(body.predicate_words)
             && grouped(body.return_targets) && grouped(body.live_at_entry)
             && get(body.shadow_base) && get(body.weak) && raw(body.tracked)

@@ -9587,19 +9587,7 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_operation(
                 if (replaying_) {
                     return;
                 }
-                const auto update
-                    = impl_.code_coverage_counters.record(op.counter);
-                if (update == CodeCoverageCounterUpdate::Unavailable) {
-                    fail(member_index, pc,
-                        "code coverage counter service is unavailable");
-                }
-                if (update == CodeCoverageCounterUpdate::OutOfRange) {
-                    fail(member_index, pc, "code coverage counter is out of range");
-                }
-                if (update == CodeCoverageCounterUpdate::FirstOverflow
-                    && impl_.code_coverage_overflow_hook) {
-                    impl_.code_coverage_overflow_hook(op.counter);
-                }
+                record_coverage(member_index, pc, op.counter);
             } else if constexpr (std::is_same_v<T, CodeCoverageToggle>) {
                 if (replaying_) {
                     return;
@@ -9607,20 +9595,7 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_operation(
                 record_code_coverage_toggles(reg(op.previous, pc),
                     reg(op.current, pc), op,
                     [&](const CodeCoverageCounterId counter) {
-                        const auto update
-                            = impl_.code_coverage_counters.record(counter);
-                        if (update == CodeCoverageCounterUpdate::Unavailable) {
-                            fail(member_index, pc,
-                                "code coverage counter service is unavailable");
-                        }
-                        if (update == CodeCoverageCounterUpdate::OutOfRange) {
-                            fail(member_index, pc,
-                                "code coverage counter is out of range");
-                        }
-                        if (update == CodeCoverageCounterUpdate::FirstOverflow
-                            && impl_.code_coverage_overflow_hook) {
-                            impl_.code_coverage_overflow_hook(counter);
-                        }
+                        record_coverage(member_index, pc, counter);
                     });
             } else if constexpr (std::is_same_v<T, Call>) {
                 const auto size = member.operations().size();

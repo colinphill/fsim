@@ -333,11 +333,28 @@ enum class KOp : std::uint8_t {
     /// imm_b holds x's width low and y's high), into d (width bits). A
     /// failure the reference reports reaches fsim_sk_scalar_fail.
     scalar,
+    /// A code coverage counter update (CodeCoverageHit, CodeCoverageToggle;
+    /// the reference's CodeCoverageCounters::record). Sub bit 0: a toggle
+    /// of the value in x to the value in y (imm_b bits; sub bit 2, the
+    /// chunks of wide registers x and y), bit i
+    /// rising counting CompiledBody::coverage_counters[imm_a + 2i] and
+    /// falling [imm_a + 2i + 1]; clear, one hit of counter imm_a. Sub bit 1:
+    /// a native template's binding holds the counters instead: a hit's is
+    /// binding z's first word, bit i of a toggle rises into binding z + i's
+    /// first word and falls into its second. aux holds the operation's
+    /// position, for the reference's failures.
+    coverage,
 };
 
-/// Number of kernel instruction kinds (KOp values 0 .. scalar).
+/// Number of kernel instruction kinds (KOp values 0 .. coverage).
 inline constexpr std::size_t kernel_op_count
-    = static_cast<std::size_t>(KOp::scalar) + 1U;
+    = static_cast<std::size_t>(KOp::coverage) + 1U;
+
+/// KOp::coverage sub bits: a toggle (else a hit), counters in bindings,
+/// and a toggle of chunked wide registers (x and y their storage).
+inline constexpr std::uint8_t coverage_toggle = 1U;
+inline constexpr std::uint8_t coverage_bound = 2U;
+inline constexpr std::uint8_t coverage_wide = 4U;
 
 /// KOp::scalar's imm_a: the operator or function, the operands' and the
 /// result's scalar kinds (SystemVerilogScalarKind values), the operands'
@@ -1087,6 +1104,9 @@ struct CompiledBody {
     /// bytes of string constants.
     std::vector<std::uint32_t> string_operands;
     std::string string_bytes;
+    /// KOp::coverage toggles: each bit's rise and fall counters (imm_a the
+    /// first); a native template binds them instead.
+    std::vector<std::uint32_t> coverage_counters;
     /// KOp::dyn: container predicate graphs (dyn_graph_node_words words a
     /// node).
     std::vector<std::uint64_t> predicate_words;

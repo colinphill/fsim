@@ -611,6 +611,10 @@ void Interpreter::Impl::StaticKernel::build_parallel_plan()
                 // A failure reports through the leader's member state.
                 ok = false;
                 break;
+            case KOp::coverage:
+                // The coverage counters are the leader's.
+                ok = false;
+                break;
             case KOp::generic:
                 touch_operation(current, inst.x);
                 // A sequential member's output and severity messages wait

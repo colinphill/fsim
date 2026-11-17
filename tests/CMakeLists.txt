@@ -6949,6 +6949,23 @@ if(FSIM_WITH_LLVM)
     TIMEOUT 600)
 endif()
 
+# Code coverage counts in the v4 kernel's own instructions (hits and
+# toggles, SystemVerilog and VHDL) on every kernel tier, as the interpreter
+# counts them.
+if(FSIM_WITH_LLVM)
+  add_test(
+    NAME fsim.application.static-kernel-coverage
+    COMMAND "${CMAKE_COMMAND}"
+      "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+      "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/systemverilog/kernel_coverage"
+      -P
+      "${PROJECT_SOURCE_DIR}/tests/fixtures/systemverilog/kernel_coverage/run_kernel_coverage.cmake"
+  )
+  set_tests_properties(fsim.application.static-kernel-coverage PROPERTIES
+    LABELS "application;vhdl;systemverilog;static-kernel;llvm;coverage;positive"
+    TIMEOUT 600)
+endif()
+
 # Clock domain analysis: derived, gated and asynchronous-reset clocks are
 # classified (FSIM_PROFILE_KERNEL_DOMAINS), and the kernel run matches the
 # reference scheduler.

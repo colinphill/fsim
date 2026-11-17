@@ -1880,6 +1880,13 @@ private:
     /// fsim_sk_scalar_fail: a KOp::scalar failure.
     static void native_scalar_fail(StaticKernelNativeFrame* frame, std::uint32_t at,
         std::uint64_t error, std::uint64_t fields);
+    /// fsim_sk_coverage_record: KOp::coverage's reference update.
+    static void native_coverage_record(StaticKernelNativeFrame* frame,
+        std::uint32_t position, std::uint64_t counter);
+    /// One counter update as the reference makes it (CodeCoverageHit of
+    /// member `member_index` at operation `pc`).
+    void record_coverage(std::uint32_t member_index, std::uint32_t pc,
+        CodeCoverageCounterId counter);
     static void native_sva_grow(StaticKernelNativeFrame* frame,
         std::uint32_t at, std::uint32_t region, std::uint64_t needed);
     static void native_sva_post(StaticKernelNativeFrame* frame, std::uint32_t at);
@@ -2489,6 +2496,7 @@ private:
         frame.reset_count = &impl_.reset_count_result;
         frame.reset_value = &impl_.reset_value_result;
         frame.string_objects = string_object_table();
+        frame.coverage = refresh_coverage_table();
         if (sva_table_used_) {
             refresh_sva_table();
             frame.sva = &sva_table_;
@@ -3676,6 +3684,19 @@ private:
         return build_string_object_table();
     }
     [[nodiscard]] const StaticKernelStringCell* build_string_object_table();
+    /// The code coverage counters as they are now (KOp::coverage): a reset
+    /// may have replaced their storage and a control switched counters.
+    [[nodiscard]] const StaticKernelCoverageTable* refresh_coverage_table() noexcept
+    {
+        auto& counters = impl_.code_coverage_counters;
+        const auto values = counters.direct_values();
+        coverage_table_.values = values.data();
+        coverage_table_.enabled = counters.enabled_flags().data();
+        coverage_table_.count = counters.configured() ? values.size() : 0U;
+        coverage_table_.all_enabled = counters.enabled() ? 1U : 0U;
+        return &coverage_table_;
+    }
+    StaticKernelCoverageTable coverage_table_;
     /// A thread's random state: while it runs as a fork child, the live
     /// copy generated code draws from (random_live_).
     [[nodiscard]] std::uint64_t& thread_random_state(std::uint32_t thread);

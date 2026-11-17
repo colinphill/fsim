@@ -1536,9 +1536,10 @@ Simulation::Impl::Impl(
         interpreter->set_code_coverage_counters(
             std::vector<std::uint64_t>(counter_count));
     }
-    // Every engine executes coverage hits on the reference evaluator: the
-    // kernel leaves instrumented processes on the host, and `debug` is the
-    // reference evaluator with debugger hooks.
+    // The executor a covergroup sample names in its callback events: the
+    // compiled engine's optimization level, else the reference evaluator.
+    // Code coverage counts in whichever executor runs the process (the v4
+    // kernel's KOp::coverage).
     coverage_execution_mode = engine != SimulationEngine::compiled
         ? frontend::SystemVerilogCoverageExecutionMode::Interpreter
         : built.optimization == fsim::project::Optimization::o0

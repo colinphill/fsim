@@ -729,6 +729,7 @@ process.fork	access_binding_attestation	D	rebound from the artifact
 process.vital	timing	P	VITAL timing and delay state
 process.vital	delay	P	VITAL timing and delay state
 kernel.impl	slot_conversions_	D	derived from the artifact or rebuilt after restore
+kernel.impl	coverage_table_	D	derived: views of the run's code coverage counters, refreshed before every native run
 kernel.impl	conversion_members_	D	derived from the artifact or rebuilt after restore
 kernel.impl	conversion_queue_	S	scratch: empty at a save point (a non-empty queue refuses the save)
 kernel.impl	sva_check_refs_	S	scratch: the FSIM_KERNEL_SVA_CHECK reference monitors, filled and emptied within one generated tick

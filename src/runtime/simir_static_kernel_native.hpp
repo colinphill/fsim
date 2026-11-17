@@ -211,6 +211,19 @@ struct StaticKernelStringCell {
     std::uint64_t index { };
 };
 
+/// The run's code coverage counters as generated code updates them
+/// (KOp::coverage; the reference's CodeCoverageCounters): the values, the
+/// per-counter enable flags, the counter count (0 while no counter
+/// service is configured) and whether every counter is enabled. The kernel
+/// refreshes it at each activation (the counters may be reset or switched
+/// between activations).
+struct StaticKernelCoverageTable {
+    std::uint64_t* values { };
+    const std::uint8_t* enabled { };
+    std::uint64_t count { };
+    std::uint64_t all_enabled { };
+};
+
 /// The std::string layout generated code reads and writes in place (string
 /// registers, string variables, plusargs): the data pointer, the length,
 /// then a 16-byte local buffer (data pointing at it, capacity 15) or the
@@ -310,6 +323,8 @@ struct StaticKernelNativeFrame {
     const std::int32_t* reset_value { };
     /// Per string variable (StaticKernel::string_object_table).
     const StaticKernelStringCell* string_objects { };
+    /// The code coverage counters (StaticKernel::coverage_table_).
+    const StaticKernelCoverageTable* coverage { };
 };
 inline constexpr std::uint32_t static_kernel_no_fast_notify = static_kernel_no_fast_notify_value;
 
@@ -442,6 +457,13 @@ struct StaticKernelNativeHelpers {
     /// instruction with imm_a `fields`; the run fails.
     void (*scalar_fail)(StaticKernelNativeFrame*, std::uint32_t at, std::uint64_t error,
         std::uint64_t fields) { };
+    /// `fsim_sk_coverage_record`: one update of `counter` by the reference
+    /// (CodeCoverageCounters::record) where generated code does not make it
+    /// (a saturated counter, which reports its first overflow, or a counter
+    /// service that is missing or does not hold the counter, which fails
+    /// the run at operation `position`).
+    void (*coverage_record)(StaticKernelNativeFrame*, std::uint32_t position,
+        std::uint64_t counter) { };
     /// Wide-register instructions by kind (`fsim_sk_wide_<op>`): instruction
     /// `at` with the caller's register file, where wide values live, and the
     /// narrow operand words x, y and z; `out` receives a narrow result and

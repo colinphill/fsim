@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cctype>
 #include <cstdlib>
 #include <cxxabi.h>
@@ -639,6 +640,37 @@ void Interpreter::Impl::StaticKernel::execute_body(
                 fail_at(at, *failure);
             }
             break;
+        case KOp::coverage: {
+            // The reference's updates (CodeCoverageHit, and
+            // record_code_coverage_toggles over the known bits, ascending).
+            const auto base = static_cast<std::uint32_t>(inst.imm_a);
+            if ((inst.sub & static_kernel_detail::coverage_toggle) == 0U) {
+                record_coverage(member_index, inst.aux, CodeCoverageCounterId { base });
+                break;
+            }
+            const auto bits = static_cast<std::uint32_t>(inst.imm_b);
+            const auto chunks = (inst.sub & static_kernel_detail::coverage_wide) != 0U
+                ? static_kernel_detail::wide_chunks(bits) : 1U;
+            for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
+                const auto left = bits - 64U * chunk;
+                const auto mask = left >= 64U ? ~std::uint64_t { 0 }
+                                              : (std::uint64_t { 1 } << left) - 1U;
+                const auto& before = registers[inst.x + chunk];
+                const auto& after = registers[inst.y + chunk];
+                const auto known = ~before.b & ~after.b & mask;
+                const auto rise = known & ~before.a & after.a;
+                const auto fall = known & before.a & ~after.a;
+                for (auto changed = rise | fall; changed != 0U; changed &= changed - 1U) {
+                    const auto bit = 64U * chunk
+                        + static_cast<std::uint32_t>(std::countr_zero(changed));
+                    const bool rose = ((rise >> (bit % 64U)) & 1U) != 0U;
+                    record_coverage(member_index, inst.aux,
+                        CodeCoverageCounterId {
+                            body.coverage_counters[base + 2U * bit + (rose ? 0U : 1U)] });
+                }
+            }
+            break;
+        }
         case KOp::str: {
             if (static_cast<static_kernel_detail::StrOp>(inst.sub)
                 == static_kernel_detail::StrOp::plusarg) {
@@ -3008,6 +3040,7 @@ void Interpreter::Impl::StaticKernel::set_instruction_helpers(
     helpers.dyn_scratch = &StaticKernel::native_dyn_scratch;
     helpers.dyn_stream_wide = &StaticKernel::native_dyn_stream_wide;
     helpers.scalar_fail = &StaticKernel::native_scalar_fail;
+    helpers.coverage_record = &StaticKernel::native_coverage_record;
     helpers.sva_post = &StaticKernel::native_sva_post;
     helpers.sva_filter = &StaticKernel::native_sva_filter;
     helpers.sva_check = &StaticKernel::native_sva_check;

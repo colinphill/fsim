@@ -284,6 +284,11 @@ static_assert(offsetof(StaticKernelNativeFrame, plusarg_count) == 184U);
 static_assert(offsetof(StaticKernelNativeFrame, reset_count) == 192U);
 static_assert(offsetof(StaticKernelNativeFrame, reset_value) == 200U);
 static_assert(offsetof(StaticKernelNativeFrame, string_objects) == 208U);
+static_assert(offsetof(StaticKernelNativeFrame, coverage) == 216U);
+static_assert(offsetof(runtime::simir::StaticKernelCoverageTable, values) == 0U);
+static_assert(offsetof(runtime::simir::StaticKernelCoverageTable, enabled) == 8U);
+static_assert(offsetof(runtime::simir::StaticKernelCoverageTable, count) == 16U);
+static_assert(offsetof(runtime::simir::StaticKernelCoverageTable, all_enabled) == 24U);
 static_assert(sizeof(runtime::simir::StaticKernelStringCell) == 16U);
 static_assert(offsetof(detail::NativeCallStack, entries) == 0U);
 static_assert(offsetof(detail::NativeCallStack, capacity) == 8U);
@@ -5488,6 +5493,15 @@ private:
                 }
                 writes = true;
                 return true;
+            case KOp::coverage:
+                // Wide storage is never local.
+                if ((inst.sub & detail::coverage_toggle) != 0U
+                    && (inst.sub & detail::coverage_wide) == 0U) {
+                    reads.push_back(inst.x);
+                    reads.push_back(inst.y);
+                }
+                writes = false;
+                return true;
             case KOp::random:
                 if ((inst.imm_a & 1U) != 0U) {
                     reads.push_back(inst.x);
@@ -8228,6 +8242,141 @@ private:
         builder_.CreateBr(failure_block_);
         builder_.SetInsertPoint(next);
         store_register(inst.d, { value, constant(0U) });
+    }
+
+    /// One update of code coverage counter `counter` (an i64) as
+    /// CodeCoverageCounters::record makes it: an enabled counter below its
+    /// maximum counts up in place; a saturated counter, and a counter the
+    /// service does not hold, take the reference's update
+    /// (fsim_sk_coverage_record).
+    void coverage_count(llvm::Value* table, llvm::Value* counter, const std::uint32_t position)
+    {
+        const auto field = [&](const std::uint64_t offset) {
+            return builder_.CreateConstInBoundsGEP1_64(i8_, table, offset);
+        };
+        auto* count = builder_.CreateLoad(i64_, field(16U));
+        auto* held = builder_.CreateICmpULT(counter, count);
+        auto* inside = llvm::BasicBlock::Create(context_, "coverage_held", &function_);
+        auto* outside = llvm::BasicBlock::Create(context_, "coverage_record", &function_);
+        auto* done = llvm::BasicBlock::Create(context_, "coverage_done", &function_);
+        builder_.CreateCondBr(held, inside, outside);
+        builder_.SetInsertPoint(inside);
+        auto* all = builder_.CreateICmpNE(builder_.CreateLoad(i64_, field(24U)), constant(0U));
+        auto* switched = llvm::BasicBlock::Create(context_, "coverage_flag", &function_);
+        auto* counting = llvm::BasicBlock::Create(context_, "coverage_count", &function_);
+        builder_.CreateCondBr(all, counting, switched);
+        builder_.SetInsertPoint(switched);
+        auto* flags = builder_.CreateLoad(ptr_, field(8U));
+        auto* flag = builder_.CreateLoad(i8_, builder_.CreateInBoundsGEP(i8_, flags, counter));
+        builder_.CreateCondBr(builder_.CreateICmpNE(flag, llvm::ConstantInt::get(i8_, 0U)),
+            counting, done);
+        builder_.SetInsertPoint(counting);
+        auto* values = builder_.CreateLoad(ptr_, field(0U));
+        auto* address = builder_.CreateInBoundsGEP(i64_, values, counter);
+        auto* value = builder_.CreateLoad(i64_, address);
+        auto* bump = llvm::BasicBlock::Create(context_, "coverage_bump", &function_);
+        builder_.CreateCondBr(builder_.CreateICmpEQ(value, constant(~std::uint64_t { 0 })),
+            outside, bump);
+        builder_.SetInsertPoint(bump);
+        builder_.CreateStore(builder_.CreateAdd(value, constant(1U)), address);
+        builder_.CreateBr(done);
+        builder_.SetInsertPoint(outside);
+        auto* type = llvm::FunctionType::get(
+            llvm::Type::getVoidTy(context_), { ptr_, i32_, i64_ }, false);
+        builder_.CreateCall(type, helper_symbol("fsim_sk_coverage_record", type),
+            { frame_, llvm::ConstantInt::get(i32_, position), counter });
+        check_status();
+        builder_.CreateBr(done);
+        builder_.SetInsertPoint(done);
+    }
+
+    /// KOp::coverage: a hit, or a toggle's rising and falling known bits in
+    /// ascending order (record_code_coverage_toggles).
+    void emit_coverage(const KInst& inst)
+    {
+        auto* table = builder_.CreateLoad(ptr_, frame_field(216U));
+        const bool bound = (inst.sub & detail::coverage_bound) != 0U;
+        if ((inst.sub & detail::coverage_toggle) == 0U) {
+            coverage_count(table,
+                bound ? builder_.CreateZExt(binding(inst.z, 0U), i64_) : constant(inst.imm_a),
+                inst.aux);
+            return;
+        }
+        // The bits' counters, rise and fall by bit: the bindings from z, or
+        // a constant copy of the body's.
+        llvm::Value* counters { };
+        if (bound) {
+            counters = builder_.CreateConstInBoundsGEP1_64(
+                i32_, bindings_, std::uint64_t { inst.z } * 2U);
+        } else {
+            const auto first = body_.coverage_counters.begin()
+                + static_cast<std::ptrdiff_t>(inst.imm_a);
+            const std::vector<std::uint32_t> values(first,
+                first + static_cast<std::ptrdiff_t>(2U * inst.imm_b));
+            auto* data = llvm::ConstantDataArray::get(context_, llvm::ArrayRef { values });
+            counters = new llvm::GlobalVariable(module_, data->getType(), true,
+                llvm::GlobalValue::PrivateLinkage, data, "coverage_counters");
+        }
+        const auto bits = static_cast<std::uint32_t>(inst.imm_b);
+        const auto last = bits % 64U == 0U ? ~std::uint64_t { 0 }
+                                           : (std::uint64_t { 1 } << (bits % 64U)) - 1U;
+        // One word's known rising and falling bits, bit `first` its lowest.
+        const auto toggles = [&](const Pair before, const Pair after, llvm::Value* mask,
+                                 llvm::Value* first) {
+            auto* known = builder_.CreateAnd(builder_.CreateAnd(builder_.CreateNot(before.b),
+                                                 builder_.CreateNot(after.b)),
+                mask);
+            auto* rise = builder_.CreateAnd(known,
+                builder_.CreateAnd(builder_.CreateNot(before.a), after.a));
+            auto* fall = builder_.CreateAnd(known,
+                builder_.CreateAnd(before.a, builder_.CreateNot(after.a)));
+            word_toggles(table, counters, rise, fall, first, inst.aux);
+        };
+        if ((inst.sub & detail::coverage_wide) == 0U) {
+            toggles(load_register(inst.x), load_register(inst.y), constant(last), constant(0U));
+            return;
+        }
+        const auto chunks = detail::wide_chunks(bits);
+        (void)word_loop(constant(chunks), Carried {},
+            [&](llvm::Value* chunk, const Carried&) {
+                const auto word = [&](const std::uint32_t reg) {
+                    return Pair { builder_.CreateLoad(i64_, dynamic_chunk_address(reg, chunk, 0U)),
+                        builder_.CreateLoad(i64_, dynamic_chunk_address(reg, chunk, 1U)) };
+                };
+                auto* mask = builder_.CreateSelect(
+                    builder_.CreateICmpEQ(chunk, constant(chunks - 1U)), constant(last),
+                    constant(~std::uint64_t { 0 }));
+                toggles(word(inst.x), word(inst.y), mask,
+                    builder_.CreateShl(chunk, constant(6U)));
+                return Carried {};
+            });
+    }
+
+    /// The counts of one word's rising and falling bits (bit `first` its
+    /// lowest), in ascending order: bit k's counters are entries 2k and
+    /// 2k + 1 of the i32 table `counters`.
+    void word_toggles(llvm::Value* table, llvm::Value* counters, llvm::Value* rise,
+        llvm::Value* fall, llvm::Value* first, const std::uint32_t position)
+    {
+        auto* changed = str_slot(i64_, builder_.CreateOr(rise, fall));
+        dyn_while(
+            [&] { return builder_.CreateICmpNE(builder_.CreateLoad(i64_, changed), constant(0U)); },
+            [&] {
+                auto* left = builder_.CreateLoad(i64_, changed);
+                auto* bit = builder_.CreateIntrinsic(i64_, llvm::Intrinsic::cttz,
+                    { left, builder_.getTrue() });
+                auto* fell = builder_.CreateAnd(builder_.CreateNot(builder_.CreateLShr(rise, bit)),
+                    constant(1U));
+                auto* slot = builder_.CreateAdd(
+                    builder_.CreateShl(builder_.CreateAdd(first, bit), constant(1U)), fell);
+                coverage_count(table,
+                    builder_.CreateZExt(builder_.CreateLoad(i32_,
+                                            builder_.CreateInBoundsGEP(i32_, counters, slot)),
+                        i64_),
+                    position);
+                builder_.CreateStore(builder_.CreateAnd(left, builder_.CreateSub(left, constant(1U))),
+                    changed);
+            });
     }
 
     /// KOp::random (IEEE 1800-2023 18.13, 20.15).
@@ -19044,6 +19193,9 @@ private:
         case KOp::scalar:
             emit_scalar(inst, at);
             break;
+        case KOp::coverage:
+            emit_coverage(inst);
+            break;
         case KOp::wide_move:
             // compile_body fuses only moves to an unresolved slot with a
             // one-field selection; the rest stay wide_load, wide_alu and
@@ -21309,6 +21461,7 @@ private:
         add("fsim_sk_dyn_scratch", helpers.dyn_scratch);
         add("fsim_sk_dyn_stream_wide", helpers.dyn_stream_wide);
         add("fsim_sk_scalar_fail", helpers.scalar_fail);
+        add("fsim_sk_coverage_record", helpers.coverage_record);
         // The math library (KOp::scalar; the reference's std:: calls, and
         // the library forms of rounding and remainder).
         using Unary = double (*)(double);
@@ -21905,6 +22058,7 @@ private:
         }
         append_all(body.wide_base);
         append_all(body.string_operands);
+        append_all(body.coverage_counters);
         append(body.string_bytes.size());
         text.append(body.string_bytes);
         append(body.wide_constants.size());

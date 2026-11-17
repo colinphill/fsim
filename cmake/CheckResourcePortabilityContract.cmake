@@ -161,6 +161,8 @@ set(FSIM_LLVM_COVERAGE_TEST
   "${FSIM_SOURCE_DIR}/tests/app/code_coverage_application_test.cpp")
 set(FSIM_STATIC_KERNEL_IMPLEMENTATION
   "${FSIM_SOURCE_DIR}/src/runtime/simir_static_kernel.cpp")
+set(FSIM_STATIC_KERNEL_NATIVE_UNITS
+  "${FSIM_SOURCE_DIR}/src/runtime/simir_static_kernel_native_units.cpp")
 set(FSIM_DEBUG_COVERAGE_IMPLEMENTATION
   "${FSIM_SOURCE_DIR}/src/app/application_debug_coverage.cpp")
 set(FSIM_CODE_COVERAGE_CONTROL_PROJECT
@@ -2849,6 +2851,8 @@ file(READ "${FSIM_LLVM_COVERAGE_TEST}"
   FSIM_LLVM_COVERAGE_TEST_CONTENTS)
 file(READ "${FSIM_STATIC_KERNEL_IMPLEMENTATION}"
   FSIM_STATIC_KERNEL_CONTENTS)
+file(READ "${FSIM_STATIC_KERNEL_NATIVE_UNITS}"
+  FSIM_STATIC_KERNEL_NATIVE_UNITS_CONTENTS)
 file(READ "${FSIM_DEBUG_COVERAGE_IMPLEMENTATION}"
   FSIM_DEBUG_COVERAGE_IMPLEMENTATION_CONTENTS)
 file(READ "${FSIM_FST_WRITER}" FSIM_FST_WRITER_CONTENTS)
@@ -3152,13 +3156,24 @@ foreach(FSIM_LLVM_COVERAGE_POLICY IN ITEMS
 endforeach()
 
 # The compiled static kernel records through the same saturating counter store
-# and reports a counter's first overflow exactly once through the hook.
+# and reports a counter's first overflow exactly once through the hook: the
+# generic operations, the kernel's coverage instruction and the native code's
+# helper all count through record_coverage.
 foreach(FSIM_STATIC_KERNEL_COVERAGE_POLICY IN ITEMS
-    "impl_.code_coverage_counters.record(op.counter)"
-    "update == CodeCoverageCounterUpdate::FirstOverflow"
-    "impl_.code_coverage_overflow_hook(op.counter)"
-    "impl_.code_coverage_overflow_hook(counter)")
+    "record_coverage(member_index, pc, op.counter)"
+    "record_coverage(member_index, pc, counter)")
   string(FIND "${FSIM_STATIC_KERNEL_CONTENTS}"
+    "${FSIM_STATIC_KERNEL_COVERAGE_POLICY}" FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "compiled code coverage counter lost first-overflow reporting: ${FSIM_STATIC_KERNEL_COVERAGE_POLICY}")
+  endif()
+endforeach()
+foreach(FSIM_STATIC_KERNEL_COVERAGE_POLICY IN ITEMS
+    "impl_.code_coverage_counters.record(counter)"
+    "update == CodeCoverageCounterUpdate::FirstOverflow"
+    "impl_.code_coverage_overflow_hook(counter)")
+  string(FIND "${FSIM_STATIC_KERNEL_NATIVE_UNITS_CONTENTS}"
     "${FSIM_STATIC_KERNEL_COVERAGE_POLICY}" FSIM_INDEX)
   if(FSIM_INDEX EQUAL -1)
     message(FATAL_ERROR

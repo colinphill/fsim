@@ -56,7 +56,7 @@ namespace {
 
 namespace {
 
-constexpr std::string_view bodies_magic { "fsim-static-kernel-bodies-v12" };
+constexpr std::string_view bodies_magic { "fsim-static-kernel-bodies-v13" };
 
 // The not-compiled reason of an operation kind the compiled tier has no form
 // for: "operation:" and the kind's name. The text lives for the process.
@@ -523,6 +523,8 @@ void Interpreter::Impl::StaticKernel::compile_members()
                         } else if (a->string_operands != b->string_operands
                             || a->string_bytes != b->string_bytes) {
                             differs = "strings";
+                        } else if (a->coverage_counters != b->coverage_counters) {
+                            differs = "coverage_counters";
                         } else if (a->live_at_entry != b->live_at_entry) {
                             differs = "live_at_entry";
                         } else if (a->shadow_base != b->shadow_base) {
@@ -3229,6 +3231,46 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             && width[reg] != polymorphic && field_slot[reg] == no_slot
             && field_family[reg] == no_slot;
     };
+    // KOp::coverage for a code coverage hit and for a toggle (its counters
+    // in the body's coverage_counters): narrow registers, or chunked wide
+    // ones (placed with the wide storage). A Logic9 register's word reads
+    // 'L' and 'H' as 0 and 1 and the others as unknown, which are the
+    // reference's toggle bits (code_coverage_toggle_bit).
+    const auto emit_coverage = [&](KInst& inst, const Operation& operation,
+                                   const std::uint32_t pc) -> bool {
+        if (const auto* hit = operation_get_if<CodeCoverageHit>(&operation)) {
+            inst.op = KOp::coverage;
+            inst.sub = 0U;
+            inst.imm_a = hit->counter.value;
+            inst.aux = pc;
+            return true;
+        }
+        const auto* toggle = operation_get_if<CodeCoverageToggle>(&operation);
+        if (toggle == nullptr) {
+            return false;
+        }
+        const auto narrow_sample = [&](const RegisterId reg) {
+            return reg < register_count && width[reg] != 0U && width[reg] <= 64U;
+        };
+        const bool wide = chunked(toggle->previous) && chunked(toggle->current);
+        if (!wide && !(narrow_sample(toggle->previous) && narrow_sample(toggle->current))) {
+            throw reject("toggle_registers");
+        }
+        // record_code_coverage_toggles' bit count.
+        const auto bits = std::min<std::size_t>(
+            { width[toggle->previous], width[toggle->current], toggle->counters.size() / 2U });
+        inst.op = KOp::coverage;
+        inst.sub = wide ? coverage_toggle | coverage_wide : coverage_toggle;
+        inst.x = wide ? toggle->previous : narrow(toggle->previous);
+        inst.y = wide ? toggle->current : narrow(toggle->current);
+        inst.imm_a = body.coverage_counters.size();
+        inst.imm_b = bits;
+        for (std::size_t at = 0U; at < 2U * bits; ++at) {
+            body.coverage_counters.push_back(toggle->counters[at].value);
+        }
+        inst.aux = pc;
+        return true;
+    };
     // A VHDL register may hold Logic9 values whatever its declared kind
     // (only ReadSignal, LoadConstant and CopyRegister coerce to it), so
     // every chunked VHDL register has 'U' masks.
@@ -4035,6 +4077,10 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             }
         }
         if (emit_scalar(inst, member.operations()[pc])) {
+            body.code.push_back(inst);
+            continue;
+        }
+        if (emit_coverage(inst, member.operations()[pc], pc)) {
             body.code.push_back(inst);
             continue;
         }
@@ -6748,6 +6794,12 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                 case KOp::mem_write:
                     if (inst.sub == 1U) {
                         place(inst.x);
+                    }
+                    break;
+                case KOp::coverage:
+                    if ((inst.sub & coverage_wide) != 0U) {
+                        place(inst.x);
+                        place(inst.y);
                     }
                     break;
                 default:

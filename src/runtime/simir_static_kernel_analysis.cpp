@@ -691,6 +691,9 @@ void Interpreter::Impl::StaticKernel::track_unknowns(CompiledBody& body,
         case KOp::generic:
         // Reads its source's 'U' mask itself; defines nothing.
         case KOp::net_delay:
+        // A toggle counts a 'U' element as unknown, as its word holds it
+        // (code_coverage_toggle_bit); defines nothing.
+        case KOp::coverage:
         // Wide registers hold their own 'U' masks.
         case KOp::wide_load:
         case KOp::wide_copy:
@@ -3198,6 +3201,9 @@ void Interpreter::Impl::StaticKernel::report_mt_plan() const
                 return "suspend";
             case KOp::mem_copy:
                 return "mem_copy";
+            case KOp::coverage:
+                // The run's coverage counters count without atomics.
+                return "coverage";
             default:
                 break;
             }
