@@ -1420,6 +1420,32 @@ void Lowerer::set_systemverilog_interface_handles(
     }
 }
 
+std::string Lowerer::hir_interface_instance_path(
+    const std::string& path) const
+{
+    if (systemverilog_interface_handles_ == nullptr
+        || systemverilog_design_element_instances_ == nullptr
+        || systemverilog_design_element_instances_->contains(path)) {
+        return path;
+    }
+    if (const auto known = hir_interface_instance_paths_.find(path);
+        known != hir_interface_instance_paths_.end()) {
+        return known->second;
+    }
+    const auto handle = systemverilog_interface_handles_->find(path);
+    if (handle == systemverilog_interface_handles_->end()) {
+        return path;
+    }
+    for (const auto& [candidate, value] : *systemverilog_interface_handles_) {
+        if (value == handle->second
+            && systemverilog_design_element_instances_->contains(candidate)) {
+            hir_interface_instance_paths_.emplace(path, candidate);
+            return candidate;
+        }
+    }
+    return path;
+}
+
 const semantic::SpecializedHirUnit* Lowerer::hir_callee_unit(
     const InterfaceReceiver& receiver) const
 {
@@ -9251,8 +9277,11 @@ std::optional<Lowerer::HirStaticStorage> Lowerer::hir_static_storage(
         }
     };
     if (frame != nullptr && !frame->interface_receiver.empty()) {
-        const auto key = callable_static_storage_key(
-            declaration, frame->interface_receiver.path_from(hierarchy_));
+        // A task called through an interface port keeps the static
+        // storage of the connected instance (13.3.2, 25.3).
+        const auto key = callable_static_storage_key(declaration,
+            hir_interface_instance_path(
+                frame->interface_receiver.path_from(hierarchy_)));
         lookup_key(design_.static_signal_by_key_, key, result.signal);
         lookup_key(design_.static_string_by_key_, key, result.string);
         lookup_key(design_.static_container_by_key_, key, result.container);

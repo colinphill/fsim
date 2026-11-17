@@ -1956,6 +1956,7 @@ tests/fixtures/compliance/sv_array_equality_bounds_20261013.sv
 tests/fixtures/compliance/sv_array_query_class_handles_batch57.sv
 tests/fixtures/compliance/sv_array_query_typedef_dimensions_batch57.sv
 tests/fixtures/compliance/sv_array_sizes_and_methods.sv
+tests/fixtures/compliance/sv_assertion_action_block_locals.sv
 tests/fixtures/compliance/sv_associative_invalid_index.sv
 tests/fixtures/compliance/sv_automatic_fork_activation_lifetime_batch59.sv
 tests/fixtures/compliance/sv_automatic_fork_frame_batch59.sv
@@ -2011,6 +2012,7 @@ tests/fixtures/compliance/sv_constant_unsigned_shift_count_batch57.sv
 tests/fixtures/compliance/sv_container_declaration_initializers.sv
 tests/fixtures/compliance/sv_copies_and_constructors.sv
 tests/fixtures/compliance/sv_declarations_and_calls.sv
+tests/fixtures/compliance/sv_deep_statement_nesting.sv
 tests/fixtures/compliance/sv_deferred_assertion_capture.sv
 tests/fixtures/compliance/sv_deferred_assertion_disable_flush.sv
 tests/fixtures/compliance/sv_deferred_assertion_display_actions.sv
@@ -2047,8 +2049,10 @@ tests/fixtures/compliance/sv_generated_scope_callable_batch58_20261013.sv
 tests/fixtures/compliance/sv_hierarchical_calls.sv
 tests/fixtures/compliance/sv_hierarchical_references.sv
 tests/fixtures/compliance/sv_hierarchy_format_shared_instances.sv
+tests/fixtures/compliance/sv_instance_validation_specialized.sv
 tests/fixtures/compliance/sv_interface_member_connections.sv
 tests/fixtures/compliance/sv_interface_packed_type_actuals_20261013.sv
+tests/fixtures/compliance/sv_interface_port_task_statics.sv
 tests/fixtures/compliance/sv_interface_ports_and_waits.sv
 tests/fixtures/compliance/sv_kernel_associative_sparse.sv
 tests/fixtures/compliance/sv_kernel_container_methods.sv
@@ -2093,13 +2097,16 @@ tests/fixtures/compliance/sv_packed_multidim.sv
 tests/fixtures/compliance/sv_parameter_types.sv
 tests/fixtures/compliance/sv_parenthesized_size_cast_batch56.sv
 tests/fixtures/compliance/sv_pattern_files_and_production_defaults.sv
+tests/fixtures/compliance/sv_pattern_nested_type_keys.sv
 tests/fixtures/compliance/sv_patterns_and_aggregates.sv
 tests/fixtures/compliance/sv_port_width_mismatch.sv
 tests/fixtures/compliance/sv_procedural_inferred_clock_ab4.sv
 tests/fixtures/compliance/sv_process_method_receivers.sv
+tests/fixtures/compliance/sv_process_typedef_receivers.sv
 tests/fixtures/compliance/sv_property_kinds_checked.sv
 tests/fixtures/compliance/sv_queue_pop_result_type_20261013.sv
 tests/fixtures/compliance/sv_random_stability.sv
+tests/fixtures/compliance/sv_randomize_uniform_samples.sv
 tests/fixtures/compliance/sv_randsequence.sv
 tests/fixtures/compliance/sv_randsequence_recursion_batch89.sv
 tests/fixtures/compliance/sv_real_to_time_assignment_batch58.sv
@@ -2119,6 +2126,7 @@ tests/fixtures/compliance/sv_static_callable_storage.sv
 tests/fixtures/compliance/sv_static_interface_storage.sv
 tests/fixtures/compliance/sv_static_sparse_arrays.sv
 tests/fixtures/compliance/sv_std_class_names.sv
+tests/fixtures/compliance/sv_stream_assign_widen.sv
 tests/fixtures/compliance/sv_stream_unpack_resize.sv
 tests/fixtures/compliance/sv_stream_unpack_stream_source.sv
 tests/fixtures/compliance/sv_streaming_builtin_slice_batch57.sv

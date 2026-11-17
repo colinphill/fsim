@@ -1163,6 +1163,54 @@ std::vector<PackedLogic4> systemverilog_constraint_wide_variable_domain(
   return unique;
 }
 
+// The implicit uniform distribution of a randomized property over its
+// domain (IEEE 1800-2023 18.5.10: every combination of legal values is
+// equally probable). A sampled domain holds uniform draws of a wide range
+// beside probe values (the range's ends and simple bit structures, which
+// counting and masking constraints select). Each draw stands for many
+// legal values and a probe value for one, so a probe value is the first
+// choice only as rarely as its single value would be.
+SystemVerilogConstraintDistribution
+systemverilog_constraint_implicit_uniform_distribution(std::string identity,
+    const SystemVerilogConstraintVariableId variable,
+    const std::span<const PackedLogic4> domain,
+    const SystemVerilogConstraintVariableProfile& profile,
+    const bool sampled) {
+  auto [lowest, highest] = systemverilog_constraint_domain_bounds(
+      domain, profile.signed_value);
+  SystemVerilogConstraintDistribution result{std::move(identity), variable,
+      {{lowest, highest, 1, SystemVerilogConstraintDistributionWeight::PerValue}}};
+  const auto width = profile.width;
+  if (!sampled || width == 0U || width > 64U) return result;
+  const auto mask = width == 64U
+      ? ~std::uint64_t{} : (std::uint64_t{1} << width) - 1U;
+  const auto sign = profile.signed_value
+      ? std::uint64_t{1} << (width - 1U) : std::uint64_t{};
+  for (const auto& value : domain) {
+    if (value.width() != width || value.is_logic9()
+        || value.low_word().bval != 0U) {
+      return result;
+    }
+  }
+  const auto low_key = (lowest.low_word().aval & mask) ^ sign;
+  const auto high_key = (highest.low_word().aval & mask) ^ sign;
+  // A domain that lists every value of its range is exact.
+  if (high_key - low_key == domain.size() - 1U) return result;
+  constexpr std::uint64_t draw_weight = std::uint64_t{1} << 20U;
+  result.value_weights.reserve(domain.size());
+  for (const auto& value : domain) {
+    const auto bits = value.low_word().aval & mask;
+    const auto key = bits ^ sign;
+    const bool probe = key == low_key || key == high_key
+        || (bits & (bits - 1U)) == 0U
+        || ((bits + 1U) & bits & mask) == 0U
+        || (key & (key - 1U)) == 0U
+        || ((key + 1U) & key & mask) == 0U;
+    result.value_weights.push_back(probe ? 1U : draw_weight);
+  }
+  return result;
+}
+
 std::optional<SystemVerilogConstraintValueInterval>
 systemverilog_constraint_value_interval(
     const std::span<const PackedLogic4> domain,

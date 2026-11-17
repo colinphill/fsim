@@ -736,6 +736,13 @@ public:
 
     [[nodiscard]] std::span<const DeclarationId>
     selected_generates() const noexcept;
+    /// The SystemVerilog generate blocks this specialization's decided
+    /// conditions leave out (IEEE 1800-2023 27.5): a conditional generate's
+    /// arm not taken, a case generate's alternatives not selected. A block
+    /// whose condition stays undecided (one naming a loop genvar) is in
+    /// neither list.
+    [[nodiscard]] std::span<const DeclarationId>
+    unselected_generates() const noexcept;
     [[nodiscard]] bool select_generate(DeclarationId declaration);
 
     [[nodiscard]] bool replace(sv::Declaration replacement);
@@ -872,6 +879,7 @@ private:
     SpecializedHirOverlay specialization_;
     std::vector<UnitId> replacement_units_;
     std::vector<DeclarationId> selected_generates_;
+    std::vector<DeclarationId> unselected_generates_;
     std::vector<InstanceId> instance_ids_;
     std::vector<InstanceId> active_instance_ids_;
     std::vector<GenerateInstances> generate_instances_;

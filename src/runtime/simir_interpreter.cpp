@@ -2095,7 +2095,9 @@ ProcessId Interpreter::Impl::add_process_program_impl(
                 }
             }
             if (!local_names.insert(local.name).second) {
-                throw std::invalid_argument { "duplicate SimIR debug-local name" };
+                throw std::invalid_argument {
+                    "duplicate SimIR debug-local name '" + local.name + "'"
+                };
             }
         }
         for (const auto& slot : process.call_results()) {
@@ -2142,7 +2144,7 @@ ProcessId Interpreter::Impl::add_process_program_impl(
             if (!string_local_names.insert(local.name).second
                 || local_names.contains(local.name)) {
                 throw std::invalid_argument {
-                    "duplicate SimIR debug-local name"
+                    "duplicate SimIR debug-local name '" + local.name + "'"
                 };
             }
         }
@@ -2165,7 +2167,7 @@ ProcessId Interpreter::Impl::add_process_program_impl(
                 || local_names.contains(local.name)
                 || string_local_names.contains(local.name)) {
                 throw std::invalid_argument {
-                    "duplicate SimIR debug-local name"
+                    "duplicate SimIR debug-local name '" + local.name + "'"
                 };
             }
         }

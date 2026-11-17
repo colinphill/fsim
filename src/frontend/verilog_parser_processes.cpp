@@ -5,6 +5,7 @@
 #include "fsim/frontend/output_format.hpp"
 #include "fsim/frontend/source.hpp"
 #include "fsim/frontend/token.hpp"
+#include "fsim/support/stack_growth.hpp"
 
 #include <array>
 #include <algorithm>
@@ -176,6 +177,12 @@ Process VerilogParser::parse_final()
 
 std::optional<Statement> VerilogParser::parse_statement()
 {
+    // Nested statements recurse through here; the parse continues on a
+    // fresh stack segment when this one is nearly used up, so nesting is
+    // bounded by memory.
+    if (!fsim::support::stack_growth_detail::has_room()) {
+        return fsim::support::with_stack([&] { return parse_statement(); });
+    }
     const auto source_order = systemverilog_source_order();
     if (language_ == Language::SystemVerilog2017
         && (keyword("randcase") || keyword("randsequence"))) {

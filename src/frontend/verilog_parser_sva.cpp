@@ -18,6 +18,7 @@
 #include "fsim/frontend/design_core.hpp"
 #include "fsim/frontend/source.hpp"
 #include "fsim/frontend/token.hpp"
+#include "fsim/support/stack_growth.hpp"
 
 #include <algorithm>
 #include <functional>
@@ -3690,6 +3691,12 @@ void VerilogParser::extract_procedural_assertions(
             }
         }
         const auto walk = [&](const auto& self, auto& statements) -> void {
+            // Nested statements continue on a fresh stack segment when
+            // this one is nearly used up.
+            if (!fsim::support::stack_growth_detail::has_room()) {
+                fsim::support::with_stack([&] { self(self, statements); });
+                return;
+            }
             for (auto& statement : statements) {
                 if (statement.procedural_concurrent_assertion
                     && !statement.procedural_concurrent_assertion

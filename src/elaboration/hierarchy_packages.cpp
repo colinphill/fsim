@@ -10028,10 +10028,83 @@ namespace {
         using TypeForm = semantic::sv::TypeForm;
 
         std::vector<CompiledSystemVerilogDiagnostic> diagnostics;
+        // The type compatibility of a value with the type it is assigned to
+        // (IEEE 1800-2023 6.22.3, 10.8, 10.9).
+        const auto append_nominal = [&](std::string code,
+                                        std::string message,
+                                        const semantic::SourceSpanId source) {
+            diagnostics.push_back({ std::move(code), std::move(message), source });
+        };
+        // A unit validated as an instance below the root specializes it is
+        // checked here only for that compatibility, which depends on the
+        // instance's type parameters and which lowering does not check. Its
+        // other rules are checked as that instance is lowered, with its
+        // ports, interface ports among them (25.10), bound.
+        const bool compatibility_only = instance_specialization != nullptr;
         const auto append = [&](std::string code,
                                 std::string message,
                                 const semantic::SourceSpanId source) {
-            diagnostics.push_back({ std::move(code), std::move(message), source });
+            if (!compatibility_only) {
+                append_nominal(std::move(code), std::move(message), source);
+            }
+        };
+
+        std::unordered_map<std::uint32_t,
+            std::optional<semantic::SpecializedHirUnit>>
+            specializations;
+        const auto specialization_for = [&](const semantic::UnitId owner)
+            -> const semantic::SpecializedHirUnit* {
+            if (owner == unit.id && instance_specialization != nullptr) {
+                return instance_specialization;
+            }
+            const auto [found, inserted] = specializations.try_emplace(
+                owner.value(), std::nullopt);
+            if (inserted) {
+                found->second = semantic::make_specialized_hir_unit(
+                    compiled, owner, { });
+            }
+            return found->second ? &*found->second : nullptr;
+        };
+        // The scopes of the generate blocks the unit's specialization leaves
+        // out: nothing in them is elaborated (IEEE 1800-2023 27.5), so
+        // nothing in them is validated. A block left out that shares its
+        // scope with one elaborated (an else arm written into the scope of
+        // its conditional) leaves that scope in.
+        std::vector<semantic::ScopeId> unselected_generate_scopes;
+        if (const auto* owner = specialization_for(unit.id)) {
+            const auto unselected = owner->unselected_generates();
+            std::vector<semantic::ScopeId> elaborated;
+            const auto collect = [&](const auto& self,
+                                     const std::vector<
+                                         semantic::sv::GenerateRegion>&
+                                         regions) -> void {
+                for (const auto& region : regions) {
+                    if (std::ranges::binary_search(
+                            unselected, region.declaration)) {
+                        unselected_generate_scopes.push_back(region.scope);
+                        continue;
+                    }
+                    elaborated.push_back(region.scope);
+                    self(self, region.nested);
+                }
+            };
+            collect(collect, unit.generates);
+            std::erase_if(unselected_generate_scopes,
+                [&](const semantic::ScopeId scope) {
+                    return !scope.valid()
+                        || std::ranges::find(elaborated, scope)
+                        != elaborated.end();
+                });
+        }
+        // Whether `scope` is the unit's and elaborated in its
+        // specialization.
+        const auto validated_scope = [&](const semantic::ScopeId scope) {
+            return compiled_scope_belongs_to_unit(compiled, scope, unit.id)
+                && std::ranges::none_of(unselected_generate_scopes,
+                    [&](const semantic::ScopeId left_out) {
+                        return semantic::scope_within(
+                            compiled.semantics, scope, left_out);
+                    });
         };
 
         std::vector<const semantic::sv::Unit*> packages;
@@ -10270,8 +10343,7 @@ namespace {
             }
         };
         for (const auto& expression : compiled.systemverilog_hir.expressions()) {
-            if (!compiled_scope_belongs_to_unit(
-                    compiled, expression.scope, unit.id)
+            if (!validated_scope(expression.scope)
                 || (expression.kind != ExpressionKind::name
                     && expression.kind != ExpressionKind::call)
                 || expression.text.empty()
@@ -10296,8 +10368,7 @@ namespace {
         };
         for (const auto& declaration :
             compiled.systemverilog_hir.declarations()) {
-            if (!compiled_scope_belongs_to_unit(
-                    compiled, declaration.scope, unit.id)) {
+            if (!validated_scope(declaration.scope)) {
                 continue;
             }
             if (declaration.type) {
@@ -10424,8 +10495,7 @@ namespace {
         };
         for (const auto& declaration :
             compiled.systemverilog_hir.declarations()) {
-            if (!compiled_scope_belongs_to_unit(
-                    compiled, declaration.scope, unit.id)) {
+            if (!validated_scope(declaration.scope)) {
                 continue;
             }
             if (declaration.type) {
@@ -10476,8 +10546,7 @@ namespace {
         }
         for (const auto& declaration :
             compiled.systemverilog_hir.declarations()) {
-            if (!compiled_scope_belongs_to_unit(
-                    compiled, declaration.scope, unit.id)) {
+            if (!validated_scope(declaration.scope)) {
                 continue;
             }
             const auto add_reference
@@ -10537,22 +10606,6 @@ namespace {
             visit_type(visit_type, *type);
         }
 
-        std::unordered_map<std::uint32_t,
-            std::optional<semantic::SpecializedHirUnit>>
-            specializations;
-        const auto specialization_for = [&](const semantic::UnitId owner)
-            -> const semantic::SpecializedHirUnit* {
-            if (owner == unit.id && instance_specialization != nullptr) {
-                return instance_specialization;
-            }
-            const auto [found, inserted] = specializations.try_emplace(
-                owner.value(), std::nullopt);
-            if (inserted) {
-                found->second = semantic::make_specialized_hir_unit(
-                    compiled, owner, { });
-            }
-            return found->second ? &*found->second : nullptr;
-        };
         const auto* unit_specialized = specialization_for(unit.id);
         const auto owner_specialization = [&](
                                               const semantic::sv::TypeDefinition& type)
@@ -11512,14 +11565,14 @@ namespace {
                     definition.members, member_name,
                     &semantic::sv::PackedMember::name);
                 if (member == definition.members.end()) {
-                    append("FSIM-ELAB-SVAGG-002",
+                    append_nominal("FSIM-ELAB-SVAGG-002",
                         "tagged-union construction names unknown member '"
                             + std::string { member_name } + "'",
                         value.source);
                     return false;
                 }
                 if (value.operands.size() != 1U) {
-                    append("FSIM-ELAB-SVUNION-001",
+                    append_nominal("FSIM-ELAB-SVUNION-001",
                         "tagged-union construction requires one member value",
                         value.source);
                     return false;
@@ -11548,7 +11601,7 @@ namespace {
                         }
                     } else if (association.choice_spelling == "default") {
                         if (default_value) {
-                            append("FSIM-ELAB-SVAGG-002",
+                            append_nominal("FSIM-ELAB-SVAGG-002",
                                 "assignment pattern specifies more than one "
                                 "default aggregate member",
                                 association.source);
@@ -11599,10 +11652,51 @@ namespace {
                                 type_keys.push_back(choice);
                                 continue;
                             }
+                            // A type key also sets the members of that type
+                            // inside the structures and arrays a member
+                            // holds (IEEE 1800-2023 10.9.2); lowering
+                            // assigns those, and the members that can hold
+                            // them count as covered.
+                            bool nested { };
+                            for (std::size_t index { };
+                                index < definition.members.size(); ++index) {
+                                const auto& member_type
+                                    = definition.members[index].type;
+                                const auto member_id
+                                    = nominal_type_of(member_type);
+                                const auto member_definition = member_id
+                                    ? compiled.find_type(*member_id)
+                                    : std::optional<
+                                        semantic::CompiledTypeView> { };
+                                const auto form = member_definition
+                                        && member_definition->systemverilog
+                                            != nullptr
+                                    ? std::optional {
+                                          member_definition->systemverilog
+                                              ->form }
+                                    : member_type.value_form;
+                                if (form
+                                    && (*form == TypeForm::unpacked_structure
+                                        || *form == TypeForm::unpacked_union
+                                        || *form == TypeForm::tagged_union
+                                        || *form == TypeForm::packed_structure
+                                        || *form == TypeForm::packed_union
+                                        || *form == TypeForm::static_array
+                                        || *form == TypeForm::dynamic_array
+                                        || *form == TypeForm::queue
+                                        || *form
+                                            == TypeForm::associative_array)) {
+                                    nested = true;
+                                    bound[index] = true;
+                                }
+                            }
+                            if (nested) {
+                                continue;
+                            }
                         }
                     }
                     if (!member_index) {
-                        append("FSIM-ELAB-SVAGG-002",
+                        append_nominal("FSIM-ELAB-SVAGG-002",
                             "assignment pattern names an unknown or malformed "
                             "aggregate member",
                             association.source);
@@ -11636,7 +11730,7 @@ namespace {
                     && std::ranges::any_of(bound, [](const bool covered) {
                            return !covered;
                        })) {
-                    append("FSIM-ELAB-SVAGG-008",
+                    append_nominal("FSIM-ELAB-SVAGG-008",
                         "assignment pattern omits a structure member",
                         value.source);
                     valid = false;
@@ -11644,7 +11738,7 @@ namespace {
                 if (default_value) {
                     const auto union_aggregate = union_members;
                     if (union_aggregate) {
-                        append("FSIM-ELAB-SVAGG-002",
+                        append_nominal("FSIM-ELAB-SVAGG-002",
                             "a union assignment pattern must select exactly "
                             "one member",
                             value.source);
@@ -11758,7 +11852,7 @@ namespace {
             if (!actual_id && !raw_literal && !plain_integral) {
                 return true;
             }
-            append(std::string { diagnostic },
+            append_nominal(std::string { diagnostic },
                 std::string { context } + " for "
                     + (aggregate ? "aggregate" : "enumeration") + " '"
                     + nominal_type_name(*expected_id)
@@ -12190,8 +12284,7 @@ namespace {
                                 == DeclarationForm::net
                             || referenced->systemverilog->form
                                 == DeclarationForm::port)
-                        && compiled_scope_belongs_to_unit(compiled,
-                            referenced->systemverilog->scope, unit.id)) {
+                        && validated_scope(referenced->systemverilog->scope)) {
                         return &*referenced->systemverilog;
                     }
                 }
@@ -12327,8 +12420,7 @@ namespace {
                     : parameter.source);
         }
         for (const auto& statement : compiled.systemverilog_hir.statements()) {
-            if (!compiled_scope_belongs_to_unit(
-                    compiled, statement.scope, unit.id)
+            if (!validated_scope(statement.scope)
                 || statement.kind != semantic::sv::StatementKind::assignment
                 || !statement.target || !statement.value) {
                 continue;
@@ -12344,7 +12436,7 @@ namespace {
                 if (definition && definition->systemverilog != nullptr
                     && definition->systemverilog->form
                         == TypeForm::enumeration) {
-                    append("FSIM-ELAB-SVTYPE-004",
+                    append_nominal("FSIM-ELAB-SVTYPE-004",
                         "an enumeration variable cannot be updated by a "
                         "compound assignment or increment without a cast",
                         statement.source);
@@ -12697,8 +12789,7 @@ namespace {
                 if (statement.kind
                         != semantic::sv::StatementKind::conditional
                     || !statement.condition
-                    || !compiled_scope_belongs_to_unit(
-                        compiled, statement.scope, unit.id)) {
+                    || !validated_scope(statement.scope)) {
                     continue;
                 }
                 const auto constant = evaluate_specialization_integer(
@@ -12719,8 +12810,7 @@ namespace {
             // the conditional expression itself remain fully validated.
             for (const auto& expression :
                 compiled.systemverilog_hir.expressions()) {
-                if (!compiled_scope_belongs_to_unit(
-                        compiled, expression.scope, unit.id)
+                if (!validated_scope(expression.scope)
                     || expression.kind != semantic::sv::ExpressionKind::call
                     || expression.text != "?:"
                     || expression.operands.size() != 3U) {
@@ -12801,8 +12891,7 @@ namespace {
             }
             const auto statement = compiled.find_statement(statement_id);
             if (!statement || statement->systemverilog == nullptr
-                || !compiled_scope_belongs_to_unit(
-                    compiled, statement->systemverilog->scope, unit.id)) {
+                || !validated_scope(statement->systemverilog->scope)) {
                 return;
             }
             const auto& source = *statement->systemverilog;
@@ -12842,8 +12931,7 @@ namespace {
         const auto mark_live_process = [&](const semantic::ProcessId process_id) {
             const auto process = compiled.find_process(process_id);
             if (!process || process->systemverilog == nullptr
-                || !compiled_scope_belongs_to_unit(
-                    compiled, process->systemverilog->scope, unit.id)) {
+                || !validated_scope(process->systemverilog->scope)) {
                 return;
             }
             for (const auto& sensitivity :
@@ -12862,9 +12950,7 @@ namespace {
                 const auto declaration = compiled.find_declaration(
                     declaration_id);
                 if (!declaration || declaration->systemverilog == nullptr
-                    || !compiled_scope_belongs_to_unit(
-                        compiled, declaration->systemverilog->scope,
-                        unit.id)) {
+                    || !validated_scope(declaration->systemverilog->scope)) {
                     return;
                 }
                 const auto& source = *declaration->systemverilog;
@@ -12884,8 +12970,7 @@ namespace {
         std::unordered_set<std::uint32_t> expression_referenced;
         for (const auto& expression :
             compiled.systemverilog_hir.expressions()) {
-            if (!compiled_scope_belongs_to_unit(
-                    compiled, expression.scope, unit.id)) {
+            if (!validated_scope(expression.scope)) {
                 continue;
             }
             for (const auto operand : expression.operands) {
@@ -12905,8 +12990,7 @@ namespace {
         }
         for (const auto& expression :
             compiled.systemverilog_hir.expressions()) {
-            if (compiled_scope_belongs_to_unit(
-                    compiled, expression.scope, unit.id)
+            if (validated_scope(expression.scope)
                 && !unreachable_expressions.contains(expression.id.value())
                 && !expression_referenced.contains(expression.id.value())) {
                 mark_live_expression(expression.id);
@@ -12914,8 +12998,7 @@ namespace {
         }
         for (const auto& statement :
             compiled.systemverilog_hir.statements()) {
-            if (compiled_scope_belongs_to_unit(
-                    compiled, statement.scope, unit.id)
+            if (validated_scope(statement.scope)
                 && !unreachable_statements.contains(statement.id.value())) {
                 mark_live_statement(statement.id);
             }
@@ -12949,8 +13032,7 @@ namespace {
         }
         for (const auto& declaration :
             compiled.systemverilog_hir.declarations()) {
-            if (!compiled_scope_belongs_to_unit(
-                    compiled, declaration.scope, unit.id)) {
+            if (!validated_scope(declaration.scope)) {
                 continue;
             }
             mark_live_declaration(declaration.id);
@@ -12963,8 +13045,7 @@ namespace {
         }
 
         for (const auto& expression : compiled.systemverilog_hir.expressions()) {
-            if (!compiled_scope_belongs_to_unit(
-                    compiled, expression.scope, unit.id)
+            if (!validated_scope(expression.scope)
                 || unreachable_expressions.contains(expression.id.value())) {
                 continue;
             }
@@ -13640,8 +13721,7 @@ namespace {
             }
         }
         for (const auto& statement : compiled.systemverilog_hir.statements()) {
-            if (!compiled_scope_belongs_to_unit(
-                    compiled, statement.scope, unit.id)) {
+            if (!validated_scope(statement.scope)) {
                 continue;
             }
             if (statement.kind == semantic::sv::StatementKind::task_call) {
@@ -13700,8 +13780,7 @@ namespace {
             const semantic::sv::Declaration* owner = nullptr;
             for (const auto& candidate :
                 compiled.systemverilog_hir.declarations()) {
-                if (!compiled_scope_belongs_to_unit(
-                        compiled, candidate.scope, unit.id)
+                if (!validated_scope(candidate.scope)
                     || !candidate.callable || !candidate.callable->function
                     || !candidate.nested_scope
                     || !scope_encloses(
@@ -13875,11 +13954,8 @@ namespace {
                                               [&](const auto& candidate) {
                                                   return candidate.systemverilog
                                                       != nullptr
-                                                      && compiled_scope_belongs_to_unit(
-                                                          compiled,
-                                                          candidate.systemverilog
-                                                              ->scope,
-                                                          unit.id);
+                                                      && validated_scope(candidate.systemverilog
+                                                              ->scope);
                                               },
                                               false)
                                       .unique();
@@ -14073,8 +14149,7 @@ namespace {
                     });
         };
         for (const auto& expression : compiled.systemverilog_hir.expressions()) {
-            if (!compiled_scope_belongs_to_unit(
-                    compiled, expression.scope, unit.id)
+            if (!validated_scope(expression.scope)
                 || unreachable_expressions.contains(expression.id.value())) {
                 continue;
             }

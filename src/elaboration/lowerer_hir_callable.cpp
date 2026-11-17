@@ -2107,8 +2107,9 @@ Lowerer::lower_hir_static_container_actual(
             && !hir_static_container_expression_type(
                 source.operands.front());
         if (stream) {
+            // An assigned stream widens to whole elements (11.4.14.3).
             return lower_hir_sv_bitstream_container(
-                expression_id, formal_type);
+                expression_id, formal_type, true);
         }
         // A string literal assigned to a fixed unpacked array of bytes
         // fills it from the left, zero-padded or truncated (IEEE

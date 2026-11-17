@@ -685,7 +685,10 @@ struct ContainerBitstream {
     RegisterId value { };
     ContainerRegisterId container { };
     // The slice size of `reverse`, the value width of to_value and
-    // take_value, or the bits take_container leaves for later targets.
+    // take_value, or the bits take_container leaves for later targets. For
+    // to_container, nonzero when the stream is assigned rather than cast:
+    // the target takes the smallest number of elements as wide as the
+    // stream, the last one filled with zero bits (IEEE 1800-2023 11.4.14.3).
     std::uint32_t slice { };
 };
 

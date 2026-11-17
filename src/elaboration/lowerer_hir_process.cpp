@@ -10,7 +10,9 @@
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <mutex>
+#include <string_view>
 #include <tuple>
 #include <unordered_map>
 #include <vector>
@@ -1382,8 +1384,16 @@ std::vector<std::string> Lowerer::hir_debug_scope_path(
     if (!debug_unnamed_scope_ordinals_) {
         // An unnamed block, fork or loop is a scope when it declares
         // something (IEEE 1800-2023 9.3.5, 12.7.1); each gets a
-        // debugger-only name, `$unnamed_<n>`, n counting its parent's such
-        // scopes from one in source order.
+        // debugger-only name, `$unnamed_<n>`, n counting from one in source
+        // order the such scopes that share its nearest enclosing scope of
+        // the path (a named scope or another such scope): a scope between
+        // them that declares nothing adds no level, so the scopes it holds
+        // are numbered together with their visible siblings. Two named
+        // scopes of one name that would share an enclosing scope of the
+        // path are copies the tool made of one source block (an assertion
+        // action placed at each outcome of its evaluator): the scope that
+        // holds each copy is numbered as well, so every copy keeps a path
+        // of its own.
         std::unordered_set<std::uint32_t> declaring;
         for (const auto& record : design.systemverilog_hir.declarations()) {
             if (record.scope.valid()) {
@@ -1395,17 +1405,74 @@ std::vector<std::string> Lowerer::hir_debug_scope_path(
                 declaring.insert(record.scope.value());
             }
         }
+        std::unordered_set<std::uint32_t> holders;
+        const auto numbered = [&](const semantic::Scope& record) {
+            return record.role != semantic::ScopeRole::named
+                && record.role != semantic::ScopeRole::unnamed_process
+                && record.parent
+                && (declaring.contains(record.id.value())
+                    || holders.contains(record.id.value()));
+        };
+        // The nearest enclosing scope of the path, and the scopes passed on
+        // the way there, innermost first.
+        const auto enclosing_of = [&](const semantic::Scope& record) {
+            std::vector<std::uint32_t> passed;
+            auto visible = *record.parent;
+            while (visible.value() < scopes.size()) {
+                const auto& enclosing = scopes[visible.value()];
+                if (enclosing.role == semantic::ScopeRole::named
+                    || numbered(enclosing) || !enclosing.parent) {
+                    break;
+                }
+                passed.push_back(visible.value());
+                visible = *enclosing.parent;
+            }
+            return std::pair { visible, std::move(passed) };
+        };
+        std::map<std::pair<std::uint32_t, std::string_view>,
+            std::vector<std::vector<std::uint32_t>>>
+            named_below;
+        for (const auto& record : scopes) {
+            if (record.role == semantic::ScopeRole::named && record.parent) {
+                auto [visible, passed] = enclosing_of(record);
+                named_below[{ visible.value(), record.name }].push_back(
+                    std::move(passed));
+            }
+        }
+        // Each copy's holder is the scope just below the one where its way
+        // up meets another copy's (or the outermost scope it passes when
+        // the ways meet only at the enclosing scope of the path).
+        for (const auto& [key, ways] : named_below) {
+            if (ways.size() < 2U) {
+                continue;
+            }
+            for (std::size_t copy = 0U; copy < ways.size(); ++copy) {
+                const auto& way = ways[copy];
+                std::size_t meet = way.size();
+                for (std::size_t step = 0U; step < way.size() && meet == way.size();
+                     ++step) {
+                    for (std::size_t other = 0U; other < ways.size(); ++other) {
+                        if (other != copy
+                            && std::ranges::find(ways[other], way[step])
+                                != ways[other].end()) {
+                            meet = step;
+                            break;
+                        }
+                    }
+                }
+                if (meet > 0U) {
+                    holders.insert(way[meet - 1U]);
+                }
+            }
+        }
         std::unordered_map<std::uint32_t, std::uint32_t> counts;
         auto& ordinals = debug_unnamed_scope_ordinals_.emplace();
         for (const auto& record : scopes) {
-            if (record.role == semantic::ScopeRole::named
-                || record.role == semantic::ScopeRole::unnamed_process
-                || !record.parent
-                || !declaring.contains(record.id.value())) {
+            if (!numbered(record)) {
                 continue;
             }
-            ordinals.emplace(
-                record.id.value(), ++counts[record.parent->value()]);
+            ordinals.emplace(record.id.value(),
+                ++counts[enclosing_of(record).first.value()]);
         }
     }
     std::vector<std::string> path;

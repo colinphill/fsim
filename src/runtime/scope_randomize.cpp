@@ -126,6 +126,9 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_scope(
         auto selection = request.selection;
         std::set<std::size_t> direct;
         std::map<std::size_t, std::vector<PackedLogic4>> bounded;
+        // Bounded variables whose values only the implicit uniform
+        // distribution weights (no dist of their own).
+        std::set<std::size_t> uniform_bounded;
         {
             std::vector<std::size_t> wide;
             for (std::size_t index = 0; index < request.variables.size(); ++index) {
@@ -228,6 +231,11 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_scope(
                                         narrowed = true;
                                     }
                                 }
+                                if (probe.distribution_entries(id).empty()) {
+                                    uniform_bounded.insert(index);
+                                } else {
+                                    uniform_bounded.erase(index);
+                                }
                                 bounded.insert_or_assign(
                                     index, std::move(domain));
                             }
@@ -239,6 +247,7 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_scope(
                 } catch (const std::exception&) {
                     direct.clear();
                     bounded.clear();
+                    uniform_bounded.clear();
                 }
             }
         }
@@ -274,11 +283,11 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_scope(
             const auto& retained = solver.variables()[id];
             // Every value of the domain is equally likely (IEEE 1800-2023
             // 18.12): its range runs in the variable's own order.
-            auto [lowest, highest] = systemverilog_constraint_domain_bounds(
-                retained.domain, retained.profile.signed_value);
-            solver.add_distribution({ retained.canonical_identity + "::$std-randomize", id,
-                { { std::move(lowest), std::move(highest), 1,
-                    SystemVerilogConstraintDistributionWeight::PerValue } } });
+            solver.add_distribution(
+                systemverilog_constraint_implicit_uniform_distribution(
+                    retained.canonical_identity + "::$std-randomize", id,
+                    retained.domain, retained.profile,
+                    uniform_bounded.contains(index)));
         }
         request.inline_constraints(solver, variables);
         auto solved = solver.solve(request.selection);

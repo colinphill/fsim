@@ -32761,9 +32761,28 @@ bool Lowerer::hir_process_handle_expression(
         return false;
     }
     const auto& source = *expression->systemverilog;
-    const auto process_type = [](const semantic::sv::TypeReference& type) {
-        return type.standard_class
-            == support::SystemVerilogStandardClass::process;
+    // The process class, also through typedefs that name it (6.18).
+    const auto process_type = [&](const semantic::sv::TypeReference& type) {
+        if (type.standard_class == support::SystemVerilogStandardClass::process) {
+            return true;
+        }
+        std::unordered_set<std::uint32_t> aliases;
+        auto current = type.target.target;
+        while (current.valid() && aliases.insert(current.value()).second) {
+            const auto definition = specialized_hir_unit_->find_type(current);
+            if (!definition || definition->systemverilog == nullptr
+                || definition->systemverilog->form
+                    != semantic::sv::TypeForm::alias) {
+                return false;
+            }
+            const auto& base = definition->systemverilog->base;
+            if (base.standard_class
+                == support::SystemVerilogStandardClass::process) {
+                return true;
+            }
+            current = base.target.target;
+        }
+        return false;
     };
     // A class property of type process.
     if (const auto property = hir_class_property_profile(expression_id)) {

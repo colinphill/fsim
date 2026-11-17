@@ -9686,15 +9686,23 @@ private:
             const bool two_state = (inst.imm_a & detail::dyn_stream_other_two_state) != 0U;
             const bool resize = (inst.imm_a & detail::dyn_stream_other_associative) == 0U;
             const auto reserved = op == DynOp::stream_take_container ? inst.imm_b : 0U;
+            // An assigned stream takes one more element for a partial last
+            // one, its missing bits zero (11.4.14.3).
+            const bool widen = op == DynOp::stream_to_container && inst.imm_b != 0U;
             llvm::Value* count = dyn_load(target, dyn_size);
             if (resize) {
                 auto* remaining = builder_.CreateSelect(
                     builder_.CreateICmpUGT(size, constant(reserved)),
                     builder_.CreateSub(size, constant(reserved)), constant(0U));
-                dyn_check(builder_.CreateICmpEQ(
-                              builder_.CreateURem(remaining, constant(width)), constant(0U)),
-                    at, DynFailure::stream_partial);
-                count = builder_.CreateUDiv(remaining, constant(width));
+                if (widen) {
+                    count = builder_.CreateUDiv(
+                        builder_.CreateAdd(remaining, constant(width - 1U)), constant(width));
+                } else {
+                    dyn_check(builder_.CreateICmpEQ(
+                                  builder_.CreateURem(remaining, constant(width)), constant(0U)),
+                        at, DynFailure::stream_partial);
+                    count = builder_.CreateUDiv(remaining, constant(width));
+                }
                 dyn_reserve(target, count, at);
                 dyn_store(target, dyn_size, count);
             }

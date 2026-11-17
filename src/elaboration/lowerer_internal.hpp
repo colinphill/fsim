@@ -4529,7 +4529,7 @@ private:
         frontend::ValueDomain domain);
     [[nodiscard]] std::optional<runtime::simir::ContainerRegisterId>
     lower_hir_sv_bitstream_container(semantic::ExpressionId expression,
-        const runtime::simir::ContainerType& type);
+        const runtime::simir::ContainerType& type, bool widen = false);
     // `before_write` runs once the indices and value are captured, just
     // before the update is scheduled (an intra-assignment control).
     [[nodiscard]] bool lower_hir_sv_value_path_nonblocking_write(
@@ -6248,6 +6248,11 @@ private:
         systemverilog_interface_exports_ { };
     [[nodiscard]] const semantic::SpecializedHirUnit* hir_callee_unit(
         const InterfaceReceiver& receiver) const;
+    // The interface instance a receiver path designates: a path through an
+    // interface port denotes the instance connected to it, which shares its
+    // handle (IEEE 1800-2023 25.3).
+    [[nodiscard]] std::string hir_interface_instance_path(
+        const std::string& path) const;
     // Records the read of `signal` into `destination` by the body of a
     // callable that another instance defines (`u1.peek()`, run in the
     // calling process) as a hierarchical read of that instance, so that SDF
@@ -6754,6 +6759,9 @@ private:
     // builder registers static storage before lowering the instance.
     mutable std::unordered_map<std::uint32_t, std::optional<HirStaticStorage>>
         hir_scope_static_storage_;
+    // hir_interface_instance_path's resolved port paths.
+    mutable std::unordered_map<std::string, std::string>
+        hir_interface_instance_paths_;
     RegisterId next_register_ { };
     StringRegisterId next_string_register_ { };
     ContainerRegisterId next_container_register_ { };

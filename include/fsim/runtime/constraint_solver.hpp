@@ -142,6 +142,10 @@ struct SystemVerilogConstraintDistribution {
   /// A predicate over other variables: the weights apply only where it holds
   /// (a dist under a random `if` or implication, IEEE 1800-2017 18.5.4).
   std::shared_ptr<const SystemVerilogConstraintExpression> guard{};
+  /// Weights aligned with the variable's domain, used in place of the
+  /// entries' weights (the entries still name the range); empty when the
+  /// entries weight the values.
+  std::vector<std::uint64_t> value_weights{};
 };
 
 enum class SystemVerilogConstraintResource : std::uint8_t {

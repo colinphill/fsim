@@ -37,6 +37,15 @@ systemverilog_constraint_value_interval(
 systemverilog_constraint_domain_bounds(
     std::span<const PackedLogic4> domain, bool signed_value);
 
+/// The implicit uniform distribution of a randomized variable over its
+/// non-empty domain; `sampled` when nothing but that distribution weights a
+/// domain drawn from its range (IEEE 1800-2023 18.5.10).
+[[nodiscard]] SystemVerilogConstraintDistribution
+systemverilog_constraint_implicit_uniform_distribution(std::string identity,
+    SystemVerilogConstraintVariableId variable,
+    std::span<const PackedLogic4> domain,
+    const SystemVerilogConstraintVariableProfile& profile, bool sampled);
+
 /// Candidate values for a variable wider than 64 bits. An unsigned variable
 /// whose hard comparisons with constants bound it below 2^64 draws from that
 /// bounded domain; otherwise it draws from the constants its clauses compare

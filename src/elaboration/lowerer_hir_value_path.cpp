@@ -1840,10 +1840,11 @@ std::optional<RegisterId> Lowerer::lower_hir_sv_bitstream_value(
     return destination;
 }
 
-// A stream as the value of a container of `type` (6.24.3, 11.4.14.4).
+// A stream as the value of a container of `type` (6.24.3, 11.4.14.4);
+// `widen` when the stream is assigned, not cast (11.4.14.3).
 std::optional<ContainerRegisterId> Lowerer::lower_hir_sv_bitstream_container(
     const semantic::ExpressionId expression_id,
-    const ContainerType& type)
+    const ContainerType& type, const bool widen)
 {
     std::optional<ContainerRegisterId> bits;
     const auto expression = specialized_hir_unit_ != nullptr
@@ -1891,6 +1892,7 @@ std::optional<ContainerRegisterId> Lowerer::lower_hir_sv_bitstream_container(
     unpack.operation = ContainerBitstreamOperation::to_container;
     unpack.bits = *bits;
     unpack.container = destination;
+    unpack.slice = widen ? 1U : 0U;
     process_.operations.emplace_back(unpack);
     return destination;
 }

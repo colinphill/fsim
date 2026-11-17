@@ -16025,6 +16025,10 @@ private:
 
 struct GenerateSelection {
     std::vector<DeclarationId> selected;
+    // The generate blocks a decided condition leaves out (IEEE 1800-2023
+    // 27.5): the arm of a conditional generate it does not take, the
+    // alternatives of a case generate it does not select.
+    std::vector<DeclarationId> unselected;
     std::vector<InstanceId> fallback_instances;
     // Genvars of enclosing loop generates that the specialization leaves
     // unbound.
@@ -16166,6 +16170,21 @@ void select_systemverilog_generate(const sv::GenerateRegion& generate,
 void select_vhdl_generate(const vhdl::GenerateRegion& generate,
     HirIntegralEvaluator& evaluator, GenerateSelection& output);
 
+// Records every alternative block of a case generate but `selected` as left
+// out (IEEE 1800-2023 27.5).
+void leave_out_alternatives(const sv::GenerateRegion& generate,
+    const sv::GenerateRegion* const selected, GenerateSelection& output)
+{
+    for (const auto& alternative : generate.alternatives) {
+        const auto nested = std::ranges::find(generate.nested,
+            alternative.alternative_discriminator,
+            &sv::GenerateRegion::alternative_discriminator);
+        if (nested != generate.nested.end() && &*nested != selected) {
+            output.unselected.push_back(nested->declaration);
+        }
+    }
+}
+
 void select_systemverilog_children(
     const std::span<const sv::GenerateRegion> children,
     HirIntegralEvaluator& evaluator, GenerateSelection& output)
@@ -16276,6 +16295,7 @@ void select_systemverilog_generate(const sv::GenerateRegion& generate,
             }
             selected = selected != nullptr ? selected : fallback;
             if (selected == nullptr) {
+                leave_out_alternatives(generate, nullptr, output);
                 return;
             }
             const auto nested = std::ranges::find(
@@ -16285,6 +16305,7 @@ void select_systemverilog_generate(const sv::GenerateRegion& generate,
                 preserve_generate_subtree(generate, output);
                 return;
             }
+            leave_out_alternatives(generate, &*nested, output);
             select_systemverilog_generate(*nested, evaluator, output);
             return;
         }
@@ -16305,8 +16326,14 @@ void select_systemverilog_generate(const sv::GenerateRegion& generate,
             = generate.alternative_discriminator.empty()
             ? std::string { "else" }
             : generate.alternative_discriminator + "/else";
+        const auto alternative = std::ranges::find(
+            generate.nested, else_discriminator,
+            &sv::GenerateRegion::alternative_discriminator);
         if (*condition) {
             output.selected.push_back(generate.declaration);
+            if (alternative != generate.nested.end()) {
+                output.unselected.push_back(alternative->declaration);
+            }
             for (const auto& nested : generate.nested) {
                 if (nested.alternative_discriminator
                     == generate.alternative_discriminator) {
@@ -16316,9 +16343,7 @@ void select_systemverilog_generate(const sv::GenerateRegion& generate,
             }
             return;
         }
-        const auto alternative = std::ranges::find(
-            generate.nested, else_discriminator,
-            &sv::GenerateRegion::alternative_discriminator);
+        output.unselected.push_back(generate.declaration);
         if (alternative != generate.nested.end()) {
             select_systemverilog_generate(
                 *alternative, evaluator, output);
@@ -16364,6 +16389,7 @@ void select_systemverilog_generate(const sv::GenerateRegion& generate,
     }
     selected = selected != nullptr ? selected : fallback;
     if (selected == nullptr) {
+        leave_out_alternatives(generate, nullptr, output);
         return;
     }
     const auto nested = std::ranges::find(
@@ -16373,6 +16399,7 @@ void select_systemverilog_generate(const sv::GenerateRegion& generate,
         preserve_generate_subtree(generate, output);
         return;
     }
+    leave_out_alternatives(generate, &*nested, output);
     select_systemverilog_generate(*nested, evaluator, output);
 }
 
@@ -20026,6 +20053,8 @@ SpecializedHirUnit::SpecializedHirUnit(const CompiledDesign& design,
     for (const auto declaration : generate_selection.selected) {
         static_cast<void>(select_generate(declaration));
     }
+    unselected_generates_ = std::move(generate_selection.unselected);
+    canonicalize(unselected_generates_);
     active_instance_ids_.insert(active_instance_ids_.end(),
         generate_selection.fallback_instances.begin(),
         generate_selection.fallback_instances.end());
@@ -20971,6 +21000,12 @@ std::span<const DeclarationId>
 SpecializedHirUnit::selected_generates() const noexcept
 {
     return selected_generates_;
+}
+
+std::span<const DeclarationId>
+SpecializedHirUnit::unselected_generates() const noexcept
+{
+    return unselected_generates_;
 }
 
 bool SpecializedHirUnit::select_generate(

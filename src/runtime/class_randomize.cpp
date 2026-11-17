@@ -973,6 +973,9 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
     std::set<Key> direct_indices;
     std::set<Key> direct_randc;
     std::map<Key, std::vector<PackedLogic4>> bounded;
+    // Bounded properties whose values only the implicit uniform
+    // distribution weights (no dist of their own, not a size).
+    std::set<Key> uniform_bounded;
     std::vector<Key> wide;
     for (std::size_t n = 0; n < nodes.size(); ++n) {
       const auto& node = nodes[n];
@@ -1203,6 +1206,11 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
             }
           }
           if (unique.size() == 1U) derived.insert_or_assign(id, unique.front());
+          if (probe.distribution_entries(id).empty() && !preserved.contains(key)) {
+            uniform_bounded.insert(key);
+          } else {
+            uniform_bounded.erase(key);
+          }
           bounded.insert_or_assign(key, std::move(unique));
         }
         if (derived.size() == derived_before && !(coupled && narrowed)) break;
@@ -1269,6 +1277,7 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
         direct_indices.clear();
         direct_randc.clear();
         bounded.clear();
+        uniform_bounded.clear();
         for (const auto& key : preserved) {
           nodes[key.first].selected.erase(key.second);
         }
@@ -1384,13 +1393,11 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
         if (chosen) {
           const auto& retained = solver.variables()[id];
           if (!staged_randc) {
-            const auto [lowest, highest] = systemverilog_constraint_domain_bounds(
-                retained.domain, retained.profile.signed_value);
-            solver.add_distribution({
-                retained.canonical_identity + "::$randomize",
-                id,
-                {{lowest, highest, 1,
-                  SystemVerilogConstraintDistributionWeight::PerValue}}});
+            solver.add_distribution(
+                systemverilog_constraint_implicit_uniform_distribution(
+                    retained.canonical_identity + "::$randomize", id,
+                    retained.domain, retained.profile,
+                    uniform_bounded.contains(Key{n, index})));
           }
           selected.push_back({n,
               {index, id, std::move(base_domain), std::move(staged_randc),

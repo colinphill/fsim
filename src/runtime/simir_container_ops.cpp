@@ -146,7 +146,9 @@ std::size_t stream_element_bits(const ContainerType& type)
 // container takes as many elements as the remaining bits fill, less the
 // `reserved` bits of the fixed-size targets after it (IEEE 1800-2023
 // 11.4.14.4). It is resized as in a cast, so bits left over that do not
-// fill a whole element are a size difference, an error (6.24.3).
+// fill a whole element are a size difference, an error (6.24.3); an
+// assigned stream (`widen`) instead takes one more element, its missing
+// bits zero (11.4.14.3).
 void consume_container_bits(
     const ProcessId process,
     const InstructionIndex instruction,
@@ -154,7 +156,8 @@ void consume_container_bits(
     std::size_t& position,
     ContainerValue& value,
     const bool variable_size,
-    const std::size_t reserved = 0U)
+    const std::size_t reserved = 0U,
+    const bool widen = false)
 {
     // A 2-state element converts X and Z bits to 0 (IEEE 1800-2017 6.22).
     const bool two_state = value.type.two_state
@@ -209,11 +212,12 @@ void consume_container_bits(
         }
         const auto available = bits.size() - std::min(position, bits.size());
         const auto remaining = available - std::min(reserved, available);
-        if (remaining % element_bits != 0U) {
+        if (remaining % element_bits != 0U && !widen) {
             container_error(process, instruction,
                 "a bit stream does not fill a whole number of elements of its variable-size target");
         }
-        resize_container_value(value, remaining / element_bits);
+        resize_container_value(value,
+            remaining / element_bits + (remaining % element_bits != 0U ? 1U : 0U));
     }
     switch (value.type.element_kind) {
     case ContainerElementKind::Packed:
@@ -1943,7 +1947,7 @@ void execute_container_operation(
             = access.container(operation.container);
         std::size_t position { };
         consume_container_bits(process, instruction, bits.elements,
-            position, destination, true);
+            position, destination, true, 0U, operation.slice != 0U);
         if (position < bits.elements.size()) {
             container_error(process, instruction,
                 "a bit stream is wider than its target");

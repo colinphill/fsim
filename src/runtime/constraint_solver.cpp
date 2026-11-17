@@ -348,6 +348,19 @@ void SystemVerilogConstraintSolver::add_distribution(
         + distribution.canonical_identity + "'"};
   }
   const auto& variable = variables_[distribution.variable];
+  if (!distribution.value_weights.empty()) {
+    if (distribution.value_weights.size() != variable.domain.size()) {
+      throw std::invalid_argument{
+          "constraint distribution weights do not match the domain"};
+    }
+    distributions_.push_back({
+        std::move(distribution.canonical_identity),
+        distribution.variable,
+        std::move(distribution.value_weights),
+        std::move(distribution.entries),
+        std::move(distribution.guard)});
+    return;
+  }
   std::vector<std::size_t> matches(distribution.entries.size());
   std::uint64_t denominator{1};
   for (std::size_t entry_index = 0;
