@@ -2061,9 +2061,19 @@ private:
     /// an equal template that exists shares its units' code, else a new
     /// template is compiled. `observed` code has the observer hooks; a
     /// `source` template gives a new one its tier and VHDL prologue.
+    /// A unit whose template still needs code (bind_native_unit given a
+    /// `deferred` list): compile_deferred_units compiles them together.
+    struct DeferredUnit {
+        NativeUnit* unit { };
+        std::uint32_t template_index { };
+    };
     void bind_native_unit(NativeUnit& unit, std::unique_ptr<CompiledBody> canonical,
         std::vector<std::uint32_t> bindings, bool partition_like,
-        bool observed = false, const StaticKernelTemplate* source = nullptr);
+        bool observed = false, const StaticKernelTemplate* source = nullptr,
+        std::vector<DeferredUnit>* deferred = nullptr);
+    /// One compile, split over the codegen's jobs, for every template the
+    /// deferred units need; units of one template share its code.
+    void compile_deferred_units(const std::vector<DeferredUnit>& deferred);
     /// The units an observer needs hooked code in get it (at a point
     /// between activations): a member that writes a watched slot
     /// (watched_slot_), or whose VHDL variables the debug interface forces
@@ -2073,11 +2083,18 @@ private:
     void observe_units();
     /// Recompiles `unit` with the observer hooks; false when it has no code
     /// or nothing to hook.
-    bool observe_unit(NativeUnit& unit, bool partition_like);
+    bool observe_unit(NativeUnit& unit, bool partition_like,
+        std::vector<DeferredUnit>& deferred);
     /// Whether an operation of the member stores a watched slot.
     [[nodiscard]] bool member_writes_watched(std::uint32_t member) const;
     /// The slots observers watch (apply_watches), by slot.
     std::vector<std::uint8_t> watched_slot_;
+    /// A member's VHDL variables got hooked during an activation (a
+    /// debugger stop, a foreign callback): the members observe_units
+    /// selects get their hooked code before any of them runs again
+    /// (observe_pending_units; no member takes the fast path meanwhile).
+    bool observe_pending_ { };
+    void observe_pending_units();
     /// Takes `unit` off the lazy and full template lists.
     void detach_native_unit(NativeUnit& unit);
     /// Fills the lazy and full templates' unit lists again from the units'

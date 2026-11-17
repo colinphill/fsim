@@ -20962,6 +20962,21 @@ public:
         std::span<const StaticKernelTemplate> templates,
         const StaticKernelNativeHelpers& helpers) override
     {
+        return compile_with(templates, helpers, jobs_);
+    }
+
+    std::vector<StaticKernelNativeEntry> compile_on(
+        std::span<const StaticKernelTemplate> templates,
+        const StaticKernelNativeHelpers& helpers, const std::uint32_t jobs) override
+    {
+        return compile_with(templates, helpers,
+            jobs != 0U ? jobs : std::max(1U, std::thread::hardware_concurrency()));
+    }
+
+    std::vector<StaticKernelNativeEntry> compile_with(
+        std::span<const StaticKernelTemplate> templates,
+        const StaticKernelNativeHelpers& helpers, const std::size_t jobs)
+    {
         const auto started = std::chrono::steady_clock::now();
         std::vector<StaticKernelNativeEntry> entries(templates.size(), nullptr);
         std::vector<std::string> keys;
@@ -21013,7 +21028,7 @@ public:
                         : tier == 1U ? warm_machine_
                                      : cold_machine_,
                     templates, keys, group, entries,
-                    tier == 3U ? std::uint8_t { 1U } : tier);
+                    tier == 3U ? std::uint8_t { 1U } : tier, jobs);
                 tier_ms[std::min<std::uint8_t>(tier, 2U)] += std::chrono::duration<double, std::milli>(
                     std::chrono::steady_clock::now() - group_started).count();
             }
@@ -21630,7 +21645,8 @@ private:
     /// a thread's setup is worth stays with another.
     [[nodiscard]] std::vector<std::vector<std::size_t>> split_group(
         std::span<const StaticKernelTemplate> templates,
-        const std::vector<std::size_t>& group, const std::uint8_t tier) const
+        const std::vector<std::size_t>& group, const std::uint8_t tier,
+        const std::size_t jobs) const
     {
         // The optimizing backend costs about twenty times as much per
         // instruction as the fast one.
@@ -21639,7 +21655,7 @@ private:
         for (const auto index : group) {
             total += templates[index].body->code.size();
         }
-        const auto count = std::min({ jobs_, group.size(),
+        const auto count = std::min({ jobs, group.size(),
             std::max<std::size_t>(1U, total / minimum_chunk) });
         if (count <= 1U) {
             return { group };
@@ -21666,7 +21682,8 @@ private:
         std::span<const StaticKernelTemplate> templates,
         const std::vector<std::string>& keys,
         const std::vector<std::size_t>& all,
-        std::vector<StaticKernelNativeEntry>& entries, const std::uint8_t tier)
+        std::vector<StaticKernelNativeEntry>& entries, const std::uint8_t tier,
+        const std::size_t jobs)
     {
         // Templates with equal keys share one function.
         std::vector<std::size_t> group;
@@ -21681,7 +21698,7 @@ private:
             // The index of an ahead-of-time build has no code for these.
             cache_misses_.fetch_add(group.size(), std::memory_order_relaxed);
         }
-        const auto chunks = split_group(templates, group, tier);
+        const auto chunks = split_group(templates, group, tier, jobs);
         if (chunks.size() == 1U) {
             auto built = build_module(jit.getDataLayout(), templates, keys, group, tier, 0U);
             if (auto error = jit.addIRModule(llvm::orc::ThreadSafeModule(

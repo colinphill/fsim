@@ -7877,7 +7877,8 @@ void Interpreter::Impl::StaticKernel::run_triggered_round()
             groups[entry] = &group;
         }
         if (auto& group = *groups[0]; count == 1U && group.fused
-            && group.native.entry != nullptr && pool_ == nullptr && !trace_) {
+            && group.native.entry != nullptr && pool_ == nullptr && !trace_
+            && !observe_pending_) {
             // One native call runs the members in index order, as the
             // merge below would.
             if (profile_) {
@@ -8039,6 +8040,9 @@ void Interpreter::Impl::StaticKernel::run(const std::uint32_t member_index)
             status, false);
         refresh_fast_run(member_index);
         return;
+    }
+    if (observe_pending_) [[unlikely]] {
+        observe_pending_units();
     }
     run_member(member_index);
     refresh_fast_run(member_index);
@@ -11458,9 +11462,16 @@ void Interpreter::Impl::StaticKernel::debug_local_hooks_changed()
             }
         }
     }
-    // Between activations at once, otherwise when the running one ends.
+    // Between activations at once, otherwise when the running one ends;
+    // the hooks the stores report through before any hooked member runs
+    // again (a thread stopped in it resumes in this activation).
     if (!activating_) {
         pin_members();
+    } else if (variable_hooks_active_) {
+        observe_pending_ = true;
+        for (auto& fast : fast_runs_) {
+            fast.entry = nullptr;
+        }
     }
 }
 

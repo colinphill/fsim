@@ -380,9 +380,10 @@ foreach(FSIM_INDEX RANGE 2 25)
     foreach(FSIM_TRACE_TOKEN IN ITEMS
         "void encode_value(const PackedLogic4& value)"
         "encoded_value.resize(width);"
-        "encoded_value[width - index - 1U] = value.is_logic9()"
-        "vcd_char(value.get_logic9(index))"
-        "vcd_char(value.get(index))"
+        "if (!value.is_logic9()) {"
+        "const auto aval = value.aval_words();"
+        "value.logic9_plane_words(0U)"
+        "table[code] = vcd_char(static_cast<Logic9>(code));"
         "impl_->encode_value(value);"
         "impl_->write_value(declaration, impl_->encoded_value);")
       string(FIND "${FSIM_OWNER_CONTENTS}" "${FSIM_TRACE_TOKEN}"

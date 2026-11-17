@@ -5699,6 +5699,9 @@ void Interpreter::Impl::StaticKernel::run_thread(const std::uint32_t index)
         && std::exchange(threads_[index].entered, true)) {
         notify_thread(index, ExecutionPointKind::thread_enter);
     }
+    if (observe_pending_) [[unlikely]] {
+        observe_pending_units();
+    }
     const auto member_index = threads_[index].member;
     auto& member = members_[member_index];
     if (trace_) {
@@ -5920,6 +5923,11 @@ void Interpreter::Impl::StaticKernel::run_thread(const std::uint32_t index)
             fail(member_index, pc, "behavioral thread stopped at a non-boundary");
         case Boundary::advance:
             ++pc;
+            // An observer attached at this point (a statement callback
+            // hooked a variable): the thread goes on in the hooked code.
+            if (observe_pending_) [[unlikely]] {
+                observe_pending_units();
+            }
             continue;
         case Boundary::suspend:
             // A debugger plan: the writes of the thread's last statement

@@ -1054,6 +1054,7 @@ kernel.impl	initial_commit_due_	S	set only within the first simulation cycle's u
 kernel.impl	variable_hooks_active_	D	rebuilt from Impl::debug_local_hooks (debug_local_hooks_changed)
 kernel.impl	variable_hook_members_	D	rebuilt from Impl::debug_local_hooks (debug_local_hooks_changed)
 kernel.impl	watched_slot_	D	rebuilt from the watches (apply_watches); selects the members observe_units recompiles
+kernel.impl	observe_pending_	D	set by a variable hook made during an activation until the hooked code is swapped in before the next run; false between activations
 kernel.impl	member_pinned_	D	rebuilt from Impl::debug_local_hooks (debug_local_hooks_changed pins the members they name)
 kernel.impl	specialized_size_	D	fixed when the kernel specializes its members at construction
 kernel.impl	pending_pins_	D	the members whose pinning waits for the end of the running activation; empty between activations

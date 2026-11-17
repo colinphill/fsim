@@ -545,6 +545,15 @@ public:
     [[nodiscard]] virtual std::vector<StaticKernelNativeEntry> compile(
         std::span<const StaticKernelTemplate> templates,
         const StaticKernelNativeHelpers& helpers) = 0;
+    /// compile on `jobs` threads (0: one per hardware thread) instead of
+    /// the codegen's own count; the code does not depend on the split.
+    [[nodiscard]] virtual std::vector<StaticKernelNativeEntry> compile_on(
+        std::span<const StaticKernelTemplate> templates,
+        const StaticKernelNativeHelpers& helpers, std::uint32_t jobs)
+    {
+        (void)jobs;
+        return compile(templates, helpers);
+    }
     /// Entries of templates whose code is already built (ahead of time),
     /// without compiling any; null for the others. A two-state template's
     /// resume points are restored with its code.

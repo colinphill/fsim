@@ -848,7 +848,8 @@ void Interpreter::Impl::StaticKernel::refresh_fast_run(
     auto& fast = fast_runs_[member_index];
     const auto& member = members_[member_index];
     const auto& unit = member.native;
-    const bool eligible = !trace_ && !profile_ && !verify_ && member.compiled
+    const bool eligible = !trace_ && !profile_ && !verify_ && !observe_pending_
+        && member.compiled
         && !member.fresh && !member.generic_mode
         && member.kind != StaticKernelMemberKind::behavioral
         && member.partition == no_slot && unit.entry != nullptr
@@ -1459,10 +1460,6 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
         if (templates[index].two_state) {
             templates[index].resume_points = &continuations_[index];
         }
-        // A debug-point kernel (a debugger plan, foreign statement probes)
-        // stops in the middle of an activation, where an observer may watch
-        // or force anything: all of its code has the hooks.
-        templates[index].observer_hooks = debug_points_;
     }
     template_codes_ = templates;
     StaticKernelNativeHelpers helpers;
@@ -1901,15 +1898,14 @@ void Interpreter::Impl::StaticKernel::rebuild_unit_lists()
 
 void Interpreter::Impl::StaticKernel::bind_native_unit(NativeUnit& unit,
     std::unique_ptr<CompiledBody> canonical, std::vector<std::uint32_t> bindings,
-    const bool partition_like, bool observed, const StaticKernelTemplate* const source)
+    const bool partition_like, bool observed, const StaticKernelTemplate* const source,
+    std::vector<DeferredUnit>* const deferred)
 {
     detach_native_unit(unit);
     unit.bindings = std::move(bindings);
     unit.entry = nullptr;
     unit.two_state = false;
     unit.program = nullptr;
-    // A debug-point kernel's code has the hooks throughout (build_native).
-    observed = observed || debug_points_;
     unit.observed = observed;
     if (codegen_ == nullptr || template_codes_.size() != templates_.size()) {
         // No native code (FSIM_STATIC_KERNEL_GENERIC): the unit runs its
@@ -1978,6 +1974,11 @@ void Interpreter::Impl::StaticKernel::bind_native_unit(NativeUnit& unit,
         }
         return;
     }
+    if (deferred != nullptr) {
+        // Compiled with the other deferred units (compile_deferred_units).
+        deferred->push_back({ &unit, index });
+        return;
+    }
     // Full-semantics code, valid for any register values.
     auto code = template_codes_[index];
     code.two_state = false;
@@ -1987,6 +1988,39 @@ void Interpreter::Impl::StaticKernel::bind_native_unit(NativeUnit& unit,
     if (!entries.empty() && entries.front() != nullptr) {
         unit.entry = entries.front();
         ++native_units_;
+    }
+}
+
+void Interpreter::Impl::StaticKernel::compile_deferred_units(
+    const std::vector<DeferredUnit>& deferred)
+{
+    if (deferred.empty()) {
+        return;
+    }
+    // Full-semantics code, valid for any register values, once per
+    // template.
+    std::vector<std::uint32_t> order;
+    std::vector<StaticKernelTemplate> batch;
+    for (const auto& entry : deferred) {
+        if (std::ranges::find(order, entry.template_index) != order.end()) {
+            continue;
+        }
+        order.push_back(entry.template_index);
+        auto code = template_codes_[entry.template_index];
+        code.two_state = false;
+        code.resume_points = nullptr;
+        batch.push_back(code);
+    }
+    // The units an observer just attached to run next: their compile
+    // takes every hardware thread.
+    const auto entries = codegen_->compile_on(batch, native_helpers_, 0U);
+    for (const auto& entry : deferred) {
+        const auto at = static_cast<std::size_t>(
+            std::ranges::find(order, entry.template_index) - order.begin());
+        if (at < entries.size() && entries[at] != nullptr) {
+            entry.unit->entry = entries[at];
+            ++native_units_;
+        }
     }
 }
 
@@ -2028,7 +2062,7 @@ bool Interpreter::Impl::StaticKernel::member_writes_watched(
 }
 
 bool Interpreter::Impl::StaticKernel::observe_unit(NativeUnit& unit,
-    const bool partition_like)
+    const bool partition_like, std::vector<DeferredUnit>& deferred)
 {
     if (unit.observed || unit.program == nullptr) {
         return false;
@@ -2051,14 +2085,14 @@ bool Interpreter::Impl::StaticKernel::observe_unit(NativeUnit& unit,
     const auto source = template_codes_[static_cast<std::size_t>(found - templates_.begin())];
     auto bindings = unit.bindings;
     bind_native_unit(unit, std::make_unique<CompiledBody>(body), std::move(bindings),
-        partition_like, true, &source);
+        partition_like, true, &source, &deferred);
     return true;
 }
 
 void Interpreter::Impl::StaticKernel::observe_units()
 {
     if (codegen_ == nullptr || template_codes_.size() != templates_.size()
-        || debug_points_ || (!watch_writes_ && !variable_hooks_active_)) {
+        || (!watch_writes_ && !variable_hooks_active_)) {
         return;
     }
     std::vector<std::uint8_t> needs(members_.size(), 0U);
@@ -2077,10 +2111,13 @@ void Interpreter::Impl::StaticKernel::observe_units()
     if (!any) {
         return;
     }
+    std::vector<DeferredUnit> deferred;
+    std::vector<std::uint32_t> rebound;
     for (std::uint32_t index = 0U; index < members_.size(); ++index) {
-        if (needs[index] != 0U && observe_unit(members_[index].native, false)
+        if (needs[index] != 0U
+            && observe_unit(members_[index].native, false, deferred)
             && index < fast_runs_.size()) {
-            refresh_fast_run(index);
+            rebound.push_back(index);
         }
     }
     const auto needed = [&](const std::vector<std::uint32_t>& members) {
@@ -2090,13 +2127,29 @@ void Interpreter::Impl::StaticKernel::observe_units()
     };
     for (auto& state : partitions_) {
         if (needed(state.members)) {
-            (void)observe_unit(state.native, true);
+            (void)observe_unit(state.native, true, deferred);
         }
     }
     for (auto& group : dispatch_groups_) {
         if (needed(group.members)) {
-            (void)observe_unit(group.native, true);
+            (void)observe_unit(group.native, true, deferred);
         }
+    }
+    compile_deferred_units(deferred);
+    for (const auto index : rebound) {
+        refresh_fast_run(index);
+    }
+}
+
+void Interpreter::Impl::StaticKernel::observe_pending_units()
+{
+    // Called where no unit's code is running (a member or thread about to
+    // run): a thread stopped at a debug point resumes at its continuation
+    // in the hooked code, which has the same body and entries.
+    observe_pending_ = false;
+    observe_units();
+    for (std::uint32_t index = 0U; index < fast_runs_.size(); ++index) {
+        refresh_fast_run(index);
     }
 }
 
@@ -2321,6 +2374,9 @@ void Interpreter::Impl::StaticKernel::note_partition_wake(const std::uint32_t pa
 
 void Interpreter::Impl::StaticKernel::run_partition(const std::uint32_t partition)
 {
+    if (observe_pending_) [[unlikely]] {
+        observe_pending_units();
+    }
     auto& state = partitions_[partition];
     const auto operations_before = profile_operations_;
     if (profile_) {

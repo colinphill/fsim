@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <cstddef>
 #include <cctype>
 #include <limits>
 #include <ostream>
@@ -59,7 +60,7 @@ namespace {
   return "\\" + std::string(value);
 }
 
-[[nodiscard]] char vcd_char(Logic4 value) noexcept {
+[[nodiscard]] constexpr char vcd_char(Logic4 value) noexcept {
   switch (value) {
   case Logic4::zero:
     return '0';
@@ -73,7 +74,7 @@ namespace {
   return 'x';
 }
 
-[[nodiscard]] char vcd_char(Logic9 value) noexcept {
+[[nodiscard]] constexpr char vcd_char(Logic9 value) noexcept {
   switch (value) {
   case Logic9::zero:
   case Logic9::l:
@@ -294,12 +295,45 @@ struct VcdWriter::Impl {
   }
 
   void encode_value(const PackedLogic4& value) {
+    // A word of each plane at a time, decoded as get and get_logic9 do (a
+    // code outside the nine values reads as x).
     const auto width = value.width();
     encoded_value.resize(width);
+    char* const out = encoded_value.data() + width;
+    if (!value.is_logic9()) {
+      static constexpr std::array<char, 4> four{'0', '1', 'z', 'x'};
+      const auto aval = value.aval_words();
+      const auto bval = value.bval_words();
+      for (std::size_t index = 0; index < width; ++index) {
+        const auto word = index / 64U;
+        const auto bit = index % 64U;
+        const auto code = ((aval[word] >> bit) & 1U)
+            | (((bval[word] >> bit) & 1U) << 1U);
+        out[-1 - static_cast<std::ptrdiff_t>(index)] = four[code];
+      }
+      return;
+    }
+    static constexpr auto nine = [] {
+      std::array<char, 16> table{};
+      table.fill('x');
+      for (std::uint8_t code = 0;
+           code <= static_cast<std::uint8_t>(Logic9::dont_care); ++code) {
+        table[code] = vcd_char(static_cast<Logic9>(code));
+      }
+      return table;
+    }();
+    const std::array planes{value.logic9_plane_words(0U),
+                            value.logic9_plane_words(1U),
+                            value.logic9_plane_words(2U),
+                            value.logic9_plane_words(3U)};
     for (std::size_t index = 0; index < width; ++index) {
-      encoded_value[width - index - 1U] = value.is_logic9()
-          ? vcd_char(value.get_logic9(index))
-          : vcd_char(value.get(index));
+      const auto word = index / 64U;
+      const auto bit = index % 64U;
+      std::size_t code{};
+      for (std::size_t plane = 0; plane < 4U; ++plane) {
+        code |= ((planes[plane][word] >> bit) & 1U) << plane;
+      }
+      out[-1 - static_cast<std::ptrdiff_t>(index)] = nine[code];
     }
   }
 

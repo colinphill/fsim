@@ -1517,7 +1517,7 @@ std::unique_ptr<TraceState> attach_trace(
                 if (!trace->handles[signal.id].empty()) {
                     const std::array observed { TraceObservationValue {
                         trace->signal_trace_ids[signal.id],
-                        simulation.read_signal(signal.id), signal.id } };
+                        simulation.read_signal_snapshot(signal.id), signal.id } };
                     static_cast<void>(trace->observations->accept(
                         TraceObservationKind::Signal, simulation.now(),
                         simulation.delta(), runtime::TraceRegion::Snapshot,
@@ -1560,7 +1560,7 @@ std::unique_ptr<TraceState> attach_trace(
                         && state->selection->selected(signal.id)) {
                         const std::array observed { TraceObservationValue {
                             state->signal_trace_ids[signal.id],
-                            traced.read_signal(signal.id), signal.id } };
+                            traced.read_signal_snapshot(signal.id), signal.id } };
                         // Initialization follows what was recorded at time
                         // zero before it (a debugger trace add, a deposit
                         // before the run): its values come after those
@@ -1823,7 +1823,7 @@ namespace {
                 }
             } else {
                 write_hdl_vcd_value(
-                    state, signal.id, state.simulation->read_signal(signal.id));
+                    state, signal.id, state.simulation->read_signal_snapshot(signal.id));
             }
         }
         state.writer->end_checkpoint();
