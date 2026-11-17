@@ -385,6 +385,11 @@ private:
         semantic::SourceSpanId type_source);
     [[nodiscard]] static bool owner_matches(
         std::string_view owner, std::string_view selected) noexcept;
+    // The classes whose properties a member of `declaration_identity` names
+    // in `specialization`: that class (unless from_base) and its bases.
+    [[nodiscard]] std::vector<std::string_view> visible_property_owners(
+        const frontend::SystemVerilogClassSpecialization& specialization,
+        std::string_view declaration_identity, bool from_base) const;
     [[nodiscard]] bool specializes_or_derives(
         const frontend::SystemVerilogClassSpecialization& specialization,
         std::string_view declaration_identity) const;

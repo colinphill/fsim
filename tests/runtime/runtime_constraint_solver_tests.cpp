@@ -1115,7 +1115,8 @@ void test_systemverilog_constraint_solver()
     auto constrained_wide = PackedLogic4(137, Logic4::zero);
     SystemVerilogConstraintTemplate wide_name;
     wide_name.kind = SystemVerilogConstraintTemplateKind::Name;
-    wide_name.text = "wide";
+    // The lowering names a variable by its exact key.
+    wide_name.text = "process::wide";
     SystemVerilogConstraintTemplate wide_constant;
     wide_constant.kind = SystemVerilogConstraintTemplateKind::Constant;
     wide_constant.constant = constrained_wide_value;

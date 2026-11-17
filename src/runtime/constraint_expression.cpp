@@ -1286,70 +1286,16 @@ namespace {
         return std::nullopt;
     }
 
-    [[nodiscard]] bool variable_suffix(
-        std::string_view canonical,
-        std::string_view name) noexcept
-    {
-        if (canonical == name)
-            return true;
-        // `h.m` names the variable whose identity is the path of canonical
-        // property identities `C::h.D::m` (IEEE 1800-2017 18.5.9).
-        if (name.find('.') != std::string_view::npos) {
-            while (true) {
-                const auto name_dot = name.find('.');
-                const auto canonical_dot = canonical.find('.');
-                if ((name_dot == std::string_view::npos)
-                    != (canonical_dot == std::string_view::npos)) {
-                    return false;
-                }
-                const auto segment = name.substr(0U, name_dot);
-                const auto component = canonical.substr(0U, canonical_dot);
-                if (component != segment
-                    && !(component.size() > segment.size() + 1U
-                        && component.ends_with(segment)
-                        && component.substr(
-                               component.size() - segment.size() - 2U, 2U)
-                            == "::")) {
-                    return false;
-                }
-                if (name_dot == std::string_view::npos) {
-                    return true;
-                }
-                name.remove_prefix(name_dot + 1U);
-                canonical.remove_prefix(canonical_dot + 1U);
-            }
-        }
-        if (canonical.size() <= name.size())
-            return false;
-        const auto prefix = canonical.substr(0, canonical.size() - name.size());
-        return (prefix.ends_with("::") || prefix.ends_with('.'))
-            && canonical.ends_with(name);
-    }
-
+    // The solver variable a template name denotes: the lowering names each
+    // property by its canonical identity (IEEE 1800-2023 18.7, 8.14).
     [[nodiscard]] std::optional<SystemVerilogConstraintVariableId>
     find_optional_template_variable(
         const SystemVerilogConstraintVariables& variables,
-        std::string_view name)
+        const std::string_view name)
     {
-        if (name.starts_with("this."))
-            name.remove_prefix(5U);
-        if (const auto exact = variables.find(std::string { name });
-            exact != variables.end()) {
-            return exact->second;
-        }
-        std::optional<SystemVerilogConstraintVariableId> result;
-        for (const auto& [canonical, variable] : variables) {
-            if (!variable_suffix(canonical, name))
-                continue;
-            if (result && *result != variable) {
-                throw std::invalid_argument {
-                    "inline constraint name '" + std::string { name }
-                    + "' is ambiguous"
-                };
-            }
-            result = variable;
-        }
-        return result;
+        const auto exact = variables.find(std::string { name });
+        return exact == variables.end() ? std::nullopt
+                                        : std::optional { exact->second };
     }
 
     [[nodiscard]] SystemVerilogConstraintVariableId find_template_variable(
@@ -1404,30 +1350,14 @@ namespace {
         return result;
     }
 
-    // The canonical identity a template name denotes, by the same suffix
-    // rule as find_optional_template_variable.
+    // The canonical identity a template name denotes.
     [[nodiscard]] std::optional<std::string> find_template_key(
         const SystemVerilogConstraintVariables& variables,
-        std::string_view name)
+        const std::string_view name)
     {
-        if (name.starts_with("this."))
-            name.remove_prefix(5U);
-        if (variables.contains(std::string { name }))
-            return std::string { name };
-        std::optional<std::string> result;
-        for (const auto& [canonical, variable] : variables) {
-            (void)variable;
-            if (!variable_suffix(canonical, name))
-                continue;
-            if (result && *result != canonical) {
-                throw std::invalid_argument {
-                    "inline constraint name '" + std::string { name }
-                    + "' is ambiguous"
-                };
-            }
-            result = canonical;
-        }
-        return result;
+        std::string key { name };
+        return variables.contains(key) ? std::optional { std::move(key) }
+                                       : std::nullopt;
     }
 
     [[nodiscard]] SystemVerilogConstraintVariableProfile index_profile()

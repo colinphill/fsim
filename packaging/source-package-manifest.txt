@@ -2014,6 +2014,7 @@ tests/fixtures/compliance/sv_compiler_directive_wrapped_arguments_batch57.sv
 tests/fixtures/compliance/sv_conditional_intrinsic_width_batch56.sv
 tests/fixtures/compliance/sv_constant_function_and_wide_literals.sv
 tests/fixtures/compliance/sv_constant_unsigned_shift_count_batch57.sv
+tests/fixtures/compliance/sv_constraint_shadowed_members.sv
 tests/fixtures/compliance/sv_container_declaration_initializers.sv
 tests/fixtures/compliance/sv_copies_and_constructors.sv
 tests/fixtures/compliance/sv_declarations_and_calls.sv

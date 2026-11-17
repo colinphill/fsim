@@ -4091,6 +4091,147 @@ Lowerer::hir_inline_constraints(
             && !expression->systemverilog->operands.empty()
         ? std::optional { expression->systemverilog->operands.front() }
         : std::nullopt;
+    // The solver variable a with-clause name of the randomized object's
+    // class denotes: the property of that class, or of the nearest base
+    // declaring it (IEEE 1800-2023 18.7, 8.14), by the property's canonical
+    // identity, which is the object's variable key; a derived class's
+    // property of the same name is not visible through the handle's class.
+    const auto randomized_class = [&]() -> std::string {
+        if (!randomized_object) {
+            return { };
+        }
+        // `this` (and the implicit receiver of `randomize()` in a method)
+        // is an object of the class whose method is being lowered (8.11).
+        const auto node = specialized_hir_unit_->find_expression(
+            *randomized_object);
+        if (node && node->systemverilog != nullptr
+            && node->systemverilog->kind == semantic::sv::ExpressionKind::name
+            && node->systemverilog->text == "this") {
+            if (!active_hir_callable_
+                || *active_hir_callable_ >= hir_callable_frames_.size()) {
+                return { };
+            }
+            const auto method
+                = hir_callable_frames_[*active_hir_callable_].declaration;
+            for (const auto& declaration :
+                specialized_hir_unit_->design().systemverilog_hir.classes()) {
+                if (std::ranges::find(declaration.methods, method,
+                        &semantic::sv::ClassMethod::declaration)
+                    != declaration.methods.end()) {
+                    return declaration.canonical_identity;
+                }
+            }
+            return { };
+        }
+        // An element of a class array property (`h.arr[1]`) is an object
+        // of the property's element class.
+        if (node && node->systemverilog != nullptr
+            && node->systemverilog->marker
+                == support::ExpressionMarker::sv_container_index) {
+            const auto* property = hir_resolver()
+                .resolve_systemverilog_class_property(
+                    node->systemverilog->marker_argument, false)
+                .unique();
+            if (property == nullptr) {
+                return { };
+            }
+            if (!property->type.class_identity.empty()) {
+                return property->type.class_identity;
+            }
+            return property->type.container_element_types.empty()
+                ? std::string { }
+                : property->type.container_element_types.front().class_identity;
+        }
+        const auto type = hir_systemverilog_value_type(*randomized_object);
+        return type ? type->class_identity : std::string { };
+    }();
+    // The property `name` of class `owner` or of the nearest base declaring
+    // it.
+    const auto class_member = [&](std::string_view owner,
+                                  const std::string_view name)
+        -> const semantic::sv::ClassProperty* {
+        const auto& classes
+            = specialized_hir_unit_->design().systemverilog_hir.classes();
+        for (std::size_t steps = 0; !owner.empty() && steps <= classes.size();
+             ++steps) {
+            const auto declaration = std::ranges::find(classes, owner,
+                &semantic::sv::ClassDeclaration::canonical_identity);
+            if (declaration == classes.end()) {
+                return nullptr;
+            }
+            const auto property = std::ranges::find(declaration->properties,
+                name, &semantic::sv::ClassProperty::name);
+            if (property != declaration->properties.end()) {
+                return property->parameter ? nullptr : &*property;
+            }
+            owner = declaration->base_declaration_identity;
+        }
+        return nullptr;
+    };
+    // The variable key of `m` or of a path `h.m` through class-handle
+    // properties (18.5.9), each component's canonical identity joined by
+    // dots, and the property the path ends at.
+    struct MemberPath {
+        std::string key;
+        const semantic::sv::ClassProperty* property { };
+    };
+    const auto member_path = [&](const std::string_view path)
+        -> std::optional<MemberPath> {
+        MemberPath result;
+        std::string_view owner { randomized_class };
+        std::string_view rest { path };
+        for (;;) {
+            const auto dot = rest.find('.');
+            result.property = class_member(owner, rest.substr(0U, dot));
+            if (result.property == nullptr) {
+                return std::nullopt;
+            }
+            if (!result.key.empty()) {
+                result.key += '.';
+            }
+            result.key += result.property->canonical_identity;
+            if (dot == std::string_view::npos) {
+                return result;
+            }
+            if (result.property->type.class_identity.empty()) {
+                return std::nullopt;
+            }
+            owner = result.property->type.class_identity;
+            rest.remove_prefix(dot + 1U);
+        }
+    };
+    const auto member_key = [&](const std::string_view path)
+        -> std::optional<std::string> {
+        auto found = member_path(path);
+        return found ? std::optional { std::move(found->key) } : std::nullopt;
+    };
+    // The template of a with-clause member path: its variable, or `a.size`
+    // without parentheses on an array property, its size method (7.5.1,
+    // 7.10.2.1, 18.5.8.1).
+    const auto member_template = [&](const std::string_view path)
+        -> std::optional<Template> {
+        Template name;
+        name.kind = TemplateKind::Name;
+        if (auto key = member_key(path)) {
+            name.text = std::move(*key);
+            return name;
+        }
+        const auto dot = path.rfind('.');
+        const auto array = dot == std::string_view::npos
+            ? std::nullopt
+            : member_path(path.substr(0U, dot));
+        if (!array || !array->property->type.container_form
+            || support::builtin_method_named(path.substr(dot + 1U))
+                != support::BuiltinMethod::size) {
+            return std::nullopt;
+        }
+        Template size;
+        size.kind = TemplateKind::Method;
+        size.text = ".size";
+        name.text = array->key;
+        size.operands.push_back(std::move(name));
+        return size;
+    };
     // A placeholder for the value an expression has in the calling scope,
     // filled from the matching inline-value actual at the call.
     const auto caller_value = [&](const semantic::ExpressionId id)
@@ -4499,6 +4640,22 @@ Lowerer::hir_inline_constraints(
                 return folded;
             }
             output.kind = TemplateKind::Name;
+            // A property of the randomized object, named as `m`, `this.m`
+            // or through its handle properties (`h.m`), is its variable
+            // (18.7, 18.5.9); `with (names)` lists the names that resolve
+            // so.
+            {
+                std::string_view name { source.text };
+                if (name.starts_with("this.")) {
+                    name.remove_prefix(5U);
+                }
+                if (!member_names
+                    || member_names->contains(name.substr(0U, name.find('.')))) {
+                    if (auto member = member_template(name)) {
+                        return std::move(*member);
+                    }
+                }
+            }
             // `a.b.m` through the randomized handle `a.b` names its member
             // `m` (IEEE 1800-2017 18.7).
             if (randomized_object && source.text.find('.') != std::string::npos) {
@@ -4538,6 +4695,9 @@ Lowerer::hir_inline_constraints(
                     && source.text.starts_with(*handle)
                     && source.text[handle->size()] == '.') {
                     output.text = source.text.substr(handle->size() + 1U);
+                    if (auto member = member_template(output.text)) {
+                        return std::move(*member);
+                    }
                     return output;
                 }
             }
@@ -4581,10 +4741,16 @@ Lowerer::hir_inline_constraints(
                 output.operands.push_back(std::move(value));
                 runtime_values->push_back(id);
             }
-            if (member_names && output.operands.size() == 1U) {
+            if (output.operands.size() == 1U) {
                 const auto root = std::string_view { source.text }.substr(
                     0, source.text.find('.'));
-                if (!member_names->contains(root)) {
+                // A name the handle's class does not declare, or one a
+                // `with (names)` list leaves out, is the calling scope's
+                // (18.7), even when the object's own class declares it.
+                if ((member_names && !member_names->contains(root))
+                    || (!randomized_class.empty()
+                        && !source.text.starts_with("this.")
+                        && !member_key(root))) {
                     return std::move(output.operands.front());
                 }
             }

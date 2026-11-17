@@ -613,6 +613,35 @@ bool SystemVerilogHirBuilder::specializes_or_derives(
     return false;
 }
 
+std::vector<std::string_view> SystemVerilogHirBuilder::visible_property_owners(
+    const frontend::SystemVerilogClassSpecialization& specialization,
+    const std::string_view declaration_identity,
+    const bool from_base) const
+{
+    std::vector<std::string_view> owners;
+    bool reached = false;
+    const auto* current = &specialization;
+    for (std::size_t steps = 0; current != nullptr
+         && steps <= class_specializations_.size(); ++steps) {
+        if (current->declaration_identity == declaration_identity) {
+            reached = true;
+            if (!from_base) {
+                owners.push_back(current->declaration_identity);
+            }
+        } else if (reached) {
+            owners.push_back(current->declaration_identity);
+        }
+        if (current->base_specialization_identity.empty()) {
+            break;
+        }
+        const auto base = std::ranges::find(
+            class_specializations_, current->base_specialization_identity,
+            &frontend::SystemVerilogClassSpecialization::specialization_identity);
+        current = base == class_specializations_.end() ? nullptr : &*base;
+    }
+    return owners;
+}
+
 std::optional<sv::ConstraintBinding> SystemVerilogHirBuilder::property_binding(
     const frontend::SystemVerilogClassDeclaration& declaration,
     const frontend::SystemVerilogClassSpecialization& specialization,
@@ -639,19 +668,23 @@ std::optional<sv::ConstraintBinding> SystemVerilogHirBuilder::property_binding(
         spelling.erase(0, separator + 2U);
         selection = Selection::qualified;
     }
+    // A constraint's names are those of the class that declares it: its
+    // own properties and its base classes', never those of a class derived
+    // from it, which only hide them in the derived class's own code (IEEE
+    // 1800-2023 8.14, 18.5). `super.` starts at the base class (8.15).
+    const auto visible = visible_property_owners(
+        specialization, declaration.canonical_identity,
+        selection == Selection::super_object);
     const auto found = std::ranges::find_if(
         specialization.properties.rbegin(),
         specialization.properties.rend(),
         [&](const frontend::SystemVerilogClassPropertyLayout& property) {
             if (property.name != spelling)
                 return false;
-            if (selection == Selection::super_object) {
-                return property.owner_identity
-                    != declaration.canonical_identity;
-            }
             if (selection == Selection::qualified)
                 return owner_matches(property.owner_identity, owner);
-            return true;
+            return std::ranges::find(visible, property.owner_identity)
+                != visible.end();
         });
     if (found == specialization.properties.rend())
         return std::nullopt;
