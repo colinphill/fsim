@@ -2092,6 +2092,76 @@ void HierarchyBuilder::finish()
                 = static_cast<std::uint32_t>(info.width);
         }
     }
+    // Each static process and static initializer is seeded with the next
+    // value of its design element's initialization random number generator
+    // (IEEE 1800-2023 18.14.1): its rank among the element's procedures,
+    // continuous assignments (Annex P) and static initializers in
+    // declaration order, so adding one after the others leaves theirs. A
+    // process no source declares ranks after the declared ones.
+    {
+        const auto count = design_.process_count();
+        std::vector<std::uint64_t> ordinals(
+            count, runtime::simir::unranked_random_ordinal);
+        std::vector<std::uint8_t> ranked(count, 0U);
+        struct Rank {
+            std::uint64_t order { };
+            ProcessId process { };
+        };
+        const auto assign = [&](std::vector<Rank>& ranks) {
+            std::ranges::sort(ranks, [](const Rank& left, const Rank& right) {
+                return left.order != right.order ? left.order < right.order
+                                                 : left.process < right.process;
+            });
+            for (std::size_t rank = 0U; rank < ranks.size(); ++rank) {
+                ordinals[ranks[rank].process] = rank;
+            }
+        };
+        constexpr auto undeclared = std::numeric_limits<std::uint64_t>::max();
+        std::unordered_map<ProcessId, std::uint64_t> orders;
+        for (const auto& specialization : design_.specializations_) {
+            orders.clear();
+            for (const auto& [process, semantic_process] :
+                specialization.semantic_processes) {
+                const auto source = compiled_->find_process(semantic_process);
+                if (source && source->systemverilog != nullptr
+                    && source->systemverilog->source_order != 0U) {
+                    orders.emplace(process, source->systemverilog->source_order);
+                }
+            }
+            std::vector<Rank> ranks;
+            for (const auto process : specialization.processes) {
+                if (process >= count || ranked[process] != 0U) {
+                    continue;
+                }
+                ranked[process] = 1U;
+                const auto declared = orders.find(process);
+                const auto concurrent = concurrent_source_orders_.find(process);
+                ranks.push_back({ declared != orders.end() ? declared->second
+                        : concurrent != concurrent_source_orders_.end()
+                        ? concurrent->second
+                        : undeclared,
+                    process });
+            }
+            assign(ranks);
+        }
+        // A package's static initializers, and a class's, rank in the
+        // startup order of the package that holds them.
+        std::map<std::uint32_t, std::vector<Rank>> packages;
+        for (ProcessId process = 0U; process < count; ++process) {
+            if (ranked[process] != 0U) {
+                continue;
+            }
+            const auto view = design_.process_view(process);
+            if (runtime::simir::startup_initializer_phase(view.startup_phase())) {
+                packages[view.startup_package_owner_id()].push_back(
+                    { view.startup_order(), process });
+            }
+        }
+        for (auto& [owner, ranks] : packages) {
+            assign(ranks);
+        }
+        design_.process_random_ordinals_ = std::move(ordinals);
+    }
     design_.finalize_process_rows();
     std::stable_sort(
         design_.systemc_objects_.begin(),

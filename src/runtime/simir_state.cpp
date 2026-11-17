@@ -3047,16 +3047,35 @@ void Interpreter::Impl::apply_time_format(const PackedLogic4& units_value,
 
 [[nodiscard]] std::uint64_t Interpreter::Impl::initial_random_state(
     const std::uint64_t seed,
-    const ProcessId process) noexcept
+    const std::uint64_t ordinal) noexcept
 {
     auto value = seed
-        + UINT64_C(0x9e3779b97f4a7c15)
-            * (static_cast<std::uint64_t>(process) + 1U);
+        + UINT64_C(0x9e3779b97f4a7c15) * (ordinal + 1U);
     value = (value ^ (value >> 30U))
         * UINT64_C(0xbf58476d1ce4e5b9);
     value = (value ^ (value >> 27U))
         * UINT64_C(0x94d049bb133111eb);
     return value ^ (value >> 31U);
+}
+
+[[nodiscard]] std::uint64_t Interpreter::Impl::static_process_random_state(
+    const ProcessId process) const noexcept
+{
+    // Every initialization generator is seeded with the default seed (IEEE
+    // 1800-2023 18.14.1), so a process's rank in its design element is the
+    // whole of its seed. A process no element ranks takes a stream past
+    // every rank.
+    constexpr auto unranked_base = std::uint64_t { 1U } << 32U;
+    if (process_random_ordinals.empty()) {
+        return initial_random_state(root_seed, process);
+    }
+    const auto ordinal = process < process_random_ordinals.size()
+        ? process_random_ordinals[process]
+        : unranked_random_ordinal;
+    return initial_random_state(root_seed,
+        ordinal != unranked_random_ordinal && ordinal < unranked_base
+            ? ordinal
+            : unranked_base + process);
 }
 
 [[nodiscard]] std::uint32_t Interpreter::Impl::next_random(

@@ -957,8 +957,9 @@ void Simulation::Impl::add_constraint_state_variables(
     request.limits.maximum_domain_values = std::size_t { 1U } << 22U;
     application_detail::configure_systemverilog_randomize_selection(
         request, selected_names, no_properties);
-    request.call_identity = object.specialization_identity
-        + "::randomize@source";
+    // The object's own generator serves every randomize call of the object
+    // (IEEE 1800-2023 18.14.1); the stream names no class text.
+    request.call_identity = "randomize";
     // A random enumerated property takes only its type's values (IEEE
     // 1800-2017 18.4).
     const auto enumeration_domains = [&](const std::string& specialization) {

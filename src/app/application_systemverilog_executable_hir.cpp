@@ -1833,6 +1833,7 @@ namespace {
             output.label = input.label;
             output.source = statement_source;
             output.origin = statement_origin;
+            output.source_order = input.systemverilog_source_order;
             auto child_scope = enclosing_scope;
             const bool declares_loop_variable
                 = input.kind == frontend::StatementKind::Loop
@@ -2315,6 +2316,7 @@ namespace {
                 = input.systemverilog_concurrent_assertion;
             output.synthesized = input.synthesized;
             output.declaration_initializer = input.declaration_initializer;
+            output.source_order = input.systemverilog_source_order;
             if (input.body_block) {
                 output.body_block = source(*input.body_block);
             }

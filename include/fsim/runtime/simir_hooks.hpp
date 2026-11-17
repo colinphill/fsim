@@ -32,15 +32,23 @@ struct ClassStaticMethodCall;
 class DpiFrame;
 enum class AssertionSeverity : std::uint8_t;
 
+/// One message a mailbox holds: a packed value, a string, or a value of an
+/// unpacked array, structure or union type (IEEE 1800-2023 15.4), which a
+/// VPI reader cannot take as one value (37.26 detail 1, 38.15).
+struct SynchronizationMessage {
+    enum class Kind : std::uint8_t { packed, string, container };
+    Kind kind { Kind::packed };
+    PackedLogic4 value;
+    std::string text;
+};
+
 /// A mailbox or semaphore, by the handle a variable of its class holds
 /// (IEEE 1800-2023 15.3, 15.4), as the VPI reads it (37.33 details 3 and
-/// 4): the messages a mailbox holds, oldest first, and the processes
+/// 4): every message a mailbox holds, oldest first, and the processes
 /// waiting on the object (a mailbox's readers, then its writers).
 struct SynchronizationObject {
     bool mailbox { };
-    bool string_messages { };
-    std::vector<PackedLogic4> messages;
-    std::vector<std::string> string_values;
+    std::vector<SynchronizationMessage> messages;
     std::vector<ProcessId> waiting;
 };
 

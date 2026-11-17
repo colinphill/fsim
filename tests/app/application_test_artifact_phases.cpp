@@ -39,11 +39,11 @@ void ApplicationTestFixture::test_artifact_phase_semantics()
 {
     install_governed_process_address_space_ceiling();
     const ScopedCurrentDirectory source_root { directory / "work" };
-    static_assert(app::kRuntimeStateSchema == 134);
+    static_assert(app::kRuntimeStateSchema == 135);
     static_assert(app::kSemanticStateSchema == 9);
     static_assert(app::kDesignIrStateSchema == 18);
-    static_assert(app::kCompiledHirBundleSchema == 13);
-    static_assert(app::kSystemVerilogConstraintHirStateSchema == 38);
+    static_assert(app::kCompiledHirBundleSchema == 14);
+    static_assert(app::kSystemVerilogConstraintHirStateSchema == 39);
     static_assert(app::kSystemVerilogCoverageStateSchema == 8);
     static_assert(app::kSystemVerilogUvmStateSchema == 3);
     static_assert(app::kVhdlHirStateSchema == 18);
@@ -463,9 +463,9 @@ end architecture;
             return diagnostic.code == "FSIM-ART-0001"
                 && diagnostic.message
                 == "unsupported .fsimobj identity: found format 12, "
-                   "portable-unit schema 16, and compiled-HIR schema 13; "
+                   "portable-unit schema 16, and compiled-HIR schema 14; "
                    "required format 11, portable-unit schema 16, and "
-                   "compiled-HIR schema 13; regenerate .fsimobj with this "
+                   "compiled-HIR schema 14; regenerate .fsimobj with this "
                    "fsim build";
         }));
     output.str({ });

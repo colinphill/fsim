@@ -29989,7 +29989,8 @@ bool Lowerer::can_lower_hir_expression(
             return supported;
         }
         if (source.kind == semantic::sv::ExpressionKind::call
-            && source.text.starts_with('.')
+            && semantic::sv::member_builtin_method(source)
+                != support::BuiltinMethod::none
             && !source.operands.empty()) {
             const auto declaration_id = hir_target_declaration(
                 source.operands.front());
@@ -30009,19 +30010,19 @@ bool Lowerer::can_lower_hir_expression(
             const bool semaphore = standard_class
                 == support::SystemVerilogStandardClass::semaphore;
             if (mailbox || semaphore) {
-                const auto method
-                    = std::string_view { source.text }.substr(1U);
+                using Method = support::BuiltinMethod;
+                const auto method = semantic::sv::member_builtin_method(source);
                 const auto arguments = source.operands.size() - 1U;
                 const bool arity = mailbox
-                    ? (method == "num" && arguments == 0U)
-                        || ((method == "put" || method == "try_put"
-                                || method == "get"
-                                || method == "try_get"
-                                || method == "peek"
-                                || method == "try_peek")
+                    ? (method == Method::num && arguments == 0U)
+                        || ((method == Method::put || method == Method::try_put
+                                || method == Method::get
+                                || method == Method::try_get
+                                || method == Method::peek
+                                || method == Method::try_peek)
                             && arguments == 1U)
-                    : (method == "get" || method == "try_get"
-                            || method == "put")
+                    : (method == Method::get || method == Method::try_get
+                            || method == Method::put)
                         && arguments <= 1U;
                 supported = arity && std::ranges::all_of(
                     source.operands,

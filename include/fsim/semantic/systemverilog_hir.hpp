@@ -566,6 +566,10 @@ struct Statement {
     std::string label;
     SourceSpanId source;
     OriginId origin;
+    // One-based source-token ordinal of the statement; a continuous
+    // assignment's place in the declaration order of its design element
+    // (IEEE 1800-2023 18.14.1). Zero for a generated statement.
+    std::uint64_t source_order { };
     AssignmentKind assignment_kind { AssignmentKind::blocking };
     std::optional<ExpressionId> target;
     // For a task_call of a class's static method through a specialization
@@ -729,6 +733,10 @@ struct Process {
     // variable its one assignment targets (IEEE 1800-2023 6.8): it starts
     // before every procedure.
     bool declaration_initializer { };
+    // One-based source-token ordinal of the procedure or declaration: its
+    // place in the declaration order of its design element (IEEE 1800-2023
+    // 18.14.1); zero for a generated process.
+    std::uint64_t source_order { };
     // The unnamed begin-end the source gave as the procedure's statement,
     // which the process's declarations and statements came from (37.44).
     std::optional<SourceSpanId> body_block;

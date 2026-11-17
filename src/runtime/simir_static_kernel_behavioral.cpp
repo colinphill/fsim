@@ -125,7 +125,9 @@ std::uint32_t Interpreter::Impl::StaticKernel::spawn_thread(
             std::max(impl_.processes.size(), next_child_process_));
         next_child_process_ = static_cast<std::size_t>(id) + 1U;
         thread.order = id;
-        thread.random_state = Impl::initial_random_state(impl_.root_seed, id);
+        // Seeded with the next value of the forking thread's generator (IEEE
+        // 1800-2023 18.14.1): the running member's live stream.
+        thread.random_state = Impl::next_random(*random_state_table()[member]);
         child_threads_[id] = index;
         if (members_[member].thread_contexts) {
             // The activation the fork runs in escapes: the child shares it,

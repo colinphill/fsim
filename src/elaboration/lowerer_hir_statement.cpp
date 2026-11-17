@@ -23432,10 +23432,6 @@ bool Lowerer::lower_hir_statement_unsuspended(
             const auto coverage_database_task
                 = input.task.spelling == "$set_coverage_db_name"
                 || input.task.spelling == "$load_coverage_db";
-            if (hir_synchronization_task_profile(
-                    input, hir_process_scope_)) {
-                return lower_hir_synchronization_statement(input);
-            }
             // A process control method of a named handle (IEEE 1800-2023
             // 9.7): a variable of the process class selecting one of its
             // methods.
@@ -26098,6 +26094,16 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         == support::SystemVerilogBuiltinType::void_type
                     && container_call.operands.size() == 1U) {
                     discarded = container_call.operands.front();
+                }
+                // `void'(mb.try_put(x));`, `void'(s.try_get());`: a
+                // semaphore or mailbox function whose result is discarded
+                // (15.3, 15.4).
+                if (discarded != *input.value) {
+                    const auto discarded_synchronization
+                        = lower_hir_synchronization_expression(discarded, 0U);
+                    if (discarded_synchronization.handled) {
+                        return discarded_synchronization.succeeded;
+                    }
                 }
                 const auto discarded_expression
                     = specialized_hir_unit_->find_expression(discarded);

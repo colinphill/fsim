@@ -11018,17 +11018,16 @@ private:
             }
         }
         if (type == vpiMessages && object->mailbox) {
-            const auto count = object->string_messages
-                ? object->string_values.size()
-                : object->messages.size();
-            for (std::size_t index = 0U; index < count; ++index) {
+            using Kind = runtime::simir::SynchronizationMessage::Kind;
+            for (const auto& held : object->messages) {
                 SyncMessage message;
                 message.object = handle;
-                if (object->string_messages) {
+                message.aggregate = held.kind == Kind::container;
+                if (held.kind == Kind::string) {
                     message.value.kind = Value::Kind::string;
-                    message.value.text = object->string_values[index];
-                } else {
-                    message.value.bits = object->messages[index];
+                    message.value.text = held.text;
+                } else if (held.kind == Kind::packed) {
+                    message.value.bits = held.value;
                 }
                 sync_messages_.push_back(std::move(message));
                 objects.push_back(
@@ -11041,6 +11040,9 @@ private:
     struct SyncMessage {
         fsim_vpi_handle_v1 object { };
         Value value;
+        // A message of an unpacked array, structure or union type, whose
+        // value is not one VPI value (37.26 detail 1, 38.15).
+        bool aggregate { };
     };
 
     [[nodiscard]] const SyncMessage* sync_message_of(
@@ -19223,6 +19225,9 @@ private:
             }
         }
         if (const auto* const message = sync_message_of(request.handle)) {
+            if (message->aggregate) {
+                return succeed(result, 0U, undefined);
+            }
             switch (property) {
             case vpiConstType:
                 return integer(message->value.kind == Value::Kind::string
@@ -22098,6 +22103,16 @@ private:
             return get_class_value(request.handle, *out, result);
         }
         if (const auto* const message = sync_message_of(request.handle)) {
+            if (message->aggregate) {
+                out->format = vpiSuppressVal;
+                std::memset(&out->value, 0, sizeof(out->value));
+                error_message_ = "vpi_get_value: a mailbox message of an "
+                                 "unpacked array, structure or union type is "
+                                 "not one value (IEEE 1800-2023 37.26 detail 1, "
+                                 "38.15)";
+                error_ = true;
+                return FSIM_VPI_STATUS_NOT_FOUND;
+            }
             if (!write_value(message->value, *out)) {
                 out->format = vpiSuppressVal;
                 std::memset(&out->value, 0, sizeof(out->value));

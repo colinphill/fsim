@@ -3436,18 +3436,6 @@ private:
         // The property's declared type.
         const semantic::sv::TypeReference* type { };
     };
-    struct HirSynchronizationTaskProfile {
-        semantic::DeclarationId receiver;
-        std::string_view method;
-        bool mailbox { };
-        // A mailbox or semaphore property of a class object (`mb.put(x)`
-        // in a method, `c.mb.get(y)`).
-        std::optional<HirNamedClassProperty> class_property;
-    };
-    [[nodiscard]] std::optional<HirSynchronizationTaskProfile>
-    hir_synchronization_task_profile(
-        const semantic::sv::Statement& statement,
-        semantic::ScopeId process_scope) const;
     // A typed mailbox's element: a string, or a packed type of `width`
     // bits (IEEE 1800-2017 15.4.9). Reports FSIM-ELAB-SVSYNC-002 with
     // `message` when the element has neither form.
@@ -3479,8 +3467,6 @@ private:
     [[nodiscard]] std::optional<HirMailboxElement> hir_mailbox_element(
         const semantic::sv::TypeReference* mailbox_type,
         std::string_view message, const frontend::SourceSpan& span);
-    [[nodiscard]] bool lower_hir_synchronization_statement(
-        const semantic::sv::Statement& statement);
     [[nodiscard]] HirSynchronizationAttempt
     lower_hir_synchronization_expression(
         semantic::ExpressionId expression,

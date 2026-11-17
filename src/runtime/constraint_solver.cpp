@@ -119,16 +119,6 @@ namespace {
   return value ^ (value >> 31U);
 }
 
-[[nodiscard]] std::uint64_t identity_hash(
-    const std::string_view identity) noexcept {
-  auto value = UINT64_C(14695981039346656037);
-  for (const auto character : identity) {
-    value ^= static_cast<std::uint8_t>(character);
-    value *= UINT64_C(1099511628211);
-  }
-  return value;
-}
-
 }  // namespace
 
 std::size_t SystemVerilogConstraintAssignment::size() const noexcept {
@@ -650,8 +640,12 @@ SystemVerilogConstraintSolver::solve(const std::uint64_t selection) const {
     }
     std::size_t top = 1U;
     while (top * 2U <= count) top *= 2U;
-    auto state = mixed(
-        selection ^ identity_hash(variables_[variable].canonical_identity));
+    // Each variable's value order follows from the call's stream and the
+    // variable's place in the solve, never from its canonical text, so a
+    // declaration elsewhere leaves it (IEEE 1800-2023 18.14.1).
+    auto state = mixed(selection
+        ^ mixed(static_cast<std::uint64_t>(variable)
+            + UINT64_C(0x9e3779b97f4a7c15)));
     order.reserve(remaining);
     for (; remaining > 0U; --remaining) {
       auto target = state % total;

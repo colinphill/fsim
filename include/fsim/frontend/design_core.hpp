@@ -2309,6 +2309,12 @@ struct Process {
     // declaration initializer (IEEE 1800-2023 6.8): it runs before every
     // initial or always procedure.
     bool declaration_initializer { };
+    // One-based preprocessed-token ordinal of the procedure or declaration
+    // the process was made from: its place in the declaration order of its
+    // design element, which orders the draws of the element's
+    // initialization random number generator (IEEE 1800-2023 18.14.1).
+    // Zero for a process the frontend generated.
+    std::uint64_t systemverilog_source_order { };
     std::string name;
     std::vector<ParameterDeclaration> constants;
     std::vector<TypeAliasDeclaration> type_aliases;

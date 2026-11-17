@@ -1077,9 +1077,11 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
           // clauses' comparisons with constants allow, and from the ranges
           // of its distributions (IEEE 1800-2017 18.5.4).
           const auto id = probe_variables.at(identity_of(node, key.second));
+          // Each property's stream is named by its place in the object, not
+          // its canonical text (IEEE 1800-2023 18.14.1).
           auto stream = heap.random_stream(node.handle,
-              request.call_identity + "::"
-                  + node.object->property_names[key.second] + "::$bounded");
+              request.call_identity + "::bounded@"
+                  + std::to_string(key.second));
           const auto& profile = probe.variables()[id].profile;
           // State variables hold their current values during the call.
           std::map<SystemVerilogConstraintVariableId, PackedLogic4> fixed;
@@ -1335,8 +1337,9 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
               ? request.limits.maximum_domain_values - domain_values
               : 0;
           if (direct_indices.contains(Key{n, index})) {
-            auto stream = heap.random_stream(
-                node.handle, request.call_identity + "::" + name);
+            auto stream = heap.random_stream(node.handle,
+                request.call_identity + "::property@"
+                    + std::to_string(index));
             base_domain.push_back(
                 random_packed(stream, property.packed.width()));
           } else if (const auto found = bounded.find(Key{n, index});

@@ -2190,6 +2190,39 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
         {},
         statement.span};
     const auto receiver_type = resolve_expression(receiver, scope);
+    // A method of a semaphore or mailbox (IEEE 1800-2023 15.3, 15.4)
+    // called as a statement: the member call with the receiver first, its
+    // method resolved here from the class's member list, so no later
+    // reader splits the task name or resolves the receiver's name again.
+    if (const auto standard = receiver_type
+                ? visible_standard_class(*receiver_type, scope)
+                : support::SystemVerilogStandardClass::none;
+        standard == support::SystemVerilogStandardClass::mailbox
+        || standard == support::SystemVerilogStandardClass::semaphore) {
+      const auto name = std::string_view{statement.task_name}.substr(
+          dot + 1U);
+      Expression call{ExpressionKind::Call, "." + std::string{name}, {},
+          statement.span};
+      call.builtin_method = support::builtin_method_named(name);
+      call.operands.push_back(Expression{ExpressionKind::Identifier,
+          statement.task_name.substr(0, dot), {}, statement.span});
+      for (auto& argument : statement.task_arguments) {
+        call.operands.push_back(std::move(argument));
+      }
+      if (!statement.task_argument_names.empty()) {
+        call.call_argument_names.push_back(std::string{});
+        for (const auto& argument_name : statement.task_argument_names) {
+          call.call_argument_names.push_back(argument_name);
+        }
+      }
+      resolve_expression(call, scope);
+      statement.kind = StatementKind::ContainerMethod;
+      statement.value = std::move(call);
+      statement.task_name.clear();
+      statement.task_arguments.clear();
+      statement.task_argument_names.clear();
+      return;
+    }
     if (receiver_type && receiver_type->systemverilog_container
         && receiver.kind == ExpressionKind::Call
         && receiver.marker == support::ExpressionMarker::sv_container_property

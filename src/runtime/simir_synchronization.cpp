@@ -167,17 +167,25 @@ Interpreter::synchronization_object(const std::uint64_t handle) const {
     }
     const auto& mailbox = impl_->mailboxes[index];
     object.mailbox = true;
-    object.string_messages = mailbox.element_kind == MailboxElementKind::string;
-    object.messages.assign(mailbox.entries.begin(), mailbox.entries.end());
-    object.string_values.assign(
-        mailbox.string_entries.begin(), mailbox.string_entries.end());
-    // A typeless mailbox's messages, each in the list of its kind.
+    using Kind = SynchronizationMessage::Kind;
+    // A typed mailbox holds messages of its one kind; a typeless one keeps
+    // each message's own kind, in the order they were put (15.4.9).
+    for (const auto& entry : mailbox.entries) {
+      object.messages.push_back({Kind::packed, entry, {}});
+    }
+    for (const auto& entry : mailbox.string_entries) {
+      object.messages.push_back({Kind::string, {}, entry});
+    }
+    for (std::size_t entry = 0U; entry < mailbox.container_entries.size();
+         ++entry) {
+      object.messages.push_back({Kind::container, {}, {}});
+    }
     for (const auto& message : mailbox.messages) {
-      if (message.string) {
-        object.string_values.push_back(message.string_value);
-      } else if (!message.container) {
-        object.messages.push_back(message.value);
-      }
+      object.messages.push_back(message.string
+              ? SynchronizationMessage{Kind::string, {}, message.string_value}
+          : message.container
+              ? SynchronizationMessage{Kind::container, {}, {}}
+              : SynchronizationMessage{Kind::packed, message.value, {}});
     }
     for (const auto& reader : mailbox.readers) {
       object.waiting.push_back(reader.process);

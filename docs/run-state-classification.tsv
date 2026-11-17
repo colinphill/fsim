@@ -135,6 +135,7 @@ interp.impl	cohort_overflow_contexts	S	empty or false at every save point: the s
 interp.impl	cohort_overflow_entries	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
 interp.impl	cohort_overflow_scratch_in_use	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
 interp.impl	root_seed	Cfg	configuration from the artifact or command line
+interp.impl	process_random_ordinals	Cfg	configuration from the artifact
 interp.impl	signals	P	signal values, driver contributions, forces and history
 interp.impl	signal_cold	Cfg	signal declarations from the artifact
 interp.impl	switch_connections	Cfg	configuration from the artifact or command line

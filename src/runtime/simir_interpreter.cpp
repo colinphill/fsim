@@ -135,6 +135,12 @@ void Interpreter::set_time_resolution_femtoseconds(
     impl_->time_format.units = exponent;
 }
 
+void Interpreter::set_process_random_ordinals(
+    std::vector<std::uint64_t> ordinals)
+{
+    impl_->process_random_ordinals = std::move(ordinals);
+}
+
 std::optional<std::uint64_t> Interpreter::take_class_allocation_seed()
 {
     return std::exchange(impl_->pending_class_allocation_seed, std::nullopt);
@@ -2387,8 +2393,7 @@ ProcessId Interpreter::Impl::add_process_program_impl(
             ? Process::full_static_trigger_mask
             : 0U;
         compact.waiting_on_static = !initialize;
-        compact.random_state = Impl::initial_random_state(
-            root_seed, id);
+        compact.random_state = static_process_random_state(id);
         compact.program_storage = std::make_unique<ProcessProgramStorage>(
             std::move(program_storage));
         processes.push_compact(std::move(compact));
@@ -2402,8 +2407,7 @@ ProcessId Interpreter::Impl::add_process_program_impl(
                   [](const Operation& operation) {
                       return operation_holds<CallableFramePush>(operation);
                   });
-        state.cold().random_state = Impl::initial_random_state(
-            root_seed, id);
+        state.cold().random_state = static_process_random_state(id);
         state.cold().design_process = id;
         state.execution_phase = execution_phase;
         state.static_trigger_mask = initialize
@@ -4997,7 +5001,7 @@ ProcessId Interpreter::add_foreign_driver_owner(const ProcessId model)
     owner.id = id;
     owner.cold().inherit_driver_owner_program(source.cold(), id);
     owner.cold().design_process = source.cold().design_process;
-    owner.cold().random_state = Impl::initial_random_state(impl.root_seed, id);
+    owner.cold().random_state = impl.static_process_random_state(id);
     owner.execution_phase = source.execution_phase;
     owner.static_trigger_mask = 0U;
     owner.status = ProcessStatus::waiting;

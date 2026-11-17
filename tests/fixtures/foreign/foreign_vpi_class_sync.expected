@@ -11,7 +11,7 @@
 #c result greet value=n4
 #c result select type=vpiBitSelect value=9
 #c constraint c_limit item type=vpiOperation value=1 parent=1
-#c constraint operand type=vpiRefObj name=x value=5
+#c constraint operand type=vpiRefObj name=x value=9
 #c constraint operand type=vpiRefObj name=limit value=20
 #c constraint defn item value=-1
 #c box typespec=Box#(8)

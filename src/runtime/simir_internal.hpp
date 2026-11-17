@@ -1549,6 +1549,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::vector<ProcessCohortResumeEntry> cohort_overflow_entries;
     bool cohort_overflow_scratch_in_use { };
     std::uint64_t root_seed { 1 };
+    // Interpreter::set_process_random_ordinals.
+    std::vector<std::uint64_t> process_random_ordinals;
     // SignalHot and SignalCold are dense, SignalId-indexed parallel records.
     std::vector<SignalHot> signals;
     std::vector<SignalCold> signal_cold;
@@ -3899,9 +3901,16 @@ struct Interpreter::Impl : SchedulerBatchTask {
         const PackedLogic4& precision, const PackedLogic4& minimum_width,
         const std::string& suffix);
 
+    // The state of the generator seeded with the `ordinal`-th value (from
+    // zero) of a generator seeded with `seed`.
     [[nodiscard]] static std::uint64_t initial_random_state(
         const std::uint64_t seed,
-        const ProcessId process) noexcept;
+        const std::uint64_t ordinal) noexcept;
+    // The state a static process starts with: the value of its design
+    // element's initialization generator its random ordinal names
+    // (Interpreter::set_process_random_ordinals).
+    [[nodiscard]] std::uint64_t static_process_random_state(
+        ProcessId process) const noexcept;
 
     // A process's random state as std::process::get_randstate's token, and
     // back (IEEE 1800-2023 18.13.4, 18.13.5).

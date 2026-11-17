@@ -1040,6 +1040,13 @@ public:
     /// the callback observation barrier that publishes every signal first.
     void set_fork_spawn_filter(ForkSpawnFilter filter, bool observes_signals = true);
     void set_class_allocate_context_hook(ClassAllocateContextHook hook);
+    // Which value of its design element's initialization random number
+    // generator seeds each static process added after this call (IEEE
+    // 1800-2023 18.14.1), by process; a process the list does not rank
+    // (unranked_random_ordinal, or past its end) takes a stream of its own.
+    // Without a list, the processes of the program are one element's, in
+    // the order they are added.
+    void set_process_random_ordinals(std::vector<std::uint64_t> ordinals);
     // The seed a new object's random number generator takes from the
     // allocating process's generator (IEEE 1800-2017 18.14.1), available
     // while the class allocation hook runs.

@@ -588,6 +588,7 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
               port_name.span};
           driver.value = std::move(*declaration.default_value);
           driver.span = span_from(port_name, previous());
+          driver.systemverilog_source_order = systemverilog_source_order();
           unit.concurrent_statements.push_back(std::move(driver));
           declaration.default_value.reset();
         }
@@ -2283,6 +2284,8 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
           initializer_process.kind = ProcessKind::Initial;
           initializer_process.name = "$class_initializer_" + name.text;
           initializer_process.declaration_initializer = true;
+          initializer_process.systemverilog_source_order
+              = systemverilog_source_order();
           initializer_process.statements.push_back(std::move(assignment));
           initializer_process.span
               = initializer_process.statements.front().span;
@@ -2305,6 +2308,7 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
           process.kind = ProcessKind::Initial;
           process.name = "$declaration_initializer_" + name.text;
           process.declaration_initializer = true;
+          process.systemverilog_source_order = systemverilog_source_order();
           process.statements.push_back(std::move(assignment));
           process.span = process.statements.front().span;
           unit.processes.push_back(std::move(process));
@@ -2459,6 +2463,7 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
       driver.value = std::move(*initializer);
       driver.verilog_drive_strength = drive_strength;
       driver.span = span_from(name, previous());
+      driver.systemverilog_source_order = systemverilog_source_order();
       unit.concurrent_statements.push_back(std::move(driver));
     } else if (initializer) {
       Statement assignment;
@@ -2472,6 +2477,7 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
       process.kind = ProcessKind::Initial;
       process.name = "$declaration_initializer_" + name.text;
       process.declaration_initializer = true;
+      process.systemverilog_source_order = systemverilog_source_order();
       process.statements.push_back(std::move(assignment));
       process.span = process.statements.front().span;
       unit.processes.push_back(std::move(process));
@@ -2741,6 +2747,9 @@ std::vector<Statement> VerilogParser::parse_continuous_assignments(
         statement.delay = delay;
         statement.verilog_drive_strength = strength;
         statement.span = cover(start.span, previous().span);
+        // The assignment's place among the static processes of its design
+        // element (IEEE 1800-2023 18.14.1, Annex P).
+        statement.systemverilog_source_order = systemverilog_source_order();
         statements.push_back(std::move(statement));
     } while (match(TokenKind::Comma));
     expect(TokenKind::Semicolon, "';' after continuous assignment",
@@ -3589,6 +3598,7 @@ void VerilogParser::parse_gate_primitive(
 }
 
 Process VerilogParser::parse_always() {
+  const auto source_order = systemverilog_source_order();
   const auto start = advance();
   if (start.text == "always_ff" || start.text == "always_comb"
       || start.text == "always_latch") {
@@ -3601,6 +3611,7 @@ Process VerilogParser::parse_always() {
   current_procedural_names_.clear();
   current_procedural_types_.clear();
   Process process;
+  process.systemverilog_source_order = source_order;
   if (start.text == "always_ff") {
     process.kind = ProcessKind::SystemVerilogAlwaysFF;
   } else if (start.text == "always_comb") {

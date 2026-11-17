@@ -1412,6 +1412,7 @@ void VerilogParser::parse_generate_declaration(
           ExpressionKind::Identifier, name.text, {}, name.span};
       driver.value = std::move(*initializer);
       driver.span = span_from(name, previous());
+      driver.systemverilog_source_order = systemverilog_source_order();
       body.concurrent_statements.push_back(std::move(driver));
     } else if ((initializer && !container_declaration
                    && declaration_type.domain != ValueDomain::String)
@@ -1430,6 +1431,7 @@ void VerilogParser::parse_generate_declaration(
       process.kind = ProcessKind::Initial;
       process.name = "$declaration_initializer_" + name.text;
       process.declaration_initializer = true;
+      process.systemverilog_source_order = systemverilog_source_order();
       process.statements.push_back(std::move(assignment));
       process.span = process.statements.front().span;
       body.processes.push_back(std::move(process));

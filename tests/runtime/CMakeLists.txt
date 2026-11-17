@@ -1289,6 +1289,17 @@ target_include_directories(
 fsim_add_foreign_conformance_test(
   vpi-class-sync vpi foreign_vpi_class_sync.sv foreign_vpi_class_sync.expected
   "--foreign-probes" fsim_foreign_vpi_class_sync_plugin)
+# Every message of a mailbox in order, a message of an unpacked structure
+# type having no one value (IEEE 1800-2023 37.26, 37.33).
+add_library(fsim_foreign_vpi_mailbox_messages_plugin SHARED
+  foreign_vpi_mailbox_messages_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_mailbox_messages_plugin)
+target_link_libraries(fsim_foreign_vpi_mailbox_messages_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_mailbox_messages_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-mailbox-messages vpi foreign_vpi_mailbox_messages.sv
+  foreign_vpi_mailbox_messages.expected "" fsim_foreign_vpi_mailbox_messages_plugin)
 # Virtual interface variables and interface typespecs (IEEE 1800-2023
 # 37.29, 37.30).
 add_library(fsim_foreign_vpi_virtual_interfaces_plugin SHARED

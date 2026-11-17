@@ -48,11 +48,13 @@ namespace {
 
 Process VerilogParser::parse_initial()
 {
+    const auto source_order = systemverilog_source_order();
     const auto start = expect_keyword("initial", false, "FSIM-SV-PARSE-013");
     current_procedural_names_.clear();
     current_procedural_types_.clear();
     Process process;
     process.kind = ProcessKind::Initial;
+    process.systemverilog_source_order = source_order;
     const auto body_begin = index_;
     auto body = parse_statement();
     const auto body_end = index_;
@@ -77,6 +79,7 @@ Process VerilogParser::parse_initial()
 
 Process VerilogParser::parse_final()
 {
+    const auto source_order = systemverilog_source_order();
     const auto start = keyword("final")
             || (language_ == Language::Verilog2005
                 && at(TokenKind::Identifier)
@@ -92,6 +95,7 @@ Process VerilogParser::parse_final()
     current_procedural_types_.clear();
     Process process;
     process.kind = ProcessKind::Final;
+    process.systemverilog_source_order = source_order;
     if (language_ == Language::Verilog2005) {
         error(
             start,

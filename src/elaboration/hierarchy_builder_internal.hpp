@@ -2144,7 +2144,8 @@ private:
         const semantic::sv::Unit& unit,
         SpecializationInfo& specialization,
         std::optional<std::uint32_t> program_owner,
-        semantic::SourceSpanId statement_source);
+        semantic::SourceSpanId statement_source,
+        std::uint64_t source_order);
     // Append a lowered SystemVerilog process; concurrent assertions run in
     // the observed region. Canonicalization is skipped for a process
     // remembered as a template, which must keep the prototype's body.
@@ -2513,6 +2514,11 @@ private:
     std::unordered_map<std::string,
         std::shared_ptr<const semantic::SpecializedHirUnit>>
         systemverilog_instance_specializations_;
+    // The source-token ordinal of the continuous assignment each concurrent
+    // process was lowered from, by process: its place among the static
+    // processes of its instance (IEEE 1800-2023 18.14.1).
+    std::unordered_map<runtime::simir::ProcessId, std::uint64_t>
+        concurrent_source_orders_;
     // The paths of the module, interface and program instances (not of
     // generated scopes): each has classes of its own (IEEE 1800-2023 6.22).
     std::unordered_set<std::string> systemverilog_design_element_instances_;

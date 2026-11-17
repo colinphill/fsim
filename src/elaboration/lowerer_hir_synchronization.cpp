@@ -506,289 +506,6 @@ Lowerer::hir_typeless_mailbox_message(const semantic::ExpressionId message,
         support::Xxh64::digest(*identity) | 1U };
 }
 
-std::optional<Lowerer::HirSynchronizationTaskProfile>
-Lowerer::hir_synchronization_task_profile(
-    const semantic::sv::Statement& statement,
-    const semantic::ScopeId process_scope) const
-{
-    if (specialized_hir_unit_ == nullptr
-        || statement.kind != semantic::sv::StatementKind::task_call) {
-        return std::nullopt;
-    }
-    const auto separator = statement.task.spelling.rfind('.');
-    if (separator == std::string::npos || separator == 0U
-        || separator + 1U == statement.task.spelling.size()) {
-        return std::nullopt;
-    }
-    const auto receiver_name = std::string_view {
-        statement.task.spelling
-    }.substr(0U, separator);
-    const auto method = std::string_view {
-        statement.task.spelling
-    }.substr(separator + 1U);
-    const auto supported_method = method == "put" || method == "get"
-        || method == "peek" || method == "try_put"
-        || method == "try_get" || method == "try_peek";
-    if (!supported_method) {
-        return std::nullopt;
-    }
-    const auto receiver
-        = hir_resolver()
-              .resolve_systemverilog(receiver_name, process_scope, { }, true)
-              .unique();
-    const auto declaration = receiver
-        ? specialized_hir_unit_->find_declaration(*receiver)
-        : std::nullopt;
-    const auto* type = declaration
-            && declaration->systemverilog != nullptr
-            && declaration->systemverilog->type
-        ? &*declaration->systemverilog->type
-        : nullptr;
-    const bool mailbox = synchronization_type(type, StandardClass::mailbox);
-    if (mailbox || synchronization_type(type, StandardClass::semaphore)) {
-        // A property named in a method (`mb.put(x)`) is the object's.
-        auto property = hir_named_class_property(
-            receiver_name, process_scope, 0U);
-        const auto is_property = std::ranges::any_of(
-            specialized_hir_unit_->design().systemverilog_hir.classes(),
-            [&](const semantic::sv::ClassDeclaration& candidate) {
-                return std::ranges::any_of(candidate.properties,
-                    [&](const semantic::sv::ClassProperty& item) {
-                        return item.declaration == *receiver;
-                    });
-            });
-        if (!is_property) {
-            property.reset();
-        }
-        return HirSynchronizationTaskProfile {
-            *receiver, method, mailbox, std::move(property)
-        };
-    }
-    // `c.mb.put(x)`: a property of a class object (IEEE 1800-2017 8.4).
-    auto property = hir_named_class_property(receiver_name, process_scope, 0U);
-    if (!property || property->type == nullptr) {
-        return std::nullopt;
-    }
-    const bool property_mailbox
-        = synchronization_type(property->type, StandardClass::mailbox);
-    if (!property_mailbox
-        && !synchronization_type(property->type, StandardClass::semaphore)) {
-        return std::nullopt;
-    }
-    return HirSynchronizationTaskProfile {
-        receiver.value_or(semantic::DeclarationId { }), method,
-        property_mailbox, std::move(property)
-    };
-}
-
-bool Lowerer::lower_hir_synchronization_statement(
-    const semantic::sv::Statement& statement)
-{
-    using namespace runtime::simir;
-    const auto profile = hir_synchronization_task_profile(
-        statement, hir_process_scope_);
-    if (!profile || specialized_hir_unit_ == nullptr) {
-        return false;
-    }
-    const auto declaration = specialized_hir_unit_->find_declaration(
-        profile->receiver);
-    const auto binding = profile->class_property ? std::nullopt
-        : hir_runtime_binding(profile->receiver, hir_process_scope_, true);
-    const auto* receiver_type = profile->class_property
-        ? profile->class_property->type
-        : declaration
-            && declaration->systemverilog != nullptr
-            && declaration->systemverilog->type
-        ? &*declaration->systemverilog->type
-        : nullptr;
-    const auto property_handle = profile->class_property
-        ? lower_hir_named_class_property(*profile->class_property)
-        : std::nullopt;
-    if (profile->class_property && !property_handle) {
-        return false;
-    }
-    if (!profile->class_property
-        && (!binding || binding->width != 64U
-            || (!binding->local && !binding->signal))) {
-        report(
-            "FSIM-ELAB-SVSYNC-001",
-            "mailbox/semaphore method requires a compatible writable "
-            "64-bit receiver",
-            hir_source_span(statement.source));
-        return true;
-    }
-    const auto receiver = [&]() {
-        if (property_handle) {
-            return *property_handle;
-        }
-        if (binding->local) {
-            return *binding->local;
-        }
-        const auto value = allocate_register(
-            binding->width, binding->domain);
-        process_.operations.emplace_back(ReadSignal {
-            value, *binding->signal,
-            sample_concurrent_assertion_reads_
-                ? SignalReadKind::sampled
-                : SignalReadKind::current,
-        });
-        record_implicit_signal_dependency(*binding->signal);
-        return value;
-    }();
-    const auto arguments_valid = std::ranges::all_of(
-        statement.task_arguments,
-        [](const semantic::sv::TaskAssociation& argument) {
-            return !argument.formal && argument.actual;
-        });
-    if (!arguments_valid) {
-        report(
-            profile->mailbox
-                ? "FSIM-ELAB-SVSYNC-003"
-                : "FSIM-ELAB-SVSYNC-004",
-            "mailbox/semaphore methods require positional value arguments",
-            hir_source_span(statement.source));
-        return true;
-    }
-
-    if (profile->mailbox) {
-        const auto mailbox_element = hir_mailbox_element(
-            receiver_type,
-            "mailbox operations require exactly one finite positive "
-            "packed element type",
-            hir_source_span(statement.source));
-        if (!mailbox_element) {
-            return true;
-        }
-        bool string_element = mailbox_element->string;
-        auto width = mailbox_element->width;
-        auto container = mailbox_element->container;
-        if ((profile->method != "put" && profile->method != "get"
-                && profile->method != "peek")
-            || statement.task_arguments.size() != 1U) {
-            report(
-                "FSIM-ELAB-SVSYNC-003",
-                "mailbox task methods require put, get, or peek with one "
-                "positional argument",
-                hir_source_span(statement.source));
-            return true;
-        }
-        const auto argument = *statement.task_arguments.front().actual;
-        // A typeless mailbox's message has the argument's own type.
-        std::uint64_t message_type { };
-        if (mailbox_element->dynamic) {
-            const auto message = hir_typeless_mailbox_message(
-                argument, hir_source_span(statement.source));
-            if (!message) {
-                return true;
-            }
-            string_element = message->string;
-            width = message->width;
-            message_type = message->type;
-            container = message->container;
-        }
-        if (container) {
-            if (profile->method == "put") {
-                const auto value
-                    = lower_hir_static_container_actual(argument, *container);
-                if (!value) {
-                    return false;
-                }
-                MailboxPut put {
-                    receiver, 0U, 0U, std::nullopt,
-                    MailboxElementKind::container, { }, message_type,
-                };
-                put.container_source = *value;
-                process_.operations.emplace_back(std::move(put));
-                return true;
-            }
-            const auto value = allocate_container_register(*container);
-            MailboxGet get {
-                receiver, 0U, 0U, std::nullopt, profile->method == "peek",
-                MailboxElementKind::container, { }, message_type,
-            };
-            get.container_destination = value;
-            process_.operations.emplace_back(std::move(get));
-            return lower_hir_container_copy_out(argument, value);
-        }
-        if (profile->method == "put") {
-            if (string_element) {
-                const auto value = lower_hir_string_expression(argument);
-                if (!value) {
-                    return false;
-                }
-                process_.operations.emplace_back(MailboxPut {
-                    receiver, 0U, 0U, std::nullopt,
-                    MailboxElementKind::string, *value, message_type,
-                });
-            } else {
-                auto value = lower_hir_expression(argument, width);
-                if (!value) {
-                    return false;
-                }
-                if (register_width(*value) != width) {
-                    value = resize_register(
-                        *value, width, hir_expression_signed(argument));
-                }
-                process_.operations.emplace_back(MailboxPut {
-                    receiver, *value, width,
-                    std::nullopt, MailboxElementKind::packed, { },
-                    message_type,
-                });
-            }
-            return true;
-        }
-        if (string_element) {
-            const auto value = allocate_string_register();
-            process_.operations.emplace_back(MailboxGet {
-                receiver, 0U, 0U, std::nullopt,
-                profile->method == "peek", MailboxElementKind::string,
-                value, message_type,
-            });
-            return lower_hir_string_copy_out(argument, value);
-        }
-        const auto domain = hir_expression_domain(
-            argument, hir_process_scope_)
-                                .value_or(frontend::ValueDomain::Logic4);
-        const auto value = allocate_register(width, domain);
-        process_.operations.emplace_back(MailboxGet {
-            receiver, value, width,
-            std::nullopt, profile->method == "peek",
-            MailboxElementKind::packed, { }, message_type,
-        });
-        return lower_hir_mailbox_copy_out(argument, value);
-    }
-
-    if ((profile->method != "put" && profile->method != "get")
-        || statement.task_arguments.size() > 1U) {
-        report(
-            "FSIM-ELAB-SVSYNC-004",
-            "semaphore task methods require get or put with zero or one "
-            "key-count argument",
-            hir_source_span(statement.source));
-        return true;
-    }
-    const auto keys = statement.task_arguments.empty()
-        ? std::optional { allocate_register(
-              32U, frontend::ValueDomain::Integer) }
-        : lower_hir_expression(
-              *statement.task_arguments.front().actual, 32U);
-    if (!keys) {
-        return false;
-    }
-    if (statement.task_arguments.empty()) {
-        process_.operations.emplace_back(LoadConstant {
-            *keys, PackedLogic4::from_aval_bval(32U, 1U, 0U) });
-    }
-    if (profile->method == "put") {
-        process_.operations.emplace_back(SemaphorePut {
-            receiver, *keys });
-    } else {
-        process_.operations.emplace_back(SemaphoreGet {
-            receiver, *keys, std::nullopt });
-    }
-    return true;
-}
-
 Lowerer::HirSynchronizationAttempt
 Lowerer::lower_hir_synchronization_expression(
     const semantic::ExpressionId expression_id,
@@ -862,7 +579,10 @@ Lowerer::lower_hir_synchronization_expression(
         return { true, true, destination };
     }
 
-    if (!source.text.starts_with('.') || source.operands.empty()) {
+    // A member call of a semaphore or mailbox method, its receiver first.
+    if (semantic::sv::member_builtin_method(source)
+            == support::BuiltinMethod::none
+        || source.operands.empty()) {
         return { };
     }
     const auto receiver_declaration = hir_target_declaration(
@@ -897,8 +617,19 @@ Lowerer::lower_hir_synchronization_expression(
     if (!receiver) {
         return { true, false, std::nullopt };
     }
-    const auto method = std::string_view { source.text }.substr(1U);
+    // The method the call names, resolved from the class's member list
+    // (15.3, 15.4).
+    using Method = support::BuiltinMethod;
+    const auto method = semantic::sv::member_builtin_method(source);
     const auto argument_count = source.operands.size() - 1U;
+    // The methods' single formals are bound by position (13.5.3).
+    if (std::ranges::any_of(source.argument_names,
+            [](const std::string& name) { return !name.empty(); })) {
+        report(mailbox ? "FSIM-ELAB-SVSYNC-003" : "FSIM-ELAB-SVSYNC-004",
+            "mailbox/semaphore methods require positional value arguments",
+            hir_source_span(source.source));
+        return { true, false, std::nullopt };
+    }
     const auto result = [&] {
         return allocate_register(32U, frontend::ValueDomain::Integer);
     };
@@ -948,13 +679,13 @@ Lowerer::lower_hir_synchronization_expression(
             message_type = message->type;
             container = message->container;
         }
-        if (method == "num" && argument_count == 0U) {
+        if (method == Method::num && argument_count == 0U) {
             const auto destination = result();
             process_.operations.emplace_back(
                 MailboxNum { destination, *receiver });
             return { true, true, resize_result(destination) };
         }
-        if ((method == "put" || method == "try_put")
+        if ((method == Method::put || method == Method::try_put)
             && argument_count == 1U && container) {
             const auto value = lower_hir_static_container_actual(
                 source.operands[1], *container);
@@ -962,7 +693,7 @@ Lowerer::lower_hir_synchronization_expression(
                 return { true, false, std::nullopt };
             }
             std::optional<RegisterId> destination;
-            if (method == "try_put") {
+            if (method == Method::try_put) {
                 destination = result();
             }
             MailboxPut put {
@@ -975,7 +706,7 @@ Lowerer::lower_hir_synchronization_expression(
                 destination ? std::optional { resize_result(*destination) }
                             : std::nullopt };
         }
-        if ((method == "put" || method == "try_put")
+        if ((method == Method::put || method == Method::try_put)
             && argument_count == 1U) {
             if (string_element) {
                 const auto value = lower_hir_string_expression(
@@ -984,7 +715,7 @@ Lowerer::lower_hir_synchronization_expression(
                     return { true, false, std::nullopt };
                 }
                 std::optional<RegisterId> destination;
-                if (method == "try_put") {
+                if (method == Method::try_put) {
                     destination = result();
                 }
                 process_.operations.emplace_back(MailboxPut {
@@ -1005,7 +736,7 @@ Lowerer::lower_hir_synchronization_expression(
                     *value, element_width,
                     hir_expression_signed(source.operands[1]));
             }
-            if (method == "put") {
+            if (method == Method::put) {
                 process_.operations.emplace_back(MailboxPut {
                     *receiver, *value, element_width, std::nullopt,
                     MailboxElementKind::packed, { }, message_type });
@@ -1017,12 +748,12 @@ Lowerer::lower_hir_synchronization_expression(
                 MailboxElementKind::packed, { }, message_type });
             return { true, true, resize_result(destination) };
         }
-        const bool get = method == "get" || method == "try_get";
-        const bool peek = method == "peek" || method == "try_peek";
+        const bool get = method == Method::get || method == Method::try_get;
+        const bool peek = method == Method::peek || method == Method::try_peek;
         if ((get || peek) && argument_count == 1U && container) {
             const auto value = allocate_container_register(*container);
             std::optional<RegisterId> success;
-            if (method.starts_with("try_")) {
+            if ((method == Method::try_get || method == Method::try_peek)) {
                 success = result();
             }
             MailboxGet operation {
@@ -1056,7 +787,7 @@ Lowerer::lower_hir_synchronization_expression(
             if (string_element) {
                 const auto value = allocate_string_register();
                 std::optional<RegisterId> success;
-                if (method.starts_with("try_")) {
+                if ((method == Method::try_get || method == Method::try_peek)) {
                     success = result();
                 }
                 process_.operations.emplace_back(MailboxGet {
@@ -1094,7 +825,7 @@ Lowerer::lower_hir_synchronization_expression(
                                     .value_or(frontend::ValueDomain::Logic4);
             const auto value = allocate_register(element_width, domain);
             std::optional<RegisterId> success;
-            if (method.starts_with("try_")) {
+            if ((method == Method::try_get || method == Method::try_peek)) {
                 success = result();
             }
             process_.operations.emplace_back(MailboxGet {
@@ -1133,7 +864,7 @@ Lowerer::lower_hir_synchronization_expression(
         return { true, false, std::nullopt };
     }
 
-    if ((method == "get" || method == "try_get" || method == "put")
+    if ((method == Method::get || method == Method::try_get || method == Method::put)
         && argument_count <= 1U) {
         const auto keys = argument_count == 0U
             ? std::optional { allocate_register(
@@ -1146,12 +877,12 @@ Lowerer::lower_hir_synchronization_expression(
             process_.operations.emplace_back(LoadConstant {
                 *keys, PackedLogic4::from_aval_bval(32U, 1U, 0U) });
         }
-        if (method == "put") {
+        if (method == Method::put) {
             process_.operations.emplace_back(SemaphorePut {
                 *receiver, *keys });
             return { true, true, std::nullopt };
         }
-        if (method == "get") {
+        if (method == Method::get) {
             process_.operations.emplace_back(SemaphoreGet {
                 *receiver, *keys, std::nullopt });
             return { true, true, std::nullopt };

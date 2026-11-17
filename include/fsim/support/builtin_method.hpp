@@ -12,11 +12,14 @@ namespace fsim::support {
 // The built-in methods IEEE 1800-2023 defines on values that are not class
 // objects: string methods (6.16), enumeration methods (6.19.5), array,
 // associative array and queue methods (7.5.1, 7.9, 7.10.2) and array
-// manipulation methods (7.12). A method call `receiver.name(...)` on such a
-// value is resolved once against these member lists; every later reader
-// takes the method from the call, never from its name. One name may be a
-// member of several lists (`first` of an enumeration and of an associative
-// array): the receiver's type tells which one applies.
+// manipulation methods (7.12); and the methods of the built-in classes
+// semaphore and mailbox (15.3, 15.4). A method call `receiver.name(...)` is
+// resolved once against these member lists; every later reader takes the
+// method from the call, never from its name. One name may be a member of
+// several lists (`first` of an enumeration and of an associative array,
+// `num` of an associative array and of a mailbox): the receiver's type
+// tells which one applies, and a call on an object of a user class keeps
+// the member list's method but is a call of that class's method.
 enum class BuiltinMethod : std::uint8_t {
     none,
     // String methods (6.16).
@@ -78,11 +81,18 @@ enum class BuiltinMethod : std::uint8_t {
     reduce_xor,
     // Array mapping method (7.12.5).
     map,
+    // Semaphore (15.3) and mailbox (15.4) methods; `num` is above.
+    put,
+    get,
+    try_get,
+    try_put,
+    peek,
+    try_peek,
 };
 
 namespace detail {
 
-inline constexpr std::array<std::pair<std::string_view, BuiltinMethod>, 52>
+inline constexpr std::array<std::pair<std::string_view, BuiltinMethod>, 58>
     kBuiltinMethodNames { {
         { "and", BuiltinMethod::reduce_and },
         { "atobin", BuiltinMethod::atobin },
@@ -101,6 +111,7 @@ inline constexpr std::array<std::pair<std::string_view, BuiltinMethod>, 52>
         { "find_last", BuiltinMethod::find_last },
         { "find_last_index", BuiltinMethod::find_last_index },
         { "first", BuiltinMethod::first },
+        { "get", BuiltinMethod::get },
         { "getc", BuiltinMethod::getc },
         { "hextoa", BuiltinMethod::hextoa },
         { "icompare", BuiltinMethod::icompare },
@@ -116,12 +127,14 @@ inline constexpr std::array<std::pair<std::string_view, BuiltinMethod>, 52>
         { "num", BuiltinMethod::num },
         { "octtoa", BuiltinMethod::octtoa },
         { "or", BuiltinMethod::reduce_or },
+        { "peek", BuiltinMethod::peek },
         { "pop_back", BuiltinMethod::pop_back },
         { "pop_front", BuiltinMethod::pop_front },
         { "prev", BuiltinMethod::prev },
         { "product", BuiltinMethod::product },
         { "push_back", BuiltinMethod::push_back },
         { "push_front", BuiltinMethod::push_front },
+        { "put", BuiltinMethod::put },
         { "putc", BuiltinMethod::putc },
         { "realtoa", BuiltinMethod::realtoa },
         { "reverse", BuiltinMethod::reverse },
@@ -133,6 +146,9 @@ inline constexpr std::array<std::pair<std::string_view, BuiltinMethod>, 52>
         { "sum", BuiltinMethod::sum },
         { "tolower", BuiltinMethod::tolower },
         { "toupper", BuiltinMethod::toupper },
+        { "try_get", BuiltinMethod::try_get },
+        { "try_peek", BuiltinMethod::try_peek },
+        { "try_put", BuiltinMethod::try_put },
         { "unique", BuiltinMethod::unique },
         { "unique_index", BuiltinMethod::unique_index },
         { "xor", BuiltinMethod::reduce_xor },

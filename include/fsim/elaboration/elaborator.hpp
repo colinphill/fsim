@@ -1579,6 +1579,8 @@ struct ElaboratedDesignState {
     /// ElaboratedDesign::class_container_types(), sorted by identity.
     std::vector<std::pair<std::string, runtime::simir::ContainerType>>
         class_container_types { };
+    /// ElaboratedDesign::process_random_ordinals(), by process.
+    std::vector<std::uint64_t> process_random_ordinals { };
 };
 
 /// One pure acyclic continuous-assignment cone selected for A2 fusion. The
@@ -1818,6 +1820,14 @@ public:
     /// Notes the container type the lowerer gives a class property.
     void record_class_container_type(
         std::string identity, runtime::simir::ContainerType type);
+    /// Which value of its design element's initialization random number
+    /// generator seeds each process (IEEE 1800-2023 18.14.1), by process:
+    /// the place of a static process or static initializer in the
+    /// declaration order of its module, interface or program instance or
+    /// package. A process no source declares holds
+    /// runtime::simir::unranked_random_ordinal.
+    [[nodiscard]] const std::vector<std::uint64_t>&
+    process_random_ordinals() const noexcept;
     [[nodiscard]] const std::vector<SystemCInstanceInfo>&
     systemc_instances() const noexcept;
     [[nodiscard]] const std::vector<SystemCProcessInfo>&
@@ -2028,6 +2038,7 @@ private:
     std::vector<std::pair<std::string, VpiCalleeInfo>> pending_vpi_callees_;
     std::unordered_map<std::string, runtime::simir::ContainerType>
         class_container_types_;
+    std::vector<std::uint64_t> process_random_ordinals_;
     std::vector<SpecializationInfo> specializations_;
     struct SpecializationPathHash {
         using is_transparent = void;

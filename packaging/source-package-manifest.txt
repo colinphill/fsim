@@ -2099,6 +2099,7 @@ tests/fixtures/compliance/sv_procedural_inferred_clock_ab4.sv
 tests/fixtures/compliance/sv_process_method_receivers.sv
 tests/fixtures/compliance/sv_property_kinds_checked.sv
 tests/fixtures/compliance/sv_queue_pop_result_type_20261013.sv
+tests/fixtures/compliance/sv_random_stability.sv
 tests/fixtures/compliance/sv_randsequence.sv
 tests/fixtures/compliance/sv_randsequence_recursion_batch89.sv
 tests/fixtures/compliance/sv_real_to_time_assignment_batch58.sv
@@ -2129,6 +2130,7 @@ tests/fixtures/compliance/sv_string_nonblocking_order.sv
 tests/fixtures/compliance/sv_sva_clock_declaration_forms.sv
 tests/fixtures/compliance/sv_sva_recursive_properties.sv
 tests/fixtures/compliance/sv_sva_sequence_endpoints.sv
+tests/fixtures/compliance/sv_sync_method_receivers.sv
 tests/fixtures/compliance/sv_task_copyout_signedness_batch56.sv
 tests/fixtures/compliance/sv_time_without_timescale.sv
 tests/fixtures/compliance/sv_type_and_class_forms.sv
@@ -2805,6 +2807,9 @@ tests/fixtures/foreign/foreign_vpi_lifecycle.sv
 tests/fixtures/foreign/foreign_vpi_listop_strings.expected
 tests/fixtures/foreign/foreign_vpi_listop_strings.expected.license
 tests/fixtures/foreign/foreign_vpi_listop_strings.sv
+tests/fixtures/foreign/foreign_vpi_mailbox_messages.expected
+tests/fixtures/foreign/foreign_vpi_mailbox_messages.expected.license
+tests/fixtures/foreign/foreign_vpi_mailbox_messages.sv
 tests/fixtures/foreign/foreign_vpi_match_items.expected
 tests/fixtures/foreign/foreign_vpi_match_items.expected.license
 tests/fixtures/foreign/foreign_vpi_match_items.sv
@@ -4395,6 +4400,7 @@ tests/runtime/foreign_vpi_late_watch_plugin.c
 tests/runtime/foreign_vpi_let_plugin.c
 tests/runtime/foreign_vpi_lifecycle_plugin.c
 tests/runtime/foreign_vpi_listop_strings_plugin.c
+tests/runtime/foreign_vpi_mailbox_messages_plugin.c
 tests/runtime/foreign_vpi_match_items_plugin.c
 tests/runtime/foreign_vpi_mcd_plugin.c
 tests/runtime/foreign_vpi_memory_words_plugin.c

@@ -1252,6 +1252,12 @@ ElaboratedDesign::class_container_types() const noexcept
     return class_container_types_;
 }
 
+const std::vector<std::uint64_t>&
+ElaboratedDesign::process_random_ordinals() const noexcept
+{
+    return process_random_ordinals_;
+}
+
 void ElaboratedDesign::record_class_container_type(
     std::string identity, runtime::simir::ContainerType type)
 {
@@ -1529,6 +1535,9 @@ void ElaboratedDesign::populate_interpreter(
     std::vector<runtime::simir::Process>* const consumed_processes,
     const ConeFusionPlan* const plan) const
 {
+    if (interpreter != nullptr) {
+        interpreter->set_process_random_ordinals(process_random_ordinals_);
+    }
     // Fused-cone substitutions: the sink runs the fused body, dormant members
     // keep their original programs without sensitivity or initialization.
     std::unordered_map<runtime::simir::ProcessId, std::size_t> fused_by_sink;
@@ -1788,6 +1797,7 @@ ElaboratedDesignState ElaboratedDesign::state() const&
         interface_handle_rows(systemverilog_interface_handles_),
         hierarchical_reads_, uses_simulation_control_,
         class_container_rows(class_container_types_),
+        process_random_ordinals_,
     };
     if (process_rows_) {
         result.processes.reserve(process_rows_->rows.size());
@@ -1852,6 +1862,7 @@ detail::ElaboratedDesignProcessAccess::artifact_state(
         interface_handle_rows(design.systemverilog_interface_handles_),
         design.hierarchical_reads_, design.uses_simulation_control_,
         class_container_rows(design.class_container_types_),
+        design.process_random_ordinals_,
     };
     result.signal_names.reserve(design.signal_by_path_.size());
     for (const auto& [path, signal] : design.signal_by_path_) {
@@ -1917,6 +1928,7 @@ detail::ElaboratedDesignProcessAccess::take_artifact_state(
         std::move(design.hierarchical_reads_),
         design.uses_simulation_control_,
         class_container_rows(design.class_container_types_),
+        design.process_random_ordinals_,
     };
     result.signal_names.reserve(design.signal_by_path_.size());
     for (const auto& [path, signal] : design.signal_by_path_) {
@@ -1988,6 +2000,7 @@ ElaboratedDesignState ElaboratedDesign::state() &&
         interface_handle_rows(systemverilog_interface_handles_),
         std::move(hierarchical_reads_), uses_simulation_control_,
         class_container_rows(class_container_types_),
+        process_random_ordinals_,
     };
     result.signal_names.reserve(signal_by_path_.size());
     for (const auto& [path, signal] : signal_by_path_) {
@@ -2631,6 +2644,7 @@ ElaboratedDesign::from_state_with_process_rows(
     result.sdf_net_delays_ = std::move(state.sdf_net_delays);
     result.hierarchical_reads_ = std::move(state.hierarchical_reads);
     result.uses_simulation_control_ = state.uses_simulation_control;
+    result.process_random_ordinals_ = std::move(state.process_random_ordinals);
     for (auto& [identity, type] : state.class_container_types) {
         result.class_container_types_.emplace(
             std::move(identity), std::move(type));

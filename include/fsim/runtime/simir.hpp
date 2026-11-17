@@ -1995,6 +1995,13 @@ enum class ProcessStartupPhase : std::uint8_t {
     return true;
 }
 
+/// The random ordinal of a process no source declares (a process an
+/// implementation generates): it takes a value of no design element's
+/// initialization random number generator (IEEE 1800-2023 18.14.1), but a
+/// stream of its own past every element's.
+inline constexpr std::uint64_t unranked_random_ordinal
+    = std::numeric_limits<std::uint64_t>::max();
+
 struct Process {
     static constexpr std::uint64_t full_static_trigger_mask
         = UINT64_C(1) << 63U;

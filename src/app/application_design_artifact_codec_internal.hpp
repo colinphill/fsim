@@ -1230,7 +1230,7 @@ namespace codec_detail {
             return fsim::support::expression_marker_valid(value);
         } else if constexpr (std::same_as<T, fsim::support::BuiltinMethod>) {
             return value >= fsim::support::BuiltinMethod::none
-                && value <= fsim::support::BuiltinMethod::map;
+                && value <= fsim::support::BuiltinMethod::try_peek;
         } else if constexpr (std::same_as<T, fsim::semantic::sv::CallKind>) {
             return value >= fsim::semantic::sv::CallKind::user
                 && value <= fsim::semantic::sv::CallKind::system;

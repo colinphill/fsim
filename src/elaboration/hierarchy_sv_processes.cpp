@@ -187,8 +187,14 @@ void HierarchyBuilder::publish_systemverilog_concurrent_occurrence(
     const semantic::sv::Unit& unit,
     SpecializationInfo& specialization,
     const std::optional<std::uint32_t> program_owner,
-    const semantic::SourceSpanId statement_source)
+    const semantic::SourceSpanId statement_source,
+    const std::uint64_t source_order)
 {
+    if (source_order != 0U) {
+        concurrent_source_orders_.emplace(
+            lowered.instance ? lowered.instance->id : lowered.process->id,
+            source_order);
+    }
     if (statement_source.valid()) {
         specialization.statement_sources.emplace_back(
             lowered.instance ? lowered.instance->id : lowered.process->id,
@@ -474,7 +480,10 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
             return false;
         }
         publish_systemverilog_concurrent_occurrence(
-            *lowered, unit, specialization, program_owner, statement_source);
+            *lowered, unit, specialization, program_owner, statement_source,
+            statement && statement->systemverilog != nullptr
+                ? statement->systemverilog->source_order
+                : 0U);
         append_generated_processes(lowerer);
     }
     // The static variables' initializers are lowered before the procedures:
@@ -762,7 +771,10 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
             }
             publish_systemverilog_concurrent_occurrence(
                 *lowered, unit, specialization, program_owner,
-                statement_source);
+                statement_source,
+                statement && statement->systemverilog != nullptr
+                    ? statement->systemverilog->source_order
+                    : 0U);
             append_generated_processes(generated_lowerer);
         }
         if (!lower_declaration_initializers(generated_lowerer,
@@ -1004,7 +1016,10 @@ bool HierarchyBuilder::lower_deferred_generated_systemverilog(
                 *lowered, unit, specialization, program_owner,
                 statement && statement->systemverilog != nullptr
                     ? statement->systemverilog->source
-                    : unit.source);
+                    : unit.source,
+                statement && statement->systemverilog != nullptr
+                    ? statement->systemverilog->source_order
+                    : 0U);
             append_generated();
             continue;
         }
@@ -1081,7 +1096,10 @@ bool HierarchyBuilder::lower_deferred_systemverilog_processes(
         auto& specialization
             = design_.specializations_[specialization_index];
         publish_systemverilog_concurrent_occurrence(
-            *lowered, unit, specialization, program_owner, statement_source);
+            *lowered, unit, specialization, program_owner, statement_source,
+            statement && statement->systemverilog != nullptr
+                ? statement->systemverilog->source_order
+                : 0U);
         append_generated_systemverilog_processes(
             lowerer, unit, specialization, program_owner);
     }

@@ -970,7 +970,9 @@ void Interpreter::Impl::spawn_fork(
                         *access_binding));
             }
         }
-        child.cold().random_state = initial_random_state(root_seed, child_id);
+        // A new dynamic thread's generator is seeded with the next value of
+        // its parent's (IEEE 1800-2023 18.14.1, hierarchical seeding).
+        child.cold().random_state = next_random(get_process(parent_id));
         child.cold().fork_parent = parent_id;
         child.cold().fork_site = instruction;
         child.cold().fork_depth = parent.cold().dynamic_call_stack.size();

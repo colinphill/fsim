@@ -335,19 +335,20 @@ SystemVerilogClassHandle SystemVerilogClassHeap::allocate(
   object_value.random_root_seed = derived_seed(
       simulation_seed_, descriptor.random_root_identity, 0);
   object_value.random_object_ordinal = object_ordinal;
+  // An object created by `new` in a thread is seeded with the thread's next
+  // random value (IEEE 1800-2023 18.14.1), and with nothing else: no text of
+  // its class, so declarations added elsewhere leave it.
   object_value.random_object_seed = next_object_seed_
-      ? derived_seed(*next_object_seed_,
-            descriptor.specialization_identity, 0)
+      ? *next_object_seed_
       : derived_seed(object_value.random_root_seed,
             descriptor.specialization_identity, object_ordinal);
   next_object_seed_.reset();
   for (std::size_t index = 0; index < object_value.properties.size(); ++index) {
     auto& state = object_value.properties[index].random_state;
     if (state) {
+      // A randc property's cycle stream, by its place in the object.
       state->stream_seed = derived_seed(
-          object_value.random_object_seed,
-          object_value.property_names[index],
-          0);
+          object_value.random_object_seed, "randc", index);
     }
   }
 
@@ -641,7 +642,7 @@ void SystemVerilogClassHeap::reseed_random(
   for (std::size_t index = 0; index < value.properties.size(); ++index) {
     auto& state = value.properties[index].random_state;
     if (!state) continue;
-    state->stream_seed = derived_seed(seed, value.property_names[index], 0);
+    state->stream_seed = derived_seed(seed, "randc", index);
     released += state->randc_used_values.size() * sizeof(std::uint64_t);
     state->randc_domain_signature = 0;
     state->randc_cycle = 0;
