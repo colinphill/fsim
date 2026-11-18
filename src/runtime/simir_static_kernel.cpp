@@ -13027,6 +13027,8 @@ void Interpreter::Impl::StaticKernel::apply_watches()
         // worker lane's writes reach the leader only as the value its batch
         // leaves, so every unit runs on the leader from now on.
         std::ranges::fill(unit_parallel_, std::uint8_t { 0U });
+        // Every frame's watch_writes from now on (refresh_environment).
+        environment_revision_ = stale_environment;
     }
     std::vector<std::uint32_t> watched;
     // Every slot an observer watches, outputs too: their writers get code

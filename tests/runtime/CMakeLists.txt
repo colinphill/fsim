@@ -1779,6 +1779,17 @@ target_include_directories(
 fsim_add_foreign_conformance_test(
   vpi-each-write vpi foreign_vpi_each_write.sv foreign_vpi_each_write.expected
   "" fsim_foreign_vpi_each_write_plugin)
+# A watch registered after the writer has run hears each later blocking
+# write as its own value change too (IEEE 1800-2023 38.36.1).
+add_library(fsim_foreign_vpi_late_each_write_plugin SHARED
+  foreign_vpi_late_each_write_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_late_each_write_plugin)
+target_link_libraries(fsim_foreign_vpi_late_each_write_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_late_each_write_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-late-each-write vpi foreign_vpi_late_each_write.sv
+  foreign_vpi_late_each_write.expected "" fsim_foreign_vpi_late_each_write_plugin)
 # The connection list of an instance array, typedef parameters of a generate
 # scope, and value-change watches on string array elements and string class
 # properties (IEEE 1800-2023 37.11, 37.28, 37.85, 38.36.1).

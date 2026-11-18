@@ -2829,6 +2829,9 @@ tests/fixtures/foreign/foreign_vpi_interactive_debug.tcl
 tests/fixtures/foreign/foreign_vpi_interface_tf.expected
 tests/fixtures/foreign/foreign_vpi_interface_tf.expected.license
 tests/fixtures/foreign/foreign_vpi_interface_tf.sv
+tests/fixtures/foreign/foreign_vpi_late_each_write.expected
+tests/fixtures/foreign/foreign_vpi_late_each_write.expected.license
+tests/fixtures/foreign/foreign_vpi_late_each_write.sv
 tests/fixtures/foreign/foreign_vpi_late_watch.expected
 tests/fixtures/foreign/foreign_vpi_late_watch.expected.license
 tests/fixtures/foreign/foreign_vpi_late_watch.sv
@@ -4505,6 +4508,7 @@ tests/runtime/foreign_vpi_huge_memory_plugin.c
 tests/runtime/foreign_vpi_imm_assert_plugin.c
 tests/runtime/foreign_vpi_interactive_plugin.c
 tests/runtime/foreign_vpi_interface_tf_plugin.c
+tests/runtime/foreign_vpi_late_each_write_plugin.c
 tests/runtime/foreign_vpi_late_watch_plugin.c
 tests/runtime/foreign_vpi_let_plugin.c
 tests/runtime/foreign_vpi_lifecycle_plugin.c
