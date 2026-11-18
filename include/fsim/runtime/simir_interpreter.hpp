@@ -100,6 +100,11 @@ public:
     /// cbAssertionStepSuccess / cbAssertionStepFailure); produced only for
     /// attempts stepping was enabled for (39.5.2).
     using SvaStepHook = std::function<void(ProcessId, const sva::StepRecord&)>;
+    /// An evaluation event of a watched sequence or property instance
+    /// (IEEE 1800-2023 39.4.2: cbAssertionStart, cbAssertionSuccess,
+    /// cbAssertionFailure on a vpiSequenceInst or vpiPropertyInst).
+    using SvaInstanceHook
+        = std::function<void(ProcessId, const sva::InstanceReport&)>;
     /// The action controls of a design process's concurrent assertions and
     /// expect statements (IEEE 1800-2023 20.11, 39.5.2): bit n set means the
     /// action block of outcome n (1 success, 2 failure, 3 vacuous success)
@@ -245,9 +250,22 @@ public:
     /// vpi_put_delays on an intermodule path or delay device does (IEEE
     /// 1800-2023 38.32); a pending change keeps its timing. Legal at any
     /// time; false, changing nothing, when the driver has no such write.
+    /// The table is the one of all the driver's bits: the tables
+    /// set_net_delay_bits_table gave some of them are replaced.
     [[nodiscard]] bool set_net_delay_table(
         ProcessId process, const NetDelayTable& table);
-    /// The table set_net_delay_table gave a driver, if any.
+    /// As set_net_delay_table for the bits [offset, offset + width) of the
+    /// signal the driver's WriteNetDelay operations write, as a live SDF
+    /// reannotation does that names some bits of a load port whose delayed
+    /// copy the driver writes as a wider run (IEEE 1364-2005 16.2.4, 16.3:
+    /// a later annotation of some bits overwrites the earlier delay of those
+    /// bits only). Each of those bits takes `table` from its next change on,
+    /// the others keep theirs, and a pending change keeps its time. False,
+    /// changing nothing, when the driver has no such write, `width` is 0 or
+    /// the bits lie outside the signal.
+    [[nodiscard]] bool set_net_delay_bits_table(ProcessId process,
+        std::uint32_t offset, std::uint32_t width, const NetDelayTable& table);
+    /// The table set_net_delay_table gave all of a driver's bits, if any.
     [[nodiscard]] std::optional<NetDelayTable> net_delay_table(
         ProcessId process) const;
     /// Declares `copy` a group-mode load copy of `net` (SDF INTERCONNECT
@@ -874,6 +892,14 @@ public:
     /// changes.
     [[nodiscard]] bool set_sva_step(std::span<const ProcessId> design_processes,
         std::int64_t start_time, bool enable);
+    void set_sva_instance_hook(SvaInstanceHook hook);
+    /// Watches (or stops watching) the sequence or property instance written
+    /// at line:column in the assertions of the design processes (39.4.2);
+    /// monitors created later get it too. Returns how many instances the
+    /// existing monitors have.
+    std::size_t set_sva_instance_watch(
+        std::span<const ProcessId> design_processes, bool sequence,
+        std::uint32_t line, std::uint32_t column, bool watched);
     /// `newer_activations` selects an outer activation of a recursive
     /// callable: the number of activations of the same callable entered
     /// after the one read (VHPI stack frames, IEEE 1076-2019 19.10).

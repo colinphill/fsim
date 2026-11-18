@@ -1,0 +1,14 @@
+#c refused vpiPropertyInst: vpi_register_assertion_cb: reason 657 is not supported on a sequence or property instance
+#c 5 start vpiSequenceInst s_ab start=5
+#c 10 start vpiPropertyInst p_ac start=10
+#c 10 success vpiPropertyInst p_ac start=10
+#c 15 success vpiSequenceInst s_ab start=5
+#c 15 start vpiSequenceInst s_ab start=15
+#c 20 start vpiPropertyInst p_ac start=20
+#c 20 failure vpiPropertyInst p_ac start=20
+#c 25 success vpiSequenceInst s_ab start=15
+#c 25 start vpiSequenceInst s_ab start=25
+#c 25 failure vpiSequenceInst s_ab start=25
+#c 28 removed 3
+#c 30 start vpiPropertyInst p_ac start=30
+#c 30 success vpiPropertyInst p_ac start=30

@@ -119,6 +119,16 @@ enum class Op : std::uint8_t {
     // each end point of the subsequence, for the assertion process to run
     // after the tick.
     call,
+    // The start of the code of an occurrence of a named sequence instance
+    // (Plan::instances[a], IEEE 1800-2023 16.8): repetition counter `b`
+    // names the evaluation of the instance the thread is in, its first tick
+    // plus one (0 outside). Only while the instance is watched (39.4.2) does
+    // it do anything, and it never changes the thread's window: the thread
+    // begins an evaluation whose first tick is the first of its window.
+    instance_begin,
+    // The end of that code: while the instance is watched, the evaluation
+    // counter `b` names matched at this tick (39.4.2 cbAssertionSuccess).
+    instance_end,
 };
 
 // A `throughout_begin` whose `c` is 1 names an expression (Plan::
@@ -232,6 +242,22 @@ struct GuardSpan {
     std::uint32_t column { };
 };
 
+// One occurrence of a named sequence or property instance in the plan's
+// expansion of the property (IEEE 1800-2023 16.8, 16.12), which a VPI
+// application may watch (39.4.2: assertion callbacks on a sequence or
+// property instance). A sequence instance is the code between its
+// instance_begin and instance_end in sequence `node`, whose evaluation the
+// thread counter `slot` names; a property instance is property node `node`.
+// The position (1-based line and column) is that of the instance's name
+// where it is written: the source of its VPI object.
+struct InstanceSite {
+    bool sequence { };
+    std::uint32_t node { };
+    std::uint32_t slot { };
+    std::uint32_t line { };
+    std::uint32_t column { };
+};
+
 struct Plan {
     std::vector<Sequence> sequences;
     std::vector<Property> properties;
@@ -257,6 +283,9 @@ struct Plan {
     std::vector<std::vector<std::uint32_t>> local_sets;
     // The number of subroutine calls attached to sequences (16.11).
     std::uint32_t calls { };
+    // The sequence and property instances (plan text "sva6"; none for
+    // older texts).
+    std::vector<InstanceSite> instances;
 };
 
 // The words a local of `width` bits holds (value words, then unknown words).

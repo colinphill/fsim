@@ -488,6 +488,7 @@ void append_sva_plan(std::string& text, const detail::SvaNativePlan& plan, const
         }
         append(property.guard_expression);
         append_all(property.initializers);
+        append_all(property.instances);
     }
     if (positions) {
         append_all(plan.guard_positions);
@@ -934,7 +935,9 @@ private:
                     || code[at].op == semantic::sva::Op::counter_set
                     || code[at].op == semantic::sva::Op::counter_increment
                     || code[at].op == semantic::sva::Op::throughout_begin
-                    || code[at].op == semantic::sva::Op::first_match_begin)) {
+                    || code[at].op == semantic::sva::Op::first_match_begin
+                    || code[at].op == semantic::sva::Op::instance_begin
+                    || code[at].op == semantic::sva::Op::instance_end)) {
                 ++at;
             }
             return at;
@@ -1297,6 +1300,8 @@ private:
             case semantic::sva::Op::counter_set:
             case semantic::sva::Op::counter_increment:
             case semantic::sva::Op::clock:
+            case semantic::sva::Op::instance_begin:
+            case semantic::sva::Op::instance_end:
                 break;
             }
             shape.throughout = std::max(shape.throughout, next[0]);
@@ -1324,11 +1329,34 @@ private:
         return add(add(add(mul(throughout, 4U), groups), mul(refs, 2U)), shape.off_nt + 3U);
     }
 
+    /// Whether sequence `sequence` holds sequence instances: its matcher
+    /// record ends with their evaluations (Matcher::encode, 39.4.2).
+    [[nodiscard]] bool instanced(const std::uint32_t sequence) const
+    {
+        return std::ranges::any_of(plan_.sequences[sequence].code,
+            [](const detail::SvaNativeStep& step) {
+                return step.op == semantic::sva::Op::instance_begin;
+            });
+    }
+
     /// The length in words of the matcher record (Matcher::encode) at
     /// `at` of the current heap: five words, the counted threads, the join
-    /// count and the joins. `at` may be garbage when `present` (an i64 0 or
-    /// 1) is 0.
+    /// count and the joins, then the counted evaluations of a sequence with
+    /// instances (four words each). `at` may be garbage when `present` (an
+    /// i64 0 or 1) is 0.
     [[nodiscard]] llvm::Value* matcher_record_length(llvm::Value* present, llvm::Value* at,
+        const std::uint32_t sequence)
+    {
+        auto* body = matcher_body_length(present, at, sequence);
+        if (!instanced(sequence)) {
+            return body;
+        }
+        auto* evaluations = guarded_old(present, add(at, body));
+        return add(add(body, mul(evaluations, 4U)), 1U);
+    }
+
+    /// The length of the matcher record at `at` short of its evaluations.
+    [[nodiscard]] llvm::Value* matcher_body_length(llvm::Value* present, llvm::Value* at,
         const std::uint32_t sequence)
     {
         const auto shape = shape_of(sequence);
@@ -1431,6 +1459,41 @@ private:
                     ks(state_id(sequence, from)), ks(state_id(sequence, to)),
                     guard, k(sequence), now, line, column });
         });
+    }
+
+    /// Whether plan instance `instance` (a value) is watched: its bit of the
+    /// block's h_inst_watched (layout::instance_watch_bit; 39.4.2).
+    [[nodiscard]] llvm::Value* instance_watched(llvm::Value* instance)
+    {
+        namespace l = runtime::sva::layout;
+        auto* bit = builder_.CreateShl(k(1U),
+            builder_.CreateSelect(builder_.CreateICmpULT(instance, k(63U)), instance, k(63U)));
+        return ne0(builder_.CreateAnd(rd(l::h_inst_watched), bit));
+    }
+    [[nodiscard]] llvm::Value* instance_watched(const std::uint32_t instance)
+    {
+        namespace l = runtime::sva::layout;
+        return ne0(builder_.CreateAnd(rd(l::h_inst_watched),
+            k(static_cast<std::uint64_t>(l::instance_watch_bit(instance)))));
+    }
+    /// An evaluation event of a watched instance (CompiledPlan::
+    /// note_instance): the kind, the instance, the attempt's start (env[3])
+    /// and the evaluation's time step (env[1]) (39.4.2 c and d).
+    void note_instance(llvm::Value* kind, llvm::Value* instance)
+    {
+        namespace l = runtime::sva::layout;
+        auto* attempt = builder_.CreateLoad(i64_, builder_.CreateConstInBoundsGEP1_64(i64_, env_, 3U));
+        auto* time = builder_.CreateLoad(i64_, builder_.CreateConstInBoundsGEP1_64(i64_, env_, 1U));
+        ring_push(l::h_inst_events_count, l::h_inst_events_cap, l::h_inst_events_head,
+            l::h_inst_events_off, 9U, l::instance_event_stride, { kind, instance, attempt, time });
+    }
+    /// The events of property node `node`'s watched instances: `kind` for
+    /// each (Instance::step).
+    void note_property_instances(const std::uint32_t node, llvm::Value* kind)
+    {
+        for (const auto site : plan_.properties[node].instances) {
+            if_then(instance_watched(site), [&] { note_instance(kind, k(site)); });
+        }
     }
 
     /// Whether guard number `index` (a value) of the tick's sampled booleans
@@ -1792,6 +1855,39 @@ private:
             });
             if_then(builder_.CreateICmpEQ(get(runnable), k(0U)), [&] { keep(cur); });
             return get(runnable);
+        };
+        // The evaluations of the watched instances of a sequence with
+        // instances (Matcher::decode, 39.4.2): scratch entries tagged 8
+        // (instance, tag, clock, flags) in the record's order, before any
+        // thread runs; evaluation_matched_now (4) is set within the step.
+        const bool with_instances = instanced(sequence);
+        if (with_instances) {
+            if_then(has_input, [&] {
+                auto* tail = add(in_off, matcher_body_length(k(1U), in_off, sequence));
+                auto* count = old_word(tail);
+                auto* index = var("seed_evaluation");
+                for_count(index, count, [&] {
+                    auto* first = add(add(tail, 1U), mul(get(index), 4U));
+                    scratch_push(8U, [&](const std::uint64_t word) -> llvm::Value* {
+                        return word < 4U ? old_word(add(first, word)) : k(0U);
+                    });
+                });
+            });
+        }
+        // The evaluation entry of instance `instance` (a constant) with tag
+        // `tag`: its scratch entry index, or -1.
+        const auto find_evaluation = [&](const std::uint32_t instance, llvm::Value* tag) {
+            auto* found = var("evaluation_found", ~std::uint64_t { 0 });
+            auto* index = var("evaluation_scan");
+            for_count(index, get(queue_tail), [&] {
+                auto* at_entry = scratch_entry(get(index));
+                auto* same = builder_.CreateAnd(builder_.CreateICmpEQ(rd(at_entry), k(8U)),
+                    builder_.CreateAnd(
+                        builder_.CreateICmpEQ(rd(add(at_entry, 1U)), k(instance)),
+                        builder_.CreateICmpEQ(rd(add(at_entry, 2U)), tag)));
+                if_then(same, [&] { set(found, get(index)); });
+            });
+            return get(found);
         };
         // Seed the queue with the input threads, or a new matcher's one.
         if_else(has_input, [&] {
@@ -2451,6 +2547,49 @@ private:
                 set_cur(0U, k(pc + 1U));
                 goto_pc(pc + 1U);
                 break;
+            case semantic::sva::Op::instance_begin:
+                // Matcher::begin_evaluation of a watched sequence instance
+                // (39.4.2); otherwise one header test. The window does not
+                // change: the evaluation starts at its first tick.
+                if_then(instance_watched(step.a), [&] {
+                    auto* due_lo = cur_word(4U);
+                    auto* tag = add(builder_.CreateSelect(
+                                        builder_.CreateICmpSGT(due_lo, now), due_lo, now),
+                        1U);
+                    set_cur(7U + step.b, tag);
+                    if_then(builder_.CreateICmpEQ(find_evaluation(step.a, tag), ks(-1)), [&] {
+                        auto* clock = cur_word(1U);
+                        scratch_push(8U, [&](const std::uint64_t word) -> llvm::Value* {
+                            switch (word) {
+                            case 0U:
+                                return k(step.a);
+                            case 1U:
+                                return tag;
+                            case 2U:
+                                return clock;
+                            default:
+                                return k(0U);
+                            }
+                        });
+                    });
+                });
+                set_cur(0U, k(pc + 1U));
+                goto_pc(pc + 1U);
+                break;
+            case semantic::sva::Op::instance_end:
+                // Matcher::end_evaluation: the evaluation the thread carries
+                // matched at this tick.
+                if_then(instance_watched(step.a), [&] {
+                    auto* found = find_evaluation(step.a, cur_word(7U + step.b));
+                    if_then(builder_.CreateICmpNE(found, ks(-1)), [&] {
+                        auto* flags = add(scratch_entry(found), 4U);
+                        wr(flags, builder_.CreateOr(rd(flags), k(4U)));
+                    });
+                    set_cur(7U + step.b, k(0U));
+                });
+                set_cur(0U, k(pc + 1U));
+                goto_pc(pc + 1U);
+                break;
             case semantic::sva::Op::throughout_begin: {
                 // `a throughout s`: the condition joins the thread, unstarted.
                 auto* used = cur_word(off_nt);
@@ -2920,6 +3059,98 @@ private:
             alt_put(tail, k(0U));
             wr(l::h_heap_alt_used, add(tail, 1U));
         }
+        if (with_instances) {
+            // Matcher::report_evaluations, in the order the evaluations
+            // began, over the threads the step kept; the record's last
+            // words are the evaluations that live on.
+            std::vector<std::pair<std::uint32_t, std::uint32_t>> bounds;
+            for (const auto& step : code) {
+                if (step.op == semantic::sva::Op::instance_begin) {
+                    bounds.emplace_back(step.a, step.b);
+                }
+            }
+            auto* evaluations = var("evaluations_kept");
+            auto* index = var("evaluation_report");
+            for_count(index, get(queue_tail), [&] {
+                // The entry's place is read again after an event, whose
+                // ring may grow the block.
+                const auto at_entry = [&] { return scratch_entry(get(index)); };
+                if_then(builder_.CreateICmpEQ(rd(at_entry()), k(8U)), [&] {
+                    auto* instance = rd(add(at_entry(), 1U));
+                    auto* tag = rd(add(at_entry(), 2U));
+                    auto* clock = rd(add(at_entry(), 3U));
+                    auto* flags_in = rd(add(at_entry(), 4U));
+                    auto* watched = instance_watched(instance);
+                    auto* matched_now = ne0(builder_.CreateAnd(flags_in, k(4U)));
+                    auto* flags = var("evaluation_flags");
+                    set(flags, builder_.CreateAnd(flags_in, k(3U)));
+                    llvm::Value* tick = now;
+                    if (multi) {
+                        tick = clock_word(0U, clock);
+                    }
+                    auto* starts = builder_.CreateAnd(
+                        builder_.CreateICmpEQ(builder_.CreateAnd(get(flags), k(1U)), k(0U)),
+                        builder_.CreateOr(matched_now,
+                            builder_.CreateICmpSGE(tick, sub(tag, k(1U)))));
+                    if_then(starts, [&] {
+                        set(flags, builder_.CreateOr(get(flags), k(1U)));
+                        if_then(watched, [&] { note_instance(k(0U), instance); });
+                    });
+                    if_then(matched_now, [&] {
+                        set(flags, builder_.CreateOr(get(flags), k(2U)));
+                        if_then(watched, [&] { note_instance(k(1U), instance); });
+                    });
+                    // The instance's counter in a kept thread.
+                    llvm::Value* slot = k(0U);
+                    for (const auto& [site, counter] : bounds) {
+                        slot = builder_.CreateSelect(builder_.CreateICmpEQ(instance, k(site)),
+                            k(counter), slot);
+                    }
+                    auto* alive = var("evaluation_alive");
+                    auto* thread = var("evaluation_thread");
+                    if (extended) {
+                        for_count(thread, get(queue_tail), [&] {
+                            auto* other = scratch_entry(get(thread));
+                            if_then(builder_.CreateAnd(builder_.CreateICmpEQ(rd(other), k(2U)),
+                                        builder_.CreateICmpEQ(rd(add(add(other, 8U), slot)), tag)),
+                                [&] { set(alive, k(1U)); });
+                        });
+                    } else {
+                        for_count(thread, get(out_count), [&] {
+                            auto* first = add(get(thread_base), mul(get(thread), thread_words));
+                            if_then(builder_.CreateICmpEQ(
+                                        rd(alt_index(add(add(first, 7U), slot))), tag),
+                                [&] { set(alive, k(1U)); });
+                        });
+                    }
+                    if_else(ne0(get(alive)), [&] {
+                        wr(add(at_entry(), 4U), get(flags));
+                        set(evaluations, add(get(evaluations), 1U));
+                    }, [&] {
+                        if_then(builder_.CreateAnd(watched,
+                                    builder_.CreateICmpEQ(get(flags), k(1U))),
+                            [&] { note_instance(k(2U), instance); });
+                        wr(at_entry(), k(9U));
+                    });
+                });
+            });
+            reserve_alt(add(mul(get(evaluations), 4U), 1U));
+            auto* tail = rd(l::h_heap_alt_used);
+            alt_put(tail, get(evaluations));
+            auto* written = var("evaluations_written");
+            auto* entry_scan = var("evaluation_encode");
+            for_count(entry_scan, get(queue_tail), [&] {
+                auto* at_entry = scratch_entry(get(entry_scan));
+                if_then(builder_.CreateICmpEQ(rd(at_entry), k(8U)), [&] {
+                    auto* first = add(add(tail, 1U), mul(get(written), 4U));
+                    for (std::uint64_t word = 0U; word < 4U; ++word) {
+                        alt_put(add(first, word), rd(add(at_entry, word + 1U)));
+                    }
+                    set(written, add(get(written), 1U));
+                });
+            });
+            wr(l::h_heap_alt_used, add(add(tail, mul(get(evaluations), 4U)), 1U));
+        }
         wr(l::h_scratch_used, k(0U));
         if (local_count != 0U) {
             // The match valuations move to the front of the scratch region,
@@ -3019,6 +3250,16 @@ private:
         const auto kind_of = [&](const std::int32_t child) {
             return plan_.properties[static_cast<std::size_t>(child)].kind;
         };
+        // The events of property instances (39.4.2) come from the property
+        // tree's code, whose nodes are the instances (`cover sequence` has
+        // none).
+        if (!plan_.every_match
+            && std::ranges::any_of(plan_.properties,
+                [](const detail::SvaNativeProperty& property) {
+                    return !property.instances.empty();
+                })) {
+            return false;
+        }
         if (locals_words() != 0U) {
             // The instances of a plan with local variables carry their
             // valuations, which only the property tree's code keeps; the
@@ -3595,6 +3836,16 @@ private:
                                              : known_one_guard(property.guard);
         };
         const auto step = [&] {
+            // A watched property instance's evaluation begins at its start
+            // tick, or at the evaluation that created it in a multiclocked
+            // plan (Instance::step, 39.4.2).
+            if (!property.instances.empty()) {
+                auto* fresh = builder_.CreateICmpEQ(existing, k(0U));
+                auto* begins = multi ? fresh
+                                     : builder_.CreateOr(fresh,
+                                           builder_.CreateICmpEQ(node_start, now));
+                if_then(begins, [&] { note_property_instances(node, k(0U)); });
+            }
             // A new instance's initialization assignments, in declaration
             // order, when its evaluation begins (Instance::step, 16.10).
             if (!property.initializers.empty()) {
@@ -4276,6 +4527,16 @@ private:
             }
             if_then(builder_.CreateICmpSGE(now, node_start), step);
         });
+        if (!property.instances.empty()) {
+            // The outcome of a watched property instance decided at this
+            // evaluation (Instance::step, 39.4.2).
+            if_then(builder_.CreateAnd(builder_.CreateNot(is_decided_in),
+                        ne0(get(state.decided))),
+                [&] {
+                    note_property_instances(node,
+                        builder_.CreateSelect(ne0(get(state.holds)), k(1U), k(2U)));
+                });
+        }
         // The record: a decided instance drops its operands and matcher.
         auto* is_decided = ne0(get(state.decided));
         auto* header = get(record);
@@ -4992,7 +5253,7 @@ private:
                          l::h_steps_active, l::h_next_serial, l::h_time, l::h_attempts_count,
                          l::h_outcomes_count, l::h_started_count, l::h_events_count,
                          l::h_requests_count, l::h_heap_used, l::h_last_fail_line,
-                         l::h_last_fail_column, l::h_pop_serial }) {
+                         l::h_last_fail_column, l::h_pop_serial, l::h_inst_events_count }) {
                     wr(field, rd(add(from, static_cast<std::uint64_t>(field))));
                 }
                 for (std::uint64_t word = 0U; word < clock_words; ++word) {
@@ -5038,7 +5299,8 @@ private:
             auto* bound = builder_.CreateICmpNE(builder_.CreateLoad(i32_,
                                                     builder_.CreateConstInBoundsGEP1_64(i8_, frame_, 112U)),
                 k32(0U));
-            auto* events = ne0(rd(l::h_events_count));
+            auto* events = builder_.CreateOr(ne0(rd(l::h_events_count)),
+                ne0(rd(l::h_inst_events_count)));
             if_then(builder_.CreateOr(bound, events), [&] {
                 auto* post_type = llvm::FunctionType::get(llvm::Type::getVoidTy(context_),
                     { ptr_, i32_ }, false);
@@ -7913,6 +8175,18 @@ private:
         dyn_store_element(header, slot, source);
     }
 
+    /// Element `ordinal` (`width` bits) of a sparse array's dense image
+    /// (dyn_dense_flag): its value bits, then its unknown bits, one plane of
+    /// `capacity` words each (ContainerValue::compact_planes).
+    [[nodiscard]] Pair dyn_dense_element(llvm::Value* header, llvm::Value* ordinal,
+        const std::uint32_t width)
+    {
+        auto* data = builder_.CreateLoad(ptr_, dyn_address(header, dyn_data));
+        auto* unknown = builder_.CreateInBoundsGEP(i64_, data, dyn_load(header, dyn_capacity));
+        auto* position = builder_.CreateMul(ordinal, constant(width));
+        return { dyn_plane_load(data, position, width), dyn_plane_load(unknown, position, width) };
+    }
+
     /// KOp::dyn on a sparse fixed array (imm_a dyn_layout_sparse): element
     /// reads and writes and whole copies, in either layout.
     void emit_dyn_sparse(const KInst& inst, const std::uint32_t at, llvm::Value* header)
@@ -7969,11 +8243,7 @@ private:
         const auto [ordinal, valid] = dyn_declared_ordinal(inst, at, writing,
             dyn_load(header, dyn_maximum));
         const auto dense_element = [&] {
-            auto* data = builder_.CreateLoad(ptr_, dyn_address(header, dyn_data));
-            auto* unknown = builder_.CreateInBoundsGEP(i64_, data, dyn_load(header, dyn_capacity));
-            auto* position = builder_.CreateMul(ordinal, constant(element_width));
-            return Pair { dyn_plane_load(data, position, element_width),
-                dyn_plane_load(unknown, position, element_width) };
+            return dyn_dense_element(header, ordinal, element_width);
         };
         if (!writing) {
             const auto empty = dyn_pair(header, dyn_empty);
@@ -10950,6 +11220,44 @@ private:
                                          builder_.CreateZExt(condition, i64_)),
                     slot);
             };
+            // One element pair of packed or scalar elements.
+            const auto mark_pair = [&](const Pair left, const Pair right) {
+                if (scalar) {
+                    mark(differ, builder_.CreateNot(scalar_equal(left, right)));
+                    return;
+                }
+                if (case_equal) {
+                    mark(differ, builder_.CreateNot(builder_.CreateAnd(
+                                     builder_.CreateICmpEQ(left.a, right.a),
+                                     builder_.CreateICmpEQ(left.b, right.b))));
+                    return;
+                }
+                auto* unknown_bits = builder_.CreateAnd(builder_.CreateOr(left.b, right.b),
+                    element_mask);
+                mark(differ, nonzero(builder_.CreateAnd(
+                                 builder_.CreateAnd(builder_.CreateXor(left.a, right.a),
+                                     bit_not(unknown_bits)),
+                                 element_mask)));
+                mark(unknown, nonzero(unknown_bits));
+            };
+            if ((inst.imm_a & detail::dyn_layout_sparse) != 0U) {
+                // Two sparse arrays of one shape (IEEE 1800-2023 11.4.5,
+                // 7.4): every ordinal's pair; a stored size says nothing.
+                builder_.CreateStore(builder_.CreateZExt(builder_.CreateICmpNE(
+                                         dyn_load(header, dyn_maximum),
+                                         dyn_load(other, dyn_maximum)),
+                                         i64_),
+                    differ);
+                auto* shaped = dyn_when(builder_.CreateICmpEQ(
+                    builder_.CreateLoad(i64_, differ), constant(0U)));
+                emit_dyn_sparse_pairs(header, other, width, mark_pair);
+                dyn_end(shaped);
+                auto* zero = nonzero(builder_.CreateLoad(i64_, differ));
+                auto* x = nonzero(builder_.CreateLoad(i64_, unknown));
+                store_register(inst.d, select(zero, zero_pair(),
+                    select(x, x_value(1U), scalar_bool(builder_.getTrue()))));
+                break;
+            }
             auto* same_size = dyn_when(builder_.CreateICmpEQ(builder_.CreateLoad(i64_, differ),
                 constant(0U)));
             dyn_loop(constant(0U), size, false, [&](llvm::Value* ordinal) {
@@ -10976,23 +11284,7 @@ private:
                 }
                 const auto left = dyn_load_element(header, ordinal);
                 const auto right = dyn_load_element(other, ordinal);
-                if (scalar) {
-                    mark(differ, builder_.CreateNot(scalar_equal(left, right)));
-                    return;
-                }
-                if (case_equal) {
-                    mark(differ, builder_.CreateNot(builder_.CreateAnd(
-                                     builder_.CreateICmpEQ(left.a, right.a),
-                                     builder_.CreateICmpEQ(left.b, right.b))));
-                    return;
-                }
-                auto* unknown_bits = builder_.CreateAnd(builder_.CreateOr(left.b, right.b),
-                    element_mask);
-                mark(differ, nonzero(builder_.CreateAnd(
-                                 builder_.CreateAnd(builder_.CreateXor(left.a, right.a),
-                                     bit_not(unknown_bits)),
-                                 element_mask)));
-                mark(unknown, nonzero(unknown_bits));
+                mark_pair(left, right);
             });
             dyn_end(same_size);
             auto* zero = nonzero(builder_.CreateLoad(i64_, differ));
@@ -11131,6 +11423,13 @@ private:
             auto* result_a = str_slot(i64_, constant(initial));
             auto* result_b = str_slot(i64_, constant(0U));
             const bool is_signed = (inst.imm_a & detail::dyn_layout_signed_elements) != 0U;
+            if ((inst.imm_a & detail::dyn_layout_sparse) != 0U) {
+                emit_dyn_sparse_reduce(inst, header, operation, fold,
+                    { result_a, result_b }, width, is_signed);
+                store_register(inst.d,
+                    { builder_.CreateLoad(i64_, result_a), builder_.CreateLoad(i64_, result_b) });
+                break;
+            }
             dyn_loop(constant(0U), dyn_load(header, dyn_size), false,
                 [&](llvm::Value* ordinal) {
                     auto value = dyn_load_element(header, ordinal);
@@ -11158,6 +11457,258 @@ private:
         default:
             throw std::logic_error("static kernel whole-array operation is invalid");
         }
+    }
+
+    /// Whether predicate graph `imm` (dyn_graph) reads the iterator's index
+    /// (ContainerPredicateOperator::index, `item.index`).
+    [[nodiscard]] bool dyn_graph_reads_index(const std::uint64_t imm) const
+    {
+        const auto begin = detail::dyn_graph_begin(imm);
+        const auto count = detail::dyn_graph_count(imm);
+        for (std::uint64_t node = 0U; node < count; ++node) {
+            const auto* words = body_.predicate_words.data()
+                + static_cast<std::size_t>((begin + node) * detail::dyn_graph_node_words);
+            if (static_cast<ContainerPredicateOperator>(words[0] & 0xFFU)
+                == ContainerPredicateOperator::index) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// The declared index (32 bits) of ordinal `ordinal` of a sparse array
+    /// whose whole-array operation's layout `imm_a` gives its left bound
+    /// and direction (sparse_index_layout; container_declared_index).
+    [[nodiscard]] llvm::Value* dyn_sparse_declared_index(const std::uint64_t imm_a,
+        llvm::Value* ordinal)
+    {
+        auto* left = constant(static_cast<std::uint64_t>(
+            static_cast<std::int64_t>(static_cast<std::int32_t>(
+                static_cast<std::uint32_t>(imm_a >> 32U)))));
+        return builder_.CreateAnd((imm_a & detail::dyn_layout_descending) != 0U
+                ? builder_.CreateSub(left, ordinal)
+                : builder_.CreateAdd(left, ordinal),
+            constant(0xFFFF'FFFFU));
+    }
+
+    /// Element `ordinal` (`width` bits) of sparse array `header`, the
+    /// ordinals of successive calls increasing (ContainerElementCursor):
+    /// the dense image's, else the stored element at position `next` (then
+    /// passed) when it is the ordinal's, else the background.
+    [[nodiscard]] Pair dyn_sparse_cursor_element(llvm::Value* header, llvm::Value* ordinal,
+        llvm::AllocaInst* next, const std::uint32_t width)
+    {
+        auto* value_a = str_slot(i64_, constant(0U));
+        auto* value_b = str_slot(i64_, constant(0U));
+        auto* dense = dyn_flag_set(header, dyn_dense_flag);
+        auto* image = dyn_when(dense);
+        {
+            const auto element = dyn_dense_element(header, ordinal, width);
+            builder_.CreateStore(element.a, value_a);
+            builder_.CreateStore(element.b, value_b);
+        }
+        dyn_end(image);
+        auto* keyed = dyn_when(builder_.CreateNot(dense));
+        {
+            auto* position = builder_.CreateLoad(i64_, next);
+            auto* present = dyn_key_present(header, position, ordinal);
+            const auto element = dyn_choose(present,
+                [&] { return dyn_load_element(header, position); }, dyn_pair(header, dyn_fill));
+            builder_.CreateStore(
+                builder_.CreateAdd(position, builder_.CreateZExt(present, i64_)), next);
+            builder_.CreateStore(element.a, value_a);
+            builder_.CreateStore(element.b, value_b);
+        }
+        dyn_end(keyed);
+        return { builder_.CreateLoad(i64_, value_a), builder_.CreateLoad(i64_, value_b) };
+    }
+
+    /// Calls `visit(left, right)` for element pairs of sparse arrays
+    /// `header` and `other` (one element count, `width`-bit elements) that
+    /// decide every pair (visit_sparse_element_pairs): with both arrays
+    /// keyed, each ordinal either stores, in increasing order, then the two
+    /// backgrounds once when some ordinal is stored in neither; else every
+    /// ordinal's pair.
+    template <typename Visit>
+    void emit_dyn_sparse_pairs(llvm::Value* header, llvm::Value* other,
+        const std::uint32_t width, Visit&& visit)
+    {
+        auto* count = dyn_load(header, dyn_maximum);
+        auto* keyed = builder_.CreateNot(builder_.CreateOr(dyn_flag_set(header, dyn_dense_flag),
+            dyn_flag_set(other, dyn_dense_flag)));
+        auto* merge = dyn_when(keyed);
+        {
+            auto* left_size = dyn_load(header, dyn_size);
+            auto* right_size = dyn_load(other, dyn_size);
+            auto* left_next = str_slot(i64_, constant(0U));
+            auto* right_next = str_slot(i64_, constant(0U));
+            auto* visited = str_slot(i64_, constant(0U));
+            const auto key_at = [&](llvm::Value* array, llvm::Value* position,
+                                    llvm::Value* size) {
+                // Past the last stored element: above every ordinal.
+                return dyn_choose(builder_.CreateICmpULT(position, size),
+                    [&] {
+                        return Pair { builder_.CreateLoad(i64_, dyn_key_address(array, position)),
+                            constant(0U) };
+                    },
+                    Pair { constant(~std::uint64_t { 0 }), constant(0U) })
+                    .a;
+            };
+            dyn_while(
+                [&] {
+                    return builder_.CreateOr(
+                        builder_.CreateICmpULT(builder_.CreateLoad(i64_, left_next), left_size),
+                        builder_.CreateICmpULT(builder_.CreateLoad(i64_, right_next),
+                            right_size));
+                },
+                [&] {
+                    auto* left_at = builder_.CreateLoad(i64_, left_next);
+                    auto* right_at = builder_.CreateLoad(i64_, right_next);
+                    auto* left_key = key_at(header, left_at, left_size);
+                    auto* right_key = key_at(other, right_at, right_size);
+                    auto* ordinal = builder_.CreateSelect(
+                        builder_.CreateICmpULT(left_key, right_key), left_key, right_key);
+                    auto* left_here = builder_.CreateICmpEQ(left_key, ordinal);
+                    auto* right_here = builder_.CreateICmpEQ(right_key, ordinal);
+                    const auto left = dyn_choose(left_here,
+                        [&] { return dyn_load_element(header, left_at); },
+                        dyn_pair(header, dyn_fill));
+                    const auto right = dyn_choose(right_here,
+                        [&] { return dyn_load_element(other, right_at); },
+                        dyn_pair(other, dyn_fill));
+                    visit(left, right);
+                    builder_.CreateStore(
+                        builder_.CreateAdd(left_at, builder_.CreateZExt(left_here, i64_)),
+                        left_next);
+                    builder_.CreateStore(
+                        builder_.CreateAdd(right_at, builder_.CreateZExt(right_here, i64_)),
+                        right_next);
+                    builder_.CreateStore(
+                        builder_.CreateAdd(builder_.CreateLoad(i64_, visited), constant(1U)),
+                        visited);
+                });
+            auto* unstored = dyn_when(
+                builder_.CreateICmpULT(builder_.CreateLoad(i64_, visited), count));
+            visit(dyn_pair(header, dyn_fill), dyn_pair(other, dyn_fill));
+            dyn_end(unstored);
+        }
+        dyn_end(merge);
+        auto* walk = dyn_when(builder_.CreateNot(keyed));
+        {
+            auto* left_next = str_slot(i64_, constant(0U));
+            auto* right_next = str_slot(i64_, constant(0U));
+            dyn_loop(constant(0U), count, false, [&](llvm::Value* ordinal) {
+                const auto left = dyn_sparse_cursor_element(header, ordinal, left_next, width);
+                const auto right = dyn_sparse_cursor_element(other, ordinal, right_next, width);
+                visit(left, right);
+            });
+        }
+        dyn_end(walk);
+    }
+
+    /// ContainerReduction (IEEE 1800-2023 7.12.3) of a sparse fixed array
+    /// (dyn_layout_sparse) folded with `fold` into `result` (two i64
+    /// slots), as reduce_container_value folds it: every element in ordinal
+    /// order when the dense image holds them or the with clause reads
+    /// `item.index`; else the stored elements, then every unstored copy of
+    /// the background (fold_repeated: by squaring for sum and product, once
+    /// for and and or, once for an odd count for xor).
+    void emit_dyn_sparse_reduce(const KInst& inst, llvm::Value* header,
+        const ContainerReductionOperator operation, const KInst& fold,
+        const std::pair<llvm::Value*, llvm::Value*> result, const std::uint32_t width,
+        const bool is_signed)
+    {
+        const bool transformed = detail::dyn_graph_count(inst.imm_b) != 0U;
+        const auto transform = [&](const Pair value, llvm::Value* item_index) {
+            return transformed ? emit_predicate(inst.imm_b, value, item_index, width, is_signed)
+                               : value;
+        };
+        const auto accumulate = [&](const Pair value) {
+            const auto folded = emit_binary(fold,
+                { builder_.CreateLoad(i64_, result.first),
+                    builder_.CreateLoad(i64_, result.second) },
+                value);
+            builder_.CreateStore(folded.a, result.first);
+            builder_.CreateStore(folded.b, result.second);
+        };
+        auto* count = dyn_load(header, dyn_maximum);
+        auto* dense = dyn_flag_set(header, dyn_dense_flag);
+        auto* image = dyn_when(dense);
+        dyn_loop(constant(0U), count, false, [&](llvm::Value* ordinal) {
+            const auto element = dyn_dense_element(header, ordinal, width);
+            accumulate(transform(element, dyn_sparse_declared_index(inst.imm_a, ordinal)));
+        });
+        dyn_end(image);
+        auto* stored = dyn_when(builder_.CreateNot(dense));
+        if (transformed && dyn_graph_reads_index(inst.imm_b)) {
+            // Each element with its own index: a merge of the stored
+            // ordinals (increasing) with the unstored ones.
+            auto* next = str_slot(i64_, constant(0U));
+            dyn_loop(constant(0U), count, false, [&](llvm::Value* ordinal) {
+                auto* position = builder_.CreateLoad(i64_, next);
+                auto* present = dyn_key_present(header, position, ordinal);
+                const auto element = dyn_choose(present,
+                    [&] { return dyn_load_element(header, position); },
+                    dyn_pair(header, dyn_fill));
+                builder_.CreateStore(
+                    builder_.CreateAdd(position, builder_.CreateZExt(present, i64_)), next);
+                accumulate(transform(element, dyn_sparse_declared_index(inst.imm_a, ordinal)));
+            });
+        } else {
+            // No element's index is read.
+            auto* size = dyn_load(header, dyn_size);
+            dyn_loop(constant(0U), size, false, [&](llvm::Value* position) {
+                accumulate(transform(dyn_load_element(header, position), constant(0U)));
+            });
+            const auto background = transform(dyn_pair(header, dyn_fill), constant(0U));
+            auto* copies = builder_.CreateSub(count, size);
+            switch (operation) {
+            case ContainerReductionOperator::sum:
+            case ContainerReductionOperator::product: {
+                auto* remaining = str_slot(i64_, copies);
+                auto* element_a = str_slot(i64_, background.a);
+                auto* element_b = str_slot(i64_, background.b);
+                dyn_while(
+                    [&] {
+                        return builder_.CreateICmpNE(builder_.CreateLoad(i64_, remaining),
+                            constant(0U));
+                    },
+                    [&] {
+                        auto* left = builder_.CreateLoad(i64_, remaining);
+                        auto* odd = dyn_when(builder_.CreateICmpNE(
+                            builder_.CreateAnd(left, constant(1U)), constant(0U)));
+                        accumulate({ builder_.CreateLoad(i64_, element_a),
+                            builder_.CreateLoad(i64_, element_b) });
+                        dyn_end(odd);
+                        auto* rest = builder_.CreateLShr(left, constant(1U));
+                        builder_.CreateStore(rest, remaining);
+                        auto* more = dyn_when(builder_.CreateICmpNE(rest, constant(0U)));
+                        const Pair current { builder_.CreateLoad(i64_, element_a),
+                            builder_.CreateLoad(i64_, element_b) };
+                        const auto squared = emit_binary(fold, current, current);
+                        builder_.CreateStore(squared.a, element_a);
+                        builder_.CreateStore(squared.b, element_b);
+                        dyn_end(more);
+                    });
+                break;
+            }
+            case ContainerReductionOperator::bit_and:
+            case ContainerReductionOperator::bit_or: {
+                auto* some = dyn_when(builder_.CreateICmpNE(copies, constant(0U)));
+                accumulate(background);
+                dyn_end(some);
+                break;
+            }
+            case ContainerReductionOperator::bit_xor: {
+                auto* odd = dyn_when(builder_.CreateICmpNE(
+                    builder_.CreateAnd(copies, constant(1U)), constant(0U)));
+                accumulate(background);
+                dyn_end(odd);
+                break;
+            }
+            }
+        }
+        dyn_end(stored);
     }
 
     /// Whether two text slots hold the same bytes.

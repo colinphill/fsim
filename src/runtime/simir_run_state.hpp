@@ -55,7 +55,7 @@ using Impl = InterpreterEventAccess::Impl;
 
 /// Section versions: each subsystem bumps its own when its layout changes.
 inline constexpr std::uint32_t scheduler_version = 1U;
-inline constexpr std::uint32_t host_version = 5U;
+inline constexpr std::uint32_t host_version = 6U;
 inline constexpr std::uint32_t process_version = 2U;
 inline constexpr std::uint32_t kernel_version = 8U;
 

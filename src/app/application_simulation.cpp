@@ -1110,6 +1110,44 @@ SdfReannotationCommitResult Simulation::commit_sdf_reannotation(
                     }
                     continue;
                 }
+                // Some bits of a load whose copy one driver of the running
+                // design writes as a wider run (the whole port): the driver
+                // keeps a table for those bits
+                // (Interpreter::set_net_delay_bits_table), so no copy is
+                // split for them. They take the record's delays from their
+                // next change on and pending changes keep their times; a
+                // later record of the same bits or of the whole load
+                // replaces it (IEEE 1364-2005 16.2.4, 16.3).
+                const auto bits = elaboration::sdf_net_delay_terminal_bits(
+                    impl_->built.design, record.destination);
+                const auto wider = !bits ? running.end()
+                    : std::ranges::find_if(running, [&](const auto& each) {
+                          if (!each.delayed
+                              || each.destination.object
+                                  != record.destination.object) {
+                              return false;
+                          }
+                          const auto held
+                              = elaboration::sdf_net_delay_terminal_bits(
+                                  impl_->built.design, each.destination);
+                          return held && held->first <= bits->first
+                              && bits->first + bits->second
+                                  <= held->first + held->second;
+                      });
+                if (wider != running.end()
+                    && std::ranges::count(running, wider->driver,
+                           &elaboration::SdfNetDelayInfo::driver) == 1) {
+                    const auto table = elaboration::sdf_net_delay_table(
+                        record.delays, record.reject, record.error);
+                    for (const auto driver : wider->drivers())
+                        (void)impl_->interpreter->set_net_delay_bits_table(
+                            impl_->running_process(driver), bits->first,
+                            bits->second, table);
+                    std::erase_if(fresh, [&](const auto& each) {
+                        return same_load(each, record);
+                    });
+                    continue;
+                }
                 // Later records to one load replace earlier ones (16.3).
                 std::erase_if(fresh, [&](const auto& each) {
                     return same_load(each, record);
@@ -1837,6 +1875,27 @@ void Simulation::set_assertion_attempt_hook(AssertionAttemptHook hook)
 void Simulation::set_assertion_step_hook(AssertionStepHook hook)
 {
     impl_->assertion_step_hook = std::move(hook);
+}
+
+void Simulation::set_assertion_instance_hook(AssertionInstanceHook hook)
+{
+    impl_->assertion_instance_hook = std::move(hook);
+}
+
+std::size_t Simulation::watch_assertion_instance(
+    const std::uint64_t assertion, const bool sequence,
+    const std::uint32_t line, const std::uint32_t column, const bool watched)
+{
+    const auto processes = impl_->vpi_assertion_processes.find(assertion);
+    if (processes == impl_->vpi_assertion_processes.end()
+        || !impl_->interpreter) {
+        return 0U;
+    }
+    const std::vector<runtime::simir::ProcessId> selected {
+        processes->second.begin(), processes->second.end()
+    };
+    return impl_->interpreter->set_sva_instance_watch(
+        selected, sequence, line, column, watched);
 }
 
 void Simulation::set_assertion_control_task_hook(

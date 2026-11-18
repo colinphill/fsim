@@ -612,6 +612,9 @@ const auto run_compiled_systemc_actual =
       fsim::diagnostic::Engine run_diagnostics;
       auto project = fsim::app::build_project(
           hdl_systemc_config, run_diagnostics);
+      if (!project) {
+        print_diagnostics(run_diagnostics);
+      }
       assert(project);
       assert((
           project->design.systemc_instances().front()
@@ -955,6 +958,9 @@ void ApplicationTestFixture::run_systemc_hdl_hierarchy_cases(
         std::cerr << "SystemC hierarchy " << hierarchy.name << ":\n";
         print_diagnostics(case_diagnostics);
       }
+      if (!project) {
+        print_diagnostics(case_diagnostics);
+      }
       assert(project);
       for (const auto& signal : hierarchy.signals) {
         if (!project->design.find_signal(signal)) {
@@ -1069,8 +1075,17 @@ auto lifecycle_compiled_project = fsim::app::build_project(
     lifecycle_config, lifecycle_diagnostics);
 auto lifecycle_resumable_project = fsim::app::build_project(
     lifecycle_config, lifecycle_diagnostics);
+if (!lifecycle_reference_project) {
+  print_diagnostics(lifecycle_diagnostics);
+}
 assert(lifecycle_reference_project);
+if (!lifecycle_compiled_project) {
+  print_diagnostics(lifecycle_diagnostics);
+}
 assert(lifecycle_compiled_project);
+if (!lifecycle_resumable_project) {
+  print_diagnostics(lifecycle_diagnostics);
+}
 assert(lifecycle_resumable_project);
 assert(lifecycle_reference_project->systemc_roots.size() == 1);
 assert(lifecycle_compiled_project->systemc_roots.size() == 1);
@@ -1140,6 +1155,9 @@ natural_lifecycle_config.bindings.clear();
 fsim::diagnostic::Engine natural_lifecycle_diagnostics;
 auto natural_lifecycle_project = fsim::app::build_project(
     natural_lifecycle_config, natural_lifecycle_diagnostics);
+if (!natural_lifecycle_project) {
+  print_diagnostics(natural_lifecycle_diagnostics);
+}
 assert(natural_lifecycle_project);
 fsim::app::Simulation natural_lifecycle_simulation{
     std::move(*natural_lifecycle_project),
@@ -1163,6 +1181,9 @@ auto multiple_systemc_project = fsim::app::build_project(
     multiple_systemc_config, multiple_systemc_diagnostics);
 if (!multiple_systemc_project) {
   fsim::diagnostic::print_text(std::cerr, multiple_systemc_diagnostics);
+}
+if (!multiple_systemc_project) {
+  print_diagnostics(multiple_systemc_diagnostics);
 }
 assert(multiple_systemc_project);
 assert(multiple_systemc_project->systemc_roots.size() == 2);
@@ -1202,6 +1223,9 @@ auto mixed_root_project = fsim::app::build_project(
 if (!mixed_root_project) {
   fsim::diagnostic::print_text(std::cerr, mixed_root_diagnostics);
 }
+if (!mixed_root_project) {
+  print_diagnostics(mixed_root_diagnostics);
+}
 assert(mixed_root_project);
 assert(mixed_root_project->design.specializations().size() == 1);
 assert(mixed_root_project->design.systemc_instances().size() == 2);
@@ -1231,7 +1255,13 @@ const auto exercise_native_binding =
           binding_config, binding_diagnostics);
       auto compiled_project = fsim::app::build_project(
           binding_config, binding_diagnostics);
+      if (!reference_project) {
+        print_diagnostics(binding_diagnostics);
+      }
       assert(reference_project);
+      if (!compiled_project) {
+        print_diagnostics(binding_diagnostics);
+      }
       assert(compiled_project);
       const auto& instances =
           reference_project->design.systemc_instances();
@@ -1485,6 +1515,9 @@ matrix_debug_config.run.trace_file = matrix_trace;
 fsim::diagnostic::Engine matrix_debug_diagnostics;
 auto matrix_debug_project = fsim::app::build_project(
     matrix_debug_config, matrix_debug_diagnostics);
+if (!matrix_debug_project) {
+  print_diagnostics(matrix_debug_diagnostics);
+}
 assert(matrix_debug_project);
 std::ostringstream matrix_debug_output;
 std::ostringstream matrix_debug_error;
@@ -1552,6 +1585,9 @@ fsim::diagnostic::Engine throwing_lifecycle_diagnostics;
 auto throwing_lifecycle_project = fsim::app::build_project(
     throwing_lifecycle_config,
     throwing_lifecycle_diagnostics);
+if (!throwing_lifecycle_project) {
+  print_diagnostics(throwing_lifecycle_diagnostics);
+}
 assert(throwing_lifecycle_project);
 fsim::app::Simulation throwing_lifecycle_simulation{
     std::move(*throwing_lifecycle_project),
@@ -1573,6 +1609,9 @@ throwing_end_config.bindings.clear();
 fsim::diagnostic::Engine throwing_end_diagnostics;
 auto throwing_end_project = fsim::app::build_project(
     throwing_end_config, throwing_end_diagnostics);
+if (!throwing_end_project) {
+  print_diagnostics(throwing_end_diagnostics);
+}
 assert(throwing_end_project);
 fsim::app::Simulation throwing_end_simulation{
     std::move(*throwing_end_project),
@@ -1623,6 +1662,9 @@ direction_probe_config.bindings.clear();
 fsim::diagnostic::Engine direction_probe_diagnostics;
 const auto direction_probe_project = fsim::app::build_project(
     direction_probe_config, direction_probe_diagnostics);
+if (!direction_probe_project) {
+  print_diagnostics(direction_probe_diagnostics);
+}
 assert(direction_probe_project);
 assert(!direction_probe_diagnostics.has_error());
 assert(
@@ -1650,6 +1692,9 @@ systemc_hdl_config.bindings.clear();
 fsim::diagnostic::Engine systemc_hdl_diagnostics;
 auto systemc_hdl_project = fsim::app::build_project(
     systemc_hdl_config, systemc_hdl_diagnostics);
+if (!systemc_hdl_project) {
+  print_diagnostics(systemc_hdl_diagnostics);
+}
 assert(systemc_hdl_project);
 assert(systemc_hdl_project->systemc_hierarchy);
 assert(
@@ -1697,6 +1742,9 @@ systemc_thread_config.bindings = {
 fsim::diagnostic::Engine systemc_thread_diagnostics;
 auto systemc_thread_project = fsim::app::build_project(
     systemc_thread_config, systemc_thread_diagnostics);
+if (!systemc_thread_project) {
+  print_diagnostics(systemc_thread_diagnostics);
+}
 assert(systemc_thread_project);
 const auto thread_count =
     systemc_thread_project->design.find_signal("count");
@@ -1789,6 +1837,9 @@ vhdl_thread_config.bindings = {
 fsim::diagnostic::Engine vhdl_thread_diagnostics;
 auto vhdl_thread_project = fsim::app::build_project(
     vhdl_thread_config, vhdl_thread_diagnostics);
+if (!vhdl_thread_project) {
+  print_diagnostics(vhdl_thread_diagnostics);
+}
 assert(vhdl_thread_project);
 const auto vhdl_thread_count =
     vhdl_thread_project->design.find_signal("count");
@@ -1863,6 +1914,9 @@ alternate_factory_config.bindings.front().target =
 fsim::diagnostic::Engine alternate_factory_diagnostics;
 auto alternate_factory_project = fsim::app::build_project(
     alternate_factory_config, alternate_factory_diagnostics);
+if (!alternate_factory_project) {
+  print_diagnostics(alternate_factory_diagnostics);
+}
 assert(alternate_factory_project);
 assert(alternate_factory_project->specialization_cache_keys.size() == 1);
 assert(
@@ -1878,6 +1932,9 @@ alternate_hierarchy_config.bindings.front().target =
 fsim::diagnostic::Engine alternate_hierarchy_diagnostics;
 auto alternate_hierarchy_project = fsim::app::build_project(
     alternate_hierarchy_config, alternate_hierarchy_diagnostics);
+if (!alternate_hierarchy_project) {
+  print_diagnostics(alternate_hierarchy_diagnostics);
+}
 assert(alternate_hierarchy_project);
 assert(alternate_hierarchy_project->specialization_cache_keys.size() == 1);
 assert(
@@ -2002,6 +2059,9 @@ fsim::diagnostic::Engine vhdl_systemc_method_diagnostics;
 auto vhdl_systemc_method_project = fsim::app::build_project(
     vhdl_systemc_method_config,
     vhdl_systemc_method_diagnostics);
+if (!vhdl_systemc_method_project) {
+  print_diagnostics(vhdl_systemc_method_diagnostics);
+}
 assert(vhdl_systemc_method_project);
 const auto vhdl_method_output =
     vhdl_systemc_method_project->design.find_signal("inverted");
@@ -2058,6 +2118,9 @@ noinit_config.project.top =
 fsim::diagnostic::Engine noinit_diagnostics;
 auto noinit_project = fsim::app::build_project(
     noinit_config, noinit_diagnostics);
+if (!noinit_project) {
+  print_diagnostics(noinit_diagnostics);
+}
 assert(noinit_project);
 const auto noinit_input =
     noinit_project->design.find_signal("noinit_bridge.value");
@@ -2078,6 +2141,9 @@ assert(
 noinit_diagnostics.clear();
 auto awakened_noinit_project = fsim::app::build_project(
     noinit_config, noinit_diagnostics);
+if (!awakened_noinit_project) {
+  print_diagnostics(noinit_diagnostics);
+}
 assert(awakened_noinit_project);
 const auto awakened_input =
     awakened_noinit_project->design.find_signal(
@@ -2115,6 +2181,9 @@ edge_method_config.bindings = {
 fsim::diagnostic::Engine edge_method_diagnostics;
 auto edge_method_project = fsim::app::build_project(
     edge_method_config, edge_method_diagnostics);
+if (!edge_method_project) {
+  print_diagnostics(edge_method_diagnostics);
+}
 assert(edge_method_project);
 const auto edge_count =
     edge_method_project->design.find_signal("count");
@@ -2138,6 +2207,9 @@ throwing_method_config.project.top =
 fsim::diagnostic::Engine throwing_method_diagnostics;
 auto throwing_method_project = fsim::app::build_project(
     throwing_method_config, throwing_method_diagnostics);
+if (!throwing_method_project) {
+  print_diagnostics(throwing_method_diagnostics);
+}
 assert(throwing_method_project);
 fsim::app::Simulation throwing_method_simulation{
     std::move(*throwing_method_project),

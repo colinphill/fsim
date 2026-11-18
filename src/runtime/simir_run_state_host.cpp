@@ -132,6 +132,11 @@ void run_io(RunStateArchive& ar, Impl& impl)
     // The monitors of concurrent assertions: each is its plan, its bounds and
     // its flat attempt block (sva::Monitor::run_state_io), by (process, site).
     FSIM_RS_IO("interp.impl", sva_monitors, ar, impl);
+    // A restored run starts with no assertion callbacks, so no instance is
+    // watched (39.4.2); the monitors' masks are cleared with them.
+    if (ar.loading()) {
+        impl.sva_instance_watches.clear();
+    }
     // The disable nets each monitor registered when it was created (16.12).
     FSIM_RS_IO("interp.impl", sva_disable_watches, ar, impl);
     FSIM_RS_IO("interp.impl", sva_disable_watched, ar, impl);

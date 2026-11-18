@@ -1275,6 +1275,9 @@ struct SvaNativeProperty {
     /// The initialization assignments of the property's local variables
     /// (expressions), run when an instance's evaluation begins.
     std::vector<std::uint32_t> initializers;
+    /// The plan's property instances this node is the evaluation of (IEEE
+    /// 1800-2023 39.4.2).
+    std::vector<std::uint32_t> instances;
     friend bool operator==(const SvaNativeProperty&, const SvaNativeProperty&)
         = default;
 };

@@ -1656,9 +1656,11 @@ private:
         RegisterId value, frontend::ValueDomain domain);
     // The run-time-shaped profile of the unconstrained array type of
     // `subtype`, or nullopt.
+    // With `string_elements`, a STRING too (5.3.2.2).
     [[nodiscard]] std::optional<HirVhdlShapedProfile>
     hir_vhdl_shaped_open_profile(
-        const semantic::vhdl::SubtypeIndication& subtype) const;
+        const semantic::vhdl::SubtypeIndication& subtype,
+        bool string_elements = false) const;
     // The shaped profile an `in` unconstrained array formal takes when its
     // actual's index range is known only at run time (a slice with
     // non-static bounds, or a shaped value; IEEE 1076-2008 4.2.2.2), or
@@ -1791,6 +1793,31 @@ private:
     [[nodiscard]] std::optional<RegisterId> lower_hir_vhdl_shaped_value(
         semantic::ExpressionId value, const HirVhdlShapedProfile& profile,
         std::optional<std::size_t> width);
+    // Whether a value's length is known without evaluating it: a string
+    // literal, a positional aggregate, or a static width (9.3.2, 9.3.3.3).
+    [[nodiscard]] bool hir_vhdl_shaped_sized_value(
+        semantic::ExpressionId value) const;
+    // A shaped STRING of the characters of `text`, left to
+    // left + length - 1, ascending (9.2.5, 16.3).
+    [[nodiscard]] ContainerRegisterId lower_hir_vhdl_shaped_text(
+        const HirVhdlShapedProfile& profile, StringRegisterId text,
+        std::int64_t left);
+    // The same from the run-time bound `left`, ascending or descending
+    // (8.5): left to left + length - 1, or left downto left - length + 1.
+    [[nodiscard]] ContainerRegisterId lower_hir_vhdl_shaped_text(
+        const HirVhdlShapedProfile& profile, StringRegisterId text,
+        RegisterId left, bool descending);
+    // Fails the run unless a non-null STRING index range lies in POSITIVE
+    // (5.3.2.2, 16.3).
+    void check_hir_vhdl_shaped_string_bounds(
+        ContainerRegisterId value, const frontend::SourceSpan& span);
+    // A STRING value whose bounds no static subtype gives (a named
+    // aggregate, a call, a value held as text), as a shaped value; nullopt
+    // when `profile` is not a STRING or the value has a static shape, an
+    // empty value when lowering failed.
+    [[nodiscard]] std::optional<std::optional<ContainerRegisterId>>
+    lower_hir_vhdl_shaped_string_value(const HirVhdlShapedProfile& profile,
+        semantic::ExpressionId value, const frontend::SourceSpan& span);
     [[nodiscard]] bool lower_hir_vhdl_shaped_whole_assignment(
         ContainerRegisterId target, const HirVhdlShapedProfile& profile,
         semantic::ExpressionId value);
@@ -5731,6 +5758,10 @@ private:
     // Bound `with`-clause iterators over signed elements: such an iterator
     // has its element's signedness (IEEE 1800-2017 7.12).
     std::unordered_set<std::uint32_t> hir_captured_signed_;
+    // Bound `with`-clause iterators over real elements: such an iterator
+    // has its element's real type (IEEE 1800-2023 7.12).
+    std::unordered_map<std::uint32_t, frontend::SystemVerilogScalarKind>
+        hir_captured_scalar_kinds_;
     // Bound `with`-clause iterators over string elements (IEEE 1800-2017
     // 7.12.1).
     std::unordered_map<std::uint32_t, StringRegisterId> hir_captured_strings_;
@@ -6049,13 +6080,70 @@ private:
         const runtime::simir::ContainerType& source_type,
         runtime::simir::ContainerRegisterId destination,
         std::string_view iterator_name, semantic::ExpressionId predicate);
-    // `sort`/`rsort` with a key expression (IEEE 1800-2017 7.12.2) beyond
-    // the bounded key graph: an insertion sort in SimIR whose comparisons
-    // evaluate the key with the iterator bound to each element.
+    // `sort`/`rsort` with a key expression (IEEE 1800-2023 7.12.2) beyond
+    // the bounded key graph: a bottom-up merge sort in SimIR over the
+    // elements and their keys, each key evaluated once per element.
     [[nodiscard]] bool lower_hir_container_keyed_order_loop(
         runtime::simir::ContainerRegisterId target,
         const runtime::simir::ContainerType& type, bool descending,
-        std::string_view iterator_name, semantic::ExpressionId key);
+        std::string_view iterator_name,
+        std::optional<semantic::ExpressionId> key);
+    // The key a container ordering or locator compares: the elements
+    // themselves, or the values of a with expression of the iterator
+    // (IEEE 1800-2023 7.12.1, 7.12.2).
+    struct HirContainerKey {
+        enum class Kind : std::uint8_t { integral, real, text };
+        Kind kind { Kind::integral };
+        frontend::SystemVerilogScalarKind scalar_kind {
+            frontend::SystemVerilogScalarKind::None };
+        std::size_t width { };
+        bool is_signed { };
+        std::optional<semantic::ExpressionId> expression;
+        std::vector<std::pair<std::uint32_t, bool>> references;
+    };
+    struct HirContainerKeyValue {
+        std::optional<RegisterId> value;
+        std::optional<StringRegisterId> text;
+    };
+    struct HirContainerKeyedElement {
+        std::optional<RegisterId> value;
+        std::optional<StringRegisterId> text;
+        HirContainerKeyValue key;
+    };
+    void hir_bind_container_iterator(
+        const std::vector<std::pair<std::uint32_t, bool>>& references,
+        const runtime::simir::ContainerType& type,
+        std::optional<RegisterId> element,
+        std::optional<StringRegisterId> text, bool bind);
+    [[nodiscard]] std::optional<HirContainerKey> hir_container_key(
+        const runtime::simir::ContainerType& type,
+        std::string_view iterator_name,
+        std::optional<semantic::ExpressionId> expression);
+    [[nodiscard]] std::optional<HirContainerKeyValue>
+    lower_hir_container_key_value(const HirContainerKey& key,
+        const runtime::simir::ContainerType& type,
+        std::optional<RegisterId> element,
+        std::optional<StringRegisterId> text);
+    [[nodiscard]] RegisterId lower_hir_container_key_compare(
+        const HirContainerKey& key, bool equal,
+        const HirContainerKeyValue& lhs, const HirContainerKeyValue& rhs);
+    [[nodiscard]] std::optional<HirContainerKeyedElement>
+    lower_hir_container_keyed_element(const HirContainerKey& key,
+        const runtime::simir::ContainerType& type,
+        runtime::simir::ContainerRegisterId source, RegisterId ordinal);
+    // min, max, unique and unique_index over elements compared by `key`
+    // (7.12.1), as an element loop in SimIR.
+    [[nodiscard]] bool lower_hir_container_ordered_locator_loop(
+        support::BuiltinMethod method,
+        runtime::simir::ContainerRegisterId source,
+        const runtime::simir::ContainerType& source_type,
+        runtime::simir::ContainerRegisterId destination,
+        std::string_view iterator_name,
+        std::optional<semantic::ExpressionId> expression);
+    // A locator call as a value: a queue of the receiver's elements, or of
+    // int for an index locator (7.12.1).
+    [[nodiscard]] std::optional<HirStaticContainerValue>
+    lower_hir_container_locator_value(semantic::ExpressionId expression);
     // A reduction (`sum with (e)`) accumulated element by element; the
     // result has the with expression's width (IEEE 1800-2017 7.12.3).
     [[nodiscard]] std::optional<RegisterId> lower_hir_container_reduction_loop(

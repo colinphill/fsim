@@ -86,6 +86,22 @@ const char* unsupported_operation_reason()
         | (std::uint64_t { static_cast<std::uint32_t>(type.index_left) } << 32U);
 }
 
+// The index layout of a whole-array operation of a sparse fixed array:
+// dyn_layout_descending and the left bound in the high half, as
+// fixed_layout gives a dense array's but without dyn_layout_fixed (a sparse
+// array's element operations keep their range in imm_b). It gives an
+// element's declared index (container_declared_index), which a with
+// clause's `item.index` reads (IEEE 1800-2023 7.12.4).
+[[nodiscard]] std::uint64_t sparse_index_layout(const ContainerType& type) noexcept
+{
+    if (!type.sparse) {
+        return 0U;
+    }
+    return (type.index_left >= type.index_right ? static_kernel_detail::dyn_layout_descending
+                                                : 0U)
+        | (std::uint64_t { static_cast<std::uint32_t>(type.index_left) } << 32U);
+}
+
 // The not-compiled reason of a container operation the compiled tier has
 // no native form for.
 template <typename Op>
@@ -1517,6 +1533,17 @@ std::optional<SvaNativePlan> sva_native_plan(const SvaOperation& operation,
                     return std::nullopt;
                 }
                 break;
+            case sv::Op::instance_begin:
+            case sv::Op::instance_end:
+                // The bounds of a sequence instance (39.4.2): `a` the plan's
+                // instance, `b` the thread counter of its evaluation.
+                if (instruction.a >= plan.instances.size()
+                    || !plan.instances[instruction.a].sequence
+                    || instruction.b >= sequence.counters) {
+                    reason = "plan";
+                    return std::nullopt;
+                }
+                break;
             }
             SvaNativeStep step { instruction.op, instruction.a, instruction.b,
                 instruction.c, 0, 0, instruction.line, instruction.column };
@@ -1602,6 +1629,14 @@ std::optional<SvaNativePlan> sva_native_plan(const SvaOperation& operation,
             return std::nullopt;
         }
         native.properties.push_back(compiled);
+    }
+    // The property instances each node is the evaluation of (39.4.2).
+    for (std::size_t index = 0U; index < plan.instances.size(); ++index) {
+        const auto& site = plan.instances[index];
+        if (!site.sequence) {
+            native.properties[site.node].instances.push_back(
+                static_cast<std::uint32_t>(index));
+        }
     }
     native.root = plan.root;
     native.every_match = plan.every_match && root.kind == sv::PropertyKind::sequence;
@@ -2954,7 +2989,19 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                 return false;
             }
             if (sparse(container)) {
-                throw reject("dyn_size");
+                // A sparse array is a fixed-size array: its size is its
+                // declared element count (IEEE 1800-2023 7.4, 20.7).
+                const auto count = sparse_container_element_count(
+                    containers_[container].type);
+                inst.op = KOp::constant;
+                inst.d = narrow(op.destination);
+                inst.imm_a = count & 0xFFFF'FFFFU;
+                inst.imm_b = 0U;
+                inst.offset = 0U;
+                inst.aux = 0U;
+                inst.x = 0U;
+                inst.y = 0U;
+                return true;
             }
             set(DynOp::size, container);
             inst.d = narrow(op.destination);
@@ -3143,7 +3190,15 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             }
             const auto& lt = containers_[left].type;
             const auto& rt = containers_[right].type;
-            if (lt.sparse || rt.sparse || lt.fixed != rt.fixed
+            // Two sparse arrays of one element count compare element by
+            // element (emit_dyn_sparse_pairs); a sparse array of strings
+            // stays on the reference.
+            if (lt.sparse != rt.sparse
+                || (lt.sparse
+                    && (text(left)
+                        || sparse_container_element_count(lt)
+                            != sparse_container_element_count(rt)))
+                || lt.fixed != rt.fixed
                 || lt.element_kind != rt.element_kind
                 || lt.element_width != rt.element_width || lt.associative != rt.associative
                 || lt.string_indices != rt.string_indices || lt.index_width != rt.index_width
@@ -3179,12 +3234,15 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                 return false;
             }
             const auto& type = containers_[container].type;
-            if (type.sparse || text(container)
+            if (text(container)
                 || (type.associative && !op.transformation.empty())
                 || w(op.destination) != element_width(container)) {
                 throw reject("dyn_reduce");
             }
             set(DynOp::reduce, container);
+            // A sparse array: its stored elements and background
+            // (emit_dyn_sparse_reduce), indexed by its declared range.
+            inst.imm_a |= sparse_index_layout(type);
             inst.d = narrow(op.destination);
             inst.x = static_cast<std::uint32_t>(op.operation);
             inst.imm_b = graph(op.transformation, "dyn_reduce");

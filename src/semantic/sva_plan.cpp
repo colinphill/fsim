@@ -7,14 +7,16 @@
 namespace fsim::semantic::sva {
 namespace {
 
-// "sva5" adds the local variables (IEEE 1800-2023 16.10) after the property
-// clocks: the locals' widths, the expressions' targets, the local sets and
+// "sva6" adds the sequence and property instances after the calls (kind,
+// node, slot and position of each; IEEE 1800-2023 39.4.2); "sva5" adds the
+// local variables (IEEE 1800-2023 16.10) after the property clocks: the locals' widths, the expressions' targets, the local sets and
 // each property's initialization assignments, and the number of subroutine
 // calls attached to sequences (16.11); "sva4" adds the clock of each property after the guards' spans; "sva3"
 // added the source span of each guard after the (possibly empty) clock guard
 // list; "sva2" added the source position of each check and property; "sva1"
 // text (artifacts written before) still decodes, without positions.
-constexpr std::string_view version { "sva5" };
+constexpr std::string_view version { "sva6" };
+constexpr std::string_view version_locals { "sva5" };
 constexpr std::string_view version_clocks { "sva4" };
 constexpr std::string_view version_spans { "sva3" };
 constexpr std::string_view version_positions { "sva2" };
@@ -173,12 +175,21 @@ std::string encode(const Plan& plan)
         }
     }
     out.put(static_cast<std::int64_t>(plan.calls));
+    out.put(static_cast<std::int64_t>(plan.instances.size()));
+    for (const auto& site : plan.instances) {
+        out.put(site.sequence ? 0 : 1);
+        out.put(site.node);
+        out.put(site.slot);
+        out.put(site.line);
+        out.put(site.column);
+    }
     return std::move(out).finish();
 }
 
 std::optional<Plan> decode(const std::string_view text)
 {
-    const bool locals = text.starts_with(version);
+    const bool instances = text.starts_with(version);
+    const bool locals = instances || text.starts_with(version_locals);
     const bool property_clocks = locals || text.starts_with(version_clocks);
     const bool spans = property_clocks || text.starts_with(version_spans);
     const bool positions = spans || text.starts_with(version_positions);
@@ -206,7 +217,8 @@ std::optional<Plan> decode(const std::string_view text)
         sequence.code.resize(size);
         for (auto& instruction : sequence.code) {
             if (!in.get_unsigned(instruction.op,
-                    static_cast<std::int64_t>(Op::call))
+                    static_cast<std::int64_t>(
+                        instances ? Op::instance_end : Op::call))
                 || !in.get_unsigned(instruction.a, maximum_count)
                 || !in.get_unsigned(instruction.b, maximum_count)
                 || !in.get_unsigned(instruction.c, maximum_count)
@@ -342,6 +354,30 @@ std::optional<Plan> decode(const std::string_view text)
             return std::nullopt;
         }
     }
+    if (instances) {
+        std::size_t count { };
+        if (!in.get_unsigned(count, maximum_count)) {
+            return std::nullopt;
+        }
+        plan.instances.resize(count);
+        for (auto& site : plan.instances) {
+            std::int64_t kind { };
+            if (!in.get_unsigned(kind, 1)
+                || !in.get_unsigned(site.node, maximum_count)
+                || !in.get_unsigned(site.slot, maximum_count)
+                || !in.get_unsigned(site.line, maximum_count)
+                || !in.get_unsigned(site.column, maximum_count)) {
+                return std::nullopt;
+            }
+            site.sequence = kind == 0;
+            if (site.sequence
+                    ? site.node >= plan.sequences.size()
+                        || site.slot >= plan.sequences[site.node].counters
+                    : site.node >= plan.properties.size() || site.slot != 0U) {
+                return std::nullopt;
+            }
+        }
+    }
     if (!in.done() || plan.root >= plan.properties.size()) {
         return std::nullopt;
     }
@@ -365,9 +401,21 @@ std::optional<Plan> decode(const std::string_view text)
             }
         }
     }
-    for (const auto& sequence : plan.sequences) {
+    for (std::size_t index = 0U; index < plan.sequences.size(); ++index) {
+        const auto& sequence = plan.sequences[index];
         for (const auto& instruction : sequence.code) {
             const auto size = sequence.code.size();
+            // An instance's bounds name a sequence instance of this
+            // sequence and its counter.
+            if ((instruction.op == Op::instance_begin
+                    || instruction.op == Op::instance_end)
+                && (instruction.a >= plan.instances.size()
+                    || !plan.instances[instruction.a].sequence
+                    || plan.instances[instruction.a].node != index
+                    || plan.instances[instruction.a].slot != instruction.b
+                    || instruction.c != 0U)) {
+                return std::nullopt;
+            }
             const bool expression = instruction.op == Op::check_expression
                 || (instruction.op == Op::throughout_begin && instruction.c == 1U);
             const bool guarded = !expression

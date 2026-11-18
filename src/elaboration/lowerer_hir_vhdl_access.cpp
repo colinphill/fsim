@@ -428,29 +428,28 @@ Lowerer::HirVhdlAccessHeap* Lowerer::hir_vhdl_access_heap(
         return &inserted->second;
     };
     // Objects of an unconstrained array type each keep their own bounds
-    // (IEEE 1076-2008 5.4.1, 9.3.7): the heap holds one shaped value per
-    // object.
-    if (!string_payload) {
-        if (auto profile = hir_vhdl_shaped_heap_profile(type)) {
-            if (const auto found = hir_vhdl_access_heaps_.find(
-                    type.id.value());
-                found != hir_vhdl_access_heaps_.end()) {
-                return &found->second;
-            }
-            ContainerType objects_type;
-            objects_type.element_kind = ContainerElementKind::Container;
-            objects_type.element_types = { profile->type };
-            objects_type.associative = true;
-            objects_type.index_width = 32U;
-            objects_type.two_state_indices = true;
-            objects_type.element_nominal_type = designated.type_mark.spelling;
-            objects_type.element_builtin_nominal
-                = designated.type_mark.builtin_declaration;
-            if (!profile->members.empty()) {
-                objects_type = profile->heap_type;
-            }
-            return insert_heap(std::move(objects_type), std::move(profile));
+    // (IEEE 1076-2008 5.4.1, 9.3.7), STRING objects included: the heap
+    // holds one shaped value per object. STD.TEXTIO.LINE keeps string
+    // storage (hir_vhdl_shaped_heap_profile).
+    if (auto profile = hir_vhdl_shaped_heap_profile(type)) {
+        if (const auto found = hir_vhdl_access_heaps_.find(
+                type.id.value());
+            found != hir_vhdl_access_heaps_.end()) {
+            return &found->second;
         }
+        ContainerType objects_type;
+        objects_type.element_kind = ContainerElementKind::Container;
+        objects_type.element_types = { profile->type };
+        objects_type.associative = true;
+        objects_type.index_width = 32U;
+        objects_type.two_state_indices = true;
+        objects_type.element_nominal_type = designated.type_mark.spelling;
+        objects_type.element_builtin_nominal
+            = designated.type_mark.builtin_declaration;
+        if (!profile->members.empty()) {
+            objects_type = profile->heap_type;
+        }
+        return insert_heap(std::move(objects_type), std::move(profile));
     }
 
     const auto normalize_range = [&](semantic::vhdl::RangeConstraint range)
@@ -1167,6 +1166,21 @@ Lowerer::lower_hir_vhdl_access_string_handle(
     }
     auto* heap = hir_vhdl_access_heap(
         *type, span, &*access_subtype);
+    // A STRING object of its own bounds (5.3.2.2): its characters.
+    if (heap != nullptr && heap->shaped) {
+        HirVhdlShapedLocal view;
+        view.profile = *heap->shaped;
+        view.heap_handle = prefix;
+        view.access_type = type;
+        const auto bound = bind_hir_vhdl_shaped(view, span);
+        if (!bound) {
+            return std::nullopt;
+        }
+        const auto result = allocate_string_register();
+        process_.operations.emplace_back(FormatContainerPattern {
+            result, bound->local.container });
+        return result;
+    }
     const auto handle = lower_hir_expression(prefix, 32U);
     if (heap == nullptr || !handle
         || heap->designated_subtype.domain
@@ -2737,8 +2751,9 @@ bool Lowerer::lower_hir_vhdl_access_assignment(
     auto* heap = hir_vhdl_access_heap(
         *type, hir_source_span(target->vhdl->source),
         subtype ? &*subtype : nullptr);
-    // A whole STRING object takes a value of its own length (10.6.2.1).
-    if (heap != nullptr && !member && handle
+    // A whole STRING object takes a value of its own length (10.6.2.1);
+    // a shaped one took it above.
+    if (heap != nullptr && !heap->shaped && !member && handle
         && heap->designated_subtype.domain
             == semantic::vhdl::ValueDomain::string) {
         const auto type_designated = hir_effective_vhdl_subtype(

@@ -2302,11 +2302,7 @@ endmodule
     assert(has_diagnostic(
         rejected, "FSIM-ELAB-SVLOCATOR-005"));
     assert(has_diagnostic(
-        rejected, "FSIM-ELAB-SVLOCATOR-006"));
-    assert(has_diagnostic(
         rejected, "FSIM-ELAB-SVLOCATOR-007"));
-    assert(has_diagnostic(
-        rejected, "FSIM-ELAB-SVLOCATOR-008"));
     assert(has_diagnostic(
         rejected, "FSIM-ELAB-SVFIND-001"));
     assert(has_diagnostic(

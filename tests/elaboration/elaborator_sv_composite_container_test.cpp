@@ -120,11 +120,13 @@ endmodule
       "composite_container_operations_invalid");
   assert(!rejected.ok());
   // Copying between equal-shape unpacked slices is legal (IEEE 1800-2023
-  // 7.4.6, 7.6); the method calls are what this module gets wrong.
+  // 7.4.6, 7.6), and so are sort() and min() of strings, which have the
+  // relational operators (7.12.1, 7.12.2); a reduction of strings is what
+  // this module gets wrong (7.12.3).
   assert(!has_diagnostic(rejected, "FSIM-ELAB-SVSLICE-006"));
   assert(has_diagnostic(rejected, "FSIM-ELAB-SVREDUCE-006"));
-  assert(has_diagnostic(rejected, "FSIM-ELAB-SVORDER-008"));
-  assert(has_diagnostic(rejected, "FSIM-ELAB-SVLOCATOR-008"));
+  assert(!has_diagnostic(rejected, "FSIM-ELAB-SVORDER-008"));
+  assert(!has_diagnostic(rejected, "FSIM-ELAB-SVLOCATOR-008"));
 
   const auto invalid_patterns = fsim::frontend::parse_text(
       "composite-container-patterns-invalid.sv",

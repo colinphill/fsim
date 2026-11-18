@@ -2174,6 +2174,20 @@ fsim_add_foreign_conformance_test(
   vpi-assertions-steps vpi foreign_vpi_assertions_steps.sv
   foreign_vpi_assertions_steps.expected ""
   fsim_foreign_vpi_assertions_steps_plugin)
+# Assertion callbacks on sequence and property instances: start, match or
+# pass, and failure of each evaluation while a callback watches it (39.4.2).
+add_library(fsim_foreign_vpi_assertions_instances_plugin SHARED
+  foreign_vpi_assertions_instances_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_assertions_instances_plugin)
+target_link_libraries(fsim_foreign_vpi_assertions_instances_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_assertions_instances_plugin PRIVATE
+  "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-assertions-instances vpi foreign_vpi_assertions_instances.sv
+  foreign_vpi_assertions_instances.expected ""
+  fsim_foreign_vpi_assertions_instances_plugin "" "" ""
+  RERUN_ENVIRONMENT FSIM_KERNEL_SVA_CHECK=1)
 # Concurrent assertions of generate blocks are assertion objects (27.3, 37.49).
 add_library(fsim_foreign_vpi_assertions_generate_plugin SHARED
   foreign_vpi_assertions_generate_plugin.c)

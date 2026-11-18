@@ -61,6 +61,7 @@ AttemptStorage::Caps AttemptStorage::caps() const noexcept
     result.scratch = static_cast<std::size_t>(get(h_scratch_cap));
     result.memo = static_cast<std::size_t>(get(h_memo_cap));
     result.calls = static_cast<std::size_t>(get(h_calls_cap));
+    result.instance_events = static_cast<std::size_t>(get(h_inst_events_cap));
     result.bounds = get(h_bounds_off) == 0
         ? 0U
         : static_cast<std::size_t>(words_[static_cast<std::size_t>(get(h_bounds_off))]) + 1U;
@@ -72,7 +73,8 @@ std::size_t AttemptStorage::total_words(const Caps& caps) noexcept
     return header_words + 3U * caps.clocks + caps.attempts * attempt_stride
         + caps.outcomes * outcome_stride + caps.started * started_stride
         + caps.events * event_stride + caps.requests * request_stride
-        + 2U * caps.heap + caps.scratch + caps.memo + caps.calls + caps.bounds;
+        + 2U * caps.heap + caps.scratch + caps.memo + caps.calls
+        + caps.instance_events * instance_event_stride + caps.bounds;
 }
 
 void AttemptStorage::relayout(const Caps& next)
@@ -100,6 +102,8 @@ void AttemptStorage::relayout(const Caps& next)
     const auto scratch_off = place(next.scratch);
     const auto memo_off = place(next.memo);
     const auto calls_off = place(next.calls);
+    const auto instance_events_off
+        = place(next.instance_events * instance_event_stride);
     const auto bounds_off = next.bounds == 0U ? std::size_t { 0 } : place(next.bounds);
 
     // Tables keep their rows; the clocks keep their words.
@@ -134,6 +138,8 @@ void AttemptStorage::relayout(const Caps& next)
         started_stride, started_off);
     copy_ring(h_events_off, h_events_head, h_events_count, h_events_cap,
         event_stride, events_off);
+    copy_ring(h_inst_events_off, h_inst_events_head, h_inst_events_count,
+        h_inst_events_cap, instance_event_stride, instance_events_off);
     // The current and the alternate heap keep the words written so far.
     std::copy_n(old.begin() + static_cast<std::ptrdiff_t>(field(h_heap_off)),
         field(h_heap_used),
@@ -185,6 +191,9 @@ void AttemptStorage::relayout(const Caps& next)
     put(h_memo_cap, next.memo);
     put(h_calls_off, calls_off);
     put(h_calls_cap, next.calls);
+    put(h_inst_events_off, instance_events_off);
+    put(h_inst_events_head, 0U);
+    put(h_inst_events_cap, next.instance_events);
     put(h_bounds_off, bounds_off);
     put(h_total_words, block.size());
     words_ = std::move(block);
@@ -291,6 +300,8 @@ std::optional<AttemptStorage> AttemptStorage::adopt(
             h_started_cap, started_stride)
         || !ring(h_events_off, h_events_head, h_events_count, h_events_cap,
             event_stride)
+        || !ring(h_inst_events_off, h_inst_events_head, h_inst_events_count,
+            h_inst_events_cap, instance_event_stride)
         || *heap_off < header_words || *heap_alt_off < header_words
         || *heap_off + *heap_cap > total || *heap_alt_off + *heap_cap > total
         || *heap_used > *heap_cap || *heap_alt_used > *heap_cap) {
@@ -545,6 +556,31 @@ std::vector<StepRecord> AttemptStorage::take_events()
     return result;
 }
 
+void AttemptStorage::push_instance_event(const InstanceEvent& event)
+{
+    std::array<std::int64_t, instance_event_stride> words { };
+    words[ie_kind] = event.kind;
+    words[ie_instance] = event.instance;
+    words[ie_attempt_start] = event.attempt_start;
+    words[ie_time] = event.time;
+    ring_push(h_inst_events_off, h_inst_events_head, h_inst_events_count,
+        h_inst_events_cap, &Caps::instance_events, instance_event_stride,
+        words);
+}
+
+std::vector<InstanceEvent> AttemptStorage::take_instance_events()
+{
+    std::vector<InstanceEvent> result;
+    std::array<std::int64_t, instance_event_stride> words { };
+    while (ring_pop(h_inst_events_off, h_inst_events_head,
+        h_inst_events_count, h_inst_events_cap, instance_event_stride,
+        words)) {
+        result.push_back({ words[ie_kind], words[ie_instance],
+            words[ie_attempt_start], words[ie_time] });
+    }
+    return result;
+}
+
 std::int64_t AttemptStorage::request_start(
     const std::size_t index) const noexcept
 {
@@ -641,6 +677,9 @@ void AttemptStorage::reserve_region(
         break;
     case grow_calls:
         field = &next.calls;
+        break;
+    case grow_instance_events:
+        field = &next.instance_events;
         break;
     default:
         return;

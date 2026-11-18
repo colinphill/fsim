@@ -2523,12 +2523,29 @@ private:
         vpi_assertion_callback_func* callback { };
         PLI_BYTE8* user_data { };
     };
+    // A sequence or property instance as the monitors name it: its kind and
+    // the position of its name (IEEE 1800-2023 39.4.2).
+    struct AssertionInstanceKey {
+        bool sequence { };
+        std::uint32_t line { };
+        std::uint32_t column { };
+        friend bool operator==(const AssertionInstanceKey&, const AssertionInstanceKey&)
+            = default;
+    };
+
     struct AssertionCallback {
         fsim_vpi_handle_v1 assertion { };
         PLI_INT32 reason { };
         vpi_assertion_callback_func* routine { };
         PLI_BYTE8* user_data { };
         std::optional<runtime::SystemVerilogVpiCallbackHandle> managed;
+        // A callback on a sequence or property instance (39.4.2): the
+        // instance handle, the instance by its kind and the position of its
+        // name, and the concurrent assertions whose evaluations of it are
+        // watched.
+        fsim_vpi_handle_v1 instance { };
+        AssertionInstanceKey instance_key { };
+        std::vector<fsim_vpi_handle_v1> instance_assertions { };
     };
 
     // The HIR unit of the module that holds an assertion object.
@@ -3086,6 +3103,172 @@ private:
         }
     }
 
+    // A sequence or property instance (vpiSequenceInst, vpiPropertyInst,
+    // IEEE 1800-2023 37.51, 37.54): its kind and the position of its name.
+    [[nodiscard]] std::optional<AssertionInstanceKey> assertion_instance(
+        const fsim_vpi_handle_v1 handle) const
+    {
+        const auto node = node_of(handle);
+        if (!node) {
+            return std::nullopt;
+        }
+        const auto type = statement_model_->type(*node);
+        if (type != vpiSequenceInst && type != vpiPropertyInst) {
+            return std::nullopt;
+        }
+        const auto line = statement_model_->property(*node, vpiLineNo);
+        const auto column = statement_model_->property(*node, vpiColumn);
+        if (!line || !column) {
+            return std::nullopt;
+        }
+        return AssertionInstanceKey { type == vpiSequenceInst,
+            static_cast<std::uint32_t>(*line), static_cast<std::uint32_t>(*column) };
+    }
+
+    // The concurrent assertions that evaluate instance `instance`: the one
+    // its parents lead to, or for an instance in a sequence or property
+    // declaration every one (its evaluations are those of the assertions
+    // that instantiate the declaration).
+    [[nodiscard]] std::vector<fsim_vpi_handle_v1> instance_assertions(
+        const fsim_vpi_handle_v1 instance)
+    {
+        for (auto at = instance; at != 0U;) {
+            const auto resolved = resolve(at);
+            if (concurrent_assertion(resolved) != nullptr) {
+                return { resolved };
+            }
+            const auto serial = node_of(at);
+            if (!serial) {
+                break;
+            }
+            const auto parent = statement_model_->relation(*serial, vpiParent);
+            at = parent ? *parent : fsim_vpi_handle_v1 { };
+        }
+        return assertions_in(0U);
+    }
+
+    // cbAssertionStart, cbAssertionSuccess and cbAssertionFailure on a
+    // sequence or property instance (IEEE 1800-2023 39.4.2): the start of
+    // each evaluation of the instance, each match of a sequence instance or
+    // pass of a property instance, and each evaluation that ends without
+    // one. The monitors report them only while a callback watches the
+    // instance.
+    fsim_vpi_status_v1 register_instance_callback(
+        const AssertionCallbackArguments& arguments, const fsim_vpi_handle_v1 instance,
+        const AssertionInstanceKey& key, fsim_vpi_service_result_v1& result)
+    {
+        switch (arguments.reason) {
+        case cbAssertionStart:
+        case cbAssertionSuccess:
+        case cbAssertionFailure:
+            break;
+        default:
+            error_message_ = "vpi_register_assertion_cb: reason "
+                + std::to_string(arguments.reason)
+                + " is not supported on a sequence or property instance";
+            error_ = true;
+            return FSIM_VPI_STATUS_NOT_FOUND;
+        }
+        ensure_assertion_instance_hook();
+        AssertionCallback stored;
+        stored.assertion = instance;
+        stored.reason = arguments.reason;
+        stored.routine = arguments.callback;
+        stored.user_data = arguments.user_data;
+        stored.instance = instance;
+        stored.instance_key = key;
+        stored.instance_assertions = instance_assertions(instance);
+        for (const auto assertion : stored.instance_assertions) {
+            if (!instance_watched(assertion, key)) {
+                (void)simulation_.watch_assertion_instance(
+                    assertion, key.sequence, key.line, key.column, true);
+            }
+        }
+        const auto serial = ++next_callback_;
+        assertion_callbacks_.emplace(serial, std::move(stored));
+        return succeed(result, tagged(Tag::callback, serial));
+    }
+
+    // Whether a callback watches instance `key` of assertion `assertion`.
+    [[nodiscard]] bool instance_watched(
+        const fsim_vpi_handle_v1 assertion, const AssertionInstanceKey& key) const
+    {
+        return std::ranges::any_of(assertion_callbacks_, [&](const auto& entry) {
+            const auto& stored = entry.second;
+            return stored.instance != 0U && stored.instance_key == key
+                && std::ranges::find(stored.instance_assertions, assertion)
+                != stored.instance_assertions.end();
+        });
+    }
+
+    void ensure_assertion_instance_hook()
+    {
+        if (assertion_instance_hooked_) {
+            return;
+        }
+        assertion_instance_hooked_ = true;
+        simulation_.set_assertion_instance_hook(
+            [this](const std::uint64_t assertion,
+                const runtime::sva::InstanceReport& report) {
+                fire_assertion_instance(assertion, report);
+            });
+    }
+
+    // The callbacks on the instance an evaluation event names, at the time
+    // step of the event (cb_time, 39.4.2 c); attemptStartTime is the start
+    // of the attempt of the assertion the evaluation belongs to (39.4.2 d).
+    void fire_assertion_instance(const fsim_vpi_handle_v1 assertion,
+        const runtime::sva::InstanceReport& report)
+    {
+        if (assertion_system_ended_) {
+            return;
+        }
+        PLI_INT32 reason = cbAssertionStart;
+        switch (report.kind) {
+        case runtime::sva::layout::instance_started:
+            reason = cbAssertionStart;
+            break;
+        case runtime::sva::layout::instance_succeeded:
+            reason = cbAssertionSuccess;
+            break;
+        case runtime::sva::layout::instance_failed:
+            reason = cbAssertionFailure;
+            break;
+        default:
+            return;
+        }
+        const AssertionInstanceKey key { report.sequence, report.line, report.column };
+        std::vector<std::uint64_t> listeners;
+        for (const auto& [serial, stored] : assertion_callbacks_) {
+            if (stored.instance != 0U && stored.reason == reason
+                && stored.instance_key == key
+                && std::ranges::find(stored.instance_assertions, assertion)
+                    != stored.instance_assertions.end()) {
+                listeners.push_back(serial);
+            }
+        }
+        for (const auto serial : listeners) {
+            const auto found = assertion_callbacks_.find(serial);
+            if (found == assertion_callbacks_.end()) {
+                continue;
+            }
+            const auto stored = found->second;
+            s_vpi_time time { };
+            time.type = vpiSimTime;
+            fill_time(time, assertion);
+            s_vpi_attempt_info detail { };
+            detail.detail.failExpr = nullptr;
+            const auto start = static_cast<std::uint64_t>(report.attempt_start);
+            detail.attemptStartTime.type = vpiSimTime;
+            detail.attemptStartTime.high = static_cast<PLI_UINT32>(start >> 32U);
+            detail.attemptStartTime.low = static_cast<PLI_UINT32>(start & 0xFFFFFFFFU);
+            CallScope scope { *this };
+            stored.routine(stored.reason, &time,
+                reinterpret_cast<vpiHandle>(static_cast<std::uintptr_t>(stored.instance)),
+                &detail, stored.user_data);
+        }
+    }
+
     fsim_vpi_status_v1 register_assertion_callback(
         const fsim_vpi_service_request_v1& request,
         fsim_vpi_service_result_v1& result)
@@ -3097,6 +3280,12 @@ private:
             && !assertion_system_ended_ && immediate_assertion_handle(assertion)) {
             return register_immediate_assertion_callback(
                 *arguments, assertion, result);
+        }
+        if (arguments != nullptr && arguments->callback != nullptr
+            && !assertion_system_ended_) {
+            if (const auto key = assertion_instance(assertion)) {
+                return register_instance_callback(*arguments, assertion, *key, result);
+            }
         }
         if (arguments == nullptr || arguments->callback == nullptr
             || concurrent_assertion(assertion) == nullptr
@@ -3191,8 +3380,19 @@ private:
             (void)simulation_.systemverilog_vpi_callbacks().remove_callback(
                 *found->second.managed);
         }
+        const auto removed = std::move(found->second);
         assertion_callbacks_.erase(found);
         immediate_assertion_callbacks_.erase(serial);
+        // The monitors stop reporting an instance no callback watches.
+        if (removed.instance != 0U) {
+            for (const auto assertion : removed.instance_assertions) {
+                if (!instance_watched(assertion, removed.instance_key)) {
+                    (void)simulation_.watch_assertion_instance(assertion,
+                        removed.instance_key.sequence, removed.instance_key.line,
+                        removed.instance_key.column, false);
+                }
+            }
+        }
         return true;
     }
 
@@ -23909,6 +24109,7 @@ private:
     bool assertion_start_hooked_ { };
     bool assertion_control_task_hooked_ { };
     bool assertion_step_hooked_ { };
+    bool assertion_instance_hooked_ { };
     bool assertion_system_locked_ { };
     bool assertion_system_ended_ { };
     std::vector<Range> ranges_;

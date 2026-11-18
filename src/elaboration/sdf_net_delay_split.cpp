@@ -638,6 +638,18 @@ std::optional<std::pair<std::uint32_t, std::uint32_t>> terminal_bits(
 
 } // namespace
 
+std::optional<std::pair<std::uint32_t, std::uint32_t>>
+sdf_net_delay_terminal_bits(
+    const ElaboratedDesign& design, const SdfNetDelayTerminal& terminal)
+{
+    const auto& signals = design.signals();
+    if (terminal.signal >= signals.size()) {
+        return std::nullopt;
+    }
+    const auto& info = signals[terminal.signal];
+    return terminal_bits(terminal, info, static_cast<std::uint32_t>(info.width));
+}
+
 NetDelayTable sdf_net_delay_table(
     const std::span<const runtime::SimulationTick> delays,
     const std::span<const runtime::SimulationTick> reject,

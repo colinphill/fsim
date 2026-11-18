@@ -735,6 +735,11 @@ std::optional<ContainerRegisterId> Lowerer::lower_hir_vhdl_shaped_materialize(
         });
         return container;
     }
+    // A STRING value whose bounds no static subtype gives.
+    if (const auto string_value = lower_hir_vhdl_shaped_string_value(
+            profile, value, span)) {
+        return *string_value;
+    }
     // An array: another shaped value, or a packed one with its own ranges.
     if (hir_vhdl_shaped_value_profile(value)) {
         const auto shaped = lower_hir_vhdl_shaped_container(value, span);

@@ -94,6 +94,7 @@ class SystemVerilogVpiControlService;
 }
 namespace fsim::runtime::sva {
 struct StepRecord;
+struct InstanceReport;
 }
 namespace fsim::runtime::simir {
 class Interpreter;
@@ -453,6 +454,10 @@ public:
     /// cbAssertionStepSuccess / cbAssertionStepFailure, 39.5.2).
     using AssertionStepHook
         = std::function<void(std::uint64_t, const runtime::sva::StepRecord&)>;
+    /// An evaluation event of a watched sequence or property instance of the
+    /// VPI assertion object (a handle) (IEEE 1800-2023 39.4.2).
+    using AssertionInstanceHook = std::function<void(
+        std::uint64_t, const runtime::sva::InstanceReport&)>;
     /// An assertion control task of the design ran (IEEE 1800-2023 20.11,
     /// Table 20-8): its control_type (Table 20-5, 1 to 11), whether it was
     /// called without arguments (the assertion system callback of 39.4.1),
@@ -1490,6 +1495,13 @@ public:
     void set_concurrent_assertion_hook(ConcurrentAssertionHook hook);
     void set_assertion_attempt_hook(AssertionAttemptHook hook);
     void set_assertion_step_hook(AssertionStepHook hook);
+    void set_assertion_instance_hook(AssertionInstanceHook hook);
+    /// Watches (or stops watching) the sequence or property instance written
+    /// at line:column in the VPI assertion object's evaluation (39.4.2); the
+    /// number of instances its monitors have (0 for no such assertion).
+    std::size_t watch_assertion_instance(std::uint64_t assertion,
+        bool sequence, std::uint32_t line, std::uint32_t column,
+        bool watched);
     void set_assertion_control_task_hook(AssertionControlTaskHook hook);
     /// vpiAssertionEnableStep / vpiAssertionDisableStep for the attempt of
     /// the VPI assertion object that starts at the tick (IEEE 1800-2023

@@ -54,6 +54,9 @@ struct CompiledSequence {
     // (16.10): a thread's valuation follows its counters.
     std::uint32_t counters { };
     std::uint32_t locals_base { };
+    // The code holds sequence instances (instance_begin): the matcher's
+    // record ends with the evaluations of the watched ones (39.4.2).
+    bool instances { };
 };
 
 struct CompiledProperty {
@@ -179,6 +182,29 @@ struct CompiledPlan {
     std::vector<std::vector<std::uint32_t>> local_sets;
     AttemptStorage* storage { };
     mutable bool missed { };
+    // The sequence and property instances (Plan::instances; IEEE 1800-2023
+    // 39.4.2): the thread counter of each sequence instance's evaluation,
+    // and the instances of each property node, the innermost first (a
+    // property whose body is an instance of another is the evaluation of
+    // both). `watched` is the block's h_inst_watched for the tick in
+    // progress: the automaton reports the evaluations of the instances it
+    // names.
+    std::vector<std::uint32_t> instance_slots;
+    std::vector<std::vector<std::uint32_t>> property_instances;
+    mutable std::int64_t watched { };
+
+    [[nodiscard]] bool watching(const std::uint32_t instance) const
+    {
+        return (watched
+                   & layout::instance_watch_bit(instance))
+            != 0;
+    }
+    // An evaluation event of instance `instance` of the attempt being
+    // advanced, at the time step of the tick (39.4.2 c and d).
+    void note_instance(const std::int64_t kind, const std::uint32_t instance) const
+    {
+        storage->push_instance_event({ kind, instance, attempt_start, time });
+    }
 
     [[nodiscard]] std::size_t result_words(const std::uint32_t expression) const
     {
@@ -206,9 +232,9 @@ struct CompiledPlan {
     // The state id of program counter `pc` of sequence `sequence` (39.4.2):
     // ids number the points where a thread waits for a sampled boolean (a
     // check) or ends. Operations that only move time or a counter (delay,
-    // counter_set, counter_increment, throughout_begin, first_match_begin)
-    // are skipped, so a step's `to` is the next step's `from`. 0 is the
-    // origin (where the program starts), 1 an accepting state (the match, or
+    // counter_set, counter_increment, throughout_begin, first_match_begin
+    // and the bounds of a sequence instance) are skipped, so a step's `to`
+    // is the next step's `from`. 0 is the origin (where the program starts), 1 an accepting state (the match, or
     // the end of the program), and 2 + base + pc any other point.
     [[nodiscard]] std::int64_t state_id(
         const std::uint32_t sequence, std::uint32_t pc) const
@@ -219,7 +245,9 @@ struct CompiledPlan {
                 && (code[at].op == Op::delay || code[at].op == Op::counter_set
                     || code[at].op == Op::counter_increment
                     || code[at].op == Op::throughout_begin
-                    || code[at].op == Op::first_match_begin)) {
+                    || code[at].op == Op::first_match_begin
+                    || code[at].op == Op::instance_begin
+                    || code[at].op == Op::instance_end)) {
                 ++at;
             }
             return at;
@@ -540,6 +568,17 @@ public:
                 }
             }
         }
+        // A sequence with instances: the counted evaluations of its watched
+        // instances (instance, tag, clock, flags), in the order they began.
+        if (sequence_.instances) {
+            out.push_back(static_cast<std::int64_t>(evaluations_.size()));
+            for (const auto& evaluation : evaluations_) {
+                out.push_back(evaluation.instance);
+                out.push_back(evaluation.tag);
+                out.push_back(evaluation.clock);
+                out.push_back(evaluation.flags);
+            }
+        }
     }
 
     void decode(RecordReader& in)
@@ -575,6 +614,24 @@ public:
                 throw std::runtime_error {
                     "concurrent property attempt record is corrupt"
                 };
+            }
+        }
+        if (sequence_.instances) {
+            const auto evaluations = in.count();
+            evaluations_.reserve(evaluations);
+            for (std::size_t index = 0; index < evaluations; ++index) {
+                Evaluation evaluation;
+                evaluation.instance = in.index(plan_.instance_slots.size());
+                evaluation.tag = in.next();
+                evaluation.clock = in.index(clocks);
+                evaluation.flags = in.next();
+                if (evaluation.tag <= 0 || evaluation.flags < 0
+                    || evaluation.flags > (evaluation_started | evaluation_matched)) {
+                    throw std::runtime_error {
+                        "concurrent property attempt record is corrupt"
+                    };
+                }
+                evaluations_.push_back(evaluation);
             }
         }
     }
@@ -648,6 +705,9 @@ public:
             });
         }
         collect_joins();
+        if (!evaluations_.empty()) {
+            report_evaluations(now);
+        }
         return matched_;
     }
 
@@ -721,6 +781,94 @@ private:
         if (kept_.insert(thread.key()).second) {
             threads_.push_back(std::move(thread));
         }
+    }
+
+    // One evaluation of a watched sequence instance (IEEE 1800-2023 39.4.2):
+    // the plan's instance, the tag its threads carry in the instance's
+    // counter (the evaluation's first tick on clock `clock`, plus one), and
+    // whether it reported its start and matched. Flag evaluation_matched_now
+    // lives only within a step.
+    static constexpr std::int64_t evaluation_started = 1;
+    static constexpr std::int64_t evaluation_matched = 2;
+    static constexpr std::int64_t evaluation_matched_now = 4;
+    struct Evaluation {
+        std::uint32_t instance { };
+        std::int64_t tag { };
+        std::uint32_t clock { };
+        std::int64_t flags { };
+    };
+
+    // A thread enters watched sequence instance `instance`: it begins the
+    // evaluation that starts at the first tick of its window ("for property
+    // and sequence instances the start is the start of evaluation",
+    // 39.4.2). The window does not change; threads of one window share one
+    // evaluation.
+    void begin_evaluation(const std::uint32_t instance, Thread& thread)
+    {
+        const auto tag = std::max(thread.due_lo, now_) + 1;
+        thread.counters[plan_.instance_slots[instance]] = tag;
+        if (std::ranges::none_of(evaluations_, [&](const Evaluation& evaluation) {
+                return evaluation.instance == instance && evaluation.tag == tag;
+            })) {
+            evaluations_.push_back({ instance, tag, thread.clock, 0 });
+        }
+    }
+
+    // A thread leaves watched sequence instance `instance`: the evaluation
+    // it carries matched at this tick (39.4.2 cbAssertionSuccess; an empty
+    // match too, at the tick the thread passes the instance).
+    void end_evaluation(const std::uint32_t instance, Thread& thread)
+    {
+        auto& tag = thread.counters[plan_.instance_slots[instance]];
+        for (auto& evaluation : evaluations_) {
+            if (evaluation.instance == instance && evaluation.tag == tag) {
+                evaluation.flags |= evaluation_matched_now;
+            }
+        }
+        tag = 0;
+    }
+
+    // The evaluations at the end of a step, in the order they began: one
+    // that reached its first tick (or matched) reports its start, one that
+    // matched at this tick its match, and one that no thread carries any
+    // more ends, with a failure when it started and never matched
+    // (39.4.2). An instance that is not watched any more reports nothing.
+    void report_evaluations(const std::int64_t now)
+    {
+        std::size_t kept = 0U;
+        for (std::size_t index = 0U; index < evaluations_.size(); ++index) {
+            auto evaluation = evaluations_[index];
+            const bool watched = plan_.watching(evaluation.instance);
+            const bool matched_now = (evaluation.flags & evaluation_matched_now) != 0;
+            evaluation.flags &= ~evaluation_matched_now;
+            const auto tick = plan_.multiclocked()
+                ? plan_.clock_ticks[evaluation.clock]
+                : now;
+            if ((evaluation.flags & evaluation_started) == 0
+                && (matched_now || tick >= evaluation.tag - 1)) {
+                evaluation.flags |= evaluation_started;
+                if (watched) {
+                    plan_.note_instance(layout::instance_started, evaluation.instance);
+                }
+            }
+            if (matched_now) {
+                evaluation.flags |= evaluation_matched;
+                if (watched) {
+                    plan_.note_instance(layout::instance_succeeded, evaluation.instance);
+                }
+            }
+            const auto slot = plan_.instance_slots[evaluation.instance];
+            if (std::ranges::any_of(threads_, [&](const Thread& thread) {
+                    return thread.counters[slot] == evaluation.tag;
+                })) {
+                evaluations_[kept++] = evaluation;
+                continue;
+            }
+            if (watched && evaluation.flags == evaluation_started) {
+                plan_.note_instance(layout::instance_failed, evaluation.instance);
+            }
+        }
+        evaluations_.resize(kept);
     }
 
     // A thread at the end of an operand: true when it ends at this tick;
@@ -900,6 +1048,19 @@ private:
                 ++thread.pc;
                 break;
             }
+            case Op::instance_begin:
+                // Watched instances only (39.4.2): one header test else.
+                if (plan_.watched != 0 && plan_.watching(step.a)) {
+                    begin_evaluation(step.a, thread);
+                }
+                ++thread.pc;
+                break;
+            case Op::instance_end:
+                if (plan_.watched != 0 && plan_.watching(step.a)) {
+                    end_evaluation(step.a, thread);
+                }
+                ++thread.pc;
+                break;
             case Op::throughout_end:
                 if (!settle(thread)) {
                     return;
@@ -1101,6 +1262,7 @@ private:
     bool matched_ { };
     std::vector<std::vector<std::int64_t>> matches_;
     FailPosition failed_;
+    std::vector<Evaluation> evaluations_;
 };
 
 enum class Verdict : std::uint8_t { pending, holds, fails };
@@ -1226,6 +1388,7 @@ public:
         instance->until_stopped_ = (flags & 64) != 0;
         instance->initialized_ = (flags & 2048) != 0;
         instance->nonvacuous_ = (flags & 4096) != 0;
+        instance->fresh_ = false;
         const auto chosen = in.next();
         if ((flags & 256) != 0) {
             if (chosen < 0
@@ -1305,6 +1468,19 @@ public:
             return;
         }
         const auto& property = plan_.properties[node_];
+        // A watched property instance reports the start of its evaluation
+        // and its outcome (IEEE 1800-2023 39.4.2): the evaluation begins at
+        // the instance's start tick (a multiclocked instance's at the
+        // evaluation that created it).
+        const auto& sites = plan_.property_instances[node_];
+        const bool reported = !sites.empty() && plan_.watched != 0;
+        if (reported && (fresh_ || (!multi && start_ == now))) {
+            for (const auto site : sites) {
+                if (plan_.watching(site)) {
+                    plan_.note_instance(layout::instance_started, site);
+                }
+            }
+        }
         // A new copy of the property's local variables gets its
         // initialization assignments when the instance's evaluation begins,
         // in declaration order, with the sampled values of that time step
@@ -1435,6 +1611,15 @@ public:
         case PropertyKind::vacuous:
             resolve(true, true);
             break;
+        }
+        if (reported && decided()) {
+            for (const auto site : sites) {
+                if (plan_.watching(site)) {
+                    plan_.note_instance(holds() ? layout::instance_succeeded
+                                                : layout::instance_failed,
+                        site);
+                }
+            }
         }
         if (decided() || !plan_.recursive) {
             return;
@@ -2048,6 +2233,9 @@ private:
     // The instance took the place of one whose success is nonvacuous
     // whatever this instance's is (forward).
     bool nonvacuous_ { };
+    // Created in this tick, not read from the attempt's record: the
+    // evaluation of a property instance begins (39.4.2).
+    bool fresh_ { true };
     std::vector<std::int64_t> locals_;
     std::vector<std::pair<std::size_t, std::unique_ptr<Instance>>> operands_;
     std::vector<std::unique_ptr<Instance>> started_;
@@ -2102,6 +2290,10 @@ void Monitor::build(const std::vector<std::int64_t>& bounds)
         compiled.locals_base = sequence.counters;
         compiled.counters = sequence.counters
             + static_cast<std::uint32_t>(plan_->locals_words);
+        compiled.instances = std::ranges::any_of(sequence.code,
+            [](const semantic::sva::Instruction& instruction) {
+                return instruction.op == Op::instance_begin;
+            });
         for (const auto& instruction : sequence.code) {
             compiled.code.push_back({ instruction.op, instruction.a,
                 instruction.b, instruction.c,
@@ -2121,6 +2313,19 @@ void Monitor::build(const std::vector<std::int64_t>& bounds)
             property.line, property.column, property.guard_expression,
             property.initializers });
     }
+    // The sequence and property instances a VPI application may watch
+    // (39.4.2).
+    plan_->property_instances.assign(plan.properties.size(), { });
+    for (std::size_t index = 0U; index < plan.instances.size(); ++index) {
+        const auto& site = plan.instances[index];
+        plan_->instance_slots.push_back(site.sequence ? site.slot : 0U);
+        if (!site.sequence) {
+            plan_->property_instances[site.node].push_back(
+                static_cast<std::uint32_t>(index));
+        }
+    }
+    sites_ = plan.instances;
+    watched_.assign(plan.instances.size(), false);
     plan_->root = plan.root;
     plan_->guards = plan.guards;
     for (const auto& span : plan.guard_spans) {
@@ -2212,6 +2417,11 @@ void Monitor::run_state_io(RunStateArchive& archive)
     auto slot = storage_.slot();
     storage_ = std::move(*adopted);
     storage_.bind_slot(std::move(slot));
+    // The restarted run has no VPI callbacks yet: no instance is watched,
+    // and the events of the saved run are not delivered (39.4.2).
+    storage_.set(layout::h_inst_watched, 0);
+    std::fill(watched_.begin(), watched_.end(), false);
+    static_cast<void>(storage_.take_instance_events());
 }
 
 std::unique_ptr<Monitor> Monitor::reference_copy() const
@@ -2390,6 +2600,7 @@ void Monitor::advance(const std::vector<bool>& guards, const bool start,
     using namespace layout;
     plan_->values = &guards;
     plan_->time = time;
+    plan_->watched = storage_.get(h_inst_watched);
     storage_.set(h_time, time);
     bool leading = true;
     std::int64_t tick = storage_.get(h_tick);
@@ -2678,6 +2889,47 @@ bool Monitor::stepping() const noexcept
 std::vector<StepEvent> Monitor::take_step_events()
 {
     return storage_.take_events();
+}
+
+std::size_t Monitor::watch_instances(const bool sequence,
+    const std::uint32_t line, const std::uint32_t column, const bool watched)
+{
+    std::size_t found = 0U;
+    for (std::size_t index = 0U; index < sites_.size(); ++index) {
+        const auto& site = sites_[index];
+        if (site.sequence == sequence && site.line == line
+            && site.column == column) {
+            watched_[index] = watched;
+            ++found;
+        }
+    }
+    // The block's mask: instances from 63 on share its last bit.
+    std::int64_t mask { };
+    for (std::size_t index = 0U; index < watched_.size(); ++index) {
+        if (watched_[index]) {
+            mask |= layout::instance_watch_bit(index);
+        }
+    }
+    storage_.set(layout::h_inst_watched, mask);
+    return found;
+}
+
+std::vector<InstanceReport> Monitor::take_instance_reports()
+{
+    std::vector<InstanceReport> reports;
+    for (const auto& event : storage_.take_instance_events()) {
+        // An instance that shares the mask's last bit with a watched one
+        // is reported only when it is watched itself.
+        if (event.instance < 0
+            || static_cast<std::uint64_t>(event.instance) >= sites_.size()
+            || !watched_[static_cast<std::size_t>(event.instance)]) {
+            continue;
+        }
+        const auto& site = sites_[static_cast<std::size_t>(event.instance)];
+        reports.push_back({ event.kind, site.sequence, site.line, site.column,
+            event.attempt_start, event.time });
+    }
+    return reports;
 }
 
 } // namespace fsim::runtime::sva

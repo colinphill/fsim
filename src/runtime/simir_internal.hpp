@@ -21,6 +21,7 @@
 #include <exception>
 #include <fstream>
 #include <limits>
+#include <compare>
 #include <map>
 #include <memory>
 #include <set>
@@ -2060,6 +2061,17 @@ struct Interpreter::Impl : SchedulerBatchTask {
     // existed (39.5.2).
     SvaStepHook sva_step_hook;
     std::map<ProcessId, std::vector<std::int64_t>> sva_step_requests;
+    SvaInstanceHook sva_instance_hook;
+    // The instances a foreign library's assertion callbacks watch, by
+    // design process, for monitors created later (39.4.2).
+    struct SvaInstanceWatch {
+        bool sequence { };
+        std::uint32_t line { };
+        std::uint32_t column { };
+        friend bool operator==(const SvaInstanceWatch&, const SvaInstanceWatch&)
+            = default;
+    };
+    std::map<ProcessId, std::vector<SvaInstanceWatch>> sva_instance_watches;
     // The action controls of each assertion (set_sva_action_filter).
     SvaActionFilter sva_action_filter;
     // The assertion control words (IEEE 1800-2023 20.11): one per control
@@ -2202,10 +2214,32 @@ struct Interpreter::Impl : SchedulerBatchTask {
     // WriteNetDelay now, so set_net_delay_table accepts them although the
     // startup program still holds the delay-free write.
     std::unordered_set<ProcessId> split_gate_drivers;
-    // The tables vpi_put_delays and acc_replace_delays gave an interconnect
-    // delay's driver (Interpreter::set_net_delay_table); they replace the
-    // tables of its WriteNetDelay operations.
-    std::unordered_map<ProcessId, NetDelayTable> net_delay_overrides;
+    // The tables vpi_put_delays, acc_replace_delays and a live SDF
+    // reannotation gave an interconnect delay's driver, by the driver and the
+    // bits [offset, offset + width) of the signal its WriteNetDelay
+    // operations write, width 0 standing for all its bits
+    // (Interpreter::set_net_delay_table, set_net_delay_bits_table). They
+    // replace the tables of those operations, a range's the whole driver's
+    // for its bits (IEEE 1364-2005 16.3); the ranges of one driver do not
+    // overlap (net_delay_override).
+    struct NetDelayOverrideKey {
+        ProcessId process { };
+        std::uint32_t offset { };
+        std::uint32_t width { };
+        friend auto operator<=>(
+            const NetDelayOverrideKey&, const NetDelayOverrideKey&) = default;
+    };
+    std::map<NetDelayOverrideKey, NetDelayTable> net_delay_overrides;
+    // The table the overrides give bit `bit` (of the written signal) of
+    // `process`'s interconnect delay writes: its range's, else the whole
+    // driver's; null when neither is set.
+    [[nodiscard]] const NetDelayTable* net_delay_override(
+        ProcessId process, std::uint32_t bit) const;
+    // The width of the signal `process`'s interconnect delay writes write
+    // (its WriteNetDelay operations', or a split gate's output); none when
+    // it has no such write.
+    [[nodiscard]] std::optional<std::size_t> net_delay_driver_width(
+        ProcessId process);
     // A net's group-mode SDF load copies (Interpreter::add_foreign_net_delay_load)
     // and the foreign writes of the net still on their way to a copy. Empty
     // unless the design has a per-source interconnect delay, so every
@@ -4583,16 +4617,18 @@ struct Interpreter::Impl : SchedulerBatchTask {
     void schedule_net_delay(ProcessId process, const WriteNetDelay& operation,
         PackedLogic4 value);
     // The delays and the reject and error limits of an interconnect delay's
-    // twelve transitions: the table Interpreter::set_net_delay_table gave
-    // `process`, else the operation's own. The static kernel's delayed
-    // writes (StaticKernel::net_delay_write) read them here as well.
+    // twelve transitions for bit `bit` of the signal `operation` writes: the
+    // table Interpreter::set_net_delay_bits_table gave the bit's range of
+    // `process`, else the one set_net_delay_table gave all its bits, else
+    // the operation's own. The static kernel's delayed writes
+    // (StaticKernel::net_delay_write) read them here as well.
     struct NetDelayLimits {
         std::span<const SimulationTick> delays;
         std::span<const SimulationTick> rejects;
         std::span<const SimulationTick> errors;
     };
-    [[nodiscard]] NetDelayLimits net_delay_limits(
-        ProcessId process, const WriteNetDelay& operation) const;
+    [[nodiscard]] NetDelayLimits net_delay_limits(ProcessId process,
+        const WriteNetDelay& operation, std::uint32_t bit) const;
     // The task that matures the changes due now (schedule_net_delay).
     void mature_net_delay(const InertialDriverKey& key, ProcessId process,
         SignalId signal, SignalChangeOrigin origin);

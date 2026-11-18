@@ -159,6 +159,20 @@ public:
     /// The step events produced since the last call, in tick order.
     [[nodiscard]] std::vector<StepEvent> take_step_events();
 
+    /// Watches (or stops watching) every instance of the plan of the given
+    /// kind written at the position; returns how many the plan has. The
+    /// automaton reports the evaluations of watched instances only, from
+    /// the next tick on: an evaluation that began before is not reported.
+    std::size_t watch_instances(bool sequence, std::uint32_t line,
+        std::uint32_t column, bool watched);
+    [[nodiscard]] bool has_instance_events() const noexcept
+    {
+        return storage_.instance_event_count() != 0U;
+    }
+    /// The evaluation events of the watched instances since the last call,
+    /// in the order they happened (InstanceReport).
+    [[nodiscard]] std::vector<InstanceReport> take_instance_reports();
+
     /// The flat attempt block (sva_storage.hpp).
     [[nodiscard]] const AttemptStorage& storage() const noexcept
     {
@@ -208,6 +222,11 @@ private:
     std::vector<std::int64_t> bounds_;
     std::unique_ptr<CompiledPlan> plan_;
     std::vector<std::uint32_t> local_widths_;
+    // The instances of the plan watched now (the block's h_inst_watched
+    // follows them); not part of the state: a run that restarts from a
+    // saved state has no VPI callbacks registered yet.
+    std::vector<bool> watched_;
+    std::vector<semantic::sva::InstanceSite> sites_;
     AttemptStorage storage_;
     // Scratch of one pass over the attempts; never part of the state.
     std::vector<std::int64_t> scratch_;

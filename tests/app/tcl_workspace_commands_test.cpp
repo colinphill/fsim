@@ -1066,6 +1066,110 @@ puts sdf-live-split-ok
     }
 }
 
+// A live SDF reannotation that delays some bits of a load port whose copy the
+// running design writes whole keeps one delay table per bit range on the
+// copy's driver, so no new copy is split (IEEE 1364-2005 16.2.4, 16.3: SDF
+// constructs annotate in their order, and a later one that names some bits
+// of a load overwrites the earlier delay of those bits). first.sdf delays
+// the 4-bit port u1.a by 3 ns; at the safe point of 11 ns second.sdf gives the
+// port 3 ns again and its bit 1 alone 5 ns. A change pending at the safe point
+// keeps its time, and every later change of a bit takes the delay of its own
+// bits:
+//   s rises to 1111 at 10 ns: every bit of z1 rises at 13 ns (pending at 11);
+//   s falls at 40 ns: bits 0, 2 and 3 fall at 43 ns (z1 = 0010), bit 1 at 45;
+//   s rises at 70 ns: bits 0, 2 and 3 rise at 73 ns (z1 = 1101), bit 1 at 75.
+void run_sdf_live_bit_retime_workspace_commands_test(const std::string& engine)
+{
+    TemporaryDirectory temporary;
+    WorkingDirectory working_directory(temporary.path());
+    {
+        std::ofstream source { "top.sv" };
+        source << R"sv(`timescale 1ns/1ps
+module ld(input logic [3:0] a, output logic [3:0] z);
+  assign z = a;
+endmodule
+module top;
+  logic [3:0] s = 4'b0000;
+  wire [3:0] n;
+  assign n = s;
+  wire [3:0] z1;
+  ld u1(.a(n), .z(z1));
+  // A time slot at 11 ns for the safe point of the reannotation.
+  logic marker;
+  initial #11 marker = 1'b1;
+  initial begin
+    #10 s = 4'b1111;
+    #30 s = 4'b0000;
+    #30 s = 4'b1111;
+    #50 $finish;
+  end
+endmodule
+)sv";
+        if (!source)
+            throw std::runtime_error("cannot write Tcl bit retime source");
+    }
+    const auto write_sdf = [](const char* filename, const std::string& body) {
+        std::ofstream source { filename };
+        source << "(DELAYFILE\n"
+            "  (SDFVERSION \"OVI 2.1\")\n"
+            "  (DESIGN \"top\")\n"
+            "  (DIVIDER .)\n"
+            "  (TIMESCALE 1 ns)\n"
+            "  (CELL (CELLTYPE \"top\") (INSTANCE top)\n"
+            "    (DELAY (ABSOLUTE " << body << "))))\n";
+        if (!source)
+            throw std::runtime_error("cannot write Tcl bit retime SDF input");
+    };
+    write_sdf("first.sdf", "(INTERCONNECT n u1.a (3))");
+    write_sdf("second.sdf",
+        "(INTERCONNECT n u1.a (3)) (INTERCONNECT n[1] u1.a[1] (5))");
+    const auto invoke = [](const std::vector<std::string>& arguments) {
+        std::istringstream input;
+        std::ostringstream output;
+        std::ostringstream error;
+        if (run_cli(arguments, input, output, error) != 0)
+            throw std::runtime_error("Tcl bit retime setup failed: " + error.str());
+    };
+    invoke({ "fsim", "compile", "--library", "work", "top.sv" });
+    invoke({ "fsim", "elaborate", "work.top", "--snapshot", "bitretime" });
+    constexpr auto script = R"FSIM_TCL(
+set loaded [fsim::load_snapshot bitretime]
+set first [fsim::sdf configure first.sdf top top typ]
+if {![dict get $first effective]} {error "first SDF file did not apply: $first"}
+set ::sdf_live_committed 0
+proc commit_bits_at_safe_point {time delta phase} {
+  if {!$::sdf_live_committed && $time == 11000 && $phase eq "postponed"} {
+    set second [fsim::sdf configure second.sdf top top typ]
+    if {![dict get $second effective] || [dict get $second generation] != 2} {
+      error "safe-point SDF file did not apply: $second"
+    }
+    set ::sdf_live_committed 1
+  }
+}
+fsim::add_callback safe_point commit_bits_at_safe_point
+fsim::run 11ns
+fsim::remove_callback safe_point
+if {!$::sdf_live_committed} {error "the safe point was not reached"}
+set expected {12500ps 0000 13500ps 1111 42500ps 1111 43500ps 0010
+  44500ps 0010 45500ps 0000 72500ps 0000 73500ps 1101 74500ps 1101
+  75500ps 1111}
+foreach {time value} $expected {
+  fsim::run $time
+  set seen [fsim::read_signal top.z1]
+  if {$seen ne $value} {error "z1 is $seen at $time, wanted $value"}
+}
+puts sdf-live-bit-retime-ok
+)FSIM_TCL";
+    std::istringstream input;
+    std::ostringstream output;
+    std::ostringstream error;
+    if (run_cli(tcl_arguments(engine, script), input, output, error) != 0
+        || output.str().find("sdf-live-bit-retime-ok") == std::string::npos) {
+        throw std::runtime_error("Tcl live bit retime session (engine '"
+            + engine + "') failed: " + error.str());
+    }
+}
+
 // The live split under the debugger plan keeps the breakpoints set before it.
 // z3 follows t at once while u3.a is undelayed, so the signal breakpoint
 // `top.z3 == 1` stops the run at 10 ns; the split of u3.a (a 5 ns delay, at
@@ -1489,6 +1593,7 @@ int main()
         run_sdf_net_delay_workspace_commands_test();
         for (const std::string engine : { "", "v4", "interpreter", "debug" }) {
             run_sdf_live_split_workspace_commands_test(engine);
+            run_sdf_live_bit_retime_workspace_commands_test(engine);
         }
         run_sdf_live_split_debug_breakpoint_test();
         run_tcl_engine_config_test();

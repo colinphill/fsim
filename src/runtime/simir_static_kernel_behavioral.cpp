@@ -2768,6 +2768,8 @@ namespace {
         { "memo_used", h_memo_used },
         { "memo_pending", h_memo_pending },
         { "calls_used", h_calls_used },
+        { "instance watch", h_inst_watched },
+        { "instance events", h_inst_events_count },
         { "calls_taken", h_calls_taken },
     };
     const auto text = [](const std::int64_t value) { return std::to_string(value); };
@@ -2831,6 +2833,11 @@ namespace {
     }
     if (auto difference = ring("step event", h_events_off, h_events_head, h_events_count,
             h_events_cap, event_stride);
+        !difference.empty()) {
+        return difference;
+    }
+    if (auto difference = ring("instance event", h_inst_events_off, h_inst_events_head,
+            h_inst_events_count, h_inst_events_cap, instance_event_stride);
         !difference.empty()) {
         return difference;
     }
@@ -6861,11 +6868,10 @@ void Interpreter::Impl::StaticKernel::verify_thread_activation(
         const InterpretingScope scope { *this, InterpretedCause::verify };
         replaying_ = true;
         try {
-            std::size_t steps = 0U;
+            // The compiled run this replays has ended, so the replay is not
+            // cut off by a step count: a loop over every element of a
+            // large array is valid work (IEEE 1800-2023 7.12.3).
             while (mismatch.empty() && role[pc] != 1U) {
-                if (++steps > run_step_limit) {
-                    fail(member_index, pc, "static kernel thread did not terminate");
-                }
                 if (role[pc] == 6U) {
                     // An assertion report's row (KOp::sva_report) is the
                     // compiled run's; the reference does not make it again.
@@ -7863,7 +7869,6 @@ void Interpreter::Impl::StaticKernel::net_delay_write(
     }
     const auto value = Impl::coerce_value_kind(source, ValueKind::logic4);
     const auto process = member_process_[member_index];
-    const auto limits = impl_.net_delay_limits(process, operation);
     const auto now = kernel_now();
     for (std::uint32_t part_index = 0U; part_index < parts.size(); ++part_index) {
         const auto& part = parts[part_index];
@@ -7903,6 +7908,11 @@ void Interpreter::Impl::StaticKernel::net_delay_write(
         const auto site_index = found->second;
         auto& site = net_delay_sites_[site_index];
         for (std::uint32_t bit = 0U; bit < part.width; ++bit) {
+            // The table of the bit of the target signal (the reference's
+            // rule, Impl::schedule_net_delay): a live reannotation may
+            // retime some bits of the load alone.
+            const auto limits = impl_.net_delay_limits(
+                process, operation, offset + part.source_offset + bit);
             site.pending.change(bit, current.get(part.offset + bit), piece.get(bit),
                 now, limits.delays, limits.rejects, limits.errors,
                 [&](const SimulationTick, const SimulationTick time,

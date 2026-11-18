@@ -11,6 +11,7 @@
 #include <iostream>
 #include <limits>
 #include <span>
+#include <string_view>
 #include <utility>
 
 namespace fsim::elaboration {
@@ -39,6 +40,81 @@ std::optional<std::uint8_t> character_literal_code(
         return std::nullopt;
     }
     return static_cast<std::uint8_t>(text[1]);
+}
+
+// The array attribute an attribute call names (IEEE 1076-2019 16.2.3).
+std::optional<VhdlShapedAttribute> shaped_array_attribute(
+    const std::string_view text)
+{
+    if (text == "'left") {
+        return VhdlShapedAttribute::left;
+    }
+    if (text == "'right") {
+        return VhdlShapedAttribute::right;
+    }
+    if (text == "'low") {
+        return VhdlShapedAttribute::low;
+    }
+    if (text == "'high") {
+        return VhdlShapedAttribute::high;
+    }
+    if (text == "'length") {
+        return VhdlShapedAttribute::length;
+    }
+    if (text == "'ascending") {
+        return VhdlShapedAttribute::ascending;
+    }
+    return std::nullopt;
+}
+
+// `f(x)'attr`: an array attribute whose prefix is a function call (IEEE
+// 1076-2019 16.2.3), read from the expression's form; the caller checks
+// that the call's result is shaped and that the dimension is the first.
+struct CallResultAttribute {
+    VhdlShapedAttribute attribute { VhdlShapedAttribute::length };
+    semantic::ExpressionId call { };
+    std::optional<semantic::ExpressionId> dimension { };
+};
+
+std::optional<CallResultAttribute> call_result_attribute(
+    const semantic::SpecializedHirUnit& unit,
+    const semantic::ExpressionId expression_id)
+{
+    const auto expression = unit.find_expression(expression_id);
+    if (!expression || expression->vhdl == nullptr
+        || expression->vhdl->kind != semantic::vhdl::ExpressionKind::call
+        || expression->vhdl->operands.empty()
+        || expression->vhdl->operands.size() > 2U) {
+        return std::nullopt;
+    }
+    const auto attribute = shaped_array_attribute(expression->vhdl->text);
+    if (!attribute) {
+        return std::nullopt;
+    }
+    CallResultAttribute result;
+    result.attribute = *attribute;
+    result.call = expression->vhdl->operands.front();
+    const auto call = unit.find_expression(result.call);
+    if (!call || call->vhdl == nullptr || !call->vhdl->referenced_name
+        || (call->vhdl->kind != semantic::vhdl::ExpressionKind::call
+            && call->vhdl->kind != semantic::vhdl::ExpressionKind::unary
+            && call->vhdl->kind != semantic::vhdl::ExpressionKind::binary)) {
+        return std::nullopt;
+    }
+    if (expression->vhdl->operands.size() == 2U) {
+        result.dimension = expression->vhdl->operands[1];
+    }
+    return result;
+}
+
+// The domain of one element of a shaped payload as a scalar value: a
+// STRING's element is a CHARACTER (5.3.2.1, 16.3), an 8-bit enumeration
+// code like any CHARACTER scalar, not a string.
+frontend::ValueDomain shaped_scalar_domain(const frontend::ValueDomain domain)
+{
+    return domain == frontend::ValueDomain::String
+        ? frontend::ValueDomain::Bit2
+        : domain;
 }
 
 } // namespace
@@ -651,21 +727,7 @@ Lowerer::hir_vhdl_shaped_attribute(
         || expression->vhdl->operands.size() > 2U) {
         return std::nullopt;
     }
-    const auto& text = expression->vhdl->text;
-    std::optional<VhdlShapedAttribute> attribute;
-    if (text == "'left") {
-        attribute = VhdlShapedAttribute::left;
-    } else if (text == "'right") {
-        attribute = VhdlShapedAttribute::right;
-    } else if (text == "'low") {
-        attribute = VhdlShapedAttribute::low;
-    } else if (text == "'high") {
-        attribute = VhdlShapedAttribute::high;
-    } else if (text == "'length") {
-        attribute = VhdlShapedAttribute::length;
-    } else if (text == "'ascending") {
-        attribute = VhdlShapedAttribute::ascending;
-    }
+    const auto attribute = shaped_array_attribute(expression->vhdl->text);
     if (!attribute) {
         return std::nullopt;
     }
@@ -840,6 +902,36 @@ std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_shaped_image(
     if (!hir_vhdl_shaped_active()) {
         return std::nullopt;
     }
+    const auto expression = specialized_hir_unit_->find_expression(
+        expression_id);
+    const auto span = expression && expression->vhdl != nullptr
+        ? hir_source_span(expression->vhdl->source)
+        : frontend::SourceSpan { };
+    // A slice of a STRING has the slice's own index range (8.5); its
+    // characters are its image.
+    if (auto slice = hir_vhdl_shaped_slice(expression_id); slice
+        && slice->local->profile.element_domain
+            == frontend::ValueDomain::String) {
+        const auto bound = bind_hir_vhdl_shaped(*slice->local, span);
+        if (!bound) {
+            return std::nullopt;
+        }
+        slice->local = &bound->local;
+        auto operation = lower_hir_vhdl_shaped_slice(
+            *slice, VhdlShapedOperation::slice);
+        if (!operation) {
+            return std::nullopt;
+        }
+        const auto part = allocate_container_register(
+            bound->local.profile.type);
+        operation->target = part;
+        operation->type = bound->local.profile.type;
+        process_.operations.emplace_back(std::move(*operation));
+        const auto destination = allocate_string_register();
+        process_.operations.emplace_back(FormatContainerPattern {
+            destination, part });
+        return destination;
+    }
     const auto profile = hir_vhdl_shaped_value_profile(expression_id);
     if (!profile || profile->constraints.size() != 1U) {
         return std::nullopt;
@@ -853,12 +945,7 @@ std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_shaped_image(
     if (!character_elements && (characters || !bit_elements)) {
         return std::nullopt;
     }
-    const auto expression = specialized_hir_unit_->find_expression(
-        expression_id);
-    const auto value = lower_hir_vhdl_shaped_container(expression_id,
-        expression && expression->vhdl != nullptr
-            ? hir_source_span(expression->vhdl->source)
-            : frontend::SourceSpan { });
+    const auto value = lower_hir_vhdl_shaped_container(expression_id, span);
     if (!value) {
         return std::nullopt;
     }
@@ -913,6 +1000,21 @@ std::optional<VhdlShaped> Lowerer::lower_hir_vhdl_shaped_slice(
 std::optional<std::size_t> Lowerer::hir_vhdl_shaped_width(
     const semantic::ExpressionId expression_id) const
 {
+    // An attribute of a call whose result has the bounds of the value its
+    // function returns (4.2.1): an index value of STRING's or the array's
+    // index subtype, or a BOOLEAN for 'ASCENDING (16.2.3). Such a call does
+    // not by itself give the process a shaped object.
+    if (const auto use = specialized_hir_unit_ != nullptr
+            ? call_result_attribute(*specialized_hir_unit_, expression_id)
+            : std::nullopt;
+        use && (!use->dimension || hir_constant_integer(*use->dimension) == 1)
+        && hir_vhdl_shaped_call_profile(use->call)) {
+        return use->attribute == VhdlShapedAttribute::ascending
+            ? 1U
+            : static_cast<std::size_t>(
+                  frontend::vhdl_predefined_integer_storage_width(
+                      vhdl_integer_standard()));
+    }
     if (!hir_vhdl_shaped_active()) {
         return std::nullopt;
     }
@@ -964,12 +1066,23 @@ std::optional<std::size_t> Lowerer::hir_vhdl_shaped_width(
 std::optional<frontend::ValueDomain> Lowerer::hir_vhdl_shaped_domain(
     const semantic::ExpressionId expression_id) const
 {
+    // An attribute of a call whose result is shaped (4.2.1, 16.2.3).
+    if (const auto use = specialized_hir_unit_ != nullptr
+            ? call_result_attribute(*specialized_hir_unit_, expression_id)
+            : std::nullopt;
+        use && (!use->dimension || hir_constant_integer(*use->dimension) == 1)
+        && hir_vhdl_shaped_call_profile(use->call)) {
+        return use->attribute == VhdlShapedAttribute::ascending
+            ? frontend::ValueDomain::Boolean
+            : frontend::ValueDomain::Integer;
+    }
     if (!hir_vhdl_shaped_active()) {
         return std::nullopt;
     }
     if (const auto access = hir_vhdl_shaped_access(expression_id)) {
-        return access->leaf ? access->local->profile.leaf_domain
-                            : access->local->profile.element_domain;
+        return shaped_scalar_domain(access->leaf
+                ? access->local->profile.leaf_domain
+                : access->local->profile.element_domain);
     }
     if (const auto path = hir_vhdl_shaped_record_path(expression_id);
         path && path->member != nullptr && !path->member->shaped) {
@@ -1025,6 +1138,14 @@ Lowerer::lower_hir_vhdl_shaped_expression(
         if (lhs_shaped || rhs_shaped) {
             const auto shaped = lhs_shaped ? operands[0] : operands[1];
             const auto other = lhs_shaped ? operands[1] : operands[0];
+            // A STRING whose length only its value gives, held as text: the
+            // two STRING values are compared as their texts (9.2.3).
+            if (!(lhs_shaped && rhs_shaped)
+                && hir_vhdl_shaped_value_profile(shaped)->element_domain
+                    == frontend::ValueDomain::String
+                && !hir_vhdl_shaped_sized_value(other)) {
+                return std::nullopt;
+            }
             const auto lhs = lower_hir_vhdl_shaped_container(shaped, span());
             if (!lhs) {
                 return std::optional<RegisterId> { };
@@ -1092,7 +1213,9 @@ Lowerer::lower_hir_vhdl_shaped_expression(
         if (!operation) {
             return std::optional<RegisterId> { };
         }
-        const auto destination = allocate_register(width, domain);
+        // A STRING's element is read as the CHARACTER scalar it is.
+        const auto destination = allocate_register(
+            width, shaped_scalar_domain(domain));
         operation->value = destination;
         operation->width = static_cast<std::uint32_t>(width);
         process_.operations.emplace_back(std::move(*operation));
@@ -1276,6 +1399,32 @@ bool Lowerer::lower_hir_vhdl_shaped_whole_assignment(
             VhdlShapedOperation::assign,
             target,
             *source,
+            { },
+            { },
+            { },
+            { },
+            0U,
+            VhdlShapedAttribute::length,
+            0U,
+            { },
+        });
+        return true;
+    }
+    // A STRING whose length only its value gives (a call, a concatenation,
+    // a STRING held as text): the target keeps its bounds and takes the
+    // value's characters, of the target's length (10.6.2.1).
+    if (profile.element_domain == frontend::ValueDomain::String
+        && profile.constraints.size() == 1U
+        && !hir_vhdl_shaped_sized_value(value_id)) {
+        const auto text = lower_hir_string_expression(value_id);
+        if (!text) {
+            return false;
+        }
+        const auto source = lower_hir_vhdl_shaped_text(profile, *text, 1);
+        process_.operations.emplace_back(VhdlShaped {
+            VhdlShapedOperation::assign,
+            target,
+            source,
             { },
             { },
             { },
@@ -1476,6 +1625,431 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_shaped_value(
     return lowered ? std::optional { conform_hir_vhdl_shaped_domain(
                          *lowered, profile.element_domain) }
                    : std::nullopt;
+}
+
+bool Lowerer::hir_vhdl_shaped_sized_value(
+    const semantic::ExpressionId value_id) const
+{
+    const auto value = specialized_hir_unit_->find_expression(value_id);
+    if (value && value->vhdl != nullptr) {
+        // A string literal has one element per character (9.3.2), a
+        // positional aggregate one per association (9.3.3.3).
+        if (value->vhdl->kind == semantic::vhdl::ExpressionKind::string_literal
+            && value->vhdl->decoded_string) {
+            return true;
+        }
+        if (value->vhdl->kind == semantic::vhdl::ExpressionKind::aggregate
+            && !value->vhdl->associations.empty()
+            && std::ranges::all_of(value->vhdl->associations,
+                [](const auto& association) {
+                    return association.positional();
+                })) {
+            return true;
+        }
+    }
+    const auto width = hir_expression_width(value_id, hir_process_scope_);
+    return width && *width != 0U;
+}
+
+ContainerRegisterId Lowerer::lower_hir_vhdl_shaped_text(
+    const HirVhdlShapedProfile& profile, const StringRegisterId text,
+    const std::int64_t left)
+{
+    return lower_hir_vhdl_shaped_text(profile, text,
+        load_integer(left, 64U, frontend::ValueDomain::Integer), false);
+}
+
+ContainerRegisterId Lowerer::lower_hir_vhdl_shaped_text(
+    const HirVhdlShapedProfile& profile, const StringRegisterId text,
+    const RegisterId left_bound, const bool descending)
+{
+    using frontend::ValueDomain;
+    // The characters of `text` from the index `left` on: left to
+    // left + length - 1, or left downto left - length + 1.
+    const auto left = resize_register(left_bound, 64U, true);
+    const auto length = allocate_register(32U, ValueDomain::Bit2);
+    process_.operations.emplace_back(StringLength { length, text });
+    const auto span_less_one = allocate_register(64U, ValueDomain::Integer);
+    process_.operations.emplace_back(Binary { BinaryOperator::subtract_signed,
+        span_less_one, resize_register(length, 64U, false),
+        load_integer(1, 64U, ValueDomain::Integer) });
+    const auto right = allocate_register(64U, ValueDomain::Integer);
+    process_.operations.emplace_back(Binary {
+        descending ? BinaryOperator::subtract_signed
+                   : BinaryOperator::add_signed,
+        right, left, span_less_one });
+    const auto container = allocate_container_register(profile.type);
+    process_.operations.emplace_back(VhdlShaped {
+        VhdlShapedOperation::create,
+        container,
+        { },
+        load_constant(profile.element_default, profile.element_domain),
+        { left, right },
+        { descending ? std::uint8_t { 1U } : std::uint8_t { 0U } },
+        profile.type,
+        0U,
+        VhdlShapedAttribute::length,
+        0U,
+        { },
+    });
+    // Each character in turn, from the leftmost: the length is known only
+    // at run time.
+    const auto position = allocate_register(32U, ValueDomain::Bit2);
+    process_.operations.emplace_back(LoadConstant {
+        position, unsigned_value(0U, 32U) });
+    const auto one = load_constant(unsigned_value(1U, 32U), ValueDomain::Bit2);
+    const auto head = static_cast<InstructionIndex>(process_.operations.size());
+    const auto more = allocate_register(1U, ValueDomain::Boolean);
+    process_.operations.emplace_back(Binary {
+        BinaryOperator::less_unsigned, more, position, length });
+    const auto branch = static_cast<InstructionIndex>(process_.operations.size());
+    process_.operations.emplace_back(Branch {
+        more, 0U, 0U, UnknownBranchPolicy::when_false });
+    const auto body = static_cast<InstructionIndex>(process_.operations.size());
+    const auto code = allocate_register(32U, ValueDomain::Bit2);
+    process_.operations.emplace_back(StringIndex {
+        code, text, position, false });
+    const auto character = allocate_register(8U, ValueDomain::Bit2);
+    process_.operations.emplace_back(Extract { character, code, 0U, 8U });
+    const auto next = allocate_register(32U, ValueDomain::Bit2);
+    process_.operations.emplace_back(Binary {
+        BinaryOperator::add_unsigned, next, position, one });
+    const auto index = allocate_register(64U, ValueDomain::Integer);
+    process_.operations.emplace_back(Binary {
+        descending ? BinaryOperator::subtract_signed
+                   : BinaryOperator::add_signed,
+        index, left, resize_register(position, 64U, false) });
+    process_.operations.emplace_back(VhdlShaped {
+        VhdlShapedOperation::element_write,
+        container,
+        container,
+        conform_hir_vhdl_shaped_domain(character, profile.element_domain),
+        { index },
+        { },
+        { },
+        0U,
+        VhdlShapedAttribute::length,
+        0U,
+        { },
+    });
+    process_.operations.emplace_back(CopyRegister { position, next });
+    process_.operations.emplace_back(Jump { head });
+    process_.operations[branch] = Branch {
+        more,
+        body,
+        static_cast<InstructionIndex>(process_.operations.size()),
+        UnknownBranchPolicy::when_false,
+    };
+    return container;
+}
+
+void Lowerer::check_hir_vhdl_shaped_string_bounds(
+    const ContainerRegisterId value, const frontend::SourceSpan& span)
+{
+    using frontend::ValueDomain;
+    // A non-null index range of a STRING lies in its index subtype
+    // POSITIVE (5.3.2.2, 16.3); a null one may have any bounds.
+    const auto query = [&](const VhdlShapedAttribute attribute) {
+        const auto destination = allocate_register(64U, ValueDomain::Integer);
+        process_.operations.emplace_back(VhdlShaped {
+            VhdlShapedOperation::query,
+            { },
+            value,
+            destination,
+            { },
+            { },
+            { },
+            0U,
+            attribute,
+            64U,
+            { },
+        });
+        return destination;
+    };
+    const auto binary = [&](const BinaryOperator operation,
+                            const RegisterId lhs, const RegisterId rhs) {
+        const auto destination = allocate_register(1U, ValueDomain::Boolean);
+        process_.operations.emplace_back(
+            Binary { operation, destination, lhs, rhs });
+        return destination;
+    };
+    const auto null_range = binary(BinaryOperator::equal,
+        query(VhdlShapedAttribute::length),
+        load_integer(0, 64U, ValueDomain::Integer));
+    const auto positive = binary(BinaryOperator::greater_equal_signed,
+        query(VhdlShapedAttribute::low),
+        load_integer(1, 64U, ValueDomain::Integer));
+    process_.operations.emplace_back(Assert {
+        binary(BinaryOperator::bit_or, null_range, positive),
+        "VHDL STRING index range is outside its POSITIVE index subtype",
+        AssertionSeverity::failure,
+        runtime_source_location(span),
+    });
+}
+
+std::optional<std::optional<ContainerRegisterId>>
+Lowerer::lower_hir_vhdl_shaped_string_value(
+    const HirVhdlShapedProfile& profile, const semantic::ExpressionId value_id,
+    const frontend::SourceSpan& span)
+{
+    using frontend::ValueDomain;
+    using Result = std::optional<std::optional<ContainerRegisterId>>;
+    if (profile.element_domain != ValueDomain::String
+        || profile.constraints.size() != 1U || profile.outer_rank != 0U
+        || !profile.members.empty()) {
+        return std::nullopt;
+    }
+    const auto value = specialized_hir_unit_->find_expression(value_id);
+    if (!value || value->vhdl == nullptr) {
+        return std::nullopt;
+    }
+    const auto& source = *value->vhdl;
+    const bool named_aggregate
+        = source.kind == semantic::vhdl::ExpressionKind::aggregate
+        && !source.associations.empty()
+        && std::ranges::none_of(source.associations,
+            [](const auto& association) { return association.positional(); });
+    // An aggregate of named associations outside a context that constrains
+    // it: its index range takes the direction of STRING's index subtype
+    // POSITIVE, ascending, and its bounds are its smallest and largest
+    // choices (9.3.3.3).
+    if (named_aggregate) {
+        if (const auto bounds = hir_vhdl_named_aggregate_bounds(source);
+            bounds
+            && (bounds->descending ? bounds->left < bounds->right
+                                   : bounds->left > bounds->right)) {
+            // A null range choice: a null aggregate of that range.
+            const auto container = allocate_container_register(profile.type);
+            process_.operations.emplace_back(VhdlShaped {
+                VhdlShapedOperation::create,
+                container,
+                { },
+                load_constant(profile.element_default, profile.element_domain),
+                { load_integer(bounds->left, 64U, ValueDomain::Integer),
+                    load_integer(bounds->right, 64U, ValueDomain::Integer) },
+                { static_cast<std::uint8_t>(bounds->descending ? 1U : 0U) },
+                profile.type,
+                0U,
+                VhdlShapedAttribute::length,
+                0U,
+                { },
+            });
+            return Result { container };
+        } else if (bounds) {
+            // Its characters as the STRING path gives them, from its
+            // smallest choice, in the context of the base subtype.
+            const auto context = hir_effective_vhdl_subtype(profile.subtype)
+                                     .value_or(profile.subtype);
+            const auto text = lower_hir_string_expression(value_id, &context);
+            if (!text) {
+                return Result { std::optional<ContainerRegisterId> { } };
+            }
+            const auto container = lower_hir_vhdl_shaped_text(profile, *text,
+                std::min(bounds->left, bounds->right));
+            check_hir_vhdl_shaped_string_bounds(container, span);
+            return Result { container };
+        }
+        // `(l to r => c)` with bounds known only at run time and a
+        // CHARACTER expression: the ascending range from the smaller bound
+        // to the larger, each element c (9.3.3.3).
+        const auto choice = source.associations.size() == 1U
+                && source.associations.front().choices.size() == 1U
+                && hir_vhdl_character_expression(
+                    source.associations.front().value)
+            ? specialized_hir_unit_->find_expression(
+                  source.associations.front().choices.front())
+            : std::nullopt;
+        if (choice && choice->vhdl != nullptr
+            && choice->vhdl->kind == semantic::vhdl::ExpressionKind::binary
+            && (choice->vhdl->text == "to" || choice->vhdl->text == "downto")
+            && choice->vhdl->operands.size() == 2U) {
+            std::vector<RegisterId> bounds;
+            for (const auto bound : choice->vhdl->operands) {
+                const auto lowered = lower_hir_expression(bound,
+                    hir_expression_width(bound, hir_process_scope_)
+                        .value_or(32U));
+                if (!lowered) {
+                    return Result { std::optional<ContainerRegisterId> { } };
+                }
+                bounds.push_back(*lowered);
+            }
+            if (choice->vhdl->text == "downto") {
+                std::swap(bounds[0], bounds[1]);
+            }
+            // A character literal is a CHARACTER here even where it could
+            // be a logic value (15.6).
+            const auto literal = specialized_hir_unit_->find_expression(
+                source.associations.front().value);
+            const auto code = literal && literal->vhdl != nullptr
+                ? character_literal_code(*literal->vhdl)
+                : std::nullopt;
+            auto element = code
+                ? std::optional { load_constant(unsigned_value(*code, 8U),
+                      ValueDomain::String) }
+                : lower_hir_expression(
+                      source.associations.front().value, profile.element_width);
+            if (!element) {
+                return Result { std::optional<ContainerRegisterId> { } };
+            }
+            if (register_width(*element) != profile.element_width) {
+                element = resize_register(
+                    *element, profile.element_width, false);
+            }
+            const auto container = allocate_container_register(profile.type);
+            process_.operations.emplace_back(VhdlShaped {
+                VhdlShapedOperation::create,
+                container,
+                { },
+                conform_hir_vhdl_shaped_domain(*element, profile.element_domain),
+                std::move(bounds),
+                { 0U },
+                profile.type,
+                0U,
+                VhdlShapedAttribute::length,
+                0U,
+                { },
+            });
+            check_hir_vhdl_shaped_string_bounds(container, span);
+            return Result { container };
+        }
+    }
+    // A concatenation has the index range of STRING's index subtype from
+    // POSITIVE'LEFT (9.2.5): its characters, as text, give it.
+    const bool concatenation
+        = (source.kind == semantic::vhdl::ExpressionKind::binary
+              && source.text == "&" && source.operands.size() == 2U)
+        || (source.kind == semantic::vhdl::ExpressionKind::concatenation
+            && !source.operands.empty());
+    // A STRING of static index range that is not shaped (an object held as
+    // text, a slice of static bounds, a call whose result shape is known):
+    // its characters with that range (5.3.2.2, 8.5). A literal, an
+    // aggregate and a concatenation have their own rules (9.3.2, 9.3.3.3,
+    // 9.2.5).
+    const bool literal_form
+        = source.kind == semantic::vhdl::ExpressionKind::string_literal
+        || source.kind == semantic::vhdl::ExpressionKind::aggregate;
+    if (!concatenation && !literal_form
+        && !hir_vhdl_shaped_value_profile(value_id)
+        && !hir_vhdl_shaped_call_profile(value_id)) {
+        if (const auto shape = hir_vhdl_shape(value_id); shape
+            && shape->ranges.size() == 1U && shape->ranges.front()) {
+            const auto& range = *shape->ranges.front();
+            const auto left = load_integer(range.left, 64U, ValueDomain::Integer);
+            // A null range keeps its own bounds; it has no characters.
+            if (shape->null()) {
+                const auto container = allocate_container_register(profile.type);
+                process_.operations.emplace_back(VhdlShaped {
+                    VhdlShapedOperation::create,
+                    container,
+                    { },
+                    load_constant(profile.element_default, profile.element_domain),
+                    { left, load_integer(range.right, 64U, ValueDomain::Integer) },
+                    { range.descending ? std::uint8_t { 1U } : std::uint8_t { 0U } },
+                    profile.type,
+                    0U,
+                    VhdlShapedAttribute::length,
+                    0U,
+                    { },
+                });
+                return Result { container };
+            }
+            const auto text = lower_hir_string_expression(value_id);
+            if (!text) {
+                return Result { std::optional<ContainerRegisterId> { } };
+            }
+            return Result { lower_hir_vhdl_shaped_text(
+                profile, *text, left, range.descending) };
+        }
+    }
+    // A literal or positional aggregate is packed with its own length; a
+    // shaped value is copied (the caller's paths).
+    if (!(concatenation && hir_vhdl_shaped_value_profile(value_id))
+        && ((literal_form && hir_vhdl_shaped_sized_value(value_id))
+            || hir_vhdl_shaped_value_profile(value_id))) {
+        return std::nullopt;
+    }
+    // A call whose result has the bounds of the value its function returns
+    // (4.2.1).
+    if (const auto call = hir_vhdl_shaped_call_profile(value_id);
+        call && call->type == profile.type) {
+        return Result { lower_hir_vhdl_shaped_call(value_id, *call) };
+    }
+    // A slice has the bounds and direction of its discrete range (8.5).
+    if (source.kind == semantic::vhdl::ExpressionKind::slice
+        && source.operands.size() == 3U
+        && (source.text == "to" || source.text == "downto")) {
+        const auto text = lower_hir_string_expression(value_id);
+        const auto first = source.operands[1];
+        const auto left = text
+            ? lower_hir_expression(first,
+                  hir_expression_width(first, hir_process_scope_)
+                      .value_or(32U))
+            : std::nullopt;
+        if (!left) {
+            return Result { std::optional<ContainerRegisterId> { } };
+        }
+        const auto container = lower_hir_vhdl_shaped_text(
+            profile, *text, *left, source.text == "downto");
+        check_hir_vhdl_shaped_string_bounds(container, span);
+        return Result { container };
+    }
+    // The left bound of the remaining STRING values held as text:
+    // - a concatenation's is POSITIVE'LEFT (9.2.5);
+    // - an object whose declared range has a static left bound and is
+    //   ascending keeps that bound (5.3.2.2);
+    // - a STD.TEXTIO.LINE object, held as text, is 1 to its length (16.4);
+    // - the STRING result of a predefined attribute or of a function with
+    //   no body here (TO_STRING and the other implicitly declared
+    //   operations, 'IMAGE) has an index range this standard leaves
+    //   unspecified (5.7), here 1 to its length.
+    // Any other value has lost its bounds and cannot be shaped.
+    std::optional<std::int64_t> left;
+    if (concatenation) {
+        left = 1;
+    } else if (const auto subtype = hir_vhdl_expression_subtype(value_id)) {
+        const auto range = std::ranges::find_if(subtype->constraints,
+            [](const semantic::vhdl::RangeConstraint& constraint) {
+                return constraint.kind
+                    == semantic::vhdl::RangeKind::array_index;
+            });
+        if (range != subtype->constraints.end() && !range->descending) {
+            left = hir_range_left(*range);
+        }
+    }
+    if (!left && source.kind == semantic::vhdl::ExpressionKind::call
+        && source.marker == support::ExpressionMarker::vhdl_dereference
+        && source.operands.size() == 1U) {
+        if (const auto access = hir_vhdl_expression_subtype(
+                source.operands.front());
+            access && hir_vhdl_textio_line_subtype(*access, source.scope)) {
+            left = 1;
+        }
+    }
+    if (!left && source.kind == semantic::vhdl::ExpressionKind::call
+        && source.marker == support::ExpressionMarker::none) {
+        const bool attribute = source.text.starts_with('\'');
+        const auto resolution = attribute
+            ? std::nullopt
+            : resolve_hir_vhdl_function_call(value_id, hir_process_scope_, 0U);
+        const auto declaration = resolution
+            ? specialized_hir_unit_->find_declaration(resolution->body)
+            : std::nullopt;
+        const bool body = declaration && declaration->vhdl != nullptr
+            && declaration->vhdl->callable
+            && declaration->vhdl->callable->defined;
+        if (attribute || !body) {
+            left = 1;
+        }
+    }
+    if (!left) {
+        return (shaped_rejected("STRING value without its bounds"),
+            Result { std::optional<ContainerRegisterId> { } });
+    }
+    const auto text = lower_hir_string_expression(value_id);
+    if (!text) {
+        return Result { std::optional<ContainerRegisterId> { } };
+    }
+    return Result { lower_hir_vhdl_shaped_text(profile, *text, *left) };
 }
 
 std::optional<Lowerer::HirVhdlShapedProfile>
@@ -1695,6 +2269,17 @@ Lowerer::lower_hir_vhdl_shaped_container(
         }
         return lower_hir_vhdl_shaped_value(operand, *profile, std::nullopt);
     };
+    // An operand of run-time length that is not shaped (a STRING held as
+    // text) leaves the whole value to its caller, before any operand is
+    // evaluated.
+    if (!std::ranges::all_of(source.operands,
+            [&](const semantic::ExpressionId operand) {
+                return element_operand(operand)
+                    || hir_vhdl_shaped_value_profile(operand)
+                    || hir_vhdl_shaped_sized_value(operand);
+            })) {
+        return std::nullopt;
+    }
     // The left operand starts the result, which then takes each further
     // operand's elements (9.2.5).
     const auto& operands = source.operands;
@@ -1807,7 +2392,8 @@ RegisterId Lowerer::conform_hir_vhdl_shaped_domain(
 
 std::optional<Lowerer::HirVhdlShapedProfile>
 Lowerer::hir_vhdl_shaped_open_profile(
-    const semantic::vhdl::SubtypeIndication& subtype) const
+    const semantic::vhdl::SubtypeIndication& subtype,
+    const bool string_elements) const
 {
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
@@ -1822,7 +2408,7 @@ Lowerer::hir_vhdl_shaped_open_profile(
             open.builtin_type = current.builtin_type;
             open.domain = current.domain;
             open.unconstrained = true;
-            return hir_vhdl_shaped_profile(open, true);
+            return hir_vhdl_shaped_profile(open, true, string_elements);
         }
         if (!current.type_mark.target.valid()
             || !visited.insert(current.type_mark.target.value()).second) {
@@ -1837,7 +2423,7 @@ Lowerer::hir_vhdl_shaped_open_profile(
             open.type_mark = current.type_mark;
             open.domain = current.domain;
             open.unconstrained = true;
-            return hir_vhdl_shaped_profile(open, true);
+            return hir_vhdl_shaped_profile(open, true, string_elements);
         }
         if (type->vhdl->form != semantic::vhdl::TypeForm::subtype
             && type->vhdl->form != semantic::vhdl::TypeForm::alias) {
@@ -1937,18 +2523,19 @@ Lowerer::hir_vhdl_shaped_heap_profile(
         return found->second;
     }
     std::optional<HirVhdlShapedProfile> profile;
-    if (access_type.designated_subtype) {
-        const auto designated = hir_effective_vhdl_subtype(
-            *access_type.designated_subtype)
-            .value_or(*access_type.designated_subtype);
-        // STRING objects keep their own lengths in string storage.
-        if (designated.domain != semantic::vhdl::ValueDomain::string) {
-            profile = hir_vhdl_shaped_record_profile(
-                *access_type.designated_subtype);
-            if (!profile) {
-                profile = hir_vhdl_shaped_profile(
-                    *access_type.designated_subtype, true);
-            }
+    // Each object of an unconstrained array type has its own bounds
+    // (5.3.2.2, 9.3.7), a STRING's included. STD.TEXTIO.LINE, the access
+    // type the TEXTIO subprograms read and write (16.4), keeps its STRING
+    // objects in string storage, their bounds 1 to their length.
+    const bool textio_line
+        = hir_resolver().vhdl_provided_type_of(access_type.id)
+        == semantic::vhdl::ProvidedType::textio_line;
+    if (access_type.designated_subtype && !textio_line) {
+        profile = hir_vhdl_shaped_record_profile(
+            *access_type.designated_subtype);
+        if (!profile) {
+            profile = hir_vhdl_shaped_profile(
+                *access_type.designated_subtype, true, true);
         }
     }
     hir_vhdl_shaped_heap_profiles_.emplace(access_type.id.value(), profile);
@@ -2144,6 +2731,9 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_shaped_allocator(
             directions.push_back(descending ? 1U : 0U);
         }
         create(std::move(bounds), std::move(directions));
+        if (profile.element_domain == frontend::ValueDomain::String) {
+            check_hir_vhdl_shaped_string_bounds(container, span);
+        }
     } else {
         // `new T'(v)`: the value supplies the bounds (9.3.7).
         auto value_id = *initializer;
@@ -2169,6 +2759,18 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_shaped_allocator(
                     process_.operations.emplace_back(ContainerElementWrite {
                         heap.objects, handle, bound->local.container, false,
                         { } });
+                });
+        }
+        // A STRING value whose bounds no static subtype gives.
+        if (const auto string_value = lower_hir_vhdl_shaped_string_value(
+                profile, value_id, span)) {
+            if (!*string_value) {
+                return std::nullopt;
+            }
+            return issue_hir_vhdl_access_handle(
+                heap, span, [&](const RegisterId handle) {
+                    process_.operations.emplace_back(ContainerElementWrite {
+                        heap.objects, handle, **string_value, false, { } });
                 });
         }
         // An array of unconstrained arrays: the value's element subtype

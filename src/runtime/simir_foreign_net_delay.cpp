@@ -155,10 +155,11 @@ void Interpreter::foreign_net_delay_settle(const SignalId signal,
                     if (bit < group.offset || bit - group.offset >= group.width) {
                         continue;
                     }
-                    const auto put = impl.net_delay_overrides.find(group.driver);
-                    const auto& table = put != impl.net_delay_overrides.end()
-                        ? put->second
-                        : group.table;
+                    // A table given to the driver, for this bit of the
+                    // copy or for all of them, replaces the group's.
+                    const auto* const put = impl.net_delay_override(
+                        group.driver, static_cast<std::uint32_t>(bit));
+                    const auto& table = put != nullptr ? *put : group.table;
                     delay = std::min(delay, table.delay[transition]);
                 }
                 if (delay == std::numeric_limits<SimulationTick>::max()) {

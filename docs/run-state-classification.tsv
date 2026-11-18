@@ -293,6 +293,8 @@ interp.impl	sva_abort_watched	P	the abort nets flagged by signal for the commit 
 interp.impl	sva_wakes_due	P	whether a monitor is pending or woken at every time step (wake_sva_monitors)
 interp.impl	sva_step_hook	Cfg	hook or callback installed by the embedder
 interp.impl	sva_step_requests	Cfg	step requests a foreign library made; it makes them again after a restart
+interp.impl	sva_instance_hook	Cfg	hook or callback installed by the embedder
+interp.impl	sva_instance_watches	Cfg	instance watches of a foreign library's assertion callbacks (39.4.2); dropped at restart with the callbacks
 interp.impl	sva_action_filter	Cfg	hook or callback installed by the embedder
 interp.impl	assertion_controls	D	the assertion control words; the host republishes them from app.assertions on restore (Interpreter::set_assertion_control)
 interp.impl	assertion_control_base	D	derived from the artifact (plan_assertion_controls)
@@ -350,7 +352,7 @@ interp.impl	update_commit_words	W	staging scratch sized per design and written b
 interp.impl	pending_channel_updates	S	SystemC primitive-channel updates are host-closure events (FSIM-SAVE-0004); a SystemC run refuses the save
 interp.impl	pending_inertial_writes	P+ids	pending inertial delayed writes; event interp.inertial_mature rebinds the handle by key digest and the record holds the value
 interp.impl	driver_delay_overrides	P	runtime delay changes (SDF, VPI); also journaled in host.structure
-interp.impl	net_delay_overrides	P	runtime delay changes (SDF, VPI); also journaled in host.structure
+interp.impl	net_delay_overrides	P	runtime delay changes (SDF, VPI), by driver and bit range; also journaled in host.structure; carried to a reset's twin by replay_plan_onto
 interp.impl	foreign_net_delay_loads	P	runtime delay changes (SDF, VPI); also journaled in host.structure
 interp.impl	net_delay_force_before	Cfg	hook or callback installed by the embedder
 interp.impl	net_delay_force_after	Cfg	hook or callback installed by the embedder
@@ -1595,6 +1597,7 @@ sim.impl	standard_coverage_run_identity	P	coverage accumulators; the VCD state r
 sim.impl	concurrent_assertion_hook	Cfg	observers and hooks installed by the embedder
 sim.impl	assertion_attempt_hook	Cfg	observers and hooks installed by the embedder
 sim.impl	assertion_step_hook	Cfg	observers and hooks installed by the embedder
+sim.impl	assertion_instance_hook	Cfg	observers and hooks installed by the embedder
 sim.impl	vpi_process_assertions	D	VPI handle tables, rebuilt on demand; not saved
 sim.impl	vhdl_psl_attempt_hook	Cfg	observers and hooks installed by the embedder
 sim.impl	concurrent_assertion_indices	P+ids	application run state (S6)
@@ -1713,6 +1716,7 @@ foreign.vpi_live	assertion_system_hooks_	Cfg	user callback or hook, dropped at r
 foreign.vpi_live	assertion_system_hooked_	Cfg	user callback or hook, dropped at restart (owner decision 5)
 foreign.vpi_live	assertion_start_hooked_	Cfg	user callback or hook, dropped at restart (owner decision 5)
 foreign.vpi_live	assertion_step_hooked_	Cfg	user callback or hook, dropped at restart (owner decision 5)
+foreign.vpi_live	assertion_instance_hooked_	Cfg	user callback or hook, dropped at restart (owner decision 5)
 foreign.vpi_live	assertion_system_locked_	D	VPI handle tables and model caches, rebuilt on demand; not saved
 foreign.vpi_live	assertion_system_ended_	D	VPI handle tables and model caches, rebuilt on demand; not saved
 foreign.vpi_live	ranges_	D	VPI handle tables and model caches, rebuilt on demand; not saved

@@ -135,6 +135,9 @@ struct Node {
     std::vector<std::vector<Token>> actual_tokens;
     // The default item of a published property case.
     bool default_item { };
+    // A published instance: where its name is written, the source of its
+    // VPI object (IEEE 1800-2023 37.51, 37.54).
+    SourceSpan occurrence { };
 };
 
 [[nodiscard]] bool sequence_kind(const NodeKind kind)
@@ -250,6 +253,16 @@ struct ParseContext {
     // offset of the name: an error was reported for each.
     const std::set<std::tuple<std::string, std::size_t, std::size_t>>*
         illegal_recursive { };
+    // The named sequence and property instances the expansion inlined
+    // (Plan::instances, IEEE 1800-2023 39.4.2): for a node, the instances
+    // whose expansion it is, the innermost first, each by its kind and the
+    // position of its name.
+    struct Mark {
+        bool sequence { };
+        std::uint32_t line { };
+        std::uint32_t column { };
+    };
+    std::map<std::size_t, std::vector<Mark>> marks { };
 };
 
 // The property and sequence operator keywords IEEE 1800-2009 added
@@ -1770,6 +1783,7 @@ private:
             node.declared = &declaration;
             node.sequence_instance = declaration.kind
                 == SystemVerilogAssertionDeclarationKind::Sequence;
+            node.occurrence = tokens_[position_].span;
             ++position_;
             if (at(TokenKind::LeftParen)) {
                 const auto close = matching(position_);
@@ -1918,10 +1932,18 @@ private:
             wrapper.actual_tokens = std::move(initializers);
             operand = add(std::move(wrapper));
         }
-        if (clock == enclosing) {
-            return operand;
+        const auto expansion
+            = clock == enclosing ? operand : clocked(clock, operand);
+        // The node is this instance's evaluation (39.4.2). The expansion of
+        // a recursive property is evaluated again by its recursive
+        // instances, which are not this occurrence.
+        if (expansion && !recursive) {
+            context_.marks[*expansion].push_back({ declaration.kind
+                    == SystemVerilogAssertionDeclarationKind::Sequence,
+                static_cast<std::uint32_t>(name.span.begin.line),
+                static_cast<std::uint32_t>(name.span.begin.column) });
         }
-        return clocked(clock, operand);
+        return expansion;
     }
 
     // A recursive instance that evaluates `expansion` again (16.12.17): its
@@ -2391,6 +2413,12 @@ public:
     // the plan does not cover.
     bool illegal { };
 
+    // The instances the expansion inlined (ParseContext::marks).
+    void use_marks(const std::map<std::size_t, std::vector<ParseContext::Mark>>& marks)
+    {
+        marks_ = &marks;
+    }
+
     // The property's local variables, by their unique names, in order.
     void use_locals(const std::vector<std::string>& names)
     {
@@ -2852,8 +2880,46 @@ private:
         return clocks.size() == 1U && *clocks.begin() == incoming;
     }
 
-    // `incoming` is the clock in effect at node `index` (16.13.3).
+    // The marks of node `index` (ParseContext::marks), the innermost first.
+    [[nodiscard]] std::span<const ParseContext::Mark> marks_of(
+        const std::size_t index) const
+    {
+        if (marks_ == nullptr) {
+            return { };
+        }
+        const auto found = marks_->find(index);
+        return found == marks_->end() ? std::span<const ParseContext::Mark> { }
+                                      : std::span<const ParseContext::Mark> { found->second };
+    }
+
+    // `incoming` is the clock in effect at node `index` (16.13.3). The code
+    // of a node that is the expansion of named sequence instances lies
+    // between their bounds, the outermost outside (Plan::instances, IEEE
+    // 1800-2023 39.4.2); each occurrence's evaluation lives in a counter of
+    // its own. Sequence::code's owner fills in the sites' sequence.
     void emit(const std::size_t index, plan::Sequence& sequence,
+        const std::uint32_t incoming)
+    {
+        const auto marks = marks_of(index);
+        std::vector<std::pair<std::uint32_t, std::uint32_t>> opened;
+        for (auto mark = marks.rbegin(); mark != marks.rend(); ++mark) {
+            if (!mark->sequence) {
+                continue;
+            }
+            const auto slot = sequence.counters++;
+            const auto site = static_cast<std::uint32_t>(plan.instances.size());
+            plan.instances.push_back({ true, 0U, slot, mark->line, mark->column });
+            sequence.code.push_back(instruction(plan::Op::instance_begin, site, slot));
+            opened.emplace_back(site, slot);
+        }
+        emit_node(index, sequence, incoming);
+        for (auto bound = opened.rbegin(); bound != opened.rend(); ++bound) {
+            sequence.code.push_back(
+                instruction(plan::Op::instance_end, bound->first, bound->second));
+        }
+    }
+
+    void emit_node(const std::size_t index, plan::Sequence& sequence,
         const std::uint32_t incoming)
     {
         const auto& node = nodes_[index];
@@ -3095,8 +3161,14 @@ private:
         clock_ = leading(index, incoming);
         emit(index, compiled, incoming);
         compiled.code.push_back(instruction(plan::Op::match));
+        const auto at = static_cast<std::uint32_t>(plan.sequences.size());
+        for (const auto& step : compiled.code) {
+            if (step.op == plan::Op::instance_begin) {
+                plan.instances[step.a].node = at;
+            }
+        }
         plan.sequences.push_back(std::move(compiled));
-        return static_cast<std::uint32_t>(plan.sequences.size() - 1U);
+        return at;
     }
 
     std::uint32_t add(plan::Property property)
@@ -3105,10 +3177,25 @@ private:
         return static_cast<std::uint32_t>(plan.properties.size() - 1U);
     }
 
+    // A node that is the expansion of named property instances is their
+    // evaluation (Plan::instances, IEEE 1800-2023 39.4.2), the innermost
+    // first.
+    std::uint32_t property(const std::size_t index,
+        const std::uint32_t incoming)
+    {
+        const auto result = property_node(index, incoming);
+        for (const auto& mark : marks_of(index)) {
+            if (!mark.sequence && failure.empty()) {
+                plan.instances.push_back({ false, result, 0U, mark.line, mark.column });
+            }
+        }
+        return result;
+    }
+
     // `incoming` is the clock in effect at node `index`: it flows across the
     // linear operators and distributes to the operands of the branching
     // ones until a clocking event replaces it (16.13.3).
-    std::uint32_t property(const std::size_t index,
+    std::uint32_t property_node(const std::size_t index,
         const std::uint32_t incoming)
     {
         const auto& node = nodes_[index];
@@ -3201,6 +3288,13 @@ private:
                 plan.properties.pop_back();
             } else {
                 plan.properties[reserved] = plan.properties[inner];
+            }
+            // The instances the operand is the evaluation of are the
+            // reserved node's.
+            for (auto& site : plan.instances) {
+                if (!site.sequence && site.node == inner) {
+                    site.node = reserved;
+                }
             }
             return reserved;
         }
@@ -3370,6 +3464,7 @@ private:
     // The plan property and clock of each recursion_target node compiled
     // so far (16.12.17).
     std::map<std::size_t, std::pair<std::uint32_t, std::uint32_t>> targets_;
+    const std::map<std::size_t, std::vector<ParseContext::Mark>>* marks_ { };
     std::map<std::string, std::uint32_t, std::less<>> local_index_;
     std::set<std::string, std::less<>> local_names_;
     std::map<std::string, std::uint32_t, std::less<>> expression_index_;
@@ -4392,7 +4487,7 @@ std::optional<SystemVerilogAssertionTree> VerilogParser::build_assertion_tree(
             published.instance = instance_node.instance;
             published.sequence = instance_node.sequence_instance;
             published.operands = std::move(operands);
-            published.span = named->span;
+            published.span = instance_node.occurrence;
             tree.nodes.push_back(std::move(published));
             SystemVerilogAssertionTreeOperand operand;
             operand.node = static_cast<std::int32_t>(tree.nodes.size() - 1U);
@@ -4599,6 +4694,8 @@ std::optional<VerilogParser::SvaPrepared> VerilogParser::prepare_sva_property(
     std::vector<std::string> inlined;
     // Whether the maximal property is a sequence or property instance.
     bool root_instance { };
+    // The instances inlined at the root, the outermost first (39.4.2).
+    std::vector<ParseContext::Mark> root_marks;
     while (!tokens.empty()) {
         if (tokens.front().kind != TokenKind::Identifier) {
             break;
@@ -4707,6 +4804,10 @@ std::optional<VerilogParser::SvaPrepared> VerilogParser::prepare_sva_property(
             }
             disable = std::move(*condition);
         }
+        root_marks.push_back({ declaration->kind
+                == SystemVerilogAssertionDeclarationKind::Sequence,
+            static_cast<std::uint32_t>(tokens.front().span.begin.line),
+            static_cast<std::uint32_t>(tokens.front().span.begin.column) });
         tokens = std::move(*body);
         strip_semicolons(tokens);
         root_instance = true;
@@ -4892,6 +4993,11 @@ std::optional<VerilogParser::SvaPrepared> VerilogParser::prepare_sva_property(
         nodes.push_back(std::move(wrapper));
         root = nodes.size() - 1U;
     }
+    // The root is the evaluation of each instance inlined there, with the
+    // initialization assignments of their local variables (16.10).
+    for (auto mark = root_marks.rbegin(); mark != root_marks.rend(); ++mark) {
+        context.marks[*root].push_back(*mark);
+    }
     if (!disable.empty() && !context.boolean(disable)) {
         return fail("the disable condition is not a boolean expression");
     }
@@ -4910,6 +5016,7 @@ std::optional<VerilogParser::SvaPrepared> VerilogParser::prepare_sva_property(
         }
     }
     PlanCompiler compiler { nodes, synthetic_tokens("1'b1", directive.span) };
+    compiler.use_marks(context.marks);
     {
         std::vector<std::string> names;
         for (const auto& local : context.locals) {

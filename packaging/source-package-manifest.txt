@@ -1952,6 +1952,10 @@ tests/fixtures/compliance/runtime_errors/sv_stream_unpack_partial_element.sv
 tests/fixtures/compliance/runtime_errors/sv_sva_sampled_null_handle.sv
 tests/fixtures/compliance/runtime_errors/sv_typeless_mailbox_get_mismatch.sv
 tests/fixtures/compliance/sv_array_equality_bounds_20261013.sv
+tests/fixtures/compliance/sv_array_method_locator_actual.sv
+tests/fixtures/compliance/sv_array_method_locator_expressions.sv
+tests/fixtures/compliance/sv_array_method_ordering_types.sv
+tests/fixtures/compliance/sv_array_method_sort_keyed_large.sv
 tests/fixtures/compliance/sv_array_query_class_handles_batch57.sv
 tests/fixtures/compliance/sv_array_query_typedef_dimensions_batch57.sv
 tests/fixtures/compliance/sv_array_sizes_and_methods.sv
@@ -2671,6 +2675,9 @@ tests/fixtures/foreign/foreign_vpi_assertions_generate.sv
 tests/fixtures/foreign/foreign_vpi_assertions_inferred.expected
 tests/fixtures/foreign/foreign_vpi_assertions_inferred.expected.license
 tests/fixtures/foreign/foreign_vpi_assertions_inferred.sv
+tests/fixtures/foreign/foreign_vpi_assertions_instances.expected
+tests/fixtures/foreign/foreign_vpi_assertions_instances.expected.license
+tests/fixtures/foreign/foreign_vpi_assertions_instances.sv
 tests/fixtures/foreign/foreign_vpi_assertions_late_start.expected
 tests/fixtures/foreign/foreign_vpi_assertions_late_start.expected.license
 tests/fixtures/foreign/foreign_vpi_assertions_late_start.sv
@@ -4099,6 +4106,9 @@ tests/fixtures/vhdl/inline_ops/shared_part.vhd
 tests/fixtures/vhdl/inline_ops/shared_variable.expected
 tests/fixtures/vhdl/inline_ops/shared_variable.expected.license
 tests/fixtures/vhdl/inline_ops/shared_variable.vhd
+tests/fixtures/vhdl/inline_ops/sparse_containers.expected
+tests/fixtures/vhdl/inline_ops/sparse_containers.expected.license
+tests/fixtures/vhdl/inline_ops/sparse_containers.sv
 tests/fixtures/vhdl/inline_ops/sv_shift_logic9.expected
 tests/fixtures/vhdl/inline_ops/sv_shift_logic9.expected.license
 tests/fixtures/vhdl/inline_ops/sv_shift_logic9.sv
@@ -4217,6 +4227,8 @@ tests/fixtures/vhdl/std_ulogic_positions/std_ulogic_positions.expected.license
 tests/fixtures/vhdl/std_ulogic_positions/std_ulogic_positions.vhd
 tests/fixtures/vhdl/string_allocators/run_string_allocators.cmake
 tests/fixtures/vhdl/string_allocators/string_allocators.vhd
+tests/fixtures/vhdl/string_shaped/run_string_shaped.cmake
+tests/fixtures/vhdl/string_shaped/string_shaped.vhd
 tests/fixtures/vhdl/subtype_left/run_subtype_left.cmake
 tests/fixtures/vhdl/subtype_left/subtype_left.expected
 tests/fixtures/vhdl/subtype_left/subtype_left.expected.license
@@ -4449,6 +4461,7 @@ tests/runtime/foreign_vpi_assertions_attempts_plugin.c
 tests/runtime/foreign_vpi_assertions_failexpr_plugin.c
 tests/runtime/foreign_vpi_assertions_generate_plugin.c
 tests/runtime/foreign_vpi_assertions_inferred_plugin.c
+tests/runtime/foreign_vpi_assertions_instances_plugin.c
 tests/runtime/foreign_vpi_assertions_late_start_plugin.c
 tests/runtime/foreign_vpi_assertions_plugin.c
 tests/runtime/foreign_vpi_assertions_steps_plugin.c

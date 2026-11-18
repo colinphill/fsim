@@ -46,6 +46,8 @@
 //                                            the process runs and empties
 //                                            them after the tick; calls_taken
 //                                            words of them it took
+//   instance events  ring                    stride 4: see InstanceEvent
+//                                            (layout 8)
 //
 // An attempt's automaton (property tree and sequence threads) is a record in
 // the current heap, at `blob` words from heap_off and `length` words long;
@@ -75,8 +77,11 @@ namespace layout {
 /// h_flags carries the host's action controls (flag_actions_off). Layout 7:
 /// the memo region of the local-variable expressions (header words 40 to
 /// 44; IEEE 1800-2023 16.10) and the queue of subroutine calls attached to
-/// sequences (header words 45 to 48; 16.11).
-inline constexpr std::int64_t magic = 0x5356'4131'0007LL;
+/// sequences (header words 45 to 48; 16.11). Layout 8: the watched sequence
+/// and property instances and the ring of their evaluation events (header
+/// words 49 to 53; IEEE 1800-2023 39.4.2), and a matcher record's
+/// evaluations of the watched sequence instances.
+inline constexpr std::int64_t magic = 0x5356'4131'0008LL;
 
 enum Header : std::size_t {
     h_magic = 0,
@@ -149,8 +154,21 @@ enum Header : std::size_t {
     h_calls_used,
     h_calls_cap,
     h_calls_taken,
+    // The sequence and property instances of the plan (Plan::instances)
+    // that a VPI application watches (IEEE 1800-2023 39.4.2: an assertion
+    // callback on a sequence or property instance): bit i for instance i
+    // below 63, bit 63 for every later one. The host sets it; while it is
+    // zero the automaton reports nothing about instances, and code that
+    // starts or ends an instance's evaluation costs one header test.
+    h_inst_watched,
+    // The evaluation events of the watched instances (layout 8), a ring of
+    // InstanceEvent records the host takes after the tick.
+    h_inst_events_off,
+    h_inst_events_head,
+    h_inst_events_count,
+    h_inst_events_cap,
 };
-inline constexpr std::size_t header_words = 49;
+inline constexpr std::size_t header_words = 54;
 static_assert(h_total_words < header_words);
 
 // h_flags bits.
@@ -181,6 +199,7 @@ inline constexpr std::size_t outcome_stride = 4;
 inline constexpr std::size_t started_stride = 1;
 inline constexpr std::size_t event_stride = 10;
 inline constexpr std::size_t request_stride = 2;
+inline constexpr std::size_t instance_event_stride = 4;
 
 // Attempt record fields.
 inline constexpr std::size_t a_started = 0;
@@ -204,6 +223,29 @@ inline constexpr std::size_t e_tick = 7;
 // the step's matched expression (39.4.2 matched_exprs).
 inline constexpr std::size_t e_guard_line = 8;
 inline constexpr std::size_t e_guard_column = 9;
+
+// Instance event fields (39.4.2, an assertion callback on a sequence or
+// property instance): the kind (instance_started, instance_succeeded or
+// instance_failed), the plan's instance, the start time of the attempt of
+// the assertion the evaluation belongs to (attemptStartTime) and the time
+// step of the event (cb_time).
+inline constexpr std::size_t ie_kind = 0;
+inline constexpr std::size_t ie_instance = 1;
+inline constexpr std::size_t ie_attempt_start = 2;
+inline constexpr std::size_t ie_time = 3;
+// Kinds: an evaluation of the instance began; a sequence instance matched
+// or a property instance held; an evaluation of a sequence instance ended
+// without a match, or a property instance failed.
+inline constexpr std::int64_t instance_started = 0;
+inline constexpr std::int64_t instance_succeeded = 1;
+inline constexpr std::int64_t instance_failed = 2;
+// The watched bit of plan instance `instance` in h_inst_watched.
+[[nodiscard]] constexpr std::int64_t instance_watch_bit(
+    const std::uint64_t instance) noexcept
+{
+    return static_cast<std::int64_t>(std::uint64_t { 1 }
+        << (instance < 63U ? instance : 63U));
+}
 
 // Memo entry fields: the expression, whether its value is known, then the
 // thread's local words and the result words.
@@ -243,6 +285,32 @@ struct StepRecord {
     std::int64_t tick { };
     std::int64_t guard_line { };
     std::int64_t guard_column { };
+};
+
+/// One evaluation event of a watched sequence or property instance.
+struct InstanceEvent {
+    std::int64_t kind { };
+    std::int64_t instance { };
+    std::int64_t attempt_start { };
+    std::int64_t time { };
+};
+
+/// One evaluation event of a watched sequence or property instance as the
+/// monitor reports it (IEEE 1800-2023 39.4.2: cbAssertionStart,
+/// cbAssertionSuccess and cbAssertionFailure registered on a
+/// vpiSequenceInst or vpiPropertyInst). `kind` is layout::instance_started,
+/// instance_succeeded or instance_failed; the instance is named by its kind
+/// and the source position of its name (semantic::sva::InstanceSite);
+/// `attempt_start` is the start of the attempt of the assertion the
+/// evaluation belongs to (attemptStartTime, 39.4.2 d) and `time` the time
+/// step of the event (cb_time, 39.4.2 c).
+struct InstanceReport {
+    std::int64_t kind { };
+    bool sequence { };
+    std::uint32_t line { };
+    std::uint32_t column { };
+    std::int64_t attempt_start { };
+    std::int64_t time { };
 };
 
 /// Where a block publishes its base pointer: entry `index` of the owner's
@@ -364,6 +432,14 @@ public:
     void push_event(const StepRecord& record);
     [[nodiscard]] std::vector<StepRecord> take_events();
 
+    // --- evaluation events of watched instances (layout 8) ---
+    [[nodiscard]] std::size_t instance_event_count() const noexcept
+    {
+        return static_cast<std::size_t>(get(layout::h_inst_events_count));
+    }
+    void push_instance_event(const InstanceEvent& event);
+    [[nodiscard]] std::vector<InstanceEvent> take_instance_events();
+
     // --- pending step requests (39.5.2: stepping for a future attempt) ---
     [[nodiscard]] std::size_t request_count() const noexcept
     {
@@ -454,6 +530,7 @@ public:
         grow_scratch,
         grow_memo,
         grow_calls,
+        grow_instance_events,
     };
 
 private:
@@ -468,6 +545,7 @@ private:
         std::size_t scratch { };
         std::size_t memo { };
         std::size_t calls { };
+        std::size_t instance_events { };
         // Words of the bounds region (count, values); 0 for none.
         std::size_t bounds { };
     };

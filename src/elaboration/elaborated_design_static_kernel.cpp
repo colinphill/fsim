@@ -1071,11 +1071,15 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             return;
         }
         // A host-access object is reached through reference-format
-        // registers, which only behavioral members hold.
+        // registers, which only behavioral members hold; so is a sparse
+        // array the kernel keeps, whose elements have no fixed offsets.
         if (!vhdl && std::ranges::any_of(container_uses[index],
                 [&](const ContainerObjectId object) {
-                    return object < host_access_objects.size()
-                        && host_access_objects[object] != 0U;
+                    return (object < host_access_objects.size()
+                               && host_access_objects[object] != 0U)
+                        || (kernel_dynamic(object)
+                            && container_objects_[object]
+                                   .initial_value.type.sparse);
                 })) {
             return;
         }
@@ -2921,6 +2925,17 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     for (const auto& touched : touched_by_process) {
         for (const auto signal : touched) {
             host_touched[signal] = 1U;
+        }
+    }
+    // A container object the host keeps toggles its change signal when the
+    // host commits a write to it, the implicit event a process waiting on
+    // the object sees (IEEE 1800-2023 9.2.2.2.1): a host-written signal.
+    for (std::size_t object = 0U; object < container_objects_.size(); ++object) {
+        const auto& value = container_objects_[object];
+        if (value.change_signal && *value.change_signal < signal_count
+            && !kernel_dynamic(static_cast<ContainerObjectId>(object))
+            && !static_kernel_arena_container_type(value.initial_value.type)) {
+            host_touched[*value.change_signal] = 1U;
         }
     }
     if (plan_profile) {

@@ -537,15 +537,38 @@ void Interpreter::Impl::schedule_inertial(
     }
 }
 
-Interpreter::Impl::NetDelayLimits Interpreter::Impl::net_delay_limits(
-    const ProcessId process, const WriteNetDelay& operation) const
+const NetDelayTable* Interpreter::Impl::net_delay_override(
+    const ProcessId process, const std::uint32_t bit) const
 {
-    // A table given to the driver replaces the operation's.
-    if (const auto put = net_delay_overrides.empty()
-            ? net_delay_overrides.end()
-            : net_delay_overrides.find(process);
-        put != net_delay_overrides.end()) {
-        return { put->second.delay, put->second.reject, put->second.error };
+    if (net_delay_overrides.empty()) {
+        return nullptr;
+    }
+    // The ranges of one driver do not overlap, so the one that can hold the
+    // bit is the last that starts at or before it; a range replaces the
+    // table of the whole driver for its bits (IEEE 1364-2005 16.3).
+    auto range = net_delay_overrides.upper_bound(NetDelayOverrideKey {
+        process, bit, std::numeric_limits<std::uint32_t>::max() });
+    if (range != net_delay_overrides.begin()) {
+        --range;
+        const auto& key = range->first;
+        if (key.process == process && key.width != 0U
+            && bit - key.offset < key.width) {
+            return &range->second;
+        }
+    }
+    const auto whole
+        = net_delay_overrides.find(NetDelayOverrideKey { process, 0U, 0U });
+    return whole == net_delay_overrides.end() ? nullptr : &whole->second;
+}
+
+Interpreter::Impl::NetDelayLimits Interpreter::Impl::net_delay_limits(
+    const ProcessId process, const WriteNetDelay& operation,
+    const std::uint32_t bit) const
+{
+    // A table given to the driver, for the bit or for all its bits,
+    // replaces the operation's.
+    if (const auto* const put = net_delay_override(process, bit)) {
+        return { put->delay, put->reject, put->error };
     }
     if (operation.table.size() != 36U) {
         throw std::invalid_argument(
@@ -585,7 +608,6 @@ void Interpreter::Impl::schedule_net_delay(
         : get_signal(signal).resolution == ResolutionKind::none
         ? driven_values[signal]
         : driver_slot(process, signal);
-    const auto [delays, rejects, errors] = net_delay_limits(process, operation);
     auto pending = pending_net_delay_writes.find(key);
     if (pending == pending_net_delay_writes.end()) {
         // Nothing pending and nothing to change: the usual case.
@@ -602,6 +624,10 @@ void Interpreter::Impl::schedule_net_delay(
         events::NetDelayMature::Payload { this, process, signal, key.offset,
             key.width, origin.process_domain, origin.phase }) };
     for (std::uint32_t bit = 0U; bit < width; ++bit) {
+        // Each bit takes the table of its own bits (a live reannotation may
+        // retime some bits of the load alone, set_net_delay_bits_table).
+        const auto [delays, rejects, errors] = net_delay_limits(
+            process, operation, key.offset + bit);
         state.change(
             bit, driver_current.get(offset + bit), value.get(bit), now, delays,
             rejects, errors,

@@ -926,6 +926,8 @@ struct Simulation::Impl {
         std::int64_t start, SimulationTick time, std::uint64_t delta);
     void publish_assertion_step(runtime::simir::ProcessId design_process,
         const runtime::sva::StepRecord& step);
+    void publish_assertion_instance(runtime::simir::ProcessId design_process,
+        const runtime::sva::InstanceReport& report);
 
     void start_vpi(bool restoring = false);
 
@@ -1591,6 +1593,7 @@ struct Simulation::Impl {
 
     AssertionAttemptHook assertion_attempt_hook;
     AssertionStepHook assertion_step_hook;
+    AssertionInstanceHook assertion_instance_hook;
     AssertionControlTaskHook assertion_control_task_hook;
 
     // The VPI assertion object of each design process that owns one.

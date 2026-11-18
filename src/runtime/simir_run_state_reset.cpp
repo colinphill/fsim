@@ -120,6 +120,16 @@ bool Interpreter::replay_plan_onto(
             break;
         }
     }
+    if (after_start) {
+        // The tables the run gave its interconnect delay drivers, for all
+        // their bits or for ranges of them (set_net_delay_table,
+        // set_net_delay_bits_table: vpi_put_delays, acc_replace_delays and
+        // live SDF reannotation, IEEE 1800-2023 38.32, IEEE 1364-2005 16.3)
+        // are timing of the design, not values a reset returns to their
+        // initial ones (IEEE 1800-2023 D.8); the twin's drivers have the
+        // run's ids (the grafts above check them).
+        target.impl_->net_delay_overrides = impl_->net_delay_overrides;
+    }
     return true;
 }
 

@@ -7006,6 +7006,17 @@ add_test(
 set_tests_properties(fsim.application.vhdl-string-allocators PROPERTIES
   LABELS "application;vhdl;access;static-kernel;positive"
   TIMEOUT 300)
+add_test(
+  NAME fsim.application.vhdl-string-shaped
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/string_shaped"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/string_shaped/run_string_shaped.cmake"
+)
+set_tests_properties(fsim.application.vhdl-string-shaped PROPERTIES
+  LABELS "application;vhdl;access;static-kernel;positive"
+  TIMEOUT 300)
 
 # real, shortreal, realtime and time variables held by the v4 kernel on
 # every kernel tier, printing what the interpreter prints.
@@ -9352,6 +9363,22 @@ add_test(
     -P
     "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
 )
+# Whole-array reductions and equality of fixed-size arrays beyond the dense
+# storage budget (sparse: stored elements, the background's run counts, the
+# dense bit-plane image; IEEE 1800-2023 7.4, 7.12.3, 7.12.4, 11.4.5) in
+# compiled member code; only the displays reach a helper.
+add_test(
+  NAME fsim.application.inline-ops-sparse-containers
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=sparse_containers
+    -DFSIM_LANGUAGE=sv
+    -DFSIM_LIBRARY_ONLY=1
+    "-DFSIM_FORBID_REASON=tier:not_compiled:[a-z_0-9:]+"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
 # Class allocations and property reads and writes (IEEE 1800-2023 8.4 -
 # 8.9) in compiled member code, each through its own runtime helper; the
 # verified run checks the thread's random stream across each allocation
@@ -9746,6 +9773,7 @@ set_tests_properties(
   fsim.application.inline-ops-wide-container
   fsim.application.inline-ops-design-containers
   fsim.application.inline-ops-fixed-containers
+  fsim.application.inline-ops-sparse-containers
   fsim.application.inline-ops-class-properties
   fsim.application.inline-ops-nested-reduction
   fsim.application.inline-ops-container-pattern

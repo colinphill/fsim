@@ -2820,6 +2820,11 @@ Simulation::Impl::Impl(
             const runtime::sva::StepRecord& step) {
             publish_assertion_step(process, step);
         });
+    interpreter->set_sva_instance_hook(
+        [this](const runtime::simir::ProcessId process,
+            const runtime::sva::InstanceReport& report) {
+            publish_assertion_instance(process, report);
+        });
     // The action controls reach each monitor's block: the outcome pop, in
     // generated code too, then skips the pass or fail statement itself, not
     // only its output (IEEE 1800-2023 20.11, 39.5.2).

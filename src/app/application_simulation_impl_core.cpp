@@ -4418,6 +4418,22 @@ void Simulation::Impl::publish_assertion_step(
     assertion_step_hook(object->second, step);
 }
 
+void Simulation::Impl::publish_assertion_instance(
+    const runtime::simir::ProcessId design_process,
+    const runtime::sva::InstanceReport& report)
+{
+    if (!assertion_instance_hook || !vpi_runtime_updates_enabled) {
+        return;
+    }
+    const auto object = vpi_process_assertions.find(design_process);
+    if (object == vpi_process_assertions.end()) {
+        return;
+    }
+    // The callback may read values of the design.
+    interpreter->prepare_output_callback_observation();
+    assertion_instance_hook(object->second, report);
+}
+
 void Simulation::Impl::start_vpi(const bool restoring)
 {
     if (vpi_started) {

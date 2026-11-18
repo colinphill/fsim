@@ -4,6 +4,7 @@
 #include "fsim/elaboration/elaborator.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <optional>
 #include <span>
@@ -53,6 +54,14 @@ SdfNetDelaySplitResult split_sdf_net_delays(ElaboratedDesignState& state);
     std::span<const runtime::SimulationTick> delays,
     std::span<const runtime::SimulationTick> reject,
     std::span<const runtime::SimulationTick> error);
+
+/// The bits [offset, offset + width) of its signal that `terminal` names, as
+/// split_sdf_net_delays takes them: by the signal's packed range (the right
+/// bound is offset 0), all of them when the terminal has no select. Nothing
+/// when the select lies outside the range or the signal is not `design`'s.
+[[nodiscard]] std::optional<std::pair<std::uint32_t, std::uint32_t>>
+sdf_net_delay_terminal_bits(
+    const ElaboratedDesign& design, const SdfNetDelayTerminal& terminal);
 
 /// The tables a running simulation of `running` takes to follow a live SDF
 /// reannotation whose design is `annotated` (both built from one baseline,

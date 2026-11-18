@@ -5417,6 +5417,13 @@ bool Lowerer::hir_expression_signed(
             || !visiting.insert(candidate.value()).second) {
             return false;
         }
+        // An operand that is a bound `with`-clause iterator over signed
+        // elements has its element's signedness (IEEE 1800-2023 7.12,
+        // 11.8.1).
+        if (hir_captured_signed_.contains(candidate.value())
+            || hir_probed_iterator_signed_.contains(candidate.value())) {
+            return true;
+        }
         const auto expression = specialized_hir_unit_->find_expression(
             candidate);
         if (!expression) {
@@ -18772,6 +18779,12 @@ frontend::SystemVerilogScalarKind Lowerer::hir_systemverilog_scalar_kind(
     }
     if (!expression || expression->systemverilog == nullptr) {
         return Kind::None;
+    }
+    // A bound `with`-clause iterator over real elements (7.12).
+    if (const auto captured = hir_captured_scalar_kinds_.find(
+            expression_id.value());
+        captured != hir_captured_scalar_kinds_.end()) {
+        return captured->second;
     }
     const auto& source = *expression->systemverilog;
     // A local variable read of a concurrent-property monitor has its

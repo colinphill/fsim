@@ -3026,31 +3026,104 @@ std::optional<TransitionDelays> Interpreter::driver_delays(
         : std::optional<TransitionDelays> { found->second };
 }
 
-bool Interpreter::set_net_delay_table(
-    const ProcessId process, const NetDelayTable& table)
+std::optional<std::size_t> Interpreter::Impl::net_delay_driver_width(
+    const ProcessId process)
 {
     // As in set_driver_delays: the static kernel's host member runs a stub,
     // so the program to inspect is the startup program.
-    const Process* const original = impl_->static_kernel
-        ? impl_->static_kernel->startup_program(process) : nullptr;
+    const Process* const original = static_kernel
+        ? static_kernel->startup_program(process) : nullptr;
     const auto program = original != nullptr
         ? ProcessProgramView { *original }
-        : impl_->get_process(process).program();
-    bool writes = impl_->split_gate_drivers.contains(process);
+        : get_process(process).program();
+    // A gate split_gate_delay gave a delay slot writes WriteNetDelay now,
+    // though its startup program still holds the delay-free output write.
+    const bool split_gate = split_gate_drivers.contains(process);
     for (const auto& operation : std::as_const(program.operations())) {
-        writes = writes || operation_holds<WriteNetDelay>(operation);
+        if (const auto* const write = operation_get_if<WriteNetDelay>(&operation)) {
+            return driven_values[write->signal].width();
+        }
+        if (!split_gate) {
+            continue;
+        }
+        if (const auto* const update = operation_get_if<WriteUpdate>(&operation)) {
+            return driven_values[update->signal].width();
+        }
+        if (const auto* const slice
+            = operation_get_if<WriteUpdateSlice>(&operation)) {
+            return driven_values[slice->signal].width();
+        }
     }
-    if (!writes) {
+    return std::nullopt;
+}
+
+bool Interpreter::set_net_delay_table(
+    const ProcessId process, const NetDelayTable& table)
+{
+    if (!impl_->net_delay_driver_width(process)) {
         return false;
     }
-    impl_->net_delay_overrides.insert_or_assign(process, table);
+    // The table is the driver's for all its bits: the ones an earlier
+    // retime of some bits gave are replaced (IEEE 1364-2005 16.3).
+    auto& overrides = impl_->net_delay_overrides;
+    using Key = Impl::NetDelayOverrideKey;
+    overrides.erase(overrides.lower_bound(Key { process, 0U, 0U }),
+        overrides.upper_bound(Key { process,
+            std::numeric_limits<std::uint32_t>::max(),
+            std::numeric_limits<std::uint32_t>::max() }));
+    overrides.insert_or_assign(Key { process, 0U, 0U }, table);
+    return true;
+}
+
+bool Interpreter::set_net_delay_bits_table(const ProcessId process,
+    const std::uint32_t offset, const std::uint32_t width,
+    const NetDelayTable& table)
+{
+    const auto target = impl_->net_delay_driver_width(process);
+    if (!target || width == 0U || offset > *target
+        || width > *target - offset) {
+        return false;
+    }
+    // Bits [offset, offset + width) take the table; a range that held some
+    // of them keeps the rest (the ranges of one driver stay disjoint), and
+    // the driver's table for all its bits stays the table of the others
+    // (IEEE 1364-2005 16.3: a later annotation of some bits replaces the
+    // earlier one for those bits only).
+    auto& overrides = impl_->net_delay_overrides;
+    using Key = Impl::NetDelayOverrideKey;
+    const std::uint64_t end = std::uint64_t { offset } + width;
+    std::vector<std::pair<Key, NetDelayTable>> kept;
+    for (auto entry = overrides.upper_bound(Key { process, 0U, 0U });
+         entry != overrides.end() && entry->first.process == process;) {
+        const auto& key = entry->first;
+        const std::uint64_t key_end = std::uint64_t { key.offset } + key.width;
+        if (key_end <= offset || key.offset >= end) {
+            ++entry;
+            continue;
+        }
+        if (key.offset < offset) {
+            kept.emplace_back(Key { process, key.offset, offset - key.offset },
+                entry->second);
+        }
+        if (key_end > end) {
+            kept.emplace_back(Key { process, static_cast<std::uint32_t>(end),
+                                  static_cast<std::uint32_t>(key_end - end) },
+                entry->second);
+        }
+        entry = overrides.erase(entry);
+    }
+    for (auto& [key, kept_table] : kept) {
+        overrides.insert_or_assign(key, std::move(kept_table));
+    }
+    overrides.insert_or_assign(Key { process, offset, width }, table);
     return true;
 }
 
 std::optional<NetDelayTable> Interpreter::net_delay_table(
     const ProcessId process) const
 {
-    const auto found = impl_->net_delay_overrides.find(process);
+    const auto found = impl_->net_delay_overrides.find(
+        Impl::NetDelayOverrideKey { process, 0U, 0U });
     return found == impl_->net_delay_overrides.end()
         ? std::nullopt
         : std::optional<NetDelayTable> { found->second };
@@ -6215,6 +6288,35 @@ bool Interpreter::set_sva_step(
         }
     }
     return true;
+}
+
+void Interpreter::set_sva_instance_hook(SvaInstanceHook hook)
+{
+    impl_->sva_instance_hook = std::move(hook);
+}
+
+std::size_t Interpreter::set_sva_instance_watch(
+    const std::span<const ProcessId> design_processes, const bool sequence,
+    const std::uint32_t line, const std::uint32_t column, const bool watched)
+{
+    std::size_t found = 0U;
+    for (auto& [key, monitor] : impl_->sva_monitors) {
+        if (std::ranges::find(design_processes, key.first)
+            != design_processes.end()) {
+            found += monitor->watch_instances(sequence, line, column, watched);
+        }
+    }
+    const Impl::SvaInstanceWatch watch { sequence, line, column };
+    for (const auto process : design_processes) {
+        auto& watches = impl_->sva_instance_watches[process];
+        const auto at = std::ranges::find(watches, watch);
+        if (watched && at == watches.end()) {
+            watches.push_back(watch);
+        } else if (!watched && at != watches.end()) {
+            watches.erase(at);
+        }
+    }
+    return found;
 }
 
 PackedLogic4 Interpreter::read_call_result(

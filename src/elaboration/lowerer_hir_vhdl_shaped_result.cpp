@@ -82,7 +82,8 @@ Lowerer::hir_vhdl_shaped_call_profile(
     if (!declared || !declared->unconstrained) {
         return std::nullopt;
     }
-    auto profile = hir_vhdl_shaped_open_profile(*declared);
+    // A STRING result too has the bounds of the value returned (4.2.1).
+    auto profile = hir_vhdl_shaped_open_profile(*declared, true);
     if (!profile || profile->constraints.size() != 1U
         || profile->outer_rank != 0U || !profile->members.empty()
         || hir_vhdl_function_result_shape(

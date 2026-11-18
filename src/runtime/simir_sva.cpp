@@ -247,6 +247,14 @@ sva::Monitor& Interpreter::Impl::sva_monitor_bind(AssertionStorage& storage,
             (void)active_monitor->request_step(start, true);
         }
     }
+    // The instances a library watches for this assertion (39.4.2).
+    if (const auto watches = sva_instance_watches.find(storage.design_process());
+        watches != sva_instance_watches.end()) {
+        for (const auto& watch : watches->second) {
+            (void)active_monitor->watch_instances(
+                watch.sequence, watch.line, watch.column, true);
+        }
+    }
     return *active_monitor;
 }
 
@@ -381,7 +389,8 @@ void Interpreter::Impl::sva_tick_reports(
 {
     const auto attempt_starts = active_monitor.take_started();
     if (((sva_attempt_hook && !attempt_starts.empty())
-            || (sva_step_hook && active_monitor.has_step_events()))
+            || (sva_step_hook && active_monitor.has_step_events())
+            || (sva_instance_hook && active_monitor.has_instance_events()))
         && host_request_rows_pending()) {
         // The outcome rows made before come first (drain_host_request_rows).
         drain_host_request_rows();
@@ -397,6 +406,14 @@ void Interpreter::Impl::sva_tick_reports(
         if (sva_step_hook) {
             for (const auto& event : events) {
                 sva_step_hook(storage.design_process(), event);
+            }
+        }
+    }
+    if (active_monitor.has_instance_events()) {
+        const auto reports = active_monitor.take_instance_reports();
+        if (sva_instance_hook) {
+            for (const auto& report : reports) {
+                sva_instance_hook(storage.design_process(), report);
             }
         }
     }

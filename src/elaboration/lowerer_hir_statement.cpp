@@ -26694,19 +26694,38 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         hir_source_span(container_call.source));
                     return true;
                 }
-                if (selection->selected_type.element_kind
-                    != ContainerElementKind::Packed) {
+                // reverse and shuffle move elements of any type; sort and
+                // rsort compare them with the relational operators of the
+                // element type: integral, real or string (IEEE 1800-2023
+                // 7.12.2).
+                const auto& selected_type = selection->selected_type;
+                const bool comparable = selected_type.element_kind
+                        == ContainerElementKind::Packed
+                    || selected_type.element_kind
+                        == ContainerElementKind::String
+                    || (selected_type.element_kind
+                            == ContainerElementKind::Scalar
+                        && selected_type.scalar_kind
+                            != frontend::SystemVerilogScalarKind::Chandle);
+                if (keyed && !comparable) {
                     report(
                         "FSIM-ELAB-SVORDER-008",
                         "container ordering requires packed integral elements",
                         hir_source_span(container_call.source));
                     return true;
                 }
+                // A string or real element is compared by an element loop.
+                const bool element_loop = keyed
+                    && (selected_type.element_kind
+                            == ContainerElementKind::String
+                        || frontend::is_real_scalar_kind(
+                            selected_type.scalar_kind));
 
                 std::vector<ContainerPredicateNode> key;
                 // A key beyond the bounded key graph sorts element by
                 // element in SimIR.
-                std::optional<std::pair<std::string, semantic::ExpressionId>>
+                std::optional<std::pair<std::string,
+                    std::optional<semantic::ExpressionId>>>
                     general_key;
                 const auto key_diagnostics = diagnostics_.size();
                 if (container_call.operands.size() >= 2U) {
@@ -27033,7 +27052,9 @@ bool Lowerer::lower_hir_statement_unsuspended(
                             hir_source_span(key_expression.source));
                         return std::nullopt;
                     };
-                    const auto root = lower_key(key_expression_id);
+                    const auto root = element_loop
+                        ? std::nullopt
+                        : lower_key(key_expression_id);
                     if (!root) {
                         key.clear();
                         general_key.emplace(
@@ -27048,6 +27069,9 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     }
                 }
 
+                if (element_loop && !general_key) {
+                    general_key.emplace(std::string { "item" }, std::nullopt);
+                }
                 const auto base = selection->base.local
                     ? *selection->base.local
                     : allocate_container_register(*selection->base.type);
@@ -27084,6 +27108,13 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     diagnostics_.resize(key_diagnostics);
                     diagnostics_.insert(diagnostics_.end(),
                         graph_diagnostics.begin(), graph_diagnostics.end());
+                    if (graph_diagnostics.empty()) {
+                        report(
+                            "FSIM-ELAB-SVORDER-006",
+                            "container ordering key expression cannot be "
+                            "lowered over these elements",
+                            hir_source_span(container_call.source));
+                    }
                     return false;
                 };
                 if (direct_receiver) {

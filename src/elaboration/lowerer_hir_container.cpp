@@ -915,12 +915,12 @@ bool Lowerer::lower_hir_container_locator_assignment(
             span);
         return true;
     }
-    // A predicate locator selects string elements as well (7.12.1).
+    // Every locator selects string elements as well (7.12.1).
     const bool string_elements
         = source->type.element_kind == ContainerElementKind::String;
     if (source->type.element_kind != ContainerElementKind::Packed
         && source->type.element_kind != ContainerElementKind::Scalar
-        && !(predicate && string_elements)) {
+        && !string_elements) {
         report(
             predicate ? "FSIM-ELAB-SVFIND-008"
                       : "FSIM-ELAB-SVLOCATOR-008",
@@ -1010,16 +1010,59 @@ bool Lowerer::lower_hir_container_locator_assignment(
             return true;
         }
         predicate_graph = std::move(*lowered);
-    } else if (call.operands.size() >= 2U) {
-        const auto lowered = lower_hir_container_expression_graph(
-            call.operands[explicit_iterator ? 2U : 1U],
-            iterator_name,
-            source->type,
-            HirContainerExpressionPurpose::locator_transformation);
-        if (!lowered) {
+    } else {
+        // min, max and unique compare the elements, or the values of the
+        // with expression, with the relational operators of their type
+        // (7.12.1). A string element or a with expression beyond the
+        // bounded graph runs as an element loop.
+        const bool transformed = call.operands.size() >= 2U;
+        const auto key_id = transformed
+            ? std::optional { call.operands[explicit_iterator ? 2U : 1U] }
+            : std::nullopt;
+        const auto diagnostic_count = diagnostics_.size();
+        bool graph = !string_elements;
+        if (graph && transformed) {
+            auto lowered = lower_hir_container_expression_graph(
+                *key_id,
+                iterator_name,
+                source->type,
+                HirContainerExpressionPurpose::locator_transformation);
+            if (lowered) {
+                transformation = std::move(*lowered);
+            } else {
+                graph = false;
+            }
+        }
+        if (!graph) {
+            const auto graph_diagnostics = std::vector<Diagnostic>(
+                diagnostics_.begin()
+                    + static_cast<std::ptrdiff_t>(diagnostic_count),
+                diagnostics_.end());
+            diagnostics_.resize(diagnostic_count);
+            const auto destination = target->local
+                ? *target->local
+                : allocate_container_register(*target->type);
+            if (lower_hir_container_ordered_locator_loop(
+                    semantic::sv::member_builtin_method(call), source->value,
+                    source->type, destination, iterator_name, key_id)) {
+                if (!target->local) {
+                    process_.operations.emplace_back(WriteContainerObject {
+                        target->object, destination, std::nullopt });
+                }
+                return true;
+            }
+            diagnostics_.resize(diagnostic_count);
+            diagnostics_.insert(diagnostics_.end(),
+                graph_diagnostics.begin(), graph_diagnostics.end());
+            if (graph_diagnostics.empty()) {
+                report(
+                    "FSIM-ELAB-SVLOCATOR-006",
+                    "container locator transformation cannot be lowered over "
+                    "these elements",
+                    span);
+            }
             return true;
         }
-        transformation = std::move(*lowered);
     }
     auto operation = ContainerLocatorOperator::minimum;
     if (semantic::sv::member_builtin_method(call) == support::BuiltinMethod::max) {
@@ -1193,62 +1236,433 @@ bool Lowerer::lower_hir_container_locator_loop(
     return true;
 }
 
+void Lowerer::hir_bind_container_iterator(
+    const std::vector<std::pair<std::uint32_t, bool>>& references,
+    const runtime::simir::ContainerType& type,
+    const std::optional<RegisterId> element,
+    const std::optional<StringRegisterId> text,
+    const bool bind)
+{
+    for (const auto& reference : references) {
+        const auto id = reference.first;
+        if (!bind) {
+            hir_captured_update_indices_.erase(id);
+            hir_captured_signed_.erase(id);
+            hir_captured_strings_.erase(id);
+            hir_captured_scalar_kinds_.erase(id);
+        } else if (text) {
+            hir_captured_strings_.insert_or_assign(id, *text);
+        } else if (element) {
+            hir_captured_update_indices_.insert_or_assign(id, *element);
+            if (type.signed_elements) {
+                hir_captured_signed_.insert(id);
+            }
+            if (!reference.second
+                && frontend::is_real_scalar_kind(type.scalar_kind)) {
+                hir_captured_scalar_kinds_.insert_or_assign(
+                    id, type.scalar_kind);
+            }
+        }
+    }
+}
+
+std::optional<Lowerer::HirContainerKey> Lowerer::hir_container_key(
+    const runtime::simir::ContainerType& type,
+    const std::string_view iterator_name,
+    const std::optional<semantic::ExpressionId> expression)
+{
+    HirContainerKey key;
+    key.expression = expression;
+    const bool text_elements
+        = type.element_kind == ContainerElementKind::String;
+    if (expression) {
+        key.references = hir_container_iterator_references(
+            *expression, iterator_name);
+    }
+    // Without a with clause, or with the iterator alone, the elements are
+    // compared themselves (IEEE 1800-2023 7.12.1, 7.12.2).
+    const bool iterator_alone = !expression
+        || (key.references.size() == 1U
+            && key.references.front().first == expression->value()
+            && !key.references.front().second);
+    if (iterator_alone) {
+        key.references.clear();
+        key.expression.reset();
+        if (text_elements) {
+            key.kind = HirContainerKey::Kind::text;
+        } else if (frontend::is_real_scalar_kind(type.scalar_kind)) {
+            key.kind = HirContainerKey::Kind::real;
+            key.scalar_kind = type.scalar_kind;
+        } else {
+            key.width = type.element_width;
+            key.is_signed = type.signed_elements;
+        }
+        return key;
+    }
+    // `item.index` names the element's original position, which a
+    // comparison of two elements does not carry.
+    if (std::ranges::any_of(key.references,
+            [](const auto& reference) { return reference.second; })) {
+        return std::nullopt;
+    }
+    std::optional<RegisterId> probe;
+    std::optional<StringRegisterId> probe_text;
+    if (text_elements) {
+        probe_text = allocate_string_register();
+    } else {
+        probe = allocate_register(type.element_width,
+            type.two_state ? frontend::ValueDomain::Bit2
+                           : frontend::ValueDomain::Logic4);
+    }
+    hir_bind_container_iterator(key.references, type, probe, probe_text, true);
+    bool valid = true;
+    const auto scalar_kind = hir_systemverilog_scalar_kind(*expression);
+    if (hir_expression_is_string(*expression, hir_process_scope_)) {
+        key.kind = HirContainerKey::Kind::text;
+    } else if (frontend::is_real_scalar_kind(scalar_kind)) {
+        key.kind = HirContainerKey::Kind::real;
+        key.scalar_kind = scalar_kind;
+    } else {
+        const auto width = hir_expression_width(
+            *expression, hir_process_scope_);
+        valid = width && *width != 0U;
+        key.width = width.value_or(0U);
+        key.is_signed = hir_expression_signed(*expression);
+    }
+    hir_bind_container_iterator(
+        key.references, type, probe, probe_text, false);
+    if (!valid) {
+        return std::nullopt;
+    }
+    return key;
+}
+
+std::optional<Lowerer::HirContainerKeyValue>
+Lowerer::lower_hir_container_key_value(
+    const HirContainerKey& key,
+    const runtime::simir::ContainerType& type,
+    const std::optional<RegisterId> element,
+    const std::optional<StringRegisterId> text)
+{
+    if (!key.expression) {
+        return HirContainerKeyValue { element, text };
+    }
+    hir_bind_container_iterator(key.references, type, element, text, true);
+    HirContainerKeyValue result;
+    bool valid = true;
+    if (key.kind == HirContainerKey::Kind::text) {
+        result.text = lower_hir_string_expression(*key.expression);
+        valid = result.text.has_value();
+    } else if (key.kind == HirContainerKey::Kind::real) {
+        result.value = lower_hir_expression(*key.expression, 64U);
+        valid = result.value.has_value();
+    } else {
+        result.value = lower_hir_expression(*key.expression, key.width);
+        valid = result.value.has_value();
+        if (valid && register_width(*result.value) != key.width) {
+            result.value = resize_register(
+                *result.value, key.width, key.is_signed);
+        }
+    }
+    hir_bind_container_iterator(key.references, type, element, text, false);
+    if (!valid) {
+        return std::nullopt;
+    }
+    return result;
+}
+
+RegisterId Lowerer::lower_hir_container_key_compare(
+    const HirContainerKey& key,
+    const bool equal,
+    const HirContainerKeyValue& lhs,
+    const HirContainerKeyValue& rhs)
+{
+    using runtime::simir::BinaryOperator;
+    const auto result = allocate_register(1U, frontend::ValueDomain::Logic4);
+    if (key.kind == HirContainerKey::Kind::text) {
+        // Strings compare lexicographically: the sign of lhs.compare(rhs)
+        // (IEEE 1800-2023 6.16, 6.16.8).
+        StringMethod method;
+        method.operation = StringMethodOperator::compare;
+        method.destination = allocate_register(
+            32U, frontend::ValueDomain::Integer);
+        method.source = *lhs.text;
+        method.argument = *rhs.text;
+        process_.operations.emplace_back(method);
+        process_.operations.emplace_back(Binary {
+            equal ? BinaryOperator::equal : BinaryOperator::less_signed,
+            result, method.destination,
+            load_constant(unsigned_value(0U, 32U),
+                frontend::ValueDomain::Integer) });
+    } else if (key.kind == HirContainerKey::Kind::real) {
+        process_.operations.emplace_back(SystemVerilogScalarBinary {
+            equal ? runtime::SystemVerilogScalarBinaryOperator::Equal
+                  : runtime::SystemVerilogScalarBinaryOperator::Less,
+            result, *lhs.value, *rhs.value, key.scalar_kind, key.scalar_kind,
+            frontend::SystemVerilogScalarKind::None });
+    } else {
+        process_.operations.emplace_back(Binary {
+            equal ? BinaryOperator::equal
+                  : key.is_signed ? BinaryOperator::less_signed
+                                  : BinaryOperator::less_unsigned,
+            result, *lhs.value, *rhs.value });
+    }
+    return result;
+}
+
+std::optional<Lowerer::HirContainerKeyedElement>
+Lowerer::lower_hir_container_keyed_element(
+    const HirContainerKey& key,
+    const runtime::simir::ContainerType& type,
+    const runtime::simir::ContainerRegisterId source,
+    const RegisterId ordinal)
+{
+    HirContainerKeyedElement element;
+    if (type.element_kind == ContainerElementKind::String) {
+        element.text = allocate_string_register();
+        process_.operations.emplace_back(ContainerStringRead {
+            *element.text, source, ordinal, true, type.fixed, false, { } });
+    } else {
+        element.value = allocate_register(type.element_width,
+            type.two_state ? frontend::ValueDomain::Bit2
+                           : frontend::ValueDomain::Logic4);
+        process_.operations.emplace_back(ContainerRead {
+            *element.value, source, ordinal, true, type.fixed, false });
+    }
+    const auto value = lower_hir_container_key_value(
+        key, type, element.value, element.text);
+    if (!value) {
+        return std::nullopt;
+    }
+    element.key = *value;
+    return element;
+}
+
+bool Lowerer::lower_hir_container_ordered_locator_loop(
+    const support::BuiltinMethod method,
+    const runtime::simir::ContainerRegisterId source,
+    const runtime::simir::ContainerType& source_type,
+    const runtime::simir::ContainerRegisterId destination,
+    const std::string_view iterator_name,
+    const std::optional<semantic::ExpressionId> expression)
+{
+    using runtime::simir::BinaryOperator;
+    const auto key = hir_container_key(
+        source_type, iterator_name, expression);
+    if (!key) {
+        return false;
+    }
+    const bool maximum = method == support::BuiltinMethod::max;
+    const bool selecting = maximum || method == support::BuiltinMethod::min;
+    const bool index_result = method == support::BuiltinMethod::unique_index;
+    process_.operations.emplace_back(DeleteContainer { destination, { } });
+    const auto size = allocate_register(32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(ContainerSize { size, source });
+    const auto zero = load_constant(
+        PackedLogic4::from_aval_bval(32U, 0U, 0U),
+        frontend::ValueDomain::Bit2);
+    const auto one = load_constant(
+        PackedLogic4::from_aval_bval(32U, 1U, 0U),
+        frontend::ValueDomain::Bit2);
+    const auto append = [&](const HirContainerKeyedElement& element,
+                            const RegisterId ordinal) {
+        if (index_result) {
+            // The declared index of the element (IEEE 1800-2023 7.12.1).
+            auto declared = ordinal;
+            if (source_type.fixed) {
+                const auto left = load_constant(
+                    PackedLogic4::from_aval_bval(32U,
+                        static_cast<std::uint32_t>(source_type.index_left),
+                        0U),
+                    frontend::ValueDomain::Bit2);
+                declared = allocate_register(
+                    32U, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(Binary {
+                    source_type.index_left >= source_type.index_right
+                        ? BinaryOperator::subtract_unsigned
+                        : BinaryOperator::add_unsigned,
+                    declared, left, ordinal });
+            }
+            process_.operations.emplace_back(PushContainer {
+                destination, declared, false, std::nullopt });
+        } else if (element.text) {
+            process_.operations.emplace_back(AppendContainer {
+                destination, false, std::nullopt, std::nullopt,
+                *element.text });
+        } else {
+            process_.operations.emplace_back(PushContainer {
+                destination, *element.value, false, std::nullopt });
+        }
+    };
+    const auto step = [&](const RegisterId counter) {
+        const auto advanced = allocate_register(
+            32U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::add_unsigned, advanced, counter, one });
+        process_.operations.emplace_back(CopyRegister { counter, advanced });
+    };
+    // The extreme element so far (min and max), zero on entry.
+    const auto selected = allocate_register(
+        32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(CopyRegister { selected, zero });
+    const auto index = allocate_register(32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(CopyRegister { index, zero });
+    const auto loop = static_cast<InstructionIndex>(
+        process_.operations.size());
+    const auto more = allocate_register(1U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(Binary {
+        BinaryOperator::less_unsigned, more, index, size });
+    const auto loop_test = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations.emplace_back(Branch { more, 0U, 0U });
+    const auto body = static_cast<InstructionIndex>(
+        process_.operations.size());
+    const auto current = lower_hir_container_keyed_element(
+        *key, source_type, source, index);
+    if (!current) {
+        return false;
+    }
+    if (selecting) {
+        // min and max keep the first of equal elements; the extreme so far
+        // is read again at each element.
+        const auto best = lower_hir_container_keyed_element(
+            *key, source_type, source, selected);
+        if (!best) {
+            return false;
+        }
+        const auto better = lower_hir_container_key_compare(*key, false,
+            maximum ? best->key : current->key,
+            maximum ? current->key : best->key);
+        const auto better_test = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations.emplace_back(Branch { better, 0U, 0U });
+        const auto replace = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations.emplace_back(CopyRegister { selected, index });
+        const auto next = static_cast<InstructionIndex>(
+            process_.operations.size());
+        step(index);
+        process_.operations.emplace_back(Jump { loop });
+        const auto finish = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations[loop_test] = Branch {
+            more, body, finish, UnknownBranchPolicy::when_false };
+        process_.operations[better_test] = Branch {
+            better, replace, next, UnknownBranchPolicy::when_false };
+        // An empty source selects nothing.
+        const auto nonempty = allocate_register(
+            1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::not_equal, nonempty, size, zero });
+        const auto push_test = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations.emplace_back(Branch { nonempty, 0U, 0U });
+        const auto push = static_cast<InstructionIndex>(
+            process_.operations.size());
+        const auto chosen = lower_hir_container_keyed_element(
+            *key, source_type, source, selected);
+        if (!chosen) {
+            return false;
+        }
+        append(*chosen, selected);
+        const auto end = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations[push_test] = Branch {
+            nonempty, push, end, UnknownBranchPolicy::when_false };
+        return true;
+    }
+    // unique and unique_index: an element whose key equals the key of an
+    // earlier element is dropped (7.12.1).
+    const auto found = allocate_register(1U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(LoadConstant {
+        found, PackedLogic4::from_aval_bval(1U, 0U, 0U) });
+    const auto earlier = allocate_register(32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(CopyRegister { earlier, zero });
+    const auto inner = static_cast<InstructionIndex>(
+        process_.operations.size());
+    const auto before = allocate_register(1U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(Binary {
+        BinaryOperator::less_unsigned, before, earlier, index });
+    const auto inner_test = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations.emplace_back(Branch { before, 0U, 0U });
+    const auto inner_body = static_cast<InstructionIndex>(
+        process_.operations.size());
+    const auto other = lower_hir_container_keyed_element(
+        *key, source_type, source, earlier);
+    if (!other) {
+        return false;
+    }
+    const auto same = lower_hir_container_key_compare(
+        *key, true, other->key, current->key);
+    const auto same_test = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations.emplace_back(Branch { same, 0U, 0U });
+    const auto mark = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations.emplace_back(LoadConstant {
+        found, PackedLogic4::from_aval_bval(1U, 1U, 0U) });
+    const auto leave = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations.emplace_back(Jump { 0U });
+    const auto advance_inner = static_cast<InstructionIndex>(
+        process_.operations.size());
+    step(earlier);
+    process_.operations.emplace_back(Jump { inner });
+    const auto inner_end = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations[inner_test] = Branch {
+        before, inner_body, inner_end, UnknownBranchPolicy::when_false };
+    process_.operations[same_test] = Branch {
+        same, mark, advance_inner, UnknownBranchPolicy::when_false };
+    process_.operations[leave] = Jump { inner_end };
+    const auto duplicate_test = inner_end;
+    process_.operations.emplace_back(Branch { found, 0U, 0U });
+    const auto keep = static_cast<InstructionIndex>(
+        process_.operations.size());
+    append(*current, index);
+    const auto skip = static_cast<InstructionIndex>(
+        process_.operations.size());
+    step(index);
+    process_.operations.emplace_back(Jump { loop });
+    const auto end = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations[duplicate_test] = Branch {
+        found, skip, keep, UnknownBranchPolicy::when_false };
+    process_.operations[loop_test] = Branch {
+        more, body, end, UnknownBranchPolicy::when_false };
+    return true;
+}
+
 bool Lowerer::lower_hir_container_keyed_order_loop(
     const runtime::simir::ContainerRegisterId target,
     const runtime::simir::ContainerType& type,
     const bool descending,
     const std::string_view iterator_name,
-    const semantic::ExpressionId key)
+    const std::optional<semantic::ExpressionId> expression)
 {
     using runtime::simir::BinaryOperator;
-    const auto references = hir_container_iterator_references(
-        key, iterator_name);
-    // The key is a function of the element alone; `item.index` names the
-    // element's original position, which an in-place sort does not keep.
-    if (std::ranges::any_of(references,
-            [](const auto& reference) { return reference.second; })) {
+    const auto key = hir_container_key(type, iterator_name, expression);
+    if (!key) {
         return false;
     }
-    const auto element_domain = type.two_state
-        ? frontend::ValueDomain::Bit2
-        : frontend::ValueDomain::Logic4;
-    const auto probe = allocate_register(type.element_width, element_domain);
-    for (const auto& reference : references) {
-        hir_captured_update_indices_.insert_or_assign(
-            reference.first, probe);
-        if (type.signed_elements) {
-            hir_captured_signed_.insert(reference.first);
-        }
-    }
-    const auto width = hir_expression_width(key, hir_process_scope_);
-    const bool signed_key = hir_expression_signed(key);
-    for (const auto& reference : references) {
-        hir_captured_update_indices_.erase(reference.first);
-        hir_captured_signed_.erase(reference.first);
-    }
-    if (!width || *width == 0U) {
-        return false;
-    }
-    const auto key_of = [&](const RegisterId element)
-        -> std::optional<RegisterId> {
-        for (const auto& reference : references) {
-            hir_captured_update_indices_.insert_or_assign(
-                reference.first, element);
-            if (type.signed_elements) {
-                hir_captured_signed_.insert(reference.first);
-            }
-        }
-        auto value = lower_hir_expression(key, *width);
-        for (const auto& reference : references) {
-            hir_captured_update_indices_.erase(reference.first);
-            hir_captured_signed_.erase(reference.first);
-        }
-        if (value && register_width(*value) != *width) {
-            value = resize_register(*value, *width, signed_key);
-        }
-        return value;
-    };
+    const bool text_elements
+        = type.element_kind == ContainerElementKind::String;
     const bool linear = type.fixed;
+    // A with expression whose value a queue holds (text, real, or at most
+    // 64 bits) is evaluated once per element and its values move with the
+    // elements; a wider one is evaluated again at each comparison. Without
+    // a with expression the elements compare themselves (7.12.2).
+    const bool stored_keys = key->expression.has_value()
+        && (key->kind != HirContainerKey::Kind::integral
+            || key->width <= 64U);
+    // The element alone, without evaluating the with expression.
+    auto element_key = *key;
+    element_key.expression.reset();
+    element_key.references.clear();
+    const auto position = [&]() {
+        return static_cast<InstructionIndex>(process_.operations.size());
+    };
     const auto size = allocate_register(32U, frontend::ValueDomain::Bit2);
     process_.operations.emplace_back(ContainerSize { size, target });
     const auto one = load_constant(
@@ -1257,87 +1671,415 @@ bool Lowerer::lower_hir_container_keyed_order_loop(
     const auto zero = load_constant(
         PackedLogic4::from_aval_bval(32U, 0U, 0U),
         frontend::ValueDomain::Bit2);
-    // for (i = 1; i < size; ++i)
-    //   for (j = i; j > 0 && key(a[j]) precedes key(a[j-1]); --j) swap
-    const auto outer_index = allocate_register(
+    const auto step = [&](const RegisterId counter) {
+        const auto advanced = allocate_register(
+            32U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::add_unsigned, advanced, counter, one });
+        process_.operations.emplace_back(CopyRegister { counter, advanced });
+    };
+    const auto write_element = [&](const ContainerRegisterId destination,
+                                   const RegisterId ordinal,
+                                   const HirContainerKeyedElement& element) {
+        if (text_elements) {
+            process_.operations.emplace_back(ContainerStringWrite {
+                destination, ordinal, *element.text, true, linear, false,
+                { }, false });
+        } else {
+            process_.operations.emplace_back(ContainerWrite {
+                destination, ordinal, *element.value, true, linear, false });
+        }
+    };
+    // The keys, one per element in element order, and the merge buffers:
+    // queues of the key type, and a container of the receiver's type (a
+    // fixed-size one already has every element).
+    const auto buffer = allocate_container_register(type);
+    if (!type.fixed) {
+        process_.operations.emplace_back(DeleteContainer { buffer, { } });
+    }
+    std::optional<ContainerRegisterId> keys;
+    std::optional<ContainerRegisterId> merged_keys;
+    ContainerType key_type;
+    key_type.queue = true;
+    auto key_domain = frontend::ValueDomain::Logic4;
+    // The key queues are cleared here; the first key value gives their
+    // type, and the clears then name them.
+    const auto key_clear = position();
+    if (stored_keys) {
+        process_.operations.emplace_back(DeleteContainer { 0U, { } });
+        process_.operations.emplace_back(DeleteContainer { 0U, { } });
+    }
+    const auto read_key = [&](const ContainerRegisterId source,
+                              const RegisterId ordinal) {
+        HirContainerKeyValue result;
+        if (key_type.element_kind == ContainerElementKind::String) {
+            result.text = allocate_string_register();
+            process_.operations.emplace_back(ContainerStringRead {
+                *result.text, source, ordinal, true, false, false, { } });
+        } else {
+            result.value = allocate_register(
+                key_type.element_width, key_domain);
+            process_.operations.emplace_back(ContainerRead {
+                *result.value, source, ordinal, true, false, false });
+        }
+        return result;
+    };
+    const auto write_key = [&](const ContainerRegisterId destination,
+                               const RegisterId ordinal,
+                               const HirContainerKeyValue& value) {
+        if (value.text) {
+            process_.operations.emplace_back(ContainerStringWrite {
+                destination, ordinal, *value.text, true, false, false,
+                { }, false });
+        } else {
+            process_.operations.emplace_back(ContainerWrite {
+                destination, ordinal, *value.value, true, false, false });
+        }
+    };
+    // for (i = 0; i < size; ++i) fill the buffer and the key queues
+    // from a[i]
+    if (!type.fixed || stored_keys) {
+        const auto fill_index = allocate_register(
+            32U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(CopyRegister { fill_index, zero });
+        const auto fill = position();
+        const auto filling = allocate_register(
+            1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::less_unsigned, filling, fill_index, size });
+        const auto fill_test = position();
+        process_.operations.emplace_back(Branch { filling, 0U, 0U });
+        const auto fill_body = position();
+        const auto element = lower_hir_container_keyed_element(
+            element_key, type, target, fill_index);
+        if (!element) {
+            return false;
+        }
+        if (!type.fixed) {
+            process_.operations.emplace_back(AppendContainer {
+                buffer, false, std::nullopt, element->value,
+                element->text });
+        }
+        if (stored_keys) {
+            const auto value = lower_hir_container_key_value(
+                *key, type, element->value, element->text);
+            if (!value || (!value->value && !value->text)) {
+                return false;
+            }
+            if (value->text) {
+                key_type.element_kind = ContainerElementKind::String;
+                key_type.element_width = 0U;
+            } else {
+                key_domain = register_domain(*value->value);
+                key_type.element_kind = ContainerElementKind::Packed;
+                key_type.element_width = static_cast<std::uint32_t>(
+                    register_width(*value->value));
+                key_type.two_state
+                    = key_domain != frontend::ValueDomain::Logic4
+                    && key_domain != frontend::ValueDomain::Logic9
+                    && key_domain != frontend::ValueDomain::Unknown;
+                key_type.signed_elements = key->is_signed;
+            }
+            keys = allocate_container_register(key_type);
+            merged_keys = allocate_container_register(key_type);
+            process_.operations[key_clear]
+                = DeleteContainer { *keys, { } };
+            process_.operations[key_clear + 1U]
+                = DeleteContainer { *merged_keys, { } };
+            for (const auto key_queue : { *keys, *merged_keys }) {
+                process_.operations.emplace_back(AppendContainer {
+                    key_queue, false, std::nullopt, value->value,
+                    value->text });
+            }
+        }
+        step(fill_index);
+        process_.operations.emplace_back(Jump { fill });
+        const auto fill_end = position();
+        process_.operations[fill_test] = Branch {
+            filling, fill_body, fill_end, UnknownBranchPolicy::when_false };
+    }
+    // A bottom-up merge sort (7.12.2 does not require a stable order; the
+    // merge keeps equal keys in their order). Each pass merges the sorted
+    // runs [low, middle) and [middle, high) of `run` elements into one run
+    // of the other buffer.
+    const auto run = allocate_register(32U, frontend::ValueDomain::Bit2);
+    const auto low = allocate_register(32U, frontend::ValueDomain::Bit2);
+    const auto middle = allocate_register(32U, frontend::ValueDomain::Bit2);
+    const auto high = allocate_register(32U, frontend::ValueDomain::Bit2);
+    const auto left_index = allocate_register(
         32U, frontend::ValueDomain::Bit2);
-    process_.operations.emplace_back(CopyRegister { outer_index, one });
-    const auto outer = static_cast<InstructionIndex>(
-        process_.operations.size());
-    const auto more = allocate_register(1U, frontend::ValueDomain::Bit2);
-    process_.operations.emplace_back(Binary {
-        BinaryOperator::less_unsigned, more, outer_index, size });
-    const auto outer_test = static_cast<InstructionIndex>(
-        process_.operations.size());
-    process_.operations.emplace_back(Branch { more, 0U, 0U });
-    const auto outer_body = static_cast<InstructionIndex>(
-        process_.operations.size());
-    const auto inner_index = allocate_register(
+    const auto right_index = allocate_register(
         32U, frontend::ValueDomain::Bit2);
-    process_.operations.emplace_back(
-        CopyRegister { inner_index, outer_index });
-    const auto inner = static_cast<InstructionIndex>(
-        process_.operations.size());
-    const auto positive = allocate_register(1U, frontend::ValueDomain::Bit2);
-    process_.operations.emplace_back(Binary {
-        BinaryOperator::not_equal, positive, inner_index, zero });
-    const auto inner_test = static_cast<InstructionIndex>(
-        process_.operations.size());
-    process_.operations.emplace_back(Branch { positive, 0U, 0U });
-    const auto inner_body = static_cast<InstructionIndex>(
-        process_.operations.size());
-    const auto previous_index = allocate_register(
+    const auto out_index = allocate_register(
         32U, frontend::ValueDomain::Bit2);
+    const auto emit_pass = [&](const ContainerRegisterId from,
+                               const std::optional<ContainerRegisterId>
+                                   from_keys,
+                               const ContainerRegisterId to,
+                               const std::optional<ContainerRegisterId>
+                                   to_keys) {
+        process_.operations.emplace_back(CopyRegister { low, zero });
+        const auto pass = position();
+        const auto passing = allocate_register(
+            1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::less_unsigned, passing, low, size });
+        const auto pass_test = position();
+        process_.operations.emplace_back(Branch { passing, 0U, 0U });
+        const auto pass_body = position();
+        // middle = min(low + run, size), high = min(middle + run, size),
+        // without overflowing the 32-bit ordinals.
+        process_.operations.emplace_back(CopyRegister { middle, size });
+        process_.operations.emplace_back(CopyRegister { high, size });
+        const auto remaining = allocate_register(
+            32U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::subtract_unsigned, remaining, size, low });
+        const auto split = allocate_register(1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::less_unsigned, split, run, remaining });
+        const auto split_test = position();
+        process_.operations.emplace_back(Branch { split, 0U, 0U });
+        const auto split_body = position();
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::add_unsigned, middle, low, run });
+        const auto rest = allocate_register(32U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::subtract_unsigned, rest, size, middle });
+        const auto full = allocate_register(1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::less_unsigned, full, run, rest });
+        const auto full_test = position();
+        process_.operations.emplace_back(Branch { full, 0U, 0U });
+        const auto full_body = position();
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::add_unsigned, high, middle, run });
+        const auto bounded = position();
+        process_.operations[split_test] = Branch {
+            split, split_body, bounded, UnknownBranchPolicy::when_false };
+        process_.operations[full_test] = Branch {
+            full, full_body, bounded, UnknownBranchPolicy::when_false };
+        process_.operations.emplace_back(CopyRegister { left_index, low });
+        process_.operations.emplace_back(
+            CopyRegister { right_index, middle });
+        process_.operations.emplace_back(CopyRegister { out_index, low });
+        const auto merge = position();
+        const auto merging = allocate_register(
+            1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::less_unsigned, merging, out_index, high });
+        const auto merge_test = position();
+        process_.operations.emplace_back(Branch { merging, 0U, 0U });
+        const auto merge_body = position();
+        const auto left_more = allocate_register(
+            1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::less_unsigned, left_more, left_index, middle });
+        const auto left_test = position();
+        process_.operations.emplace_back(Branch { left_more, 0U, 0U });
+        const auto left_body = position();
+        const auto right_more = allocate_register(
+            1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::less_unsigned, right_more, right_index, high });
+        const auto right_test = position();
+        process_.operations.emplace_back(Branch { right_more, 0U, 0U });
+        const auto right_body = position();
+        // The right element goes first only when its key strictly precedes
+        // the left one's: less for sort, greater for rsort.
+        std::optional<HirContainerKeyValue> left_key;
+        std::optional<HirContainerKeyValue> right_key;
+        if (stored_keys) {
+            left_key = read_key(*from_keys, left_index);
+            right_key = read_key(*from_keys, right_index);
+        } else {
+            const auto left_element = lower_hir_container_keyed_element(
+                *key, type, from, left_index);
+            const auto right_element = lower_hir_container_keyed_element(
+                *key, type, from, right_index);
+            if (!left_element || !right_element) {
+                return false;
+            }
+            left_key = left_element->key;
+            right_key = right_element->key;
+        }
+        const auto precedes = lower_hir_container_key_compare(*key, false,
+            descending ? *left_key : *right_key,
+            descending ? *right_key : *left_key);
+        const auto precedes_test = position();
+        process_.operations.emplace_back(Branch { precedes, 0U, 0U });
+        const auto take = [&](const RegisterId source_index) {
+            const auto element = lower_hir_container_keyed_element(
+                element_key, type, from, source_index);
+            if (!element) {
+                return false;
+            }
+            write_element(to, out_index, *element);
+            if (stored_keys) {
+                write_key(*to_keys, out_index,
+                    read_key(*from_keys, source_index));
+            }
+            step(source_index);
+            step(out_index);
+            process_.operations.emplace_back(Jump { merge });
+            return true;
+        };
+        const auto take_left = position();
+        if (!take(left_index)) {
+            return false;
+        }
+        const auto take_right = position();
+        if (!take(right_index)) {
+            return false;
+        }
+        const auto merge_end = position();
+        process_.operations.emplace_back(CopyRegister { low, high });
+        process_.operations.emplace_back(Jump { pass });
+        const auto pass_end = position();
+        process_.operations[pass_test] = Branch {
+            passing, pass_body, pass_end, UnknownBranchPolicy::when_false };
+        process_.operations[merge_test] = Branch {
+            merging, merge_body, merge_end, UnknownBranchPolicy::when_false };
+        process_.operations[left_test] = Branch {
+            left_more, left_body, take_right,
+            UnknownBranchPolicy::when_false };
+        process_.operations[right_test] = Branch {
+            right_more, right_body, take_left,
+            UnknownBranchPolicy::when_false };
+        process_.operations[precedes_test] = Branch {
+            precedes, take_right, take_left,
+            UnknownBranchPolicy::when_false };
+        return true;
+    };
+    // Each continuing pass doubles `run` only while 2 * run < size, so it
+    // does not overflow:
+    //   run = 1; if (run < size) for (;;) {
+    //     pass a -> buffer; if (!(run < size - run)) { a = buffer; break; }
+    //     run += run;
+    //     pass buffer -> a; if (!(run < size - run)) break;
+    //     run += run; }
+    const auto double_run = [&]() {
+        const auto doubled = allocate_register(
+            32U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::add_unsigned, doubled, run, run });
+        process_.operations.emplace_back(CopyRegister { run, doubled });
+    };
+    const auto continuing = [&]() {
+        const auto remaining = allocate_register(
+            32U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::subtract_unsigned, remaining, size, run });
+        const auto again = allocate_register(1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::less_unsigned, again, run, remaining });
+        return again;
+    };
+    process_.operations.emplace_back(CopyRegister { run, one });
+    const auto sorting = allocate_register(1U, frontend::ValueDomain::Bit2);
     process_.operations.emplace_back(Binary {
-        BinaryOperator::subtract_unsigned, previous_index, inner_index, one });
-    const auto previous = allocate_register(
-        type.element_width, element_domain);
-    process_.operations.emplace_back(ContainerRead {
-        previous, target, previous_index, true, linear, false });
-    const auto current = allocate_register(
-        type.element_width, element_domain);
-    process_.operations.emplace_back(ContainerRead {
-        current, target, inner_index, true, linear, false });
-    const auto previous_key = key_of(previous);
-    const auto current_key = key_of(current);
-    if (!previous_key || !current_key) {
+        BinaryOperator::less_unsigned, sorting, run, size });
+    const auto sorting_test = position();
+    process_.operations.emplace_back(Branch { sorting, 0U, 0U });
+    const auto passes = position();
+    if (!emit_pass(target, keys, buffer, merged_keys)) {
         return false;
     }
-    const auto precedes = allocate_register(1U, frontend::ValueDomain::Logic4);
+    const auto forward_again = continuing();
+    const auto forward_test = position();
+    process_.operations.emplace_back(Branch { forward_again, 0U, 0U });
+    const auto backward = position();
+    double_run();
+    if (!emit_pass(buffer, merged_keys, target, keys)) {
+        return false;
+    }
+    const auto backward_again = continuing();
+    const auto backward_test = position();
+    process_.operations.emplace_back(Branch { backward_again, 0U, 0U });
+    const auto repeat = position();
+    double_run();
+    process_.operations.emplace_back(Jump { passes });
+    // The sorted elements are in the buffer: a[i] = buffer[i].
+    const auto copy_back = position();
+    const auto copy_index = allocate_register(
+        32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(CopyRegister { copy_index, zero });
+    const auto copy = position();
+    const auto copying = allocate_register(1U, frontend::ValueDomain::Bit2);
     process_.operations.emplace_back(Binary {
-        signed_key ? BinaryOperator::less_signed
-                   : BinaryOperator::less_unsigned,
-        precedes,
-        descending ? *previous_key : *current_key,
-        descending ? *current_key : *previous_key });
-    const auto swap_test = static_cast<InstructionIndex>(
-        process_.operations.size());
-    process_.operations.emplace_back(Branch { precedes, 0U, 0U });
-    const auto swap = static_cast<InstructionIndex>(
-        process_.operations.size());
-    process_.operations.emplace_back(ContainerWrite {
-        target, previous_index, current, true, linear, false });
-    process_.operations.emplace_back(ContainerWrite {
-        target, inner_index, previous, true, linear, false });
-    process_.operations.emplace_back(
-        CopyRegister { inner_index, previous_index });
-    process_.operations.emplace_back(Jump { inner });
-    const auto advance = static_cast<InstructionIndex>(
-        process_.operations.size());
-    const auto advanced = allocate_register(32U, frontend::ValueDomain::Bit2);
-    process_.operations.emplace_back(Binary {
-        BinaryOperator::add_unsigned, advanced, outer_index, one });
-    process_.operations.emplace_back(CopyRegister { outer_index, advanced });
-    process_.operations.emplace_back(Jump { outer });
-    const auto end = static_cast<InstructionIndex>(
-        process_.operations.size());
-    process_.operations[outer_test] = Branch {
-        more, outer_body, end, UnknownBranchPolicy::when_false };
-    process_.operations[inner_test] = Branch {
-        positive, inner_body, advance, UnknownBranchPolicy::when_false };
-    process_.operations[swap_test] = Branch {
-        precedes, swap, advance, UnknownBranchPolicy::when_false };
+        BinaryOperator::less_unsigned, copying, copy_index, size });
+    const auto copy_test = position();
+    process_.operations.emplace_back(Branch { copying, 0U, 0U });
+    const auto copy_body = position();
+    const auto sorted = lower_hir_container_keyed_element(
+        element_key, type, buffer, copy_index);
+    if (!sorted) {
+        return false;
+    }
+    write_element(target, copy_index, *sorted);
+    step(copy_index);
+    process_.operations.emplace_back(Jump { copy });
+    const auto end = position();
+    process_.operations[sorting_test] = Branch {
+        sorting, passes, end, UnknownBranchPolicy::when_false };
+    process_.operations[forward_test] = Branch {
+        forward_again, backward, copy_back,
+        UnknownBranchPolicy::when_false };
+    process_.operations[backward_test] = Branch {
+        backward_again, repeat, end, UnknownBranchPolicy::when_false };
+    process_.operations[copy_test] = Branch {
+        copying, copy_body, end, UnknownBranchPolicy::when_false };
     return true;
+}
+
+std::optional<Lowerer::HirStaticContainerValue>
+Lowerer::lower_hir_container_locator_value(
+    const semantic::ExpressionId expression_id)
+{
+    const auto expression = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_expression(expression_id)
+        : std::nullopt;
+    if (!expression || expression->systemverilog == nullptr
+        || expression->systemverilog->kind
+            != semantic::sv::ExpressionKind::call
+        || !is_container_locator(semantic::sv::member_builtin_method(
+            *expression->systemverilog))
+        || expression->systemverilog->operands.empty()) {
+        return std::nullopt;
+    }
+    const auto& call = *expression->systemverilog;
+    const auto method = semantic::sv::member_builtin_method(call);
+    const auto source_type = hir_static_container_expression_type(
+        call.operands.front());
+    if (!source_type || source_type->associative) {
+        return std::nullopt;
+    }
+    // The result is a queue of the receiver's elements, or of int for an
+    // index locator (IEEE 1800-2023 7.12.1).
+    auto type = *source_type;
+    type.fixed = false;
+    type.queue = true;
+    type.sparse = false;
+    type.dimensions.clear();
+    type.maximum_elements.reset();
+    if (method == support::BuiltinMethod::unique_index
+        || method == support::BuiltinMethod::find_index
+        || method == support::BuiltinMethod::find_first_index
+        || method == support::BuiltinMethod::find_last_index) {
+        type = ContainerType { };
+        type.element_width = 32U;
+        type.two_state = true;
+        type.signed_elements = true;
+        type.queue = true;
+    }
+    HirContainerObjectBinding result;
+    result.local = allocate_container_register(type);
+    result.type = &type;
+    if (!lower_hir_container_locator_assignment(
+            expression_id, expression_id, &result)) {
+        return std::nullopt;
+    }
+    return HirStaticContainerValue { *result.local, type };
 }
 
 std::optional<RegisterId> Lowerer::lower_hir_container_reduction_loop(

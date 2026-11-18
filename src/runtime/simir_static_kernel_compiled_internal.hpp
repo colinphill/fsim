@@ -1190,6 +1190,7 @@ public:
                 put(property.column);
                 put(property.guard_expression ? 1U : 0U);
                 grouped(property.initializers);
+                grouped(property.instances);
             });
             put(plan.root);
             put(plan.every_match ? 1U : 0U);
@@ -1548,7 +1549,8 @@ public:
                                   && get_narrow(property.hi_slot)
                                   && get(property.line) && get(property.column)
                                   && get(property.guard_expression)
-                                  && grouped(property.initializers);
+                                  && grouped(property.initializers)
+                                  && grouped(property.instances);
                           })
                        && get(plan.root) && get(plan.every_match)
                        && grouped(plan.clock_guards)

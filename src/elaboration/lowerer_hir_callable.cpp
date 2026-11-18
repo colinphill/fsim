@@ -1659,6 +1659,14 @@ Lowerer::lower_hir_static_container_value(
             return value;
         }
     }
+    // A locator method's result as a value (IEEE 1800-2023 7.12.1).
+    if (expression && expression->systemverilog != nullptr
+        && expression->systemverilog->kind
+            == semantic::sv::ExpressionKind::call) {
+        if (auto value = lower_hir_container_locator_value(expression_id)) {
+            return value;
+        }
+    }
     if (const auto place = hir_class_container_place(expression_id)) {
         if (const auto access = lower_hir_class_value_container(
                 place->receiver, place->identity)) {
@@ -15325,7 +15333,6 @@ Lowerer::hir_vhdl_shaped_formal_profile(
     if (!subtype || !subtype->unconstrained
         || subtype->unspecified_class
             != semantic::vhdl::UnspecifiedTypeClass::none
-        || subtype->domain == semantic::vhdl::ValueDomain::string
         || hir_vhdl_partially_constrained_record(*subtype)) {
         return std::nullopt;
     }
@@ -15350,7 +15357,8 @@ Lowerer::hir_vhdl_shaped_formal_profile(
         || !hir_vhdl_shaped_value_profile(actual)) {
         return std::nullopt;
     }
-    auto profile = hir_vhdl_shaped_open_profile(*subtype);
+    // A STRING formal too has its actual's bounds (4.2.2.2).
+    auto profile = hir_vhdl_shaped_open_profile(*subtype, true);
     if (!profile || profile->constraints.size() != 1U
         || profile->outer_rank != 0U || !profile->members.empty()) {
         return std::nullopt;
@@ -26989,14 +26997,27 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
         return true;
     }
 
-    // STRING formals are passed in a dynamic string register. An out or
-    // inout string formal (a std.textio LINE) copies back to its actual's
-    // string variable.
+    // An unconstrained array formal whose actual's index range is known
+    // only when the call is executed takes it then (IEEE 1076-2008
+    // 4.2.2.2): the actual is passed as a shaped value. A STRING formal's
+    // too: its actual's bounds, not 1 to its length.
+    std::vector<std::optional<HirVhdlShapedProfile>> shaped_formals(
+        formals.size());
+    for (std::size_t index { }; index < formals.size(); ++index) {
+        if (!signal_actuals[index] && !protected_actuals[index]) {
+            shaped_formals[index] = hir_vhdl_shaped_formal_profile(
+                formals[index], (*actuals)[index]);
+        }
+    }
+    // Other STRING formals are passed in a dynamic string register. An out
+    // or inout string formal (a std.textio LINE) copies back to its
+    // actual's string variable.
     std::vector<bool> string_formals(formals.size());
     std::vector<std::optional<StringRegisterId>> string_copy_out(
         formals.size());
     for (std::size_t index { }; index < formals.size(); ++index) {
-        if (signal_actuals[index] || protected_actuals[index]) {
+        if (signal_actuals[index] || protected_actuals[index]
+            || shaped_formals[index]) {
             continue;
         }
         const auto formal = specialized_hir_unit_->find_declaration(
@@ -27028,18 +27049,6 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
                 return true;
             }
             string_formals[index] = true;
-        }
-    }
-    // An unconstrained array formal whose actual's index range is known
-    // only when the call is executed takes it then (IEEE 1076-2008
-    // 4.2.2.2): the actual is passed as a shaped value.
-    std::vector<std::optional<HirVhdlShapedProfile>> shaped_formals(
-        formals.size());
-    for (std::size_t index { }; index < formals.size(); ++index) {
-        if (!signal_actuals[index] && !protected_actuals[index]
-            && !string_formals[index]) {
-            shaped_formals[index] = hir_vhdl_shaped_formal_profile(
-                formals[index], (*actuals)[index]);
         }
     }
     // A locally static input actual becomes a static binding of the frame
