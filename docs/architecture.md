@@ -1776,13 +1776,12 @@ specialization's time-unit and precision magnitudes in their portable SimIR
 operation. Interpreter and LLVM callback execution combine that metadata with
 the simulation's project-resolution tick and call the shared checked runtime
 conversion, preserving per-instance semantics without scheduler duplication.
-`$get_coverage()` and `$get_inst_coverage()` similarly lower to one
-value-producing portable boundary with an explicit aggregate kind. The
-simulation-owned hook reads the current persisted covergroup declarations and
-instances. The first applies each type's goal-adjusted percentage and
-`type_option.weight`; the second contributes every materialized instance
-independently using its effective instance `option.weight`. Empty or
-zero-weight contributors do not enter either denominator. Both return one
+`$get_coverage()` and a covergroup's `get_coverage()` and
+`get_inst_coverage()` methods similarly lower to one value-producing portable
+boundary with an explicit query kind. The simulation-owned hook reads the
+current persisted covergroup declarations and instances. `$get_coverage()`
+applies each type's goal-adjusted percentage and `type_option.weight`; empty
+or zero-weight contributors do not enter the denominator. Every query returns one
 canonical 64-bit real payload, so interpreter and LLVM observe the same live
 coverage state without copying frontend coverage ownership into native code.
 The coverage database tasks use a separate string-bearing portable boundary.

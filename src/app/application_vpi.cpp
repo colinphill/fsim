@@ -4511,6 +4511,30 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         descriptor.type = packed_type(specialization.language,
             value.width(), object.signed_value, descriptor.kind, signal_info,
             direction);
+        // A port is a net or a variable as its declaration says (IEEE
+        // 1800-2023 23.2.2.3), whatever the collapsed signal it shares is in
+        // the instance above: an output or ref port is a net when it has a
+        // net type, which a port written without a data type takes from the
+        // default net type (22.8).
+        if (descriptor.kind == runtime::SystemVerilogVpiObjectKind::Port
+            && port->second->declaration) {
+            const auto* const declaration
+                = project.systemverilog_hir.find_declaration(
+                    *port->second->declaration);
+            if (declaration != nullptr && declaration->type) {
+                const auto declared = vpi_net_kind(declaration->type->net_kind);
+                const bool net_port
+                    = direction == runtime::SystemVerilogVpiDirection::Input
+                    || direction == runtime::SystemVerilogVpiDirection::Inout
+                    || declared != runtime::SystemVerilogVpiNetKind::None
+                    || !declaration->type->systemverilog_net_type.empty();
+                descriptor.type->net_kind = !net_port
+                    ? runtime::SystemVerilogVpiNetKind::None
+                    : declared != runtime::SystemVerilogVpiNetKind::None
+                    ? declared
+                    : runtime::SystemVerilogVpiNetKind::Wire;
+            }
+        }
         descriptor.type->language
             = vpi_profile_language(project, specialization);
         if (descriptor.kind == runtime::SystemVerilogVpiObjectKind::Net) {

@@ -316,46 +316,57 @@ std::optional<std::uint64_t> Type::width() const noexcept
 
 std::optional<SystemVerilogIntegralTypeDescriptor>
 systemverilog_integral_type_descriptor(
+    const support::SystemVerilogBuiltinType kind) noexcept
+{
+    using Kind = support::SystemVerilogBuiltinType;
+    using Descriptor = SystemVerilogIntegralTypeDescriptor;
+    switch (kind) {
+    case Kind::bit:
+        return Descriptor { ValueDomain::Bit2, 1U, false, false,
+            SystemVerilogScalarKind::None };
+    case Kind::logic:
+    case Kind::reg:
+        return Descriptor { ValueDomain::Logic4, 1U, false, false,
+            SystemVerilogScalarKind::None };
+    case Kind::byte:
+        return Descriptor { ValueDomain::Bit2, 8U, true, true,
+            SystemVerilogScalarKind::None };
+    case Kind::shortint:
+        return Descriptor { ValueDomain::Bit2, 16U, true, true,
+            SystemVerilogScalarKind::None };
+    case Kind::int_type:
+        return Descriptor { ValueDomain::Bit2, 32U, true, true,
+            SystemVerilogScalarKind::None };
+    case Kind::longint:
+        return Descriptor { ValueDomain::Bit2, 64U, true, true,
+            SystemVerilogScalarKind::None };
+    case Kind::integer:
+        return Descriptor { ValueDomain::Logic4, 32U, true, true,
+            SystemVerilogScalarKind::None };
+    case Kind::time:
+        return Descriptor { ValueDomain::Logic4, 64U, true, false,
+            SystemVerilogScalarKind::Time };
+    default:
+        return std::nullopt;
+    }
+}
+
+std::optional<SystemVerilogIntegralTypeDescriptor>
+systemverilog_integral_type_descriptor(
     const std::string_view spelling) noexcept
 {
-    using Descriptor = SystemVerilogIntegralTypeDescriptor;
-    using Entry = std::pair<std::string_view, Descriptor>;
-    static constexpr std::array<Entry, 9> descriptors { {
-        { "bit", { ValueDomain::Bit2, 1U, false, false,
-                     SystemVerilogScalarKind::None } },
-        { "logic", { ValueDomain::Logic4, 1U, false, false,
-                       SystemVerilogScalarKind::None } },
-        { "reg", { ValueDomain::Logic4, 1U, false, false,
-                     SystemVerilogScalarKind::None } },
-        { "byte", { ValueDomain::Bit2, 8U, true, true,
-                      SystemVerilogScalarKind::None } },
-        { "shortint", { ValueDomain::Bit2, 16U, true, true,
-                          SystemVerilogScalarKind::None } },
-        { "int", { ValueDomain::Bit2, 32U, true, true,
-                     SystemVerilogScalarKind::None } },
-        { "longint", { ValueDomain::Bit2, 64U, true, true,
-                         SystemVerilogScalarKind::None } },
-        { "integer", { ValueDomain::Logic4, 32U, true, true,
-                         SystemVerilogScalarKind::None } },
-        { "time", { ValueDomain::Logic4, 64U, true, false,
-                      SystemVerilogScalarKind::Time } },
-    } };
-    for (const auto& [name, descriptor] : descriptors) {
-        if (spelling == name) {
-            return descriptor;
-        }
-    }
-    return std::nullopt;
+    return systemverilog_integral_type_descriptor(
+        support::systemverilog_builtin_type_keyword(spelling));
 }
 
 bool apply_systemverilog_integral_type(
-    Type& type, const std::string_view spelling)
+    Type& type, const support::SystemVerilogBuiltinType kind)
 {
-    const auto descriptor = systemverilog_integral_type_descriptor(spelling);
+    const auto descriptor = systemverilog_integral_type_descriptor(kind);
     if (!descriptor) {
         return false;
     }
-    set_systemverilog_type_keyword(type, spelling);
+    set_systemverilog_builtin_type(type, kind);
     type.domain = descriptor->domain;
     type.is_signed = descriptor->default_signed;
     type.systemverilog_scalar = descriptor->scalar_kind;
@@ -365,6 +376,17 @@ bool apply_systemverilog_integral_type(
               0,
               true } }
         : std::nullopt;
+    return true;
+}
+
+bool apply_systemverilog_integral_type(
+    Type& type, const std::string_view spelling)
+{
+    if (!apply_systemverilog_integral_type(
+            type, support::systemverilog_builtin_type_keyword(spelling))) {
+        return false;
+    }
+    set_systemverilog_type_keyword(type, spelling);
     return true;
 }
 

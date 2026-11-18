@@ -1234,6 +1234,15 @@ namespace codec_detail {
         } else if constexpr (std::same_as<T, fsim::support::SystemTf>) {
             return value >= fsim::support::SystemTf::none
                 && value <= fsim::support::kLastSystemTf;
+        } else if constexpr (std::same_as<T, fsim::support::VhdlEntityClass>) {
+            return value >= fsim::support::VhdlEntityClass::none
+                && value <= fsim::support::kLastVhdlEntityClass;
+        } else if constexpr (std::same_as<T, fsim::support::VhdlEntityNameList>) {
+            return value >= fsim::support::VhdlEntityNameList::designators
+                && value <= fsim::support::VhdlEntityNameList::others;
+        } else if constexpr (std::same_as<T, fsim::support::UnbasedUnsizedLiteral>) {
+            return value >= fsim::support::UnbasedUnsizedLiteral::none
+                && value <= fsim::support::UnbasedUnsizedLiteral::high_impedance;
         } else if constexpr (std::same_as<T, fsim::semantic::sv::CallResultValues>) {
             return value >= fsim::semantic::sv::CallResultValues::none
                 && value <= fsim::semantic::sv::CallResultValues::string;

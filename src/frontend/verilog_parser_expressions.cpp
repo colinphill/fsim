@@ -807,6 +807,8 @@ Expression VerilogParser::parse_primary_impl()
                 pattern.aggregate_choice_markers.resize(
                     pattern.aggregate_choices.size(),
                     support::ExpressionMarker::none);
+                pattern.aggregate_choice_markers.back()
+                    = support::ExpressionMarker::sv_default_choice;
                 pattern.aggregate_choice_expressions.push_back(
                     { std::move(default_choice) });
                 pattern.operands.push_back(parse_pattern_value());
@@ -851,6 +853,11 @@ Expression VerilogParser::parse_primary_impl()
                             break;
                         }
                         pattern.aggregate_choices.push_back("default");
+                        pattern.aggregate_choice_markers.resize(
+                            pattern.aggregate_choices.size(),
+                            support::ExpressionMarker::none);
+                        pattern.aggregate_choice_markers.back()
+                            = support::ExpressionMarker::sv_default_choice;
                         pattern.aggregate_choice_expressions.push_back(
                             { Expression { ExpressionKind::DefaultChoice,
                                 "default", { }, first.span } });
@@ -1004,6 +1011,28 @@ Expression VerilogParser::parse_primary_impl()
             { },
             time_unit ? cover(token.span, time_unit->span) : token.span
         };
+        // An unbased unsized literal is an apostrophe and one of 0, 1, x
+        // or z (5.7.1).
+        if (kind == ExpressionKind::LogicLiteral && token.text.size() == 2U
+            && token.text.front() == '\'') {
+            switch (token.text[1]) {
+            case '0':
+                expression.unbased_unsized = support::UnbasedUnsizedLiteral::zero;
+                break;
+            case '1':
+                expression.unbased_unsized = support::UnbasedUnsizedLiteral::one;
+                break;
+            case 'x': case 'X':
+                expression.unbased_unsized = support::UnbasedUnsizedLiteral::unknown;
+                break;
+            case 'z': case 'Z':
+                expression.unbased_unsized
+                    = support::UnbasedUnsizedLiteral::high_impedance;
+                break;
+            default:
+                break;
+            }
+        }
         if (kind == ExpressionKind::IntegerLiteral
             && (decimal_form || time_unit)) {
             expression.systemverilog_decimal_literal = parse_systemverilog_decimal_literal(token, time_unit);
@@ -1070,6 +1099,8 @@ Expression VerilogParser::parse_primary_impl()
             }
             canonical += ")";
             selected->spelling = canonical;
+            selected->systemverilog_class_enclosing_selection
+                = std::move(selection);
             selection = std::move(selected);
         };
         append_specialization();
@@ -1789,8 +1820,7 @@ Expression VerilogParser::parse_primary_impl()
                     expression.call_result_domain = ValueDomain::Bit2;
                     expression.call_result_signed = false;
                 }
-            } else if (canonical == "$get_coverage"
-                || canonical == "$get_inst_coverage") {
+            } else if (canonical == "$get_coverage") {
                 require_file_call(0, "no arguments");
                 expression.call_result_width = 64;
                 expression.call_result_domain = ValueDomain::Bit2;
@@ -1812,13 +1842,6 @@ Expression VerilogParser::parse_primary_impl()
                 expression.call_result_width = 32;
                 expression.call_result_domain = ValueDomain::Integer;
                 expression.call_result_signed = true;
-            } else if (canonical == "$simtime") {
-                // The current time in simulation-precision units, an
-                // extension that ivtest uses.
-                require_file_call(0, "no arguments");
-                expression.call_result_width = 64;
-                expression.call_result_domain = ValueDomain::Bit2;
-                expression.call_result_signed = false;
             } else if (canonical == "$time"
                 || canonical == "$stime"
                 || canonical == "$realtime") {
@@ -1981,7 +2004,7 @@ Expression VerilogParser::parse_primary_impl()
         }
         if (canonical == "$urandom" || canonical == "$random"
             || canonical == "$time" || canonical == "$stime"
-            || canonical == "$realtime" || canonical == "$simtime"
+            || canonical == "$realtime"
             || canonical == "$reset_count" || canonical == "$reset_value") {
             expression.kind = ExpressionKind::Call;
             if (canonical == "$reset_count" || canonical == "$reset_value") {
@@ -1990,10 +2013,6 @@ Expression VerilogParser::parse_primary_impl()
                 expression.call_result_width = 32;
                 expression.call_result_domain = ValueDomain::Integer;
                 expression.call_result_signed = true;
-            } else if (canonical == "$simtime") {
-                expression.call_result_width = 64;
-                expression.call_result_domain = ValueDomain::Bit2;
-                expression.call_result_signed = false;
             } else if (canonical == "$random" || canonical == "$urandom") {
                 expression.call_result_width = 32;
                 const bool random_call = support::system_tf_named(canonical)

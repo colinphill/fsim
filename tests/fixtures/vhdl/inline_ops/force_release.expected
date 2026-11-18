@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
+inl forced v=5 n=a2
+inl released v=5 n=22
+inl assigned v=3 changes=3

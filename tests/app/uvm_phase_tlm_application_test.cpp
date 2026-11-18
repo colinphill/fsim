@@ -1231,17 +1231,6 @@ int main(int argc, char **argv) {
   if (mode == "elaborate") {
     config.source_sets.clear();
     fsim::diagnostic::Engine diagnostics;
-    const std::array objects{object};
-    const auto elaborated =
-        fsim::app::elaborate_artifact(config, objects, design, diagnostics);
-    if (!elaborated || diagnostics.has_error())
-      print_diagnostics(diagnostics);
-    assert(elaborated && !diagnostics.has_error());
-    auto metadata = fsim::artifact::load_design_metadata(design, diagnostics);
-    assert(metadata && metadata->uvm_release
-        == fsim::project::to_string(
-            fsim::project::parse_systemverilog_uvm_release(release).value()));
-    assert(!metadata->uvm_source_identity.empty());
     // `elaborate --aot`: the static kernel builds its code into the
     // optimization's cache (<work>/<optimization>/cache), set up as the
     // compiled simulation below sets it up, so that run starts from it.
@@ -1250,6 +1239,22 @@ int main(int argc, char **argv) {
       std::cerr << "elaborate accepts only --aot after the optimization\n";
       return 2;
     }
+    // The ahead-of-time stage follows the plain elaboration of the same
+    // object and configuration, whose design it builds the kernel code of;
+    // elaborating the UVM design again would give the same design.
+    if (!aot || !std::filesystem::exists(design)) {
+      const std::array objects{object};
+      const auto elaborated =
+          fsim::app::elaborate_artifact(config, objects, design, diagnostics);
+      if (!elaborated || diagnostics.has_error())
+        print_diagnostics(diagnostics);
+      assert(elaborated && !diagnostics.has_error());
+    }
+    auto metadata = fsim::artifact::load_design_metadata(design, diagnostics);
+    assert(metadata && metadata->uvm_release
+        == fsim::project::to_string(
+            fsim::project::parse_systemverilog_uvm_release(release).value()));
+    assert(!metadata->uvm_source_identity.empty());
     if (aot) {
 #if defined(FSIM_HAS_LLVM)
       auto reloaded = fsim::app::load_design_artifact(design, diagnostics);

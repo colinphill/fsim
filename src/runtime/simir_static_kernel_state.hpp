@@ -1268,6 +1268,9 @@ private:
         std::uint32_t dynamic_header { static_kernel_detail::no_slot };
         /// Storage strings: the member whose string registers it is.
         std::uint32_t string_member { static_kernel_detail::no_slot };
+        /// Storage packed_signal of a flat aggregate: an element's bits
+        /// (its leaves' widths).
+        std::uint32_t element_bits { };
     };
 
     struct FamilyLeaf {
@@ -1364,6 +1367,31 @@ private:
     [[nodiscard]] PackedLogic4 slot_value(std::uint32_t slot) const;
     void write_slot_word(std::uint32_t slot, Word value, std::uint32_t offset,
         std::uint32_t width, std::uint32_t member);
+    /// The value of a flat aggregate the host bridges to a kernel slot
+    /// (storage packed_signal), and its blocking write (the reference's
+    /// binding and write-back; DynOp::aggregate_unpack, aggregate_pack).
+    [[nodiscard]] ContainerValue bridged_aggregate_value(std::uint32_t container) const;
+    /// A flat aggregate or packed memory in a kernel variable's two-plane
+    /// slot (storage packed_signal), whose binding into a kernel container
+    /// unpacks the slot's fields (DynOp::aggregate_unpack) and whose
+    /// blocking write from one packs them (aggregate_pack).
+    [[nodiscard]] bool bridged_object(std::uint32_t container) const noexcept;
+    /// KOp::mem_copy's form for these arrays (KInst::sub): 1 the arena words
+    /// of two kernel-held arrays, 2 two packed memories' slot fields, 3 the
+    /// elements between a kernel-held array and a packed memory, 0 the
+    /// runtime's copy.
+    [[nodiscard]] std::uint8_t memory_copy_form(std::uint32_t destination,
+        std::uint32_t source) const noexcept;
+    /// KInst::width of a mem_copy of that form: the slot's width (2), the
+    /// element width (3), else 0.
+    [[nodiscard]] std::uint32_t copy_form_width(std::uint8_t form,
+        std::uint32_t destination) const noexcept;
+    void set_bridged_aggregate_value(std::uint32_t container, const ContainerValue& value,
+        std::uint32_t member, InstructionIndex instruction);
+    /// DynOp::aggregate_unpack / aggregate_pack on the bytecode tier.
+    void aggregate_slot_transfer(const CompiledBody& body,
+        const static_kernel_detail::KInst& inst,
+        std::uint32_t member);
     void write_slot_value(std::uint32_t slot, const PackedLogic4& value,
         std::optional<std::uint32_t> offset, std::uint32_t member,
         InstructionIndex instruction);
@@ -1615,6 +1643,10 @@ private:
         PackedLogic4 value, std::uint32_t member, InstructionIndex instruction);
     /// A whole-array copy between private containers of one type.
     void copy_container(std::uint32_t destination, std::uint32_t source,
+        std::uint32_t member, InstructionIndex instruction);
+    /// A nonblocking whole-array write (IEEE 1800-2023 10.4.2): each
+    /// element's value now, queued for the target's NBA update.
+    void push_container_copy(std::uint32_t destination, std::uint32_t source,
         std::uint32_t member, InstructionIndex instruction);
     void write_container_element_word(Container& container,
         std::size_t ordinal, Word value, std::uint32_t member);
@@ -2185,6 +2217,8 @@ private:
     static std::uint32_t native_variable_store(StaticKernelNativeFrame* frame,
         Word* registers, std::uint32_t reg);
     static void native_flush_writes(StaticKernelNativeFrame* frame);
+    static void native_container_publish(StaticKernelNativeFrame* frame,
+        std::uint32_t container);
     void move_wide(const static_kernel_detail::CompiledBody& body,
         const static_kernel_detail::KInst& inst, std::uint32_t at,
         std::uint32_t member_index, std::uint32_t source_slot, Word base,
@@ -2242,10 +2276,27 @@ private:
         const std::function<void(const char*)>& stage);
     /// The native view of containers_ (container_info_, container_elements_).
     void build_container_info();
-    /// Whether every reference-format container register of the member is a
-    /// queue or dynamic array the kernel can hold (native_dynamic_type) and
-    /// every operation naming one is a KOp::dyn operation.
-    [[nodiscard]] bool native_dynamic_containers(const Member& member) const;
+    /// Why a member's container registers keep it off the compiled tier
+    /// ("dynamic_containers:<cause>"): nullptr when every one is a container
+    /// the kernel holds (native_dynamic_type) and every operation naming one
+    /// is a KOp::dyn operation.
+    [[nodiscard]] const char* dynamic_containers_reason(const Member& member) const;
+    /// FSIM_PROFILE_KERNEL: the first member a reason keeps off the
+    /// compiled tier, with its operations.
+    void profile_not_compiled_example(std::size_t index,
+        const std::string& reason) const;
+    /// The kernel dynamic object (storage dynamic) container register `id`
+    /// of `member` is bound to, or no_container.
+    [[nodiscard]] std::uint32_t dynamic_object_binding(
+        const Member& member, ContainerRegisterId id) const;
+    /// Per container register of `member`, 1 when the register can be the
+    /// storage of the kernel dynamic object its ReadContainerObject binds:
+    /// it is only read, or its one binding, its changes and its write-back
+    /// to the object run in one straight run of register operations. A
+    /// register with 0 holds its own copy, read in at the binding and
+    /// written back whole (IEEE 1800-2023 7.6, 7.10).
+    [[nodiscard]] std::vector<std::uint8_t> dynamic_object_aliases(
+        const Member& member) const;
     /// Gives member `index` kernel containers of storage dynamic for its
     /// reference-format registers (container_registers); the values move
     /// into them at commit_dynamic_containers, or the containers are given
@@ -3225,6 +3276,12 @@ private:
     void report_vhdl(std::uint32_t member, std::uint32_t pc,
         std::string_view message, AssertionSeverity severity,
         const SourceLocation& source, bool standalone);
+    /// An Assert operation on its condition (IEEE 1800-2023 16.3, IEEE
+    /// 1076-2019 10.3): a condition other than a known 1 reports, a failure
+    /// severity throws. A verified run's replay leaves a non-failure report
+    /// to the compiled run, which made it.
+    void check_assert(std::uint32_t member, std::uint32_t pc, const Assert& op,
+        const PackedLogic4& condition);
     [[nodiscard]] Boundary behavioral_boundary(std::uint32_t thread,
         std::uint32_t pc);
     /// behavioral_boundary for one operation kind (Boundary::none for kinds
@@ -3318,6 +3375,18 @@ private:
     using NativeContainerValues
         = std::vector<std::pair<ContainerRegisterId, ContainerValue>>;
     [[nodiscard]] NativeContainerValues native_container_values(const Member& member) const;
+    /// The values of the kernel dynamic objects (design queues, dynamic,
+    /// associative and sparse arrays of storage dynamic) a member reaches,
+    /// by container index.
+    using NativeObjectValues = std::vector<std::pair<std::uint32_t, ContainerValue>>;
+    [[nodiscard]] NativeObjectValues native_object_values(const Member& member) const;
+    /// FSIM_KERNEL_VERIFY: while a reference replay runs, the values of the
+    /// kernel dynamic objects it reads and writes in place of the kernel's.
+    NativeObjectValues* verify_objects_ { };
+    /// The value of kernel dynamic object container `container` (the
+    /// replay's when one runs), and its replacement.
+    [[nodiscard]] ContainerValue dynamic_object_value(std::uint32_t container) const;
+    void set_dynamic_object_value(std::uint32_t container, const ContainerValue& value);
     /// The replay runs the reference's operations on `values` as the
     /// member's reference-format registers, which exist while the scope
     /// lives.
@@ -3350,6 +3419,7 @@ private:
     struct VerifyThreadState {
         decltype(CompiledBody::registers) registers;
         NativeContainerValues containers;
+        NativeObjectValues objects;
         std::vector<std::string> strings;
         /// The string variables the body writes in place (StrOp::
         /// write_object), with their values at the start: the replay starts
@@ -3360,6 +3430,9 @@ private:
         /// system seed ($random): the replay draws again from these.
         std::uint64_t random { };
         std::int32_t system_seed { };
+        /// The host's $timeformat (20.4.2), which the replay's formatting
+        /// reads; the replay starts from it.
+        SystemVerilogTimeFormat time_format;
         /// The call stack's return targets at the start.
         std::vector<std::uint64_t> stack;
         /// The frame stack's words (two per pair) and its pairs.
@@ -3428,6 +3501,26 @@ private:
         std::vector<Pending> host_updates;
         /// The string registers the operation changed, as it left them.
         std::vector<std::pair<StringRegisterId, std::string>> strings;
+        /// The member's random stream before and after the operation (a
+        /// class allocation draws the new object's seed from it, IEEE
+        /// 1800-2023 18.14.1); the replay checks the first and takes the
+        /// second.
+        std::uint64_t random_before { };
+        std::uint64_t random_after { };
+        /// The host's $timeformat after a TimeFormatControl (20.4.2): the
+        /// replay takes it, so later formatting reads what the compiled
+        /// run's did.
+        std::optional<SystemVerilogTimeFormat> time_format;
+        /// A force or release of a host signal: the words of the signal's
+        /// mirror slot as the operation's refresh left them (its arena
+        /// offset and words), which the replay takes, so its later reads
+        /// see the forced value as the compiled run's did.
+        std::uint32_t mirror_offset { };
+        std::vector<std::uint64_t> mirror;
+        /// The same force's or release's signal as the host holds it after
+        /// the operation: the replay's view of it from then on (host_values;
+        /// shadow_note_reads gave the view before it).
+        std::optional<std::pair<SignalId, PackedLogic4>> host_value;
     };
     /// A concurrent assertion's monitor tick of the compiled run (IEEE
     /// 1800-2023 16.14): the operation, the operand registers it read and the
@@ -3450,6 +3543,7 @@ private:
         std::vector<Pending> pending_host_updates;
         /// The member's string registers before the generic operation.
         std::vector<std::string> pending_strings;
+        std::uint64_t pending_random { };
         /// The compiled run is inside a generic operation (between
         /// shadow_note_reads and shadow_record_generic).
         bool in_generic { };
@@ -3515,7 +3609,8 @@ private:
     /// it. The host's commit (refresh_input) checks the mirror against the
     /// committed value and ends the entry.
     std::map<std::uint32_t, std::optional<PackedLogic4>> verify_mirror_ahead_;
-    void shadow_note_reads(std::uint32_t member, const std::vector<RegisterId>& reads);
+    void shadow_note_reads(std::uint32_t member, std::uint32_t pc,
+        const std::vector<RegisterId>& reads);
     /// A file operation's immediate write of a signal target (commit_driver
     /// for a host signal), as the member's blocking writes make it.
     void commit_file_target(std::uint32_t member, std::uint32_t pc, SignalId signal,
@@ -4461,6 +4556,20 @@ private:
     /// blocking write of an output is its own change, as under a debugger
     /// plan (note_debug_write), and the units run on the leader.
     bool watch_writes_ { };
+    /// Kernel dynamic objects (storage dynamic, by container) a host
+    /// observer follows (watch_dynamic_object): each write reaches the host
+    /// copy and the container change hook (publish_dynamic_object).
+    std::vector<std::uint8_t> observed_containers_;
+    bool dynamic_observed_ { };
+public:
+    /// A host observer follows design container `object` (a VPI memory's
+    /// words or a value-change watch): when the kernel holds it as a
+    /// dynamic container, its writers' code reports each write (re-JIT).
+    void watch_dynamic_object(ContainerObjectId object);
+private:
+    void publish_dynamic_object(std::uint32_t container);
+    /// Whether member `index`'s compiled body writes an observed object.
+    [[nodiscard]] bool member_publishes_observed(std::uint32_t index) const;
     /// Sequential SystemVerilog members with one edge-sensitivity set and no
     /// other wake-up (build_dispatch_groups). An edge schedules the group
     /// once, and the group runs its members in index order, as the sorted

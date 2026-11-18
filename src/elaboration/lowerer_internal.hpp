@@ -7,6 +7,7 @@
 #include "virtual_interface_definition.hpp"
 #include "systemverilog_template_bindings.hpp"
 #include "vhdl_lowering_index.hpp"
+#include "fsim/support/process_method.hpp"
 #include "fsim/support/dpi_identity.hpp"
 #include "fsim/support/active_set.hpp"
 #include "fsim/elaboration/coverage_hir_points.hpp"
@@ -2205,6 +2206,11 @@ private:
     void emit_hir_vhdl_string_length_check(
         StringRegisterId target, StringRegisterId value,
         const frontend::SourceSpan& span);
+    // The process class method (IEEE 1800-2023 9.7) a method call on a
+    // process handle selects, looked up in the class's scope; none for any
+    // other call.
+    [[nodiscard]] std::optional<support::ProcessMethod> hir_process_method_call(
+        const semantic::sv::Expression& call) const;
     [[nodiscard]] bool hir_process_handle_expression(
         semantic::ExpressionId expression) const;
     // Whether `name` resolves to a variable of the built-in process class.
@@ -3940,9 +3946,36 @@ private:
     // r)` designates (IEEE 1076-2008 9.3.7); nullopt for another value.
     [[nodiscard]] std::optional<StringRegisterId> lower_hir_vhdl_line_value(
         semantic::ExpressionId expression);
-    // The element count of `new string(l to r)` with constant bounds.
-    [[nodiscard]] std::optional<std::size_t> hir_vhdl_line_allocator_length(
+    // The STRING subtype the type mark of a qualified allocator `new T'(v)`
+    // denotes, the context of its operand v (IEEE 1076-2019 9.3.5, 9.3.7);
+    // none for another allocator.
+    [[nodiscard]] std::optional<semantic::vhdl::SubtypeIndication>
+    hir_vhdl_qualified_allocator_string_subtype(
         semantic::ExpressionId expression) const;
+    // The index range of `new string(l to r)`: its bounds when they are
+    // static, their expressions otherwise (IEEE 1076-2019 9.3.7).
+    [[nodiscard]] std::optional<semantic::vhdl::RangeConstraint>
+    hir_vhdl_line_allocator_range(semantic::ExpressionId expression) const;
+    // A STRING aggregate of named CHARACTER associations whose choices are
+    // static values or ranges, or of one range choice with run-time bounds
+    // (IEEE 1076-2019 9.3.3.3): lower_hir_string_expression builds it in an
+    // unconstrained STRING context.
+    [[nodiscard]] bool hir_vhdl_named_character_string_aggregate(
+        const semantic::vhdl::Expression& aggregate) const;
+    // A discrete range choice or index constraint `l to r` / `l downto r`:
+    // its bounds when they are static, their expressions otherwise.
+    [[nodiscard]] std::optional<semantic::vhdl::RangeConstraint>
+    hir_vhdl_range_choice(semantic::ExpressionId choice) const;
+    // The length of an index range whose bounds are known only at run time
+    // (IEEE 1076-2019 5.3.2.2), a 32-bit integer (the STRING fill's count
+    // operand): zero for a null range, and -1, which the fill refuses,
+    // beyond a 32-bit count. With
+    // `minimum_bound`, a run-time bound of a non-null range below it fails
+    // the run at `span`: STRING is indexed by POSITIVE (16.3, 5.3.2.2).
+    [[nodiscard]] std::optional<RegisterId> lower_hir_vhdl_range_length(
+        const semantic::vhdl::RangeConstraint& range,
+        std::optional<std::int64_t> minimum_bound = std::nullopt,
+        const frontend::SourceSpan* span = nullptr);
     // A string operand, or a packed one's bytes with zero bytes dropped
     // (IEEE 1800-2017 6.16, 6.24.1).
     [[nodiscard]] std::optional<StringRegisterId> lower_hir_text_value(
@@ -5675,6 +5708,11 @@ private:
     mutable std::unordered_map<std::uint32_t, std::size_t>
         hir_probed_iterator_widths_;
     mutable std::unordered_set<std::uint32_t> hir_probed_iterator_signed_;
+    // A with clause's iterator references that are rows of a
+    // multidimensional array (IEEE 1800-2023 7.12.3), while its
+    // signedness is probed: the row's container type.
+    mutable std::unordered_map<std::uint32_t, runtime::simir::ContainerType>
+        hir_probed_iterator_rows_;
     // Bound `with`-clause iterators over signed elements: such an iterator
     // has its element's signedness (IEEE 1800-2017 7.12).
     std::unordered_set<std::uint32_t> hir_captured_signed_;

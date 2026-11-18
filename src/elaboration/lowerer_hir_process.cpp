@@ -1991,9 +1991,8 @@ bool Lowerer::initialize_hir_declarations(
                         const auto callee = specialized_hir_unit_
                             ->find_expression(constructor->operands.front());
                         if (callee && callee->systemverilog != nullptr
-                            && callee->systemverilog->kind
-                                == semantic::sv::ExpressionKind::name
-                            && callee->systemverilog->text == "new") {
+                            && callee->systemverilog->marker
+                                == support::ExpressionMarker::sv_new_array) {
                             constructed_size = constructor->operands.back();
                         }
                     }
@@ -6421,17 +6420,15 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
         }
         // An unsized fill literal (`'1`) fills the port's width (IEEE
         // 1800-2017 5.7.1).
-        const auto fill_literal = [](const std::string_view text) {
-            return text == "'0" || text == "'1" || text == "'x"
-                || text == "'X" || text == "'z" || text == "'Z";
-        };
+
         // A port connection extends a narrower actual by the actual's own
         // signedness, as a continuous assignment does (IEEE 1800-2017
         // 23.3.3.7 and 10.7).
         if (!description.input_actual_assignment_context && !value
             && actual_expression
             && actual_expression->systemverilog != nullptr
-            && !fill_literal(actual_expression->systemverilog->text)) {
+            && actual_expression->systemverilog->unbased_unsized
+                == support::UnbasedUnsizedLiteral::none) {
             const auto natural = hir_expression_width(
                 actual, hir_process_scope_);
             if (natural && *natural != 0U && *natural < signal.width) {

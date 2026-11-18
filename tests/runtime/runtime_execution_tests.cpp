@@ -1214,7 +1214,8 @@ void test_simir_postponed_process_ordering()
             { frontend::SystemVerilogScalarKind::None },
             CoverageSampleTrigger::procedural },
         CoverageQuery { 0, CoverageQueryKind::overall_type },
-        CoverageQuery { 1, CoverageQueryKind::overall_instance },
+        CoverageQuery { 1, CoverageQueryKind::covergroup_instance,
+            "work.sample@wide#0" },
         Halt { }
     };
     (void)coverage_runtime.add_process(std::move(sampler));
@@ -1249,9 +1250,13 @@ void test_simir_postponed_process_ordering()
             ++coverage_samples;
         });
     coverage_runtime.set_coverage_query_hook([&](
-        const auto kind, const std::string&) {
+        const CoverageQueryKind kind, const std::string& identity) {
         ++coverage_queries;
-        return kind == CoverageQueryKind::overall_instance
+        require(kind == CoverageQueryKind::covergroup_instance
+                ? identity == "work.sample@wide#0"
+                : identity.empty(),
+            "coverage query boundary must preserve the queried identity");
+        return kind == CoverageQueryKind::covergroup_instance
             ? instance_coverage_query_payload.value
             : coverage_query_payload.value;
     });

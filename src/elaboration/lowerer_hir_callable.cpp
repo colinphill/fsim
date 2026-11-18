@@ -2068,9 +2068,8 @@ Lowerer::lower_hir_static_container_actual(
             : std::nullopt;
         const bool sized_new = constructor
             && constructor->systemverilog != nullptr
-            && constructor->systemverilog->kind
-                == semantic::sv::ExpressionKind::name
-            && constructor->systemverilog->text == "new";
+            && constructor->systemverilog->marker
+                == support::ExpressionMarker::sv_new_array;
         const bool initialized_new = source.kind
                 == semantic::sv::ExpressionKind::call
             && source.marker == support::ExpressionMarker::new_array
@@ -28541,8 +28540,9 @@ std::optional<std::string> Lowerer::hir_vhdl_foreign_model(
     }
     const auto& design = specialized_hir_unit_->design();
     const auto& scopes = design.semantics.scopes();
-    const auto entity_class
-        = callable.form == Form::function ? "function" : "procedure";
+    const auto entity_class = callable.form == Form::function
+        ? support::VhdlEntityClass::function
+        : support::VhdlEntityClass::procedure;
     // The nearest enclosing declarative region with a specification of the
     // subprogram's FOREIGN attribute.
     auto scope = callable.scope;
@@ -28554,8 +28554,7 @@ std::optional<std::string> Lowerer::hir_vhdl_foreign_model(
                 || !candidate.attribute->value
                 || !equal_ignoring_ascii_case(
                     candidate.name, "foreign")
-                || !equal_ignoring_ascii_case(
-                    candidate.attribute->entity_class, entity_class)
+                || candidate.attribute->entity_class_kind != entity_class
                 || std::ranges::none_of(candidate.attribute->entity_names,
                     [&](const semantic::vhdl::Name& name) {
                         return equal_ignoring_ascii_case(

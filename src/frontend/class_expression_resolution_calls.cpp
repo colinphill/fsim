@@ -2476,7 +2476,8 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
   const auto selected = statement.task_name.rfind("::");
   if (selected != std::string::npos) {
     const auto owner = resolve_class_selection(
-        statement.task_name.substr(0, selected), scope);
+        statement.task_name.substr(0, selected), scope,
+        statement.systemverilog_task_class_selection.get());
     if (owner) {
       const auto name = statement.task_name.substr(selected + 2U);
       // A typedef's actuals (`uvm_config_int` names
@@ -2521,6 +2522,8 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
           // native UVM methods keep their task form.
           Expression call{
               ExpressionKind::Call, statement.task_name, {}, statement.span};
+          call.systemverilog_class_selection
+              = statement.systemverilog_task_class_selection;
           for (auto& argument : statement.task_arguments) {
             call.operands.push_back(std::move(argument));
           }

@@ -206,7 +206,8 @@ gives fsim's result in each case checked.
 - ivtest `nb_ec_real` expects a `repeat(0)` nonblocking update to be
   visible after `#0`. The update matures in the NBA region, after the
   inactive region that `#0` resumes in; xsim agrees with fsim. The test
-  also uses the iverilog-only `$simtime`.
+  also uses the iverilog-only `$simtime`, which fsim does not accept
+  (IEEE 1800-2023 defines no such function).
 - ivtest `real_wire_force_rel` checks a `wire real` immediately after a
   blocking write to its driver, before the continuous assignment can
   update it; xsim rejects `wire real` altogether.

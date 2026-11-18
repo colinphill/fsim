@@ -1236,7 +1236,8 @@ bool Lowerer::lower_hir_vhdl_shaped_whole_assignment(
     if (value && value->vhdl != nullptr
         && value->vhdl->kind == semantic::vhdl::ExpressionKind::aggregate
         && value->vhdl->associations.size() == 1U
-        && value->vhdl->associations.front().choice_spelling == "others") {
+        && value->vhdl->associations.front().choice_marker
+            == support::ExpressionMarker::vhdl_others_choice) {
         auto element = lower_hir_expression(
             value->vhdl->associations.front().value, profile.element_width);
         if (!element) {

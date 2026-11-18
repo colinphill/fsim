@@ -14709,42 +14709,45 @@ private:
     // The vpiFuncType of a system function call: the type a registered
     // function declared, or what the standard defines for a built-in one
     // (IEEE 1800-2023 20, 37.42).
+    // A registered function is found by the name it was registered with
+    // (36.9.1); a built-in one by the routine the HIR identified.
     [[nodiscard]] std::optional<std::int64_t> system_function_type(
-        const std::string& name) const
+        const std::string& name, const support::SystemTf routine) const
     {
         if (const auto known = systf_by_name_.find(name);
             known != systf_by_name_.end()) {
             return systfs_[known->second].data.sysfunctype;
         }
-        static const std::unordered_map<std::string_view, std::int64_t> builtin {
-            { "$time", vpiTimeFunc }, { "$stime", vpiSizedFunc },
-            { "$realtime", vpiRealFunc }, { "$itor", vpiRealFunc },
-            { "$bitstoreal", vpiRealFunc }, { "$bitstoshortreal", vpiRealFunc },
-            { "$sqrt", vpiRealFunc }, { "$ln", vpiRealFunc },
-            { "$log10", vpiRealFunc }, { "$exp", vpiRealFunc },
-            { "$pow", vpiRealFunc }, { "$floor", vpiRealFunc },
-            { "$ceil", vpiRealFunc }, { "$sin", vpiRealFunc },
-            { "$cos", vpiRealFunc }, { "$tan", vpiRealFunc },
-            { "$asin", vpiRealFunc }, { "$acos", vpiRealFunc },
-            { "$atan", vpiRealFunc }, { "$atan2", vpiRealFunc },
-            { "$hypot", vpiRealFunc }, { "$sinh", vpiRealFunc },
-            { "$cosh", vpiRealFunc }, { "$tanh", vpiRealFunc },
-            { "$asinh", vpiRealFunc }, { "$acosh", vpiRealFunc },
-            { "$atanh", vpiRealFunc }, { "$random", vpiIntFunc },
-            { "$rtoi", vpiIntFunc }, { "$clog2", vpiIntFunc },
-            { "$bits", vpiIntFunc }, { "$countones", vpiIntFunc },
-            { "$onehot", vpiIntFunc }, { "$onehot0", vpiIntFunc },
-            { "$isunknown", vpiIntFunc }, { "$dimensions", vpiIntFunc },
-            { "$unpacked_dimensions", vpiIntFunc }, { "$left", vpiIntFunc },
-            { "$right", vpiIntFunc }, { "$low", vpiIntFunc },
-            { "$high", vpiIntFunc }, { "$increment", vpiIntFunc },
-            { "$size", vpiIntFunc }, { "$test$plusargs", vpiIntFunc },
-            { "$value$plusargs", vpiIntFunc }, { "$urandom_range", vpiSizedFunc },
-            { "$urandom", vpiSizedFunc }, { "$realtobits", vpiSizedFunc },
-            { "$shortrealtobits", vpiSizedFunc }, { "$unsigned", vpiSizedFunc },
-            { "$signed", vpiSizedSignedFunc },
+        using SystemRoutine = support::SystemTf;
+        static const std::unordered_map<SystemRoutine, std::int64_t> builtin {
+            { SystemRoutine::time, vpiTimeFunc }, { SystemRoutine::stime, vpiSizedFunc },
+            { SystemRoutine::realtime, vpiRealFunc }, { SystemRoutine::itor, vpiRealFunc },
+            { SystemRoutine::bitstoreal, vpiRealFunc }, { SystemRoutine::bitstoshortreal, vpiRealFunc },
+            { SystemRoutine::sqrt, vpiRealFunc }, { SystemRoutine::ln, vpiRealFunc },
+            { SystemRoutine::log10, vpiRealFunc }, { SystemRoutine::exp, vpiRealFunc },
+            { SystemRoutine::pow, vpiRealFunc }, { SystemRoutine::floor, vpiRealFunc },
+            { SystemRoutine::ceil, vpiRealFunc }, { SystemRoutine::sin, vpiRealFunc },
+            { SystemRoutine::cos, vpiRealFunc }, { SystemRoutine::tan, vpiRealFunc },
+            { SystemRoutine::asin, vpiRealFunc }, { SystemRoutine::acos, vpiRealFunc },
+            { SystemRoutine::atan, vpiRealFunc }, { SystemRoutine::atan2, vpiRealFunc },
+            { SystemRoutine::hypot, vpiRealFunc }, { SystemRoutine::sinh, vpiRealFunc },
+            { SystemRoutine::cosh, vpiRealFunc }, { SystemRoutine::tanh, vpiRealFunc },
+            { SystemRoutine::asinh, vpiRealFunc }, { SystemRoutine::acosh, vpiRealFunc },
+            { SystemRoutine::atanh, vpiRealFunc }, { SystemRoutine::random, vpiIntFunc },
+            { SystemRoutine::rtoi, vpiIntFunc }, { SystemRoutine::clog2, vpiIntFunc },
+            { SystemRoutine::bits, vpiIntFunc }, { SystemRoutine::countones, vpiIntFunc },
+            { SystemRoutine::onehot, vpiIntFunc }, { SystemRoutine::onehot0, vpiIntFunc },
+            { SystemRoutine::isunknown, vpiIntFunc }, { SystemRoutine::dimensions, vpiIntFunc },
+            { SystemRoutine::unpacked_dimensions, vpiIntFunc }, { SystemRoutine::left, vpiIntFunc },
+            { SystemRoutine::right, vpiIntFunc }, { SystemRoutine::low, vpiIntFunc },
+            { SystemRoutine::high, vpiIntFunc }, { SystemRoutine::increment, vpiIntFunc },
+            { SystemRoutine::size, vpiIntFunc }, { SystemRoutine::test_plusargs, vpiIntFunc },
+            { SystemRoutine::value_plusargs, vpiIntFunc }, { SystemRoutine::urandom_range, vpiSizedFunc },
+            { SystemRoutine::urandom, vpiSizedFunc }, { SystemRoutine::realtobits, vpiSizedFunc },
+            { SystemRoutine::shortrealtobits, vpiSizedFunc }, { SystemRoutine::unsigned_conversion, vpiSizedFunc },
+            { SystemRoutine::signed_conversion, vpiSizedSignedFunc },
         };
-        const auto found = builtin.find(name);
+        const auto found = builtin.find(routine);
         return found == builtin.end() ? std::nullopt
                                       : std::optional { found->second };
     }
@@ -14758,7 +14761,9 @@ private:
         if (type == vpiSysFuncCall) {
             const auto name
                 = statement_model_->string_property(serial, vpiName);
-            return name ? system_function_type(*name) : std::nullopt;
+            return name ? system_function_type(
+                       *name, statement_model_->system_routine(serial))
+                        : std::nullopt;
         }
         if (type != vpiFuncCall && type != vpiMethodFuncCall) {
             return std::nullopt;
@@ -20804,22 +20809,25 @@ private:
         if (statement_model_->type(serial) != vpiSysFuncCall) {
             return std::nullopt;
         }
-        const auto name = statement_model_->string_property(serial, vpiName);
-        if (!name || (*name != "$time" && *name != "$stime" && *name != "$realtime")) {
+        using SystemRoutine = support::SystemTf;
+        const auto routine = statement_model_->system_routine(serial);
+        if (routine != SystemRoutine::time && routine != SystemRoutine::stime
+            && routine != SystemRoutine::realtime) {
             return std::nullopt;
         }
         s_vpi_time time { };
         time.type = vpiScaledRealTime;
         fill_time(time, statement_model_->relation(serial, vpiScope).value_or(0U));
         Value value;
-        if (*name == "$realtime") {
+        if (routine == SystemRoutine::realtime) {
             value.kind = Value::Kind::real;
             value.real = time.real;
             return value;
         }
         const auto ticks = static_cast<std::uint64_t>(std::llround(time.real));
-        value.bits = *name == "$time" ? integer_bits(ticks, 64U)
-                                      : integer_bits(ticks & 0xFFFFFFFFU, 32U);
+        value.bits = routine == SystemRoutine::time
+            ? integer_bits(ticks, 64U)
+            : integer_bits(ticks & 0xFFFFFFFFU, 32U);
         return value;
     }
 
@@ -21012,9 +21020,10 @@ private:
     // An array query function over an object (IEEE 1800-2023 20.7): an
     // integer; 'x for a dimension number out of range.
     [[nodiscard]] std::optional<Value> array_query_value(
-        const std::string& function,
+        const support::SystemTf function,
         const std::vector<fsim_vpi_handle_v1>& arguments) const
     {
+        using SystemRoutine = support::SystemTf;
         if (arguments.empty() || arguments.size() > 2U) {
             return std::nullopt;
         }
@@ -21028,12 +21037,12 @@ private:
             result.is_signed = true;
             return result;
         };
-        if (function == "$dimensions") {
+        if (function == SystemRoutine::dimensions) {
             return integer(dimensions->string
                     ? 1
                     : static_cast<std::int64_t>(dimensions->ranges.size()));
         }
-        if (function == "$unpacked_dimensions") {
+        if (function == SystemRoutine::unpacked_dimensions) {
             return integer(static_cast<std::int64_t>(dimensions->unpacked));
         }
         if (dimensions->string) {
@@ -21068,19 +21077,19 @@ private:
             = dimensions->dynamic[index] || left < right ? -1 : 1;
         const auto low = increment == -1 ? left : right;
         const auto high = increment == -1 ? right : left;
-        if (function == "$left") {
+        if (function == SystemRoutine::left) {
             return integer(left);
         }
-        if (function == "$right") {
+        if (function == SystemRoutine::right) {
             return integer(right);
         }
-        if (function == "$increment") {
+        if (function == SystemRoutine::increment) {
             return integer(increment);
         }
-        if (function == "$low") {
+        if (function == SystemRoutine::low) {
             return integer(low);
         }
-        if (function == "$high") {
+        if (function == SystemRoutine::high) {
             return integer(high);
         }
         return integer(high - low + 1);
@@ -21092,19 +21101,20 @@ private:
         if (statement_model_->type(serial) != vpiSysFuncCall) {
             return std::nullopt;
         }
-        const auto name = statement_model_->string_property(serial, vpiName);
+        using SystemRoutine = support::SystemTf;
+        const auto function = statement_model_->system_routine(serial);
         const auto handles = statement_model_->iterate(serial, vpiArgument);
-        if (!name || !handles) {
+        if (function == SystemRoutine::none || !handles) {
             return std::nullopt;
         }
         // The array query functions read the argument's type, not its value
         // (20.7).
-        static constexpr std::string_view array_queries[] = { "$dimensions",
-            "$unpacked_dimensions", "$left", "$right", "$low", "$high",
-            "$increment", "$size" };
-        if (std::ranges::find(array_queries, std::string_view { *name })
+        static constexpr SystemRoutine array_queries[] = { SystemRoutine::dimensions,
+            SystemRoutine::unpacked_dimensions, SystemRoutine::left, SystemRoutine::right,
+            SystemRoutine::low, SystemRoutine::high, SystemRoutine::increment, SystemRoutine::size };
+        if (std::ranges::find(array_queries, function)
             != std::end(array_queries)) {
-            return array_query_value(*name, *handles);
+            return array_query_value(function, *handles);
         }
         std::vector<Value> arguments;
         for (const auto argument : *handles) {
@@ -21142,21 +21152,20 @@ private:
             result.is_signed = is_signed;
             return result;
         };
-        const auto& function = *name;
         if (arguments.size() == 1U) {
             const auto& argument = arguments.front();
             const bool bits = argument.kind == Value::Kind::bits;
-            if (function == "$signed" || function == "$unsigned") {
+            if (function == SystemRoutine::signed_conversion || function == SystemRoutine::unsigned_conversion) {
                 if (!bits) {
                     return std::nullopt;
                 }
                 auto result = argument;
-                result.is_signed = function == "$signed";
+                result.is_signed = function == SystemRoutine::signed_conversion;
                 return result;
             }
             // $bits of an expression is the number of bits its value has
             // (IEEE 1800-2023 20.6.2); the argument is read on demand.
-            if (function == "$bits") {
+            if (function == SystemRoutine::bits) {
                 if (bits) {
                     return make_int(argument.bits.width(), 32U, true);
                 }
@@ -21164,7 +21173,7 @@ private:
                     return make_int(64U, 32U, true);
                 }
             }
-            if (function == "$clog2" && bits) {
+            if (function == SystemRoutine::clog2 && bits) {
                 if (!known(argument.bits)) {
                     return unknown(32U, true);
                 }
@@ -21182,58 +21191,58 @@ private:
                     = ones == 0U ? 0U : highest + (ones == 1U ? 0U : 1U);
                 return make_int(result, 32U, true);
             }
-            if (function == "$countones" && bits) {
+            if (function == SystemRoutine::countones && bits) {
                 std::uint64_t ones = 0U;
                 for (std::size_t bit = 0U; bit < argument.bits.width(); ++bit) {
                     ones += argument.bits.get(bit) == Logic4::one ? 1U : 0U;
                 }
                 return make_int(ones, 32U, true);
             }
-            if ((function == "$onehot" || function == "$onehot0") && bits) {
+            if ((function == SystemRoutine::onehot || function == SystemRoutine::onehot0) && bits) {
                 std::uint64_t ones = 0U;
                 for (std::size_t bit = 0U; bit < argument.bits.width(); ++bit) {
                     ones += argument.bits.get(bit) == Logic4::one ? 1U : 0U;
                 }
-                return make_int(function == "$onehot" ? ones == 1U : ones <= 1U,
+                return make_int(function == SystemRoutine::onehot ? ones == 1U : ones <= 1U,
                     1U, false);
             }
-            if (function == "$isunknown" && bits) {
+            if (function == SystemRoutine::isunknown && bits) {
                 return make_int(known(argument.bits) ? 0U : 1U, 1U, false);
             }
-            if (function == "$itor") {
+            if (function == SystemRoutine::itor) {
                 return make_real(real_of(argument));
             }
-            if (function == "$rtoi") {
+            if (function == SystemRoutine::rtoi) {
                 return make_int(static_cast<std::uint64_t>(
                                     static_cast<std::int64_t>(
                                         std::trunc(real_of(argument)))),
                     32U, true);
             }
             using Math = double (*)(double);
-            static constexpr std::pair<std::string_view, Math> math[] = {
-                { "$ln", static_cast<Math>(std::log) }, { "$log10", static_cast<Math>(std::log10) },
-                { "$exp", static_cast<Math>(std::exp) }, { "$sqrt", static_cast<Math>(std::sqrt) },
-                { "$floor", static_cast<Math>(std::floor) }, { "$ceil", static_cast<Math>(std::ceil) },
-                { "$sin", static_cast<Math>(std::sin) }, { "$cos", static_cast<Math>(std::cos) },
-                { "$tan", static_cast<Math>(std::tan) }, { "$asin", static_cast<Math>(std::asin) },
-                { "$acos", static_cast<Math>(std::acos) }, { "$atan", static_cast<Math>(std::atan) },
-                { "$sinh", static_cast<Math>(std::sinh) }, { "$cosh", static_cast<Math>(std::cosh) },
-                { "$tanh", static_cast<Math>(std::tanh) }, { "$asinh", static_cast<Math>(std::asinh) },
-                { "$acosh", static_cast<Math>(std::acosh) }, { "$atanh", static_cast<Math>(std::atanh) },
+            static constexpr std::pair<SystemRoutine, Math> math[] = {
+                { SystemRoutine::ln, static_cast<Math>(std::log) }, { SystemRoutine::log10, static_cast<Math>(std::log10) },
+                { SystemRoutine::exp, static_cast<Math>(std::exp) }, { SystemRoutine::sqrt, static_cast<Math>(std::sqrt) },
+                { SystemRoutine::floor, static_cast<Math>(std::floor) }, { SystemRoutine::ceil, static_cast<Math>(std::ceil) },
+                { SystemRoutine::sin, static_cast<Math>(std::sin) }, { SystemRoutine::cos, static_cast<Math>(std::cos) },
+                { SystemRoutine::tan, static_cast<Math>(std::tan) }, { SystemRoutine::asin, static_cast<Math>(std::asin) },
+                { SystemRoutine::acos, static_cast<Math>(std::acos) }, { SystemRoutine::atan, static_cast<Math>(std::atan) },
+                { SystemRoutine::sinh, static_cast<Math>(std::sinh) }, { SystemRoutine::cosh, static_cast<Math>(std::cosh) },
+                { SystemRoutine::tanh, static_cast<Math>(std::tanh) }, { SystemRoutine::asinh, static_cast<Math>(std::asinh) },
+                { SystemRoutine::acosh, static_cast<Math>(std::acosh) }, { SystemRoutine::atanh, static_cast<Math>(std::atanh) },
             };
-            for (const auto& [spelling, routine] : math) {
-                if (function == spelling) {
+            for (const auto& [routine_kind, routine] : math) {
+                if (function == routine_kind) {
                     return make_real(routine(real_of(argument)));
                 }
             }
         } else if (arguments.size() == 2U) {
             using Math2 = double (*)(double, double);
-            static constexpr std::pair<std::string_view, Math2> math[] = {
-                { "$pow", static_cast<Math2>(std::pow) }, { "$atan2", static_cast<Math2>(std::atan2) },
-                { "$hypot", static_cast<Math2>(std::hypot) },
+            static constexpr std::pair<SystemRoutine, Math2> math[] = {
+                { SystemRoutine::pow, static_cast<Math2>(std::pow) }, { SystemRoutine::atan2, static_cast<Math2>(std::atan2) },
+                { SystemRoutine::hypot, static_cast<Math2>(std::hypot) },
             };
-            for (const auto& [spelling, routine] : math) {
-                if (function == spelling) {
+            for (const auto& [routine_kind, routine] : math) {
+                if (function == routine_kind) {
                     return make_real(
                         routine(real_of(arguments[0]), real_of(arguments[1])));
                 }

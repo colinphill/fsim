@@ -74,6 +74,17 @@ void mark_task(frontend::Statement& statement,
 /// the frontend from a compiled HIR description.
 using ClassOwnerSelection = decltype(frontend::Expression::systemverilog_class_owner);
 
+// The first specialization of a `C#(...)` scope chain as the parser read
+// it (IEEE 1800-2023 8.25.1); none for a name written without actuals.
+[[nodiscard]] const frontend::Type* chain_first_specialization(
+    const ClassOwnerSelection& selection) noexcept
+{
+    const frontend::Type* first = selection.get();
+    while (first != nullptr && first->systemverilog_class_enclosing_selection)
+        first = first->systemverilog_class_enclosing_selection.get();
+    return first;
+}
+
 struct SourceScope {
     const frontend::DesignUnit* unit { };
     // The package imports of a compilation-unit ($unit) class.
@@ -507,8 +518,9 @@ private:
         const auto alias_name = text.substr(alias_separator + 2U,
             member_separator - alias_separator - 2U);
         const auto class_name = text.substr(0, alias_separator);
-        const auto hash = class_name.find('#');
-        const auto name = std::string { class_name.substr(0, hash) };
+        const auto* const specialization = chain_first_specialization(selection);
+        const auto name = specialization != nullptr
+            ? specialization->named_type : std::string { class_name };
         RegistryCall result;
         const sv::ClassDeclaration* compiled { };
         const frontend::SystemVerilogClassDeclaration* local { };
@@ -516,7 +528,7 @@ private:
             result.canonical = compiled->canonical_identity;
         } else if ((local = source_class(name, scope)) != nullptr) {
             result.canonical = local->canonical_identity;
-        } else if (hash == std::string_view::npos) {
+        } else if (specialization == nullptr) {
             ClassOwnerSelection typedef_selection;
             if (const auto alias = scope.aliases.find(name);
                 alias != scope.aliases.end()
@@ -542,7 +554,7 @@ private:
         if (result.role != support::UvmRole::registry_create
             && result.role != support::UvmRole::registry_get)
             return std::nullopt;
-        if (!result.owner && hash != std::string_view::npos && selection)
+        if (!result.owner && specialization != nullptr)
             result.owner = frontend::systemverilog_class_scope_owner(
                 *selection, result.canonical);
         return result;
@@ -1150,7 +1162,9 @@ private:
                 ? selected.spelling : selected.named_type;
             if (selected.systemverilog_virtual_interface)
                 type = "vif:" + spelling + ":64";
-            else if (spelling == "string")
+            else if (selected.named_type.empty()
+                && selected.systemverilog_builtin
+                    == support::SystemVerilogBuiltinType::string)
                 type = "string";
             else
                 type = named(spelling);
@@ -1298,15 +1312,16 @@ private:
                 // and `typedef C#(8) T; T::p` the same one (IEEE 1800-2023
                 // 6.18, 8.23, 8.25.1).
                 const auto owner_name = std::string_view { input.text }.substr(0, separator);
-                const auto hash = owner_name.find('#');
+                const auto* const specialization
+                    = chain_first_specialization(input.systemverilog_class_selection);
                 ClassOwnerSelection owner_selection;
-                const auto* owner = named_class(owner_name.substr(0, hash), scope, input.span);
-                if (owner != nullptr && hash != std::string_view::npos) {
-                    if (!input.systemverilog_class_selection)
-                        return { };
+                const auto* owner = named_class(specialization != nullptr
+                        ? std::string_view { specialization->named_type } : owner_name,
+                    scope, input.span);
+                if (owner != nullptr && specialization != nullptr) {
                     owner_selection = frontend::systemverilog_class_scope_owner(
                         *input.systemverilog_class_selection, owner->canonical_identity);
-                } else if (owner == nullptr) {
+                } else if (owner == nullptr && specialization == nullptr) {
                     owner = typedef_class(owner_name, scope, input.span, &owner_selection);
                 }
                 if (owner != nullptr) {
@@ -1398,10 +1413,13 @@ private:
         if (separator != std::string::npos) {
             // `C#(...)::m(...)` selects a specialization of class C (8.25.1).
             const auto owner_name = std::string_view { input.text }.substr(0, separator);
-            const auto hash = owner_name.find('#');
-            if (const auto* owner = named_class(owner_name.substr(0, hash), scope, input.span)) {
+            const auto* const specialization
+                = chain_first_specialization(input.systemverilog_class_selection);
+            if (const auto* owner = named_class(specialization != nullptr
+                        ? std::string_view { specialization->named_type } : owner_name,
+                    scope, input.span)) {
                 const auto member = input.text.substr(separator + 2U);
-                if (hash != std::string_view::npos) {
+                if (specialization != nullptr) {
                     if (auto intrinsic = uvm_database_intrinsic(*owner, member,
                             input.systemverilog_class_selection.get(), scope, input.span);
                         !intrinsic.empty()) {
@@ -1414,7 +1432,7 @@ private:
                         return { };
                     }
                 }
-                if (hash == std::string_view::npos && input.operands.empty()) {
+                if (specialization == nullptr && input.operands.empty()) {
                     if (auto singleton = uvm_singleton_intrinsic(*owner, member);
                         !singleton.empty()) {
                         const auto* selected = method(owner->canonical_identity, member);
@@ -1428,14 +1446,14 @@ private:
                                                    : ClassTypeView { };
                     }
                 }
-                if (hash != std::string_view::npos && input.systemverilog_class_selection
+                if (specialization != nullptr
                     && registry_get(input, *owner, member,
                         frontend::systemverilog_class_scope_owner(
                             *input.systemverilog_class_selection, owner->canonical_identity)))
                     return { nullptr, nullptr, owner->canonical_identity };
                 auto result = bind_method(input, { nullptr, nullptr, owner->canonical_identity },
                     member, scope, true);
-                if (hash != std::string_view::npos && input.systemverilog_class_selection) {
+                if (specialization != nullptr) {
                     input.systemverilog_class_owner = frontend::systemverilog_class_scope_owner(
                         *input.systemverilog_class_selection, owner->canonical_identity);
                 }
@@ -1553,10 +1571,13 @@ private:
         } else if (separator != std::string::npos) {
             // `C#(...)::m` selects a specialization of class C (8.25.1).
             auto owner_name = std::string_view { input.task_name }.substr(0, separator);
-            const auto hash = owner_name.find('#');
+            const auto* const specialization
+                = chain_first_specialization(input.systemverilog_task_class_selection);
             const auto member = std::string_view { input.task_name }.substr(separator + 2U);
-            if (const auto* owner = named_class(owner_name.substr(0, hash), scope, input.span)) {
-                if (hash != std::string_view::npos) {
+            if (const auto* owner = named_class(specialization != nullptr
+                        ? std::string_view { specialization->named_type } : owner_name,
+                    scope, input.span)) {
+                if (specialization != nullptr) {
                     if (auto intrinsic = uvm_database_intrinsic(*owner, member,
                             input.systemverilog_task_class_selection.get(), scope, input.span);
                         !intrinsic.empty()) {
@@ -1571,9 +1592,8 @@ private:
                 // (8.25.1); the statement keeps the selection as its value,
                 // as the expression form of the call keeps it.
                 if (selected != nullptr && selected->static_method
-                    && hash != std::string_view::npos
-                    && !support::uvm_library(owner->uvm_role)
-                    && input.systemverilog_task_class_selection) {
+                    && specialization != nullptr
+                    && !support::uvm_library(owner->uvm_role)) {
                     frontend::Expression selection { frontend::ExpressionKind::Call,
                         "", { }, input.span };
                     selection.marker

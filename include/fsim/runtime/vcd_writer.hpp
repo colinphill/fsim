@@ -36,10 +36,16 @@ public:
     VcdWriter(const VcdWriter&) = delete;
     VcdWriter& operator=(const VcdWriter&) = delete;
 
+    /// `var_kind` is the VCD var_type keyword (IEEE 1800-2023 21.7.2.1).
     [[nodiscard]] VcdSignal declare_signal(std::string_view hierarchical_name,
-        std::size_t width);
+        std::size_t width, TraceVarKind var_kind = TraceVarKind::Wire);
     /// Real-family values use VCD `real`; exact `time` and opaque `chandle`
     /// values remain 64-bit vectors so their identities are never rounded.
+    [[nodiscard]] VcdSignal declare_systemverilog_scalar(
+        std::string_view hierarchical_name,
+        SystemVerilogScalarKind kind, TraceVarKind var_kind);
+    /// As above with the default var_type: `real` for a real-family kind,
+    /// `wire` otherwise.
     [[nodiscard]] VcdSignal declare_systemverilog_scalar(
         std::string_view hierarchical_name,
         SystemVerilogScalarKind kind);

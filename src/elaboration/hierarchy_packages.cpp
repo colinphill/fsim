@@ -3719,7 +3719,7 @@ namespace {
             };
             for (const auto& association : source.associations) {
                 std::optional<std::size_t> index;
-                if (association.choice_spelling == "default") {
+                if (association.choice_marker == support::ExpressionMarker::sv_default_choice) {
                     if (default_value) {
                         return std::nullopt;
                     }
@@ -6760,9 +6760,7 @@ namespace {
                 return true;
             };
             for (const auto& association : source.associations) {
-                auto choice = association.choice_spelling;
-                lowercase_ascii(choice);
-                if (choice == "others") {
+                if (association.choice_marker == support::ExpressionMarker::vhdl_others_choice) {
                     if (others) {
                         return std::nullopt;
                     }
@@ -6779,29 +6777,10 @@ namespace {
                         names.push_back(selected->vhdl->text);
                     }
                 }
-                if (names.empty() && !choice.empty()) {
-                    auto remaining = std::string_view { choice };
-                    while (!remaining.empty()) {
-                        const auto separator = remaining.find('|');
-                        auto name = remaining.substr(0U, separator);
-                        while (!name.empty()
-                            && std::isspace(static_cast<unsigned char>(
-                                   name.front())) != 0) {
-                            name.remove_prefix(1U);
-                        }
-                        while (!name.empty()
-                            && std::isspace(static_cast<unsigned char>(
-                                   name.back())) != 0) {
-                            name.remove_suffix(1U);
-                        }
-                        if (!name.empty()) {
-                            names.emplace_back(name);
-                        }
-                        if (separator == std::string_view::npos) {
-                            break;
-                        }
-                        remaining.remove_prefix(separator + 1U);
-                    }
+                // A named association whose choices are not element names
+                // has no static record value here (9.3.3.2).
+                if (names.empty() && !association.choice_spelling.empty()) {
+                    return std::nullopt;
                 }
                 if (names.empty()) {
                     if (!association.choices.empty()
@@ -6905,9 +6884,7 @@ namespace {
             if (!value) {
                 return std::nullopt;
             }
-            auto choice_spelling = association.choice_spelling;
-            lowercase_ascii(choice_spelling);
-            if (choice_spelling == "others") {
+            if (association.choice_marker == support::ExpressionMarker::vhdl_others_choice) {
                 if (others) {
                     return std::nullopt;
                 }
@@ -7624,7 +7601,7 @@ namespace {
             std::optional<semantic::ExpressionId> others;
             std::size_t positional { };
             for (const auto& association : source.associations) {
-                if (lowered(association.choice_spelling) == "others") {
+                if (association.choice_marker == support::ExpressionMarker::vhdl_others_choice) {
                     if (others) {
                         return std::nullopt;
                     }
@@ -8391,7 +8368,7 @@ namespace {
                 ++positional;
                 continue;
             }
-            if (spelling == "others") {
+            if (association.choice_marker == support::ExpressionMarker::vhdl_others_choice) {
                 if (others) {
                     return std::nullopt;
                 }
@@ -8401,10 +8378,7 @@ namespace {
             for (const auto choice_id : association.choices) {
                 const auto choice = specialization.find_expression(choice_id);
                 if (choice && choice->vhdl != nullptr
-                    && choice->vhdl->kind
-                        == semantic::vhdl::ExpressionKind::name
-                    && compiled_vhdl_name_equal(
-                        choice->vhdl->text, "others")) {
+                    && choice->vhdl->marker == support::ExpressionMarker::vhdl_others_choice) {
                     if (others || association.choices.size() != 1U) {
                         return std::nullopt;
                     }
@@ -11744,7 +11718,7 @@ namespace {
                         if (positional < bound.size()) {
                             member_index = positional++;
                         }
-                    } else if (association.choice_spelling == "default") {
+                    } else if (association.choice_marker == support::ExpressionMarker::sv_default_choice) {
                         if (default_value) {
                             append("FSIM-ELAB-SVAGG-002",
                                 "assignment pattern specifies more than one "
@@ -13611,7 +13585,7 @@ namespace {
                         }
                         continue;
                     }
-                    if (association.choice_spelling == "default") {
+                    if (association.choice_marker == support::ExpressionMarker::sv_default_choice) {
                         has_default = true;
                         continue;
                     }
@@ -14519,8 +14493,8 @@ namespace {
             const auto selected = compiled.find_expression(
                 expression.operands.front());
             if (selected && selected->systemverilog != nullptr
-                && selected->systemverilog->kind == ExpressionKind::name
-                && selected->systemverilog->text == "new") {
+                && selected->systemverilog->marker
+                    == support::ExpressionMarker::sv_new_array) {
                 continue;
             }
             const auto bounds = expression_bounds(expression.operands.front());
@@ -15986,7 +15960,7 @@ void HierarchyBuilder::add_root(
         static_cast<void>(instantiate_compiled_systemverilog_unit(
             CompiledSystemVerilogInstantiationContext {
                 *selected, active_root_, { }, { }, { }, { },
-                std::nullopt, std::nullopt, { }, { } }));
+                std::nullopt, std::nullopt, { }, { }, { }, false, true }));
         active_compiled_systemverilog_configuration_
             = saved_configuration;
         active_compiled_systemverilog_configuration_root_
@@ -16002,7 +15976,8 @@ void HierarchyBuilder::add_root(
                 ? compiled_systemverilog_root_parameter_actuals(
                       *root.systemverilog)
                 : std::vector<semantic::SpecializedHirActualIdentity> { },
-            { }, { }, { }, std::nullopt, std::nullopt, { }, { } }));
+            { }, { }, { }, std::nullopt, std::nullopt, { }, { }, { }, false,
+            true }));
 }
 
 std::optional<HierarchyBuilder::SystemVerilogAliasPlan>
@@ -17330,8 +17305,6 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit_in_stack(
     CompiledHierarchyContainerGuard bind_guard {
         active_compiled_systemverilog_binds_
     };
-    activate_compiled_systemverilog_defparams(
-        unit.defparams, path, *specialized);
     for (const auto& bind : unit.binds) {
         active_compiled_systemverilog_binds_.push_back({ &bind, &unit });
     }
@@ -17362,6 +17335,14 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit_in_stack(
     }
     auto generate_occurrences
         = std::move(generate_collection.occurrences);
+    // The instance's scopes, for the defparams of it and of its descendants
+    // (IEEE 1800-2023 23.8, 23.10.1).
+    CompiledHierarchyContainerGuard defparam_scope_guard {
+        defparam_scope_frames_
+    };
+    defparam_scope_frames_.push_back({ path, &unit, &generate_occurrences,
+        context.instantiating_scope, context.array_element,
+        context.top_level });
     const auto packed_range_bounds_are_known = [&](
         const semantic::SpecializedHirUnit& specialization,
         const std::vector<semantic::DeclarationId>& declarations,
@@ -17449,6 +17430,8 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit_in_stack(
         }
         return std::string { parent } + "." + std::string { local };
     };
+    activate_compiled_systemverilog_defparams(
+        unit.defparams, path, *specialized);
     for (const auto& occurrence : generate_occurrences) {
         activate_compiled_systemverilog_defparams(
             occurrence.region->defparams,
@@ -19581,6 +19564,14 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_instance_worklist(
             ? generated_path(working_path, record.name)
             : compiled_instance_path(*compiled_, unit.scope,
                   record.scope, working_path, record.name);
+        // The scope that holds the instantiation: the path before the
+        // instance's own name.
+        auto instantiating_scope = std::string { working_path };
+        if (const auto suffix = record.name.size() + 1U;
+            child_path.size() > suffix && child_path.ends_with(record.name)
+            && child_path[child_path.size() - suffix] == '.') {
+            instantiating_scope = child_path.substr(0U, child_path.size() - suffix);
+        }
         for (const auto outer : materialization.outer_array_indices) {
             child_path += "[" + std::to_string(outer) + "]";
         }
@@ -20058,6 +20049,10 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_instance_worklist(
                 .type_owner_contexts
                 = materialization.type_owner_contexts,
                 .param_assigns = std::move(child_param_assigns),
+                .instantiating_scope = std::move(instantiating_scope),
+                .array_element = materialization.array_index.has_value()
+                    || !materialization.outer_array_indices.empty(),
+                .top_level = false,
             });
         active_compiled_systemverilog_configuration_
             = saved_configuration;
@@ -34056,6 +34051,9 @@ void HierarchyBuilder::instantiate_systemc_hdl_child(
                 .prepared_specialization = std::move(specialization),
                 .type_owner_contexts = { },
                 .param_assigns = { },
+                .instantiating_scope = { },
+                .array_element = false,
+                .top_level = false,
             }));
         return;
     }
@@ -36229,6 +36227,9 @@ bool HierarchyBuilder::instantiate_compiled_vhdl_unit_in_stack(
                         = std::move(child_specialization),
                         .type_owner_contexts = { },
                         .param_assigns = { },
+                        .instantiating_scope = { },
+                        .array_element = false,
+                        .top_level = false,
                     })) {
                 return false;
             }

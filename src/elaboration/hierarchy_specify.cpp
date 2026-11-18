@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "hierarchy_builder_internal.hpp"
+#include "hierarchy_sv_constant_evaluator.hpp"
 #include "fsim/support/stack_growth.hpp"
 #include "fsim/support/active_set.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
@@ -455,10 +456,6 @@ void HierarchyBuilder::activate_compiled_systemverilog_defparams(
     if (compiled_ == nullptr) {
         return;
     }
-    const auto owner = compiled_->find_unit(specialization.unit());
-    const auto owner_name = owner && owner->systemverilog != nullptr
-        ? std::string_view { owner->systemverilog->name }
-        : std::string_view { };
     for (const auto& defparam : defparams) {
         // A defparam value is a constant expression (IEEE 1800-2017 23.10.1).
         if (const auto value = specialization.find_expression(defparam.value);
@@ -483,11 +480,11 @@ void HierarchyBuilder::activate_compiled_systemverilog_defparams(
                 continue;
             }
         }
-        std::vector<std::string> segments;
+        std::vector<DefparamSegment> segments;
         segments.reserve(defparam.path.size());
         bool valid = true;
         for (const auto& segment : defparam.path) {
-            auto selected = segment.name;
+            DefparamSegment selected { segment.name, { }, segment.name };
             for (const auto index_expression : segment.indices) {
                 const auto index
                     = specialization.evaluate_integral_expression(
@@ -501,7 +498,8 @@ void HierarchyBuilder::activate_compiled_systemverilog_defparams(
                     valid = false;
                     break;
                 }
-                selected += "[" + std::to_string(*index) + "]";
+                selected.indices.push_back(*index);
+                selected.text += "[" + std::to_string(*index) + "]";
             }
             if (!valid) {
                 break;
@@ -511,50 +509,256 @@ void HierarchyBuilder::activate_compiled_systemverilog_defparams(
         if (!valid) {
             continue;
         }
-        if (segments.size() > 2U && !owner_name.empty()
-            && segments.front() == owner_name) {
-            segments.erase(segments.begin());
-        }
         if (segments.size() < 2U) {
             report("FSIM-ELAB-DEFPARAM-001",
                 "cannot resolve defparam hierarchy path",
                 compiled_source_span(*compiled_, defparam.source));
             continue;
         }
-        // The first name of a hierarchical path is searched upward (IEEE
-        // 1800-2017 23.8): `defparam Loop[i].m.p` inside `Loop[i]` names
-        // that generate instance, not a child of it.
-        auto target_path = std::string { hierarchy_prefix };
-        for (auto end = target_path.size(); end != 0U;) {
-            const auto separator = target_path.rfind('.', end - 1U);
-            const auto begin = separator == std::string::npos ? 0U : separator + 1U;
-            if (std::string_view { target_path }.substr(begin, end - begin)
-                == segments.front()) {
-                target_path.resize(begin == 0U ? 0U : begin - 1U);
-                break;
-            }
-            if (separator == std::string::npos) {
-                break;
-            }
-            end = separator;
+        std::string written;
+        for (const auto& segment : segments) {
+            written += written.empty() ? "" : ".";
+            written += segment.text;
         }
-        for (std::size_t index = 0U;
-            index + 1U < segments.size(); ++index) {
-            if (!target_path.empty()) {
-                target_path += '.';
-            }
-            target_path += segments[index];
+        // The first name is searched upward (IEEE 1800-2023 23.8): the
+        // scopes of the instance from the defparam's own outward, then the
+        // scopes of each instantiating instance in turn.
+        auto base = resolve_defparam_target_scope(
+            std::span { segments }.first(segments.size() - 1U),
+            hierarchy_prefix);
+        if (!base) {
+            report("FSIM-ELAB-DEFPARAM-002",
+                "unknown defparam hierarchical target '" + written + "'",
+                compiled_source_span(*compiled_, defparam.source));
+            continue;
+        }
+        std::vector<std::string> below;
+        auto target_path = std::optional<std::string> { *base };
+        for (std::size_t index = 1U; index + 1U < segments.size(); ++index) {
+            below.push_back(segments[index].text);
+            *target_path += '.';
+            *target_path += segments[index].text;
+        }
+        // A defparam that a pass before resolved to another target: its
+        // name, resolved before the hierarchy was complete, resolves
+        // differently in the elaborated hierarchy (23.10.4.2).
+        if (const auto earlier = std::ranges::find_if(external_defparams_,
+                [&](const ExternalSystemVerilogDefparam& external) {
+                    return external.source == defparam.source
+                        && external.owner_path == hierarchy_prefix;
+                });
+            earlier != external_defparams_.end()
+            && earlier->target_path != *target_path) {
+            report("FSIM-ELAB-DEFPARAM-007",
+                "defparam '" + written + "' resolved to '"
+                    + earlier->target_path + "' before the hierarchy was "
+                      "elaborated but resolves to '" + *target_path
+                    + "' in the elaborated hierarchy",
+                compiled_source_span(*compiled_, defparam.source));
+            continue;
+        }
+        // A defparam in or under a generate block instance or an array of
+        // instances changes no parameter outside that hierarchy (23.10.1).
+        if (const auto hierarchy = defparam_enclosing_hierarchy(hierarchy_prefix);
+            hierarchy && *target_path != *hierarchy
+            && !(target_path->size() > hierarchy->size()
+                && target_path->starts_with(*hierarchy)
+                && (*target_path)[hierarchy->size()] == '.')) {
+            report("FSIM-ELAB-DEFPARAM-006",
+                "defparam '" + written + "' in '" + *hierarchy
+                    + "' changes a parameter outside that generate block "
+                      "or instance array element",
+                compiled_source_span(*compiled_, defparam.source));
+            continue;
+        }
+        // The parameters below the instance that holds the defparam take it
+        // as they are elaborated. A target outside it (an ancestor's, a
+        // sibling's or the instance's own parameter, another top-level
+        // instance's) is elaborated before or apart from it: the next
+        // elaboration pass applies the defparam from the root (the order of
+        // IEEE 1800-2023 23.10.4.1, elaborate()).
+        if (const auto& holder = defparam_scope_frames_.back().path;
+            !(target_path->size() > holder.size()
+                && target_path->starts_with(holder)
+                && (*target_path)[holder.size()] == '.')) {
+            std::string error;
+            const auto value = evaluate_hir_systemverilog_value(
+                specialization, defparam.value, error);
+            deferred_external_defparams_.push_back({
+                *target_path,
+                *base,
+                below,
+                segments.back().text,
+                defparam.value,
+                defparam.source,
+                std::make_shared<const semantic::SpecializedHirUnit>(specialization),
+                std::string { hierarchy_prefix },
+                value ? value->canonical() : std::string { },
+            });
+            continue;
         }
         active_compiled_systemverilog_defparams_.push_back({
-            std::move(target_path),
-            std::move(segments.back()),
+            std::move(*target_path),
+            std::move(segments.back().text),
             defparam.value,
             defparam.source,
             &specialization,
             false,
             std::string { hierarchy_prefix },
+            std::move(*base),
+            std::move(below),
         });
     }
+}
+
+std::optional<std::string> HierarchyBuilder::resolve_defparam_target_scope(
+    const std::span<const DefparamSegment> segments,
+    const std::string_view defparam_scope) const
+{
+    if (segments.empty() || defparam_scope_frames_.empty()) {
+        return std::nullopt;
+    }
+    const auto& first = segments.front();
+    // The scope `scope` of instance `frame` holds a scope named by the first
+    // segment: an instance (or an element of an instance array) or a
+    // generate block instance declared there. The path of that scope.
+    const auto named_in = [&](const DefparamScopeFrame& frame,
+                              const std::string_view scope)
+        -> std::optional<std::string> {
+        const auto instance_named = [&](const semantic::InstanceId id) {
+            const auto instance = compiled_->find_instance(id);
+            return instance && instance->systemverilog != nullptr
+                && instance->systemverilog->name == first.name;
+        };
+        if (scope == frame.path
+            && std::ranges::any_of(frame.unit->instances, instance_named)) {
+            return std::string { scope } + "." + first.text;
+        }
+        for (const auto& occurrence : *frame.occurrences) {
+            if (occurrence.path == scope
+                && std::ranges::any_of(occurrence.region->instances, instance_named)) {
+                return std::string { scope } + "." + first.text;
+            }
+        }
+        for (const auto& occurrence : *frame.occurrences) {
+            if (occurrence.parent_path != scope || occurrence.path == scope
+                || occurrence.region->label != first.name) {
+                continue;
+            }
+            const bool iterative = occurrence.region->kind
+                == semantic::sv::GenerateKind::iterative;
+            if (iterative
+                    ? first.indices.size() == 1U
+                        && first.indices.front() == occurrence.genvar_value
+                    : first.indices.empty()) {
+                return occurrence.path;
+            }
+        }
+        return std::nullopt;
+    };
+    // The scope that encloses `scope` within the instance: the scope of the
+    // generate block whose occurrence it is.
+    const auto enclosing = [](const DefparamScopeFrame& frame,
+                               const std::string_view scope)
+        -> std::optional<std::string_view> {
+        if (scope == frame.path) {
+            return std::nullopt;
+        }
+        for (const auto& occurrence : *frame.occurrences) {
+            if (occurrence.path == scope && occurrence.parent_path != scope) {
+                return std::string_view { occurrence.parent_path };
+            }
+        }
+        return std::nullopt;
+    };
+    auto scope = std::string { defparam_scope };
+    for (auto level = defparam_scope_frames_.size(); level-- != 0U;) {
+        const auto& frame = defparam_scope_frames_[level];
+        for (std::optional<std::string_view> current { scope }; current;
+             current = enclosing(frame, *current)) {
+            if (auto found = named_in(frame, *current)) {
+                return found;
+            }
+        }
+        // The name of the instance's module (Syntax 23-8) or, at the top,
+        // of the top-level instance (23.3.1).
+        if (first.indices.empty()
+            && (frame.unit->name == first.name
+                || (frame.top_level && frame.path == first.name))) {
+            return frame.path;
+        }
+        // The other top-level instances (23.3.1, 23.8 c).
+        if (frame.top_level && first.indices.empty()
+            && std::ranges::find(top_level_names_, first.name)
+                != top_level_names_.end()) {
+            return first.name;
+        }
+        // The instantiating scope of the parent instance (23.8 b, c).
+        if (frame.top_level || frame.instantiating_scope.empty() || level == 0U) {
+            break;
+        }
+        scope = frame.instantiating_scope;
+    }
+    return std::nullopt;
+}
+
+void HierarchyBuilder::set_external_defparams(
+    std::vector<ExternalSystemVerilogDefparam> externals)
+{
+    external_defparams_ = std::move(externals);
+    for (const auto& external : external_defparams_) {
+        active_compiled_systemverilog_defparams_.push_back({
+            external.target_path,
+            external.parameter,
+            external.expression,
+            external.source,
+            external.owner.get(),
+            false,
+            external.owner_path,
+            external.base,
+            external.below,
+        });
+    }
+}
+
+void HierarchyBuilder::report_unmatched_external_defparams()
+{
+    for (std::size_t index = 0U; index < external_defparams_.size()
+         && index < active_compiled_systemverilog_defparams_.size();
+         ++index) {
+        const auto& active = active_compiled_systemverilog_defparams_[index];
+        if (!active.matched) {
+            report("FSIM-ELAB-DEFPARAM-002",
+                "unknown defparam hierarchical target '" + active.target_path
+                    + "." + active.parameter + "'",
+                compiled_source_span(*compiled_, active.source));
+        }
+    }
+}
+
+std::optional<std::string> HierarchyBuilder::defparam_enclosing_hierarchy(
+    const std::string_view defparam_scope) const
+{
+    if (defparam_scope_frames_.empty()) {
+        return std::nullopt;
+    }
+    // The defparam's own scope is a generate block instance.
+    if (defparam_scope != defparam_scope_frames_.back().path) {
+        return std::string { defparam_scope };
+    }
+    for (auto level = defparam_scope_frames_.size(); level-- != 0U;) {
+        const auto& frame = defparam_scope_frames_[level];
+        if (frame.array_element) {
+            return frame.path;
+        }
+        if (frame.top_level || frame.instantiating_scope.empty() || level == 0U) {
+            break;
+        }
+        if (frame.instantiating_scope != defparam_scope_frames_[level - 1U].path) {
+            return frame.instantiating_scope;
+        }
+    }
+    return std::nullopt;
 }
 
 void HierarchyBuilder::validate_verilog_specify(

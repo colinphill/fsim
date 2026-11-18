@@ -247,15 +247,15 @@ std::optional<ForeignArchitectureBinding> foreign_architecture_binding(
             || candidate->form != DeclarationForm::attribute_specification
             || !candidate->attribute || !candidate->attribute->value
             || !support::equal_ignoring_ascii_case(candidate->name, "foreign")
-            || !support::equal_ignoring_ascii_case(
-                candidate->attribute->entity_class, "architecture")
-            || std::ranges::none_of(candidate->attribute->entity_names,
-                [&](const Name& name) {
-                    return support::equal_ignoring_ascii_case(
-                               name.spelling, architecture.name)
-                        || support::equal_ignoring_ascii_case(
-                            name.spelling, "all");
-                })) {
+            || candidate->attribute->entity_class_kind
+                != support::VhdlEntityClass::architecture
+            || (candidate->attribute->name_list
+                    != support::VhdlEntityNameList::all
+                && std::ranges::none_of(candidate->attribute->entity_names,
+                    [&](const Name& name) {
+                        return support::equal_ignoring_ascii_case(
+                            name.spelling, architecture.name);
+                    }))) {
             continue;
         }
         const auto& expressions = hir.expressions();

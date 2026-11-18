@@ -838,6 +838,16 @@ bool Interpreter::Impl::StaticKernel::restore_image(
         }
     }
     build_container_info();
+    // A design object's queue or dynamic array (storage dynamic) starts
+    // with its initial value, as build_fresh gives it.
+    for (const auto& container : containers_) {
+        if (container.object != no_container_object
+            && container.storage == StaticKernelContainerStorage::dynamic) {
+            static_kernel_detail::assign_dynamic_value(
+                dynamic_headers_[container.dynamic_header],
+                impl_.get_container_object(container.object).initial_value);
+        }
+    }
     fast_runs_.assign(members_.size(), FastRun { });
     restored_host_scan_ = host_scan;
     restored_update_writers_ = std::move(update_writers);

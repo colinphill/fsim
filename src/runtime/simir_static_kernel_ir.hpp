@@ -701,6 +701,29 @@ enum class DynOp : std::uint8_t {
     stream_take_value,
     stream_to_container,
     stream_take_container,
+    /// A flat aggregate object the host bridges to a packed signal (IEEE
+    /// 1800-2023 7.2, 37.17; storage packed_signal, container z's info
+    /// storage 2): its leaves are bit fields of the slot, the first leaf
+    /// leftmost. aggregate_unpack (ReadContainerObject): the leaves of
+    /// container aux = the slot's fields; aggregate_pack (a blocking
+    /// WriteContainerObject): the slot's fields = container aux's leaves, a
+    /// changed field announced as a slot store does. The graph imm_b holds
+    /// one node per leaf of an element, its width in the node's first word
+    /// (dyn_graph_node_words words a node).
+    aggregate_unpack,
+    aggregate_pack,
+    /// ContainerElementRead / ContainerElementWrite of a flat aggregate
+    /// (7.2): the `offset` leaves of the element index y selects in
+    /// container z (read) or aux (write), from leaf dyn_aggregate_leaf of
+    /// it (a nested structure member), to or from the structure register's
+    /// container (aux on a read, z on a write) as a dense fixed-size
+    /// array's elements are (dyn_layout_aggregate_box: the indexed
+    /// container is a structure value). Register x is the first of the
+    /// leaves' nodes in CompiledBody::predicate_words: width | the
+    /// zero-initial flag << 32 (an invalid read index reads each leaf's
+    /// initial value, 7.4.6).
+    aggregate_element_read,
+    aggregate_element_write,
 };
 
 /// A container predicate graph of CompiledBody::predicate_words, as
@@ -762,6 +785,9 @@ enum class DynFailure : std::uint32_t {
     missing_entry,
     invalid_read_index,
     invalid_write_index,
+    // A flat aggregate's member write of a value the leaf cannot hold
+    // (apply_container_aggregate_member).
+    aggregate_leaf,
 };
 
 /// KInst::imm_b of a DynOp::assoc_read: the read of an update's own target,
@@ -805,6 +831,38 @@ inline constexpr std::uint64_t dyn_layout_scalar_float = 512U;
 inline constexpr std::uint64_t dyn_stream_other_two_state = 1024U;
 inline constexpr std::uint64_t dyn_stream_other_text = 2048U;
 inline constexpr std::uint64_t dyn_stream_other_associative = 4096U;
+/// A dense fixed-size unpacked array (IEEE 1800-2023 7.4): its elements in
+/// declared order, left first, at ordinals 0 .. size - 1 (the dynamic
+/// array layout). An index is a declared index (the declared range in
+/// imm_b, left in the low half, as a sparse array's) and an iterator index
+/// (item.index, an index locator's result) is the declared index of the
+/// ordinal: imm_a's high half holds the left bound, dyn_layout_descending
+/// whether the left bound is the higher one (container_declared_index).
+inline constexpr std::uint64_t dyn_layout_fixed = 8192U;
+inline constexpr std::uint64_t dyn_layout_descending = 16384U;
+/// A flat unpacked aggregate's member read or write (DynOp::read, write of
+/// ContainerAggregateRead, ContainerAggregateWrite; IEEE 1800-2023 7.2): the
+/// container holds each element's leaves (flat_aggregate_type), and the
+/// member is leaf dyn_aggregate_leaf(imm_a) of the element the index
+/// selects, among dyn_aggregate_leaves(imm_a) leaves per element (imm_a's
+/// high half; the index as a dense fixed-size array's). A structure value
+/// (dyn_layout_aggregate_box) is its own element: the index is ignored.
+/// An unknown or out-of-range read index reads the leaf type's initial
+/// value: zero for a two-state or real leaf (dyn_layout_leaf_zero), else
+/// all X (the leaf's width in offset). A write of a value with X or Z bits
+/// to a two-state leaf (dyn_layout_leaf_two_state) fails (aggregate_leaf).
+inline constexpr std::uint64_t dyn_layout_aggregate = 32768U;
+inline constexpr std::uint64_t dyn_layout_aggregate_box = 65536U;
+inline constexpr std::uint64_t dyn_layout_leaf_zero = 131072U;
+inline constexpr std::uint64_t dyn_layout_leaf_two_state = 262144U;
+[[nodiscard]] constexpr std::uint64_t dyn_aggregate_leaf(const std::uint64_t imm_a) noexcept
+{
+    return (imm_a >> 32U) & 0xFFFFU;
+}
+[[nodiscard]] constexpr std::uint64_t dyn_aggregate_leaves(const std::uint64_t imm_a) noexcept
+{
+    return imm_a >> 48U;
+}
 
 /// A string element of a kernel container: one element slot (two words)
 /// holding the element's bytes, which the slot owns (malloc'd, no
@@ -825,7 +883,8 @@ static_assert(sizeof(DynTextSlot) == 16U);
     return op == DynOp::read || op == DynOp::write || op == DynOp::delete_at
         || op == DynOp::insert || op == DynOp::assoc_read || op == DynOp::assoc_write
         || op == DynOp::assoc_delete || op == DynOp::exists || op == DynOp::next
-        || op == DynOp::prev || op == DynOp::text_read || op == DynOp::text_write;
+        || op == DynOp::prev || op == DynOp::text_read || op == DynOp::text_write
+        || op == DynOp::aggregate_element_read || op == DynOp::aggregate_element_write;
 }
 
 [[nodiscard]] inline bool dyn_reads_source(const DynOp op) noexcept
@@ -845,7 +904,8 @@ static_assert(sizeof(DynTextSlot) == 16U);
 /// Whether KInst::imm_b is a predicate graph (dyn_graph).
 [[nodiscard]] inline bool dyn_has_graph(const DynOp op) noexcept
 {
-    return op == DynOp::reduce || op == DynOp::order || op == DynOp::locate;
+    return op == DynOp::reduce || op == DynOp::order || op == DynOp::locate
+        || op == DynOp::aggregate_unpack || op == DynOp::aggregate_pack;
 }
 
 /// The whole-array operations, which the bytecode tier runs through the
@@ -1288,6 +1348,15 @@ struct CompiledBody {
     /// executor reports these stores (StaticKernel::note_variable_store,
     /// IEEE 1076-2019 22.5.2, 21.3.2.2).
     std::vector<std::uint32_t> variable_stores;
+    /// By instruction: the kernel dynamic object (a design queue, dynamic,
+    /// associative or sparse array of storage dynamic, by container) whose
+    /// value it leaves changed (a write-back of a binding, an element
+    /// write), or no_variable_store; empty in a body that writes none.
+    /// Code compiled for an observer (StaticKernelTemplate::observer_hooks)
+    /// calls `fsim_sk_container_publish` after them, so a host observer of
+    /// the object (a VPI word or value-change watch, IEEE 1800-2023 37.17,
+    /// 38.36.1) hears each change.
+    std::vector<std::uint32_t> container_publishes;
     /// By instruction: nonzero where a statement of a SystemVerilog member
     /// begins (a debug point of the program, a no-op without the debug
     /// plan) that may follow a store: its code-order predecessor stores a

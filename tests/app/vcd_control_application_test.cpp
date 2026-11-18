@@ -154,7 +154,7 @@ void check_trace(const std::string& trace)
     };
     assert(contains("$timescale 1ns $end"));
     assert(contains("$scope module vcd_control_test $end"));
-    assert(contains("$var wire 137"));
+    assert(contains("$var reg 137"));
     assert(contains("$dumpvars\n"));
     assert(contains("$dumpoff\n"));
     assert(contains("$dumpon\n"));

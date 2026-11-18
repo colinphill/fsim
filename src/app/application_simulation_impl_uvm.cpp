@@ -102,7 +102,8 @@ namespace {
     return method.statements.empty() && method.local_declarations.empty()
         && method.defined
         && (!method.return_type
-            || method.return_type->target.spelling == "void");
+            || method.return_type->builtin
+                == support::SystemVerilogBuiltinType::void_type);
 }
 }
 

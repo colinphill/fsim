@@ -147,6 +147,7 @@ struct VcdWriter::Impl {
     SystemVerilogScalarKind scalar_kind{SystemVerilogScalarKind::None};
     std::string last_value;
     bool has_value{};
+    TraceVarKind var_kind{TraceVarKind::Wire};
   };
 
   struct TraceSelection {
@@ -220,8 +221,9 @@ struct VcdWriter::Impl {
 
     for (const auto index : scope.declarations) {
       const auto &declaration = declarations[index];
-      const bool real = frontend::is_real_scalar_kind(declaration.scalar_kind);
-      append(real ? "$var real " : "$var wire ");
+      append("$var ");
+      append(trace_var_keyword(declaration.var_kind));
+      append(" ");
       append(std::to_string(declaration.width));
       append(" ");
       append(declaration.identifier);
@@ -362,7 +364,8 @@ VcdWriter::VcdWriter(VcdWriter &&) noexcept = default;
 VcdWriter &VcdWriter::operator=(VcdWriter &&) noexcept = default;
 
 VcdSignal VcdWriter::declare_signal(std::string_view hierarchical_name,
-                                    std::size_t width) {
+                                    std::size_t width,
+                                    const TraceVarKind var_kind) {
   if (impl_->started) {
     throw std::logic_error("cannot declare a VCD signal after begin");
   }
@@ -386,22 +389,31 @@ VcdSignal VcdWriter::declare_signal(std::string_view hierarchical_name,
   }
   impl_->declarations.push_back(
       {std::string(hierarchical_name), std::string(reference),
-       make_identifier(index), width, SystemVerilogScalarKind::None, {}, false});
+       make_identifier(index), width, SystemVerilogScalarKind::None, {}, false,
+       var_kind});
   return VcdSignal{index};
 }
 
 VcdSignal VcdWriter::declare_systemverilog_scalar(
     const std::string_view hierarchical_name,
-    const SystemVerilogScalarKind kind) {
+    const SystemVerilogScalarKind kind, const TraceVarKind var_kind) {
   const bool real = frontend::is_real_scalar_kind(kind);
   if (!real && kind != SystemVerilogScalarKind::Time
       && kind != SystemVerilogScalarKind::Chandle) {
     throw std::invalid_argument("unsupported SystemVerilog VCD scalar kind");
   }
   const auto signal = declare_signal(
-      hierarchical_name, real ? 1U : 64U);
+      hierarchical_name, real ? 1U : 64U, var_kind);
   impl_->declarations[signal.index].scalar_kind = kind;
   return signal;
+}
+
+VcdSignal VcdWriter::declare_systemverilog_scalar(
+    const std::string_view hierarchical_name,
+    const SystemVerilogScalarKind kind) {
+  return declare_systemverilog_scalar(hierarchical_name, kind,
+      frontend::is_real_scalar_kind(kind) ? TraceVarKind::Real
+                                          : TraceVarKind::Wire);
 }
 
 std::vector<VcdSignal> VcdWriter::declare_model(
@@ -412,6 +424,7 @@ std::vector<VcdSignal> VcdWriter::declare_model(
     std::size_t width{};
     SystemVerilogScalarKind scalar_kind{SystemVerilogScalarKind::None};
     bool is_scalar{};
+    TraceVarKind var_kind{TraceVarKind::Wire};
   };
 
   const auto entries = model.entries();
@@ -423,18 +436,21 @@ std::vector<VcdSignal> VcdWriter::declare_model(
     }
     const TraceVariableDeclaration* variable = nullptr;
     std::string_view hierarchical_name;
+    TraceVarKind var_kind{TraceVarKind::Wire};
     if (entry.kind == TraceDeclarationKind::Variable) {
       variable = &model.variable(entry.id);
       hierarchical_name = variable->hierarchical_name;
+      var_kind = variable->var_kind;
     } else {
       const auto& alias = model.alias(entry.id);
       variable = &model.variable(alias.target);
       hierarchical_name = alias.hierarchical_name;
+      var_kind = alias.var_kind;
     }
     const auto& type = model.type(variable->type);
     pending.push_back({
         entry.id, hierarchical_name, type.width, type.scalar_kind,
-        type.kind == TraceTypeKind::SystemVerilogScalar});
+        type.kind == TraceTypeKind::SystemVerilogScalar, var_kind});
   }
 
   if (pending.size()
@@ -448,9 +464,10 @@ std::vector<VcdSignal> VcdWriter::declare_model(
   result.reserve(pending.size());
   for (const auto& selection : pending) {
     const auto signal = selection.is_scalar
-        ? declare_systemverilog_scalar(
-              selection.hierarchical_name, selection.scalar_kind)
-        : declare_signal(selection.hierarchical_name, selection.width);
+        ? declare_systemverilog_scalar(selection.hierarchical_name,
+              selection.scalar_kind, selection.var_kind)
+        : declare_signal(selection.hierarchical_name, selection.width,
+              selection.var_kind);
     impl_->trace_signals.emplace(
         selection.identity.value,
         Impl::TraceSelection{selection.identity.value, signal});

@@ -214,7 +214,7 @@ fsim_require_schema_diagnostic_tokens("${FSIM_LIBRARY_TEST}"
   "stale-publication.fsimlib")
 fsim_require_schema_diagnostic_tokens("${FSIM_APPLICATION_TEST}"
   "unsupported design state FSIMUVM1 identity: found"
-  "found schema 17; required schema 18"
+  "found schema 18; required schema 19"
   "regenerate .fsimdesign"
   "FSIMHPT1"
   "future-vhdl-object"

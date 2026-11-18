@@ -454,10 +454,10 @@ ScalarSurfaceCapture verify_scalar_surfaces(
         std::istreambuf_iterator<char> { }
     };
     assert(vcd.find("$var real 1") != std::string::npos);
-    assert(vcd.find("$var wire 64") != std::string::npos);
-    assert(
-        vcd.find("$var wire 64", vcd.find("$var wire 64") + 1)
-        != std::string::npos);
+    // The time variable and the chandle variable are exact 64-bit vectors
+    // (IEEE 1800-2023 21.7.2.1 var_types time and reg).
+    assert(vcd.find("$var time 64") != std::string::npos);
+    assert(vcd.find("$var reg 64") != std::string::npos);
     assert(vcd.find("r-0 ") != std::string::npos);
     assert(
         vcd.find(

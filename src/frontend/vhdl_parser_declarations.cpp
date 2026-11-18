@@ -1276,7 +1276,9 @@ void VhdlParser::parse_vhdl_attribute_declaration(DesignUnit &unit,
                                  {},
                                  {},
                                  {},
-                                 span_from(start, previous())});
+                                 span_from(start, previous()),
+                                 support::VhdlEntityClass::none,
+                                 support::VhdlEntityNameList::designators});
     vhdl_declared_attributes_.insert_or_assign(name, std::move(type_mark));
     return;
   }
@@ -1290,7 +1292,20 @@ void VhdlParser::parse_vhdl_attribute_declaration(DesignUnit &unit,
 
   std::vector<std::string> entity_names;
   std::string entity_name;
+  // `all` and `others` are reserved words that stand for the whole entity
+  // name list (IEEE 1076-2019 7.2).
+  auto name_list = support::VhdlEntityNameList::designators;
+  if ((keyword("all", 0, true) || keyword("others", 0, true))
+      && at(TokenKind::Colon, 1)) {
+    name_list = keyword("all", 0, true) ? support::VhdlEntityNameList::all
+                                        : support::VhdlEntityNameList::others;
+    advance();
+  }
   while (!at_end() && !at(TokenKind::Colon) && !at(TokenKind::Semicolon)) {
+    if (keyword("all", 0, true) || keyword("others", 0, true)) {
+      error(current(), "FSIM-VHDL-PARSE-266",
+            "'all' and 'others' stand alone as an attribute entity name list");
+    }
     if (match(TokenKind::Comma)) {
       if (entity_name.empty()) {
         error(previous(), "FSIM-VHDL-PARSE-266",
@@ -1318,7 +1333,8 @@ void VhdlParser::parse_vhdl_attribute_declaration(DesignUnit &unit,
   if (!entity_name.empty()) {
     entity_names.push_back(std::move(entity_name));
   }
-  if (entity_names.empty()) {
+  if (entity_names.empty()
+      && name_list == support::VhdlEntityNameList::designators) {
     error(current(), "FSIM-VHDL-PARSE-266",
           "an attribute specification requires at least one entity name");
   }
@@ -1328,23 +1344,24 @@ void VhdlParser::parse_vhdl_attribute_declaration(DesignUnit &unit,
   // An attribute of a design unit is specified immediately within that
   // unit's declarative part (IEEE 1076-2008 7.2).
   {
-    const auto entity_class_name = vhdl_name(entity_class.text);
-    const auto required = entity_class_name == "entity"
+    const auto entity_class_kind
+        = support::vhdl_entity_class(vhdl_name(entity_class.text));
+    const auto required = entity_class_kind == support::VhdlEntityClass::entity
         ? std::optional { UnitKind::VhdlEntity }
-        : entity_class_name == "architecture"
+        : entity_class_kind == support::VhdlEntityClass::architecture
         ? std::optional { UnitKind::VhdlArchitecture }
-        : entity_class_name == "package"
+        : entity_class_kind == support::VhdlEntityClass::package
         ? std::optional { UnitKind::VhdlPackage }
-        : entity_class_name == "configuration"
+        : entity_class_kind == support::VhdlEntityClass::configuration
         ? std::optional { UnitKind::VhdlConfiguration }
         : std::nullopt;
     if (required
         && (unit.kind != *required
-            || std::ranges::any_of(entity_names,
-                [&](const std::string& entity_name) {
-                  return entity_name != "all" && entity_name != "others"
-                      && entity_name != unit.name;
-                }))) {
+            || (name_list == support::VhdlEntityNameList::designators
+                && std::ranges::any_of(entity_names,
+                    [&](const std::string& entity_name) {
+                      return entity_name != unit.name;
+                    })))) {
       error(entity_class, "FSIM-VHDL-SEM-118",
             "an attribute of a design unit must be specified in that "
             "unit's own declarative part");
@@ -1406,13 +1423,19 @@ void VhdlParser::parse_vhdl_attribute_declaration(DesignUnit &unit,
         support::ExpressionMarker::vhdl_qualified, declared->second, {value},
         value.span);
   }
+  auto& attribute_values = vhdl_attribute_values_[name];
   for (const auto& specified : entity_names) {
-    vhdl_attribute_values_[name].insert_or_assign(specified, named_value);
-    // `all` and `others` apply to the named entity class only.
-    if (specified == "all" || specified == "others") {
-      vhdl_attribute_values_[name].insert_or_assign(
-          specified + ":" + vhdl_name(entity_class.text), named_value);
-    }
+    attribute_values.named.insert_or_assign(specified, named_value);
+  }
+  // `all` and `others` apply to the named entity class only.
+  if (name_list == support::VhdlEntityNameList::others) {
+    attribute_values.others_by_class.insert_or_assign(
+        vhdl_name(entity_class.text), named_value);
+    attribute_values.latest_others = named_value;
+  } else if (name_list == support::VhdlEntityNameList::all) {
+    attribute_values.all_by_class.insert_or_assign(
+        vhdl_name(entity_class.text), named_value);
+    attribute_values.latest_all = named_value;
   }
   unit.vhdl_attributes.push_back(
       VhdlAttributeDeclaration{name,
@@ -1421,7 +1444,10 @@ void VhdlParser::parse_vhdl_attribute_declaration(DesignUnit &unit,
                                std::move(entity_names),
                                vhdl_name(entity_class.text),
                                std::move(value),
-                               span_from(start, previous())});
+                               span_from(start, previous()),
+                               support::vhdl_entity_class(
+                                   vhdl_name(entity_class.text)),
+                               name_list});
 }
 
 void VhdlParser::parse_vhdl_group_declaration(DesignUnit &unit,

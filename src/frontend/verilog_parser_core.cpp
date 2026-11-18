@@ -121,11 +121,10 @@ verilog_system_service_standard(const std::string_view name)
                 "$countbits", "$countones", "$dimensions", "$error", "$exit",
                 "$coverage_control", "$coverage_get", "$coverage_get_max",
                 "$coverage_merge", "$coverage_save", "$fatal", "$fell", "$get_coverage",
-                "$get_inst_coverage",
                 "$high", "$increment", "$info", "$isunknown", "$isunbounded",
                 "$left", "$low", "$onehot", "$onehot0", "$past", "$right",
                 "$rose", "$sampled", "$sformatf", "$shortrealtobits", "$size",
-                "$srandom", "$stable", "$system", "$typename",
+                "$stable", "$system", "$typename",
                 "$unpacked_dimensions", "$urandom", "$urandom_range",
                 "$warning" },
             name)) {

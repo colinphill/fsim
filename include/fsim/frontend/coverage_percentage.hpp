@@ -76,12 +76,4 @@ calculate_systemverilog_overall_coverage_percentage(
     std::span<const SystemVerilogCovergroupDeclaration> declarations,
     std::span<const SystemVerilogCovergroupInstance> instances);
 
-/// Return the instance-weighted overall functional coverage. Every
-/// materialized instance contributes independently using its covergroup
-/// declaration's effective instance weight.
-[[nodiscard]] SystemVerilogCoveragePercentage
-calculate_systemverilog_overall_instance_coverage_percentage(
-    std::span<const SystemVerilogCovergroupDeclaration> declarations,
-    std::span<const SystemVerilogCovergroupInstance> instances);
-
 } // namespace fsim::frontend

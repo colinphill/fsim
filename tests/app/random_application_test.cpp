@@ -433,7 +433,6 @@ module invalid_scope_randomize;
     // A module variable is a legal std::randomize argument (IEEE 1800-2017
     // 18.12); a real variable has no integral domain to randomize.
     result = std::randomize(module_real);
-    $srandom();
     result = $dist_uniform(1, 0, 10);
   end
 endmodule
@@ -450,7 +449,6 @@ endmodule
     for (const auto code : {
              "FSIM-ELAB-SVRAND-002",
              "FSIM-ELAB-SVRAND-003",
-             "FSIM-ELAB-SVRAND-007",
              "FSIM-ELAB-SVRAND-008" }) {
         assert(std::ranges::any_of(
             diagnostics.diagnostics(), [&](const auto& diagnostic) {
@@ -554,9 +552,9 @@ module random_test;
     inline_mode = mode;
     $display("cli=%h", $urandom);
     $display("signed=%d", $random);
-    $srandom(32'h13579bdf);
+    process::self().srandom(32'h13579bdf);
     srandom_a = $urandom;
-    $srandom(32'h13579bdf);
+    process::self().srandom(32'h13579bdf);
     srandom_b = $urandom;
     dist_seed = 32'h12345678;
     dist_uniform_value = $dist_uniform(dist_seed, -10, 10);

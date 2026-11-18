@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+inl mailbox num=2
+inl peek 1 7
+inl get 7
+inl try_get 1 9
+inl empty 0 num=0
+inl keys 1 0
+inl keys 1
+inl event 1

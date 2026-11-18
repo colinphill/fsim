@@ -9661,7 +9661,8 @@ private:
                 result.push_back(object);
             }
         }
-        if (same_name(owner.association->choice_spelling, "others")) {
+        if (owner.association->choice_marker
+            == support::ExpressionMarker::vhdl_others_choice) {
             auto* const others = make_object(vhpiOthersK, "others", &owner);
             others->source = owner.association->source;
             result.push_back(others);
@@ -12705,18 +12706,11 @@ private:
         }
         const auto add = [&](const vhdl::Name& name, std::string entity_class) {
             const auto text = name.text();
-            Object* object = nullptr;
-            if (same_name(text, "all")) {
-                object = make_object(vhpiAllK, "all", &owner);
-            } else if (same_name(text, "others")) {
-                object = make_object(vhpiOthersK, "others", &owner);
-            } else {
-                // A signature after the name selects overloads of one name.
-                const auto bracket = text.find('[');
-                object = lookup_name(*owner.parent,
-                    bracket == std::string_view::npos ? text
-                                                      : text.substr(0U, bracket));
-            }
+            // A signature after the name selects overloads of one name.
+            const auto bracket = text.find('[');
+            Object* object = lookup_name(*owner.parent,
+                bracket == std::string_view::npos ? text
+                                                  : text.substr(0U, bracket));
             if (object == nullptr) {
                 object = make_object(static_cast<vhpiClassKindT>(0), text, &owner);
                 object->entity_designator = true;
@@ -12725,8 +12719,16 @@ private:
             result.push_back(object);
         };
         if (owner.kind == vhpiAttrSpecK && owner.declaration->attribute) {
-            for (const auto& name : owner.declaration->attribute->entity_names) {
-                add(name, owner.declaration->attribute->entity_class);
+            const auto& attribute = *owner.declaration->attribute;
+            if (attribute.name_list != support::VhdlEntityNameList::designators) {
+                auto* const object = attribute.name_list
+                        == support::VhdlEntityNameList::all
+                    ? make_object(vhpiAllK, "all", &owner)
+                    : make_object(vhpiOthersK, "others", &owner);
+                result.push_back(object);
+            }
+            for (const auto& name : attribute.entity_names) {
+                add(name, attribute.entity_class);
             }
         } else if (owner.kind == vhpiGroupDeclK && owner.declaration->group) {
             const auto classes = [&] {

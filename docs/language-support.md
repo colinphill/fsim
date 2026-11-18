@@ -1043,10 +1043,12 @@ with the same checked scalar-time service in interpreter and compiled modes.
 
 `$get_coverage()` returns a real percentage from 0 through 100 using the live,
 goal-adjusted coverage of every materialized covergroup type and each type's
-`type_option.weight`. `$get_inst_coverage()` instead contributes every
-materialized covergroup instance using the declaration's effective instance
-`option.weight`. Empty or zero-weight contributors are excluded from their
-respective denominators. Both queries use one typed portable SimIR service, so
+`type_option.weight`; empty or zero-weight types are excluded from the
+denominator. A covergroup's `get_coverage()` and `get_inst_coverage()` methods
+give the coverage of its type and of its instance (IEEE 1800-2023 19.8). The
+routines `$simtime`, `$srandom` and `$get_inst_coverage`, which IEEE 1800-2023
+does not define, are unknown system routines. Every query uses one typed
+portable SimIR service, so
 runtime-state round trips and interpreter or LLVM O0/O2 execution share the
 same simulation-owned coverage state.
 
@@ -2226,6 +2228,13 @@ resumption emit standard unknown/current checkpoints; `$dumpall` emits an
 unconditional current-value checkpoint, the default path is `dump.vcd`, and a
 byte limit terminates dumping with a VCD comment. Paths remain sandboxed below
 the project file root and packed values retain their complete declared width.
+Each Verilog and SystemVerilog object, in a `$dumpvars` file and a `--trace`
+VCD file alike, is declared with its var_type (IEEE 1800-2023 21.7.2.1): a net
+with its net type (`wire`, `tri`, `wand`, `supply0`, ...; a `uwire` as
+`wire`), an input or inout port as a net, a `time`, `real`, `shortreal` or
+`realtime` variable as `time`, `real` or `realtime`, an `integer`, `int`,
+`shortint`, `longint` or `byte` variable as `integer`, and any other variable
+as `reg`.
 The companion extended-VCD family is also executable: `$dumpports`,
 `$dumpportsoff`, `$dumpportson`, `$dumpportsall`, `$dumpportslimit`, and
 `$dumpportsflush`. Each `$dumpports` call owns one unique file and one or more
@@ -2276,8 +2285,12 @@ classification, explicit rounding, locale-independent formatting/scanning,
 typed scheduling, and `$time`/`$stime`/`$realtime` execute through common
 checked services. Interpreter and LLVM O0/O2 agree on canonical payloads,
 signal transport, callbacks, debugger show/deposit/force/release, snapshots,
-and VCD real versus exact-vector declarations. Overflow, nonfinite rejection,
-unsupported operators, and resource failures are transactional.
+and VCD real versus exact-vector declarations. A `real`, `shortreal` or
+`realtime` holds every IEEE 754 value, infinities and NaN included, and a real
+converts to `shortreal` as IEEE 754 converts it, a finite value beyond its
+range becoming an infinity (IEEE 1800-2023 6.12). Overflow, nonfinite
+conversion to `time`, unsupported operators, and resource failures are
+transactional.
 
 `chandle` supports null and simulation-owned opaque identities, equality and
 inequality, exact same-kind transport, debugger inspection/mutation, callbacks,

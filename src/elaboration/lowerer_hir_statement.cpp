@@ -367,7 +367,7 @@ Lowerer::lower_hir_container_assignment_pattern(
                     continue;
                 }
                 keyed = true;
-                if (association.choice_spelling == "default") {
+                if (association.choice_marker == support::ExpressionMarker::sv_default_choice) {
                     if (default_value) {
                         report(
                             "FSIM-ELAB-SVPATTERN-005",
@@ -958,7 +958,7 @@ Lowerer::lower_hir_container_assignment_pattern(
         // 1800-2017 10.9.1, 7.8.1).
         if (target.type->associative && target.type->string_indices) {
             for (const auto& association : source.associations) {
-                if (association.choice_spelling == "default") {
+                if (association.choice_marker == support::ExpressionMarker::sv_default_choice) {
                     if (!emit_default(association)) {
                         return std::nullopt;
                     }
@@ -1023,7 +1023,7 @@ Lowerer::lower_hir_container_assignment_pattern(
             const auto& association = source.associations[ordinal];
             auto index_value = static_cast<std::int64_t>(ordinal);
             if (target.type->associative
-                && association.choice_spelling == "default") {
+                && association.choice_marker == support::ExpressionMarker::sv_default_choice) {
                 if (!emit_default(association)) {
                     return std::nullopt;
                 }
@@ -1228,7 +1228,7 @@ Lowerer::lower_hir_container_assignment_pattern(
                 continue;
             }
             keyed = true;
-            if (association.choice_spelling == "default"
+            if (association.choice_marker == support::ExpressionMarker::sv_default_choice
                 && association.choices.size() == 1U) {
                 if (default_value) {
                     report(
@@ -1618,8 +1618,10 @@ void Lowerer::emit_hir_vhdl_initializer_length_checks(
                     if (names.empty() && association.choices.empty()) {
                         names.push_back(association.choice_spelling);
                     }
+                    const bool others_choice = association.choice_marker
+                        == support::ExpressionMarker::vhdl_others_choice;
                     for (const auto& name : names) {
-                        if (same_hir_identifier(name, "others", true)) {
+                        if (others_choice) {
                             for (std::size_t index { };
                                 index < elements.size(); ++index) {
                                 if (!covered[index]) {
@@ -4738,12 +4740,9 @@ bool Lowerer::lower_hir_statement_unsuspended(
             return std::nullopt;
         }
         const auto& input = *expression->systemverilog;
-        if (input.kind != semantic::sv::ExpressionKind::call
-            || !input.text.starts_with('.')
-            || support::process_method(std::string_view { input.text }.substr(1U))
-                != support::ProcessMethod::get_randstate
-            || input.operands.size() != 1U
-            || !hir_process_handle_expression(input.operands.front())) {
+        if (input.operands.size() != 1U
+            || hir_process_method_call(input)
+                != support::ProcessMethod::get_randstate) {
             return std::nullopt;
         }
         const auto receiver_expression
@@ -8393,9 +8392,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 : std::nullopt;
             const auto plain_constructor = constructor_name
                 && constructor_name->systemverilog != nullptr
-                && constructor_name->systemverilog->kind
-                    == semantic::sv::ExpressionKind::name
-                && constructor_name->systemverilog->text == "new";
+                && constructor_name->systemverilog->marker
+                    == support::ExpressionMarker::sv_new_array;
             const auto source_container
                 = hir_container_object_binding(*value);
             const bool static_slice
@@ -9239,9 +9237,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                       : std::nullopt;
                   const bool sized_new = constructor
                       && constructor->systemverilog != nullptr
-                      && constructor->systemverilog->kind
-                          == semantic::sv::ExpressionKind::name
-                      && constructor->systemverilog->text == "new";
+                      && constructor->systemverilog->marker
+                          == support::ExpressionMarker::sv_new_array;
                   const bool array_new
                       = source.kind == semantic::sv::ExpressionKind::call
                       && source.marker
@@ -9993,9 +9990,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     : std::nullopt;
                 const auto plain_constructor = constructor_name
                     && constructor_name->systemverilog != nullptr
-                    && constructor_name->systemverilog->kind
-                        == semantic::sv::ExpressionKind::name
-                    && constructor_name->systemverilog->text == "new";
+                    && constructor_name->systemverilog->marker
+                        == support::ExpressionMarker::sv_new_array;
                 std::optional<ContainerRegisterId> lowered;
                 if (constructor_call || plain_constructor) {
                     if (child_type.fixed || child_type.queue
@@ -10644,9 +10640,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     && !resized->systemverilog->operands.empty()
                     && resized->systemverilog->operands.size() <= 2U;
                 if (constructor && constructor->systemverilog != nullptr
-                    && constructor->systemverilog->kind
-                        == semantic::sv::ExpressionKind::name
-                    && constructor->systemverilog->text == "new") {
+                    && constructor->systemverilog->marker
+                        == support::ExpressionMarker::sv_new_array) {
                     const auto size = lower_hir_expression(
                         resized->systemverilog->operands.back(), 32U);
                     if (!size || !lower_intra_assignment_control()) {
@@ -11280,9 +11275,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     : std::nullopt;
                 const bool sized_new = constructor
                     && constructor->systemverilog != nullptr
-                    && constructor->systemverilog->kind
-                        == semantic::sv::ExpressionKind::name
-                    && constructor->systemverilog->text == "new";
+                    && constructor->systemverilog->marker
+                        == support::ExpressionMarker::sv_new_array;
                 const bool array_new = constructed
                     && constructed->systemverilog != nullptr
                     && constructed->systemverilog->kind
@@ -11666,9 +11660,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                                             association.choices,
                                             static_choice);
                                     }
-                                    if (equal_ignoring_ascii_case(
-                                            association.choice_spelling,
-                                            "others")) {
+                                    if (association.choice_marker
+                                        == support::ExpressionMarker::vhdl_others_choice) {
                                         if (association.choices.empty()) {
                                             return true;
                                         }
@@ -11681,11 +11674,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                                                       association.choices
                                                           .front());
                                         return choice && choice->vhdl != nullptr
-                                            && choice->vhdl->kind
-                                                == semantic::vhdl::ExpressionKind::name
-                                            && equal_ignoring_ascii_case(
-                                                choice->vhdl->text,
-                                                "others");
+                                            && choice->vhdl->marker
+                                                == support::ExpressionMarker::vhdl_others_choice;
                                     }
                                     return association.choice_marker
                                             == support::ExpressionMarker::
@@ -11710,8 +11700,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         // empty spelling.
                         bool null_range_choice { };
                         bool null_binary_range_choice { };
-                        if (equal_ignoring_ascii_case(
-                                association.choice_spelling, "others")) {
+                        if (association.choice_marker
+                            == support::ExpressionMarker::vhdl_others_choice) {
                             if (association.choices.empty()) {
                                 null_range_choice = true;
                             } else if (association.choices.size() == 1U) {
@@ -11720,10 +11710,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                                         association.choices.front());
                                 null_range_choice = choice
                                     && choice->vhdl != nullptr
-                                    && choice->vhdl->kind
-                                        == semantic::vhdl::ExpressionKind::name
-                                    && equal_ignoring_ascii_case(
-                                        choice->vhdl->text, "others");
+                                    && choice->vhdl->marker
+                                        == support::ExpressionMarker::vhdl_others_choice;
                             }
                         }
                         if (association.choices.size() == 1U) {
@@ -12518,7 +12506,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
             if (!signal_assignment && !nonblocking
                 && string_binding->kind == HirStringBindingKind::local
                 && string_binding->local) {
-                if (hir_vhdl_line_allocator_length(*value)) {
+                if (hir_vhdl_line_allocator_range(*value)) {
                     const auto allocated = lower_hir_vhdl_line_value(*value);
                     if (!allocated) {
                         return false;
@@ -12978,11 +12966,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                                     const auto node = specialized_hir_unit_
                                         ->find_expression(choice);
                                     return node && node->vhdl != nullptr
-                                        && node->vhdl->kind
-                                            == semantic::vhdl::
-                                                ExpressionKind::name
-                                        && support::same_vhdl_identifier(
-                                            node->vhdl->text, "others");
+                                        && node->vhdl->marker
+                                            == support::ExpressionMarker::vhdl_others_choice;
                                 });
                         });
                 if (others_aggregate || hir_vhdl_null_value(*value)
@@ -14384,32 +14369,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 : nullptr;
             const auto only_others = aggregate_value != nullptr
                 && aggregate_value->associations.size() == 1U
-                && [&] {
-                       auto spelling = std::string_view {
-                           aggregate_value->associations.front()
-                               .choice_spelling
-                       };
-                       while (!spelling.empty()
-                           && std::isspace(static_cast<unsigned char>(
-                                  spelling.front())) != 0) {
-                           spelling.remove_prefix(1U);
-                       }
-                       while (!spelling.empty()
-                           && std::isspace(static_cast<unsigned char>(
-                                  spelling.back())) != 0) {
-                           spelling.remove_suffix(1U);
-                       }
-                       return spelling.size() == 6U
-                           && std::ranges::equal(
-                               spelling,
-                               std::string_view { "others" },
-                               [](const char left, const char right) {
-                                   return std::tolower(
-                                              static_cast<unsigned char>(left))
-                                       == std::tolower(
-                                           static_cast<unsigned char>(right));
-                               });
-                   }();
+                && aggregate_value->associations.front().choice_marker
+                    == support::ExpressionMarker::vhdl_others_choice;
             if (!target_subtype || !only_others
                 || !slice || target_expression->vhdl == nullptr
                 || target_expression->vhdl->kind != Kind::slice
@@ -23531,43 +23492,6 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 case support::ProcessMethod::get_randstate:
                     break;
                 }
-                return true;
-            }
-            if (input.task.spelling == "$srandom") {
-                if (language_
-                        != frontend::Language::SystemVerilog2017
-                    || input.task_arguments.size() != 1U
-                    || input.task_arguments.front().formal
-                    || !input.task_arguments.front().actual) {
-                    report(
-                        "FSIM-ELAB-SVRAND-007",
-                        "$srandom requires one integral seed in "
-                        "SystemVerilog",
-                        span);
-                    return true;
-                }
-                const auto seed_expression
-                    = *input.task_arguments.front().actual;
-                auto seed = lower_hir_expression(seed_expression, 32U);
-                if (!seed) {
-                    report(
-                        "FSIM-ELAB-SVRAND-007",
-                        "$srandom seed must be an integral expression",
-                        hir_source_span(
-                            input.task_arguments.front().source));
-                    return true;
-                }
-                if (register_width(*seed) != 32U) {
-                    seed = resize_register(
-                        *seed,
-                        32U,
-                        hir_expression_signed(seed_expression));
-                }
-                const auto process = allocate_register(
-                    64U, frontend::ValueDomain::Bit2);
-                process_.operations.emplace_back(ProcessSelf { process });
-                process_.operations.emplace_back(ProcessSrandom {
-                    process, *seed });
                 return true;
             }
             if (input.task_system_tf == support::SystemTf::system) {

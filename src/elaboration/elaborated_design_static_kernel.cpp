@@ -17,6 +17,7 @@
 #include "fsim/support/parallel_for.hpp"
 #include "elaborated_design_process_access.hpp"
 #include "../runtime/simir_static_kernel.hpp"
+#include "../runtime/simir_static_kernel_dynamic.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -301,6 +302,20 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     // planned again with them.
     std::vector<std::uint8_t> host_access_objects(container_objects_.size(), 0U);
     bool host_access_grew = false;
+    // Kernel dynamic objects: queues, dynamic and associative arrays and
+    // sparse arrays of the design (IEEE 1800-2023 7.5-7.10) whose type the
+    // kernel holds natively (static_kernel_detail::native_dynamic_type) and
+    // that every access reaches through a whole read or a blocking write of
+    // a binding (ReadContainerObject, WriteContainerObject). Each is kernel
+    // storage (StaticKernelContainerStorage::dynamic) unless a host process
+    // reaches it; such an object leaves the set and the design is planned
+    // again (host_access_grew).
+    std::vector<std::uint8_t> kernel_dynamic_objects;
+    bool kernel_dynamic_known = false;
+    const auto kernel_dynamic = [&](const ContainerObjectId object) {
+        return object < kernel_dynamic_objects.size()
+            && kernel_dynamic_objects[object] != 0U;
+    };
     const auto plan_for = [&](const bool allow_mixed) -> StaticKernelPlan {
     StaticKernelPlan plan;
     // FSIM_PROFILE_PHASES: `static-kernel-plan-stage NAME_ms=` per phase
@@ -458,6 +473,83 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     const auto& graph = *graph_owner;
     stage("region_graph");
     const auto graph_signals = graph.signals();
+    if (!kernel_dynamic_known) {
+        kernel_dynamic_known = true;
+        kernel_dynamic_objects.assign(container_objects_.size(), 0U);
+        bool any = false;
+        for (std::size_t object = 0U; object < container_objects_.size(); ++object) {
+            const auto& value = container_objects_[object];
+            // A change signal a process reads is the implicit event of a
+            // wait on the object (9.2.2.2.1), which a kernel write does not
+            // toggle.
+            const bool watched = value.change_signal
+                && *value.change_signal < signal_count
+                && !graph_signals[*value.change_signal].readers.empty();
+            const bool arena = static_kernel_arena_container_type(value.initial_value.type);
+            const auto* const type_reason
+                = static_kernel_detail::native_dynamic_type_reason(value.initial_value.type);
+            if (!value.slice_alias && !watched && !arena && type_reason == nullptr) {
+                kernel_dynamic_objects[object] = 1U;
+                any = true;
+            } else if (plan_profile && !arena) {
+                std::cerr << "fsim-kernel-plan: host dynamic object=" << value.name
+                          << " reason="
+                          << (value.slice_alias ? "slice_alias"
+                                  : watched     ? "change_signal_read"
+                                                : type_reason)
+                          << '\n';
+            }
+        }
+        // Element writes, nonblocking or transaction writes and file reads
+        // of an object go through the host's object services.
+        for (std::size_t index = 0U; any && index < process_count; ++index) {
+            const auto& view = views[index];
+            if (!view.valid()) {
+                continue;
+            }
+            const auto& operations = view.operations();
+            for (std::size_t op = 0U; op < operations.size(); ++op) {
+                Operation expanded_scratch;
+                const auto& operation = operations.expanded_ref(op, expanded_scratch);
+                const auto host = [&](const ContainerObjectId object) {
+                    if (object < kernel_dynamic_objects.size()) {
+                        if (plan_profile && kernel_dynamic_objects[object] != 0U) {
+                            std::cerr << "fsim-kernel-plan: host dynamic object="
+                                      << container_objects_[object].name
+                                      << " reason=object_service process="
+                                      << view.name() << " pc=" << op << '\n';
+                        }
+                        kernel_dynamic_objects[object] = 0U;
+                    }
+                };
+                visit_operation([&](const auto& value) {
+                    using T = std::decay_t<decltype(value)>;
+                    if constexpr (std::is_same_v<T, WriteContainerObject>) {
+                        if (value.nonblocking || value.transaction_signal) {
+                            host(value.object);
+                        }
+                    } else if constexpr (std::is_same_v<T, WriteContainerObjectElement>) {
+                        // A blocking write of a whole element is a kernel
+                        // element write (KOp::dyn).
+                        if (value.nonblocking || value.transaction_signal
+                            || value.dynamic_part || !value.members.empty()
+                            || !value.levels.empty()) {
+                            host(value.object);
+                        }
+                    } else if constexpr (std::is_same_v<T, WriteContainerObjectString>) {
+                        host(value.object);
+                    } else if constexpr (std::is_same_v<T, FileBinaryRead>) {
+                        if (value.target_kind == FileBinaryTargetKind::container_object) {
+                            host(value.target);
+                        }
+                    } else if constexpr (std::is_same_v<T, PlaEvaluate>
+                        || std::is_same_v<T, WaitPla>) {
+                        host(value.memory);
+                    }
+                }, operation);
+            }
+        }
+    }
     const auto graph_processes = graph.processes();
     const char* deferred_refusal = nullptr;
     // Publish-all mode (docs/engine-v4-semantics.md S4, S19): a process whose
@@ -1402,7 +1494,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 || !(container_objects_[object].initial_value.type == types[reg])) {
                 return false;
             }
-            if (static_kernel_arena_container_type(types[reg])
+            if ((static_kernel_arena_container_type(types[reg])
+                    || kernel_dynamic(object))
                 && host_access_objects[object] == 0U) {
                 return true;
             }
@@ -1461,8 +1554,9 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                     // the host: blocking now, nonblocking from its NBA
                     // region (Impl::write_object_element).
                     if (!vhdl && value.object < container_objects_.size()
-                        && (!static_kernel_arena_container_type(
-                                container_objects_[value.object].initial_value.type)
+                        && ((!static_kernel_arena_container_type(
+                                    container_objects_[value.object].initial_value.type)
+                                && !kernel_dynamic(value.object))
                             || host_access_objects[value.object] != 0U)) {
                         if (!host_container_ok(value.object)) {
                             dynamic_reason = "dynamic_container_alias";
@@ -1508,8 +1602,9 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                         // A nonblocking write of a host object goes through
                         // the host's NBA region (Impl::write_object); one of
                         // a kernel array stages its elements for the kernel's.
-                        const bool host = !static_kernel_arena_container_type(
+                        const bool host = (!static_kernel_arena_container_type(
                                 types[value.source])
+                                && !kernel_dynamic(value.object))
                             || (value.object < host_access_objects.size()
                                 && host_access_objects[value.object] != 0U);
                         if (!dynamic_object_ok(value.object, value.source)) {
@@ -1712,7 +1807,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         const auto host_object = [&](const ContainerObjectId object,
                                      const ContainerRegisterId reg) {
             return is_dynamic(reg)
-                && (!static_kernel_arena_container_type(types[reg])
+                && ((!static_kernel_arena_container_type(types[reg])
+                        && !kernel_dynamic(object))
                     || (object < host_access_objects.size()
                         && host_access_objects[object] != 0U));
         };
@@ -2608,13 +2704,38 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         const auto& type = container.initial_value.type;
         // A sparse array keeps only its written elements on the host
         // (static_kernel_arena_container_type).
-        container_shape_ok[object] = !host_signals && type.fixed
-            && !type.sparse && !type.associative
-            && !container.slice_alias
-            && (type.element_kind == ContainerElementKind::Packed
-                || type.element_kind == ContainerElementKind::Scalar)
-            && !(packed_alias[object] && has_element_alias[object])
+        container_shape_ok[object] = !host_signals
+            && ((type.fixed && !type.sparse && !type.associative
+                    && !container.slice_alias
+                    && (type.element_kind == ContainerElementKind::Packed
+                        || type.element_kind == ContainerElementKind::Scalar)
+                    && !(packed_alias[object] && has_element_alias[object]))
+                || (kernel_dynamic(static_cast<ContainerObjectId>(object))
+                    && !packed_alias[object] && has_element_alias[object] == 0U)
+                // A flat structure variable or fixed array of them that
+                // the host bridges to a packed signal (37.17): its leaves
+                // are the signal's fields (DynOp::aggregate_unpack, _pack).
+                // A net of a user-defined nettype takes its resolution
+                // function's value in the update commit (6.6.7), so its
+                // object stays the host's.
+                || (kernel_dynamic(static_cast<ContainerObjectId>(object))
+                    && packed_alias[object] && has_element_alias[object] == 0U
+                    && static_kernel_detail::flat_aggregate_type(type)
+                    && *packed_alias[object] < signal_count
+                    && !signals_[*packed_alias[object]].vhdl_resolver
+                    && signals_[*packed_alias[object]].resolution
+                        == ResolutionKind::none
+                    && signals_[*packed_alias[object]].initial_value.width()
+                        == static_kernel_detail::aggregate_bridge_bits(type)))
             ? 1U : 0U;
+        if (plan_profile && container_shape_ok[object] == 0U
+            && kernel_dynamic(static_cast<ContainerObjectId>(object))) {
+            std::cerr << "fsim-kernel-plan: dynamic object=" << container.name
+                      << " shape=" << (host_signals ? "host_signals"
+                                          : packed_alias[object] ? "packed_alias"
+                                                                 : "element_alias")
+                      << '\n';
+        }
     }
     std::vector<std::uint8_t> vhdl_variable_storage(object_count, 0U);
     for (std::size_t object = 0U; object < object_count; ++object) {
@@ -4062,9 +4183,20 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                         return object >= object_count
                             || owned_container[object] == 0U;
                     })) {
+                // A kernel dynamic object the kernel cannot own is a host
+                // object in the next plan, which its members reach through
+                // reference-format registers.
+                for (const auto object : container_uses[index]) {
+                    if (object < object_count && owned_container[object] == 0U
+                        && kernel_dynamic(object)) {
+                        kernel_dynamic_objects[object] = 0U;
+                        host_access_grew = true;
+                    }
+                }
                 if (!candidates[index]->vhdl) {
                     for (const auto object : container_uses[index]) {
                         if (object < object_count && owned_container[object] == 0U
+                            && !kernel_dynamic(object)
                             && host_access_objects[object] == 0U
                             && host_container_ok(object)) {
                             const std::uint8_t kind
@@ -5757,6 +5889,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         } else if (has_element_alias[object] != 0U) {
             container.storage = StaticKernelContainerStorage::element_signals;
             container.element_signals = std::move(element_signals[object]);
+        } else if (kernel_dynamic(static_cast<ContainerObjectId>(object))) {
+            container.storage = StaticKernelContainerStorage::dynamic;
         }
         if (!accessors[object].empty()
             || container.storage != StaticKernelContainerStorage::elements) {
@@ -5768,7 +5902,10 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                                  ? "packed_signal"
                                  : container.storage
                                      == StaticKernelContainerStorage::element_signals
-                                 ? "element_signals" : "elements")
+                                 ? "element_signals"
+                                 : container.storage
+                                     == StaticKernelContainerStorage::dynamic
+                                 ? "dynamic" : "elements")
                           << '\n';
             }
             spec->containers.push_back(std::move(container));
@@ -6413,3 +6550,4 @@ std::optional<StaticKernelPlan> restore_static_kernel_plan(
 } // namespace detail
 
 } // namespace fsim::elaboration
+

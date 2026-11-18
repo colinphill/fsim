@@ -25,7 +25,7 @@ using namespace static_kernel_compiled_detail;
 namespace kw = kernel_word;
 
 namespace {
-constexpr std::string_view native_magic { "fsim-static-kernel-templates-v7" };
+constexpr std::string_view native_magic { "fsim-static-kernel-templates-v8" };
 
 /// The operands build_native binds to slots (bind_slot), in binding order:
 /// the field, and whether it holds the slot's arena offset (else its index;
@@ -1618,6 +1618,7 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
     helpers.member_due = &StaticKernel::native_member_due;
     helpers.variable_store = &StaticKernel::native_variable_store;
     helpers.flush_writes = &StaticKernel::native_flush_writes;
+    helpers.container_publish = &StaticKernel::native_container_publish;
     helpers.fail = &StaticKernel::native_fail;
     if (std::getenv("FSIM_STATIC_KERNEL_PERF_MAP") != nullptr) {
         std::vector<std::size_t> units_of(templates_.size(), 0U);
@@ -1811,6 +1812,10 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
             units[unit].native->lazy_template = lazy_of[index];
             lazy_templates_[lazy_of[index]].units.push_back(units[unit].native);
         }
+    }
+    // The writers of objects observed before the build report each write.
+    if (dynamic_observed_) {
+        observe_units();
     }
 }
 
@@ -2220,7 +2225,9 @@ bool Interpreter::Impl::StaticKernel::observe_unit(NativeUnit& unit,
     const bool hooks = std::ranges::any_of(body.statement_starts,
                            [](const std::uint8_t start) { return start != 0U; })
         || std::ranges::any_of(body.variable_stores,
-            [](const std::uint32_t reg) { return reg != no_variable_store; });
+            [](const std::uint32_t reg) { return reg != no_variable_store; })
+        || std::ranges::any_of(body.container_publishes,
+            [](const std::uint32_t container) { return container != no_variable_store; });
     if (!hooks) {
         unit.observed = true;
         return false;
@@ -2241,7 +2248,7 @@ bool Interpreter::Impl::StaticKernel::observe_unit(NativeUnit& unit,
 void Interpreter::Impl::StaticKernel::observe_units()
 {
     if (codegen_ == nullptr || template_codes_.size() != templates_.size()
-        || (!watch_writes_ && !variable_hooks_active_)) {
+        || (!watch_writes_ && !variable_hooks_active_ && !dynamic_observed_)) {
         return;
     }
     std::vector<std::uint8_t> needs(members_.size(), 0U);
@@ -2252,7 +2259,8 @@ void Interpreter::Impl::StaticKernel::observe_units()
         }
         if ((variable_hooks_active_ && index < variable_hook_members_.size()
                 && variable_hook_members_[index] != 0U)
-            || (watch_writes_ && member_writes_watched(index))) {
+            || (watch_writes_ && member_writes_watched(index))
+            || (dynamic_observed_ && member_publishes_observed(index))) {
             needs[index] = 1U;
             any = true;
         }
@@ -3165,6 +3173,11 @@ void Interpreter::Impl::StaticKernel::concatenate_members(CompiledBody& program,
                 const auto op = static_cast<DynOp>(inst.sub);
                 if (dyn_has_graph(op) && dyn_graph_count(inst.imm_b) != 0U) {
                     inst.imm_b += predicate_base;
+                }
+                if (op == DynOp::aggregate_element_read
+                    || op == DynOp::aggregate_element_write) {
+                    // The leaves' nodes (x).
+                    inst.x += static_cast<std::uint32_t>(predicate_base);
                 }
                 if (dyn_writes_destination(op)) {
                     reg(inst.d);

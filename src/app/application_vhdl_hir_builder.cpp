@@ -533,6 +533,8 @@ void VhdlHirBuilder::add_design(const frontend::ParsedDesign& parsed)
             input.type, input.span, scope, declaration_origin);
     } else {
         profile.entity_class = input.entity_class;
+        profile.entity_class_kind = input.entity_class_kind;
+        profile.name_list = input.name_list;
         for (const auto& entity_name : input.entity_names) {
             profile.entity_names.push_back(name(entity_name, input.span, scope));
         }
@@ -1603,10 +1605,9 @@ void VhdlHirBuilder::mark_foreign_subprograms()
                 != "foreign") {
             continue;
         }
-        const auto entity_class
-            = support::canonical_vhdl_spelling(
-                declaration.attribute->entity_class);
-        if (entity_class != "function" && entity_class != "procedure") {
+        if (declaration.attribute->entity_class_kind != support::VhdlEntityClass::function
+            && declaration.attribute->entity_class_kind
+                != support::VhdlEntityClass::procedure) {
             continue;
         }
         for (const auto& name : declaration.attribute->entity_names) {

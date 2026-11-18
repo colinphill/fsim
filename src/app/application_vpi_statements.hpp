@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include "fsim/support/system_tf.hpp"
 #include "fsim/runtime/packed_value.hpp"
 #include "fsim/semantic/model.hpp"
 #include "fsim/semantic/systemverilog_hir.hpp"
@@ -534,6 +535,9 @@ public:
     [[nodiscard]] std::optional<semantic::ExpressionId> cast_expression(
         std::uint64_t serial) const;
     [[nodiscard]] std::optional<CastTarget> cast_target(std::uint64_t serial);
+    /// The system task or function a system call node names, as the HIR
+    /// identified it (IEEE 1800-2023 20, 21); none for another node.
+    [[nodiscard]] support::SystemTf system_routine(std::uint64_t serial) const;
 
     /// The delay of a continuous assignment or one of its bits (IEEE
     /// 1800-2023 37.47): the rise, fall and turn-off values written, in

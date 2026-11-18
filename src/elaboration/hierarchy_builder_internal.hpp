@@ -124,6 +124,25 @@ struct DeferredGeneratedSystemVerilogItem {
     std::vector<semantic::DeclarationId> declarations;
 };
 
+// A defparam whose target lies outside the instance that holds it (an
+// ancestor's, a sibling's or the instance's own parameter, IEEE 1800-2023
+// 23.10.1): found by one elaboration pass and applied from the root by the
+// next (the order of 23.10.4.1). `owner` evaluates the value in the scope
+// of the defparam statement as the pass found it.
+struct ExternalSystemVerilogDefparam {
+    std::string target_path;
+    std::string base;
+    std::vector<std::string> below;
+    std::string parameter;
+    semantic::ExpressionId expression;
+    semantic::SourceSpanId source;
+    std::shared_ptr<const semantic::SpecializedHirUnit> owner;
+    std::string owner_path;
+    // The value's canonical constant, empty when it is not a scalar
+    // constant; compared between passes.
+    std::string value_identity;
+};
+
 class HierarchyBuilder final {
 public:
     HierarchyBuilder(
@@ -168,6 +187,24 @@ public:
     {
         return std::move(vital_wire_locations_);
     }
+    // The names of the top-level instances (IEEE 1800-2023 23.3.1), which
+    // the upward search of a defparam's first name ends at (23.8); set
+    // before the first root.
+    void set_top_level_names(std::vector<std::string> names)
+    {
+        top_level_names_ = std::move(names);
+    }
+    // The defparams a previous pass found targeting outside their
+    // instance, applied from the root; set before the first root.
+    void set_external_defparams(std::vector<ExternalSystemVerilogDefparam> externals);
+    // The defparams of this pass whose targets lie outside their instance.
+    [[nodiscard]] std::vector<ExternalSystemVerilogDefparam>
+    take_deferred_external_defparams()
+    {
+        return std::move(deferred_external_defparams_);
+    }
+    // Reports the applied external defparams no instance of this pass took.
+    void report_unmatched_external_defparams();
 
 private:
     // A single root's object is also found by its name relative to the
@@ -529,6 +566,14 @@ private:
         // The overrides and defparams that set the instance's parameters
         // (SpecializationInfo::vpi_param_assigns).
         std::vector<runtime::SystemVerilogVpiParamAssign> param_assigns;
+        // The scope of the parent SystemVerilog instance that holds the
+        // instantiation (its path or a generate block's); empty for a
+        // top-level instance or one a VHDL or SystemC parent holds.
+        std::string instantiating_scope;
+        // An element of an array of instances (IEEE 1800-2023 23.3.2).
+        bool array_element { };
+        // A top-level instance (IEEE 1800-2023 23.3.1).
+        bool top_level { };
     };
 
     struct CompiledSystemVerilogParameterDiagnostic {
@@ -1390,7 +1435,7 @@ private:
     [[nodiscard]] std::optional<semantic::DeclarationId>
     compiled_systemverilog_scoped_parameter(
         const semantic::CompiledUnitView& child,
-        std::string_view scope_path,
+        std::span<const std::string> scope_names,
         std::string_view name) const;
     CompiledSystemVerilogParameterResult
     resolve_compiled_systemverilog_parameters(
@@ -2450,7 +2495,38 @@ private:
         // The path of the scope whose body holds the defparam statement:
         // the scope of its value and of its VPI object (37.28 vpiDefParam).
         std::string owner_path;
+        // The scope the path's first name resolves to, and the names of the
+        // path's scopes below it (target_path is them joined).
+        std::string base;
+        std::vector<std::string> below;
     };
+    // A SystemVerilog instance being elaborated, as the upward search of a
+    // defparam's first name sees it (IEEE 1800-2023 23.8, 23.10.1): its
+    // scopes are its own path and its generate blocks' occurrences.
+    struct DefparamScopeFrame {
+        std::string path;
+        const semantic::sv::Unit* unit { };
+        const std::vector<hierarchy_sv_generate_detail::Occurrence>*
+            occurrences { };
+        std::string instantiating_scope;
+        bool array_element { };
+        bool top_level { };
+    };
+    struct DefparamSegment {
+        std::string name;
+        std::vector<std::int64_t> indices;
+        // The segment as a path component: the name and its indices.
+        std::string text;
+    };
+    // The path of the scope a defparam path's first name resolves to, or
+    // nullopt when it names no scope.
+    [[nodiscard]] std::optional<std::string> resolve_defparam_target_scope(
+        std::span<const DefparamSegment> segments,
+        std::string_view defparam_scope) const;
+    // The innermost generate block instance or instance array element that
+    // holds a defparam of `defparam_scope` (IEEE 1800-2023 23.10.1), if any.
+    [[nodiscard]] std::optional<std::string> defparam_enclosing_hierarchy(
+        std::string_view defparam_scope) const;
     struct ActiveCompiledSystemVerilogBind {
         const semantic::sv::BindDirective* directive { };
         const semantic::sv::Unit* owner { };
@@ -2553,6 +2629,13 @@ private:
         systemverilog_read_only_interface_member_paths_;
 
     std::vector<std::string> stack_;
+    // The SystemVerilog instances being elaborated, outermost first.
+    std::vector<DefparamScopeFrame> defparam_scope_frames_;
+    std::vector<std::string> top_level_names_;
+    // The applied external defparams (the first entries of
+    // active_compiled_systemverilog_defparams_) and their owners.
+    std::vector<ExternalSystemVerilogDefparam> external_defparams_;
+    std::vector<ExternalSystemVerilogDefparam> deferred_external_defparams_;
     // Every instantiation is charged to this budget, so a recursion whose
     // actuals change on every level still stops.
     static constexpr std::uint64_t maximum_instance_work_units

@@ -4964,21 +4964,14 @@ std::optional<Lowerer::HirPackedRange> Lowerer::hir_vhdl_named_aggregate_bounds(
         low = low ? std::min(*low, value) : value;
         high = high ? std::max(*high, value) : value;
     };
-    const auto include_choice = [&](const auto& self,
-                                    const semantic::ExpressionId choice_id)
+    const auto include_choice = [&](const semantic::ExpressionId choice_id)
         -> bool {
         const auto choice = specialized_hir_unit_->find_expression(choice_id);
         if (!choice || choice->vhdl == nullptr) {
             return false;
         }
         const auto& source = *choice->vhdl;
-        if (source.kind == semantic::vhdl::ExpressionKind::binary
-            && source.text == "|" && source.operands.size() == 2U) {
-            return self(self, source.operands[0])
-                && self(self, source.operands[1]);
-        }
-        if (source.kind == semantic::vhdl::ExpressionKind::name
-            && same_vhdl_identifier(source.text, "others")) {
+        if (source.marker == support::ExpressionMarker::vhdl_others_choice) {
             return false;
         }
         if (source.kind == semantic::vhdl::ExpressionKind::binary
@@ -5022,8 +5015,8 @@ std::optional<Lowerer::HirPackedRange> Lowerer::hir_vhdl_named_aggregate_bounds(
     for (const auto& association : aggregate.associations) {
         const auto spelling = normalized_vhdl_choice(
             association.choice_spelling);
-        if (association.choices.empty() || spelling == "others"
-            || spelling == "default"
+        if (association.choices.empty()
+            || association.choice_marker == support::ExpressionMarker::vhdl_others_choice
             || association.choice_marker
                 == support::ExpressionMarker::key) {
             return std::nullopt;
@@ -5042,7 +5035,7 @@ std::optional<Lowerer::HirPackedRange> Lowerer::hir_vhdl_named_aggregate_bounds(
             }
         }
         for (const auto choice : association.choices) {
-            if (!include_choice(include_choice, choice)) {
+            if (!include_choice(choice)) {
                 return std::nullopt;
             }
         }
@@ -5333,7 +5326,9 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
                     [&](const auto& association) {
                         const auto spelling = normalized_vhdl_choice(
                             association.choice_spelling);
-                        if (spelling.empty() || spelling == "others") {
+                        if (spelling.empty()
+                            || association.choice_marker
+                                == support::ExpressionMarker::vhdl_others_choice) {
                             return true;
                         }
                         const auto names = association_names(association);
@@ -5757,9 +5752,8 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
             const auto names = association_names(association);
             if (spelling.empty() && names.empty()) {
                 assign(positional++, association.value, span);
-            } else if (spelling == "others"
-                || (names.size() == 1U
-                    && same_vhdl_identifier(names.front(), "others"))) {
+            } else if (association.choice_marker
+                == support::ExpressionMarker::vhdl_others_choice) {
                 others = index;
             } else if (names.empty()) {
                 report(
@@ -6333,9 +6327,8 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
                 assign(positional++, association.value, span);
                 continue;
             }
-            if (spelling == "others"
-                || (names.size() == 1U
-                    && same_vhdl_identifier(names.front(), "others"))) {
+            if (association.choice_marker
+                == support::ExpressionMarker::vhdl_others_choice) {
                 if (others) {
                     report(
                         "FSIM-ELAB-VHAGG-004",
@@ -7687,9 +7680,8 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
             aggregate.associations, [&](const auto& association) {
                 return association.positional()
                     || (aggregate.associations.size() == 1U
-                        && normalized_vhdl_choice(
-                               association.choice_spelling)
-                            == "others");
+                        && association.choice_marker
+                            == support::ExpressionMarker::vhdl_others_choice);
             })) {
         semantic::vhdl::RangeConstraint materialized;
         materialized.left = 0;
@@ -8352,7 +8344,8 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
                 append_positional_value, association.value, span);
             continue;
         }
-        if (spelling == "others") {
+        if (association.choice_marker
+            == support::ExpressionMarker::vhdl_others_choice) {
             if (others) {
                 report(
                     "FSIM-ELAB-VHARRAYAGG-004",
@@ -8364,8 +8357,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
             }
             continue;
         }
-        const auto assign_choice = [&](const auto& self,
-                                       const semantic::ExpressionId choice_id)
+        const auto assign_choice = [&](const semantic::ExpressionId choice_id)
             -> void {
             const auto choice = specialized_hir_unit_->find_expression(
                 choice_id);
@@ -8374,15 +8366,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
                 return;
             }
             const auto& source = *choice->vhdl;
-            if (source.kind == semantic::vhdl::ExpressionKind::binary
-                && source.text == "|"
-                && source.operands.size() == 2U) {
-                self(self, source.operands[0]);
-                self(self, source.operands[1]);
-                return;
-            }
-            if (source.kind == semantic::vhdl::ExpressionKind::name
-                && same_vhdl_identifier(source.text, "others")) {
+            if (source.marker == support::ExpressionMarker::vhdl_others_choice) {
                 if (association.choices.size() != 1U || others) {
                     report(
                         "FSIM-ELAB-VHARRAYAGG-004",
@@ -8557,7 +8541,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
             assign_index(*index, association.value, span);
         };
         for (const auto choice_id : association.choices) {
-            assign_choice(assign_choice, choice_id);
+            assign_choice(choice_id);
         }
     }
     if (others) {
@@ -8907,7 +8891,7 @@ Lowerer::lower_hir_systemverilog_packed_pattern(
     };
     for (const auto& association : source.associations) {
         std::size_t index { };
-        if (association.choice_spelling == "default") {
+        if (association.choice_marker == support::ExpressionMarker::sv_default_choice) {
             if (default_value) {
                 return std::nullopt;
             }
@@ -9039,7 +9023,7 @@ Lowerer::lower_hir_systemverilog_packed_array_pattern(
     std::optional<semantic::ExpressionId> default_value;
     for (const auto& association : source.associations) {
         std::size_t ordinal { };
-        if (association.choice_spelling == "default") {
+        if (association.choice_marker == support::ExpressionMarker::sv_default_choice) {
             if (default_value) {
                 return std::nullopt;
             }
@@ -9098,8 +9082,6 @@ bool Lowerer::is_hir_systemverilog_coverage_call(
     using Routine = support::SystemTf;
     const auto routine = expression->systemverilog->system_tf;
     return routine == Routine::get_coverage
-        || (routine == Routine::none
-            && expression->systemverilog->text == "$get_inst_coverage")
         || frontend::is_coverage_query(expression->systemverilog->marker)
         || routine == Routine::coverage_control
         || routine == Routine::coverage_get
@@ -9160,8 +9142,7 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_coverage_call(
             ? resize_register(destination, expected_width, false)
             : destination;
     }
-    if (source.system_tf == support::SystemTf::get_coverage
-        || source.text == "$get_inst_coverage") {
+    if (source.system_tf == support::SystemTf::get_coverage) {
         if (language_ != frontend::Language::SystemVerilog2017
             || named || !source.operands.empty()) {
             return invalid(
@@ -9171,11 +9152,7 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_coverage_call(
         const auto destination = allocate_register(
             64U, frontend::ValueDomain::Bit2);
         process_.operations.emplace_back(CoverageQuery {
-            destination,
-            source.text == "$get_inst_coverage"
-                ? CoverageQueryKind::overall_instance
-                : CoverageQueryKind::overall_type,
-        });
+            destination, CoverageQueryKind::overall_type });
         return expected_width != 0U && expected_width != 64U
             ? resize_register(destination, expected_width, false)
             : destination;
@@ -11930,8 +11907,7 @@ Lowerer::hir_vhdl_concat_aggregate_context(
         }
         return true;
     };
-    const auto visit_choice = [&](const auto& self,
-                                  const semantic::ExpressionId choice_id,
+    const auto visit_choice = [&](const semantic::ExpressionId choice_id,
                                   const bool controls_direction)
         -> bool {
         const auto choice = specialized_hir_unit_->find_expression(choice_id);
@@ -11939,13 +11915,7 @@ Lowerer::hir_vhdl_concat_aggregate_context(
             return false;
         }
         const auto& source = *choice->vhdl;
-        if (source.kind == semantic::vhdl::ExpressionKind::binary
-            && source.text == "|" && source.operands.size() == 2U) {
-            return self(self, source.operands[0], controls_direction)
-                && self(self, source.operands[1], controls_direction);
-        }
-        if (source.kind == semantic::vhdl::ExpressionKind::name
-            && same_vhdl_identifier(source.text, "others")) {
+        if (source.marker == support::ExpressionMarker::vhdl_others_choice) {
             return false;
         }
         if (source.kind == semantic::vhdl::ExpressionKind::binary
@@ -11979,9 +11949,8 @@ Lowerer::hir_vhdl_concat_aggregate_context(
 
     for (const auto& association : aggregate->vhdl->associations) {
         if (association.choices.empty()
-            || same_vhdl_identifier(
-                normalized_vhdl_choice(association.choice_spelling),
-                "others")) {
+            || association.choice_marker
+                == support::ExpressionMarker::vhdl_others_choice) {
             return std::nullopt;
         }
         auto value_subtype
@@ -12002,7 +11971,7 @@ Lowerer::hir_vhdl_concat_aggregate_context(
             && hir_vhdl_same_nominal_array_type(
                 *value_subtype, result_context, aggregate->vhdl->scope);
         for (const auto choice : association.choices) {
-            if (!visit_choice(visit_choice, choice, controls_direction)) {
+            if (!visit_choice(choice, controls_direction)) {
                 return std::nullopt;
             }
         }
@@ -30752,11 +30721,9 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
     // `p.get_randstate()` of a process (IEEE 1800-2017 9.7, 18.13.4).
     if (const auto call = specialized_hir_unit_->find_expression(expression_id);
         call && call->systemverilog != nullptr
-        && call->systemverilog->kind == semantic::sv::ExpressionKind::call
-        && call->systemverilog->text == ".get_randstate"
         && call->systemverilog->operands.size() == 1U
-        && hir_process_handle_expression(
-            call->systemverilog->operands.front())) {
+        && hir_process_method_call(*call->systemverilog)
+            == support::ProcessMethod::get_randstate) {
         const auto receiver = lower_hir_expression(
             call->systemverilog->operands.front(), 64U);
         if (!receiver || register_width(*receiver) != 64U) {
@@ -31255,10 +31222,62 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
                     destination, std::move(pieces) });
                 return destination;
             }
+            // An unconstrained STRING aggregate of one range choice whose
+            // bounds are known only at run time: as many copies of its
+            // CHARACTER value as the range has values (IEEE 1076-2019
+            // 9.3.3.3).
+            if (predefined_string && !width && !explicit_context_bounds
+                && !string_elements && source.associations.size() == 1U
+                && source.associations.front().choices.size() == 1U) {
+                const auto range = hir_vhdl_range_choice(
+                    source.associations.front().choices.front());
+                if (range && (!range->left || !range->right)) {
+                    const auto choice_span = hir_source_span(source.source);
+                    const auto length
+                        = lower_hir_vhdl_range_length(*range, 1, &choice_span);
+                    // The element is a CHARACTER: a literal is its written
+                    // character, not a logic value (9.3.3.3, 16.3).
+                    const auto value_id = source.associations.front().value;
+                    const auto character = [&]() -> std::optional<RegisterId> {
+                        const auto literal
+                            = specialized_hir_unit_->find_expression(value_id);
+                        if (literal && literal->vhdl != nullptr
+                            && literal->vhdl->kind
+                                == semantic::vhdl::ExpressionKind::logic_literal
+                            && literal->vhdl->text.size() == 3U) {
+                            return load_integer(static_cast<unsigned char>(
+                                                    literal->vhdl->text[1]),
+                                32U, frontend::ValueDomain::Bit2);
+                        }
+                        if (const auto code = hir_vhdl_character_literal_code(
+                                value_id, 8U)) {
+                            return load_integer(
+                                static_cast<std::int64_t>(*code), 32U,
+                                frontend::ValueDomain::Bit2);
+                        }
+                        const auto lowered = lower_hir_expression(value_id, 8U);
+                        return lowered ? std::optional {
+                                   resize_register(*lowered, 32U, false) }
+                                       : std::nullopt;
+                    }();
+                    if (!length || !character) {
+                        return rejected();
+                    }
+                    StringMethod fill;
+                    fill.operation
+                        = runtime::simir::StringMethodOperator::vhdl_string_fill;
+                    fill.string_destination = allocate_string_register();
+                    fill.source = fill.string_destination;
+                    fill.first = *length;
+                    fill.second = *character;
+                    process_.operations.emplace_back(fill);
+                    return fill.string_destination;
+                }
+            }
             // An unconstrained STRING aggregate of named associations whose
-            // choices are static values takes the direction of POSITIVE and
-            // its bounds from the smallest and largest choice (IEEE
-            // 1076-2008 9.3.3.3).
+            // choices are static values or static ranges takes the
+            // direction of POSITIVE and its bounds from the smallest and
+            // largest choice (IEEE 1076-2008 9.3.3.3).
             auto named_context = *effective;
             if (predefined_string && !width && !explicit_context_bounds
                 && !string_elements && !source.associations.empty()) {
@@ -31272,6 +31291,30 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
                     }
                     bool all_static = true;
                     for (const auto choice : association.choices) {
+                        if (const auto range = hir_vhdl_range_choice(choice)) {
+                            const auto first = range->left && range->right
+                                ? std::optional { std::min(
+                                      *range->left, *range->right) }
+                                : std::nullopt;
+                            const auto last = first
+                                ? std::optional { std::max(
+                                      *range->left, *range->right) }
+                                : std::nullopt;
+                            // A null range choice is left to the packed
+                            // aggregate's own bounds.
+                            if (!first
+                                || (range->descending
+                                        ? *range->left < *range->right
+                                        : *range->left > *range->right)) {
+                                all_static = false;
+                                break;
+                            }
+                            low = low ? std::min(*low, *first) : *first;
+                            high = high ? std::max(*high, *last) : *last;
+                            choices += static_cast<std::size_t>(
+                                index_distance(*first, *last) + 1U);
+                            continue;
+                        }
                         const auto value = hir_constant_integer(choice);
                         if (!value) {
                             all_static = false;
@@ -32764,6 +32807,17 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
     process_.operations.emplace_back(ReadStringObject {
         destination, *binding->object });
     return destination;
+}
+
+std::optional<support::ProcessMethod> Lowerer::hir_process_method_call(
+    const semantic::sv::Expression& call) const
+{
+    if (call.kind != semantic::sv::ExpressionKind::call
+        || !call.text.starts_with('.') || call.operands.empty()
+        || !hir_process_handle_expression(call.operands.front())) {
+        return std::nullopt;
+    }
+    return support::process_method(std::string_view { call.text }.substr(1U));
 }
 
 bool Lowerer::hir_process_handle_expression(

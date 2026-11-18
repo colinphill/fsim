@@ -578,7 +578,7 @@ Exclusions never count as closures.
 | `pr2453002b` | out of scope | Icarus syntax extension |
 | `pr2456943` | out of scope | Icarus syntax extension |
 | `pr2476430` | out of scope | uses non-standard %+08d and %04c flags |
-| `pr2486350` | out of scope | expects %h of a 64-bit value without leading zeros |
+| `pr2486350` | out of scope | calls $simtime, which IEEE 1800-2023 does not define, and expects %h of a 64-bit value without leading zeros |
 | `pr2590274a` | out of scope | Icarus system task extension |
 | `pr2590274b` | out of scope | Icarus system task extension |
 | `pr2590274c` | out of scope | Icarus system task extension |

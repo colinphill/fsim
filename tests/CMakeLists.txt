@@ -6981,6 +6981,31 @@ if(FSIM_WITH_LLVM)
     LABELS "application;systemverilog;static-kernel;llvm;monitor;positive"
     TIMEOUT 600)
 endif()
+add_test(
+  NAME fsim.application.vcd-var-types
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/systemverilog/vcd_var_types"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/systemverilog/vcd_var_types/run_vcd_var_types.cmake"
+)
+set_tests_properties(fsim.application.vcd-var-types PROPERTIES
+  LABELS "application;systemverilog;vcd;trace;positive"
+  TIMEOUT 300)
+
+# STRING allocators with run-time ranges and STRING aggregates with range
+# choices, on the v4 kernel and the interpreter.
+add_test(
+  NAME fsim.application.vhdl-string-allocators
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/string_allocators"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/string_allocators/run_string_allocators.cmake"
+)
+set_tests_properties(fsim.application.vhdl-string-allocators PROPERTIES
+  LABELS "application;vhdl;access;static-kernel;positive"
+  TIMEOUT 300)
 
 # real, shortreal, realtime and time variables held by the v4 kernel on
 # every kernel tier, printing what the interpreter prints.
@@ -9295,6 +9320,193 @@ add_test(
     -P
     "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
 )
+# Queues, dynamic, associative and bounded queue arrays of the module that
+# the v4 kernel holds as its own dynamic containers (IEEE 1800-2023 7.5,
+# 7.9, 7.10): every member compiles, and only library operations (the
+# displays) reach a helper.
+add_test(
+  NAME fsim.application.inline-ops-design-containers
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=design_containers
+    -DFSIM_LANGUAGE=sv
+    -DFSIM_LIBRARY_ONLY=1
+    "-DFSIM_FORBID_REASON=tier:not_compiled:[a-z_0-9]+"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# Fixed-size arrays of an automatic task that the array manipulation
+# methods reach as whole values (IEEE 1800-2023 7.4, 7.12): the kernel holds
+# them as its own containers, indexed by their declared ranges; every
+# member compiles, and only the displays reach a helper.
+add_test(
+  NAME fsim.application.inline-ops-fixed-containers
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=fixed_containers
+    -DFSIM_LANGUAGE=sv
+    -DFSIM_LIBRARY_ONLY=1
+    "-DFSIM_FORBID_REASON=tier:not_compiled:[a-z_0-9:]+"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# Class allocations and property reads and writes (IEEE 1800-2023 8.4 -
+# 8.9) in compiled member code, each through its own runtime helper; the
+# verified run checks the thread's random stream across each allocation
+# (18.14.1).
+add_test(
+  NAME fsim.application.inline-ops-class-properties
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=class_properties
+    -DFSIM_LANGUAGE=sv
+    "-DFSIM_FORBID_REASON=tier:not_compiled:[a-z_0-9:]+"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# A reduction whose with clause reduces each row of a two-dimensional
+# array (IEEE 1800-2023 7.12.3): the row copies' checked index arithmetic
+# (IntegerBinary) is generated code in a SystemVerilog member.
+add_test(
+  NAME fsim.application.inline-ops-nested-reduction
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=nested_reduction
+    -DFSIM_LANGUAGE=sv
+    "-DFSIM_FORBID_REASON=tier:not_compiled:[a-z_0-9:]+"
+    "-DFSIM_FORBID_GENERIC=IntegerBinary"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# Two-dimensional fixed-size arrays of an automatic task (IEEE 1800-2023
+# 7.4, 7.6): kernel-held elements, whose element accesses and whole-array
+# copy are generated code (no mem_copy helper).
+add_test(
+  NAME fsim.application.inline-ops-automatic-arrays
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=automatic_arrays
+    -DFSIM_LANGUAGE=sv
+    "-DFSIM_FORBID_REASON=tier:not_compiled:[a-z_0-9:]+"
+    -DFSIM_FORBID_EFFECT=mem_copy
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# Mailboxes, semaphores and automatic events (IEEE 1800-2023 15.3 - 15.5)
+# in a compiled SystemVerilog member: handle, element and result registers
+# take the widths the runtime writes.
+add_test(
+  NAME fsim.application.inline-ops-synchronization-objects
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=synchronization_objects
+    -DFSIM_LANGUAGE=sv
+    "-DFSIM_FORBID_REASON=tier:not_compiled:[a-z_0-9:]+"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# Unpacked structures of an automatic task (IEEE 1800-2023 7.2): flat
+# leaves the kernel holds, whose member reads and writes are generated code.
+add_test(
+  NAME fsim.application.inline-ops-automatic-structures
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=automatic_structures
+    -DFSIM_LANGUAGE=sv
+    "-DFSIM_FORBID_REASON=tier:not_compiled:[a-z_0-9:]+"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# Unpacked structures of a module (IEEE 1800-2023 7.2, 37.17): leaves the
+# host bridges to packed signals, which generated code binds and writes as
+# the signals' fields.
+add_test(
+  NAME fsim.application.inline-ops-module-structures
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=module_structures
+    -DFSIM_LANGUAGE=sv
+    "-DFSIM_FORBID_REASON=tier:not_compiled:[a-z_0-9:]+"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# Whole unpacked arrays of a module written as a whole (IEEE 1800-2023
+# 10.3, 10.4): packed memories' slots copied or queued by generated code.
+add_test(
+  NAME fsim.application.inline-ops-whole-array-writes
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=whole_array_writes
+    -DFSIM_LANGUAGE=sv
+    "-DFSIM_FORBID_REASON=tier:not_compiled:[a-z_0-9:]+"
+    -DFSIM_FORBID_EFFECT=mem_copy
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# Process handles (IEEE 1800-2023 9.7, 18.13) and $timeformat (20.4.2) in
+# generated code: per-kind host helpers, verified runs replaying the format.
+add_test(
+  NAME fsim.application.inline-ops-process-services
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=process_services
+    -DFSIM_LANGUAGE=sv
+    "-DFSIM_FORBID_REASON=tier:not_compiled:[a-z_0-9:]+"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# $dist_* (IEEE 1800-2023 20.14.2) writing its seed back and tagged-union
+# tag checks (11.9) in generated code; a failed check reports once, also
+# under FSIM_KERNEL_VERIFY.
+add_test(
+  NAME fsim.application.inline-ops-dist-and-tags
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=dist_and_tags
+    -DFSIM_LANGUAGE=sv
+    -DFSIM_REPORTS=all
+    "-DFSIM_FORBID_REASON=tier:not_compiled:[a-z_0-9:]+"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# $sformatf with a run-time format string (IEEE 1800-2023 21.3.3) in
+# generated code.
+add_test(
+  NAME fsim.application.inline-ops-runtime-format
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=runtime_format
+    -DFSIM_LANGUAGE=sv
+    -DFSIM_EXPECT_ERROR=FSIM-RUN-0001
+    "-DFSIM_FORBID_REASON=tier:not_compiled:[a-z_0-9:]+"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# Force and release of host signals (IEEE 1800-2023 10.6.2) in generated
+# code; verified runs replay the forced value.
+add_test(
+  NAME fsim.application.inline-ops-force-release
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=force_release
+    -DFSIM_LANGUAGE=sv
+    "-DFSIM_FORBID_REASON=tier:not_compiled:[a-z_0-9:]+"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
 add_test(
   NAME fsim.application.inline-ops-wide-thread
   COMMAND "${CMAKE_COMMAND}"
@@ -9471,6 +9683,19 @@ set_tests_properties(
   fsim.application.inline-ops-shared-part
   fsim.application.inline-ops-wide-dyn-write
   fsim.application.inline-ops-wide-container
+  fsim.application.inline-ops-design-containers
+  fsim.application.inline-ops-fixed-containers
+  fsim.application.inline-ops-class-properties
+  fsim.application.inline-ops-nested-reduction
+  fsim.application.inline-ops-automatic-arrays
+  fsim.application.inline-ops-synchronization-objects
+  fsim.application.inline-ops-automatic-structures
+  fsim.application.inline-ops-module-structures
+  fsim.application.inline-ops-whole-array-writes
+  fsim.application.inline-ops-process-services
+  fsim.application.inline-ops-dist-and-tags
+  fsim.application.inline-ops-runtime-format
+  fsim.application.inline-ops-force-release
   fsim.application.inline-ops-systemverilog
   fsim.application.inline-ops-part-select-wide
   fsim.application.inline-ops-wide-move

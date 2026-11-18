@@ -141,11 +141,11 @@ CoverageFsmHintResult coverage_hir_fsm_hints(
                     const auto value = profile.value
                         ? compiled.find_expression(*profile.value)
                         : std::nullopt;
-                    const auto entity_class = lower_ascii(profile.entity_class);
                     if (!value || value->vhdl == nullptr
                         || !value->vhdl->decoded_string
-                        || (entity_class != "signal"
-                            && entity_class != "variable")) {
+                        || (profile.entity_class_kind != support::VhdlEntityClass::signal
+                            && profile.entity_class_kind
+                                != support::VhdlEntityClass::variable)) {
                         return reject(
                             Error::InvalidAttributeSpecification, index);
                     }

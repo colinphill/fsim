@@ -5533,6 +5533,11 @@ void Interpreter::deposit_container_object(
     for (const auto signal : signals) {
         note_external_signal_write(signal);
     }
+    // A kernel dynamic object takes the value first: the host write reads
+    // the kernel's value back into the host copy (read_owned_container_object).
+    if (impl_->static_kernel) {
+        (void)impl_->static_kernel->write_owned_container_object(object, value);
+    }
     impl_->write_container_object_value(object, value);
     impl_->deposit_static_kernel_container(object);
     if (impl_->static_kernel) {

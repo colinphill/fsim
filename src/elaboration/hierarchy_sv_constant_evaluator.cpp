@@ -1941,7 +1941,7 @@ private:
         std::optional<semantic::ExpressionId> fallback;
         std::vector<semantic::ExpressionId> positional;
         for (const auto& association : view->systemverilog->associations) {
-            if (association.choice_spelling == "default") {
+            if (association.choice_marker == support::ExpressionMarker::sv_default_choice) {
                 fallback = association.value;
             } else if (unkeyed_choice(association)) {
                 positional.push_back(association.value);
@@ -5355,7 +5355,7 @@ private:
                       << '\n';
         }
         if (record.associations.size() == 1U
-            && record.associations.front().choice_spelling == "default") {
+            && record.associations.front().choice_marker == support::ExpressionMarker::sv_default_choice) {
             auto value = evaluate(record.associations.front().value);
             if (!value) {
                 return std::nullopt;
@@ -5921,7 +5921,7 @@ private:
             std::optional<semantic::ExpressionId> fallback;
             std::vector<semantic::ExpressionId> positional;
             for (const auto& association : associations) {
-                if (association.choice_spelling == "default") {
+                if (association.choice_marker == support::ExpressionMarker::sv_default_choice) {
                     fallback = association.value;
                 } else if (unkeyed_choice(association)) {
                     positional.push_back(association.value);
@@ -6302,7 +6302,7 @@ private:
                 return std::nullopt;
             }
             if (associations.size() == 1U
-                && associations.front().choice_spelling == "default") {
+                && associations.front().choice_marker == support::ExpressionMarker::sv_default_choice) {
                 for (std::uint64_t index { }; index < count; ++index) {
                     if (!place(associations.front().value, element,
                             (count - 1U - index) * *element_width)) {
@@ -6354,7 +6354,7 @@ private:
                 }
                 continue;
             }
-            if (association.choice_spelling == "default") {
+            if (association.choice_marker == support::ExpressionMarker::sv_default_choice) {
                 default_value = association.value;
                 continue;
             }
@@ -6739,7 +6739,7 @@ private:
                 std::map<std::int64_t, semantic::ExpressionId> keyed;
                 for (const auto& association :
                     view->systemverilog->associations) {
-                    if (association.choice_spelling == "default") {
+                    if (association.choice_marker == support::ExpressionMarker::sv_default_choice) {
                         fallback = association.value;
                         continue;
                     }
@@ -6916,7 +6916,7 @@ private:
                 }
                 continue;
             }
-            if (association.choice_spelling == "default") {
+            if (association.choice_marker == support::ExpressionMarker::sv_default_choice) {
                 default_value = association.value;
                 continue;
             }

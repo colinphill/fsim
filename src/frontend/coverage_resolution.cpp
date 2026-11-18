@@ -1270,7 +1270,7 @@ namespace {
 
     // `v.get_inst_coverage()` and `v.get_coverage()` of a covergroup
     // variable are the coverage of its instance and of its covergroup type
-    // (IEEE 1800-2023 19.8), a real percentage like `$get_inst_coverage`.
+    // (IEEE 1800-2023 19.8), a real percentage like `$get_coverage`.
     void bind_coverage_methods(
         const ParsedDesign& design,
         const std::string& owner,

@@ -2127,10 +2127,6 @@ Simulation::Impl::Impl(
                 calculate_systemverilog_covergroup_type_percentage(
                     declaration_named(identity), adapter.instances)
                     .coverage;
-        } else if (kind == CoverageQueryKind::overall_instance) {
-            percentage = frontend::
-                calculate_systemverilog_overall_instance_coverage_percentage(
-                    adapter.declarations, adapter.instances);
         } else {
             percentage = frontend::
                 calculate_systemverilog_overall_coverage_percentage(
@@ -3082,6 +3078,12 @@ void Simulation::Impl::refresh_observation_hooks()
                     const SimulationTick) {
                     publish_vpi_container(object);
                 });
+            // A dynamic memory's words follow each write the v4 kernel
+            // makes to it (IEEE 1800-2023 37.17 detail 14).
+            for (const auto& [object, memory] : vpi_live_memories) {
+                (void)memory;
+                interpreter->watch_container_object_changes(object);
+            }
         } else {
             interpreter->set_container_object_change_hook({});
         }

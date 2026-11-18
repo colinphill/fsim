@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+inl uniform same 1 seeds same 1 moved 1
+inl normal 100
+warning[FSIM-HDL-REPORT]: Poisson distribution mean must be positive
+inl poisson 0
+inl exponential same 1
+inl tag 42
+inl tag 5a
+error[FSIM-HDL-REPORT]: tagged union member read does not match the current tag
+inl after mismatch

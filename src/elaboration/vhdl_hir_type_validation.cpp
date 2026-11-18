@@ -3121,24 +3121,22 @@ private:
                 specialization_.design().semantics, inner, outer)
                 .has_value();
         };
-        const auto class_forms = [](const std::string_view entity_class)
+        const auto class_forms = [](const support::VhdlEntityClass entity_class)
             -> std::vector<Form> {
-            if (equal_ignoring_ascii_case(entity_class, "signal")) {
+            switch (entity_class) {
+            case support::VhdlEntityClass::signal:
                 return { Form::signal, Form::port };
-            }
-            if (equal_ignoring_ascii_case(entity_class, "variable")) {
+            case support::VhdlEntityClass::variable:
                 return { Form::variable };
-            }
-            if (equal_ignoring_ascii_case(entity_class, "constant")) {
+            case support::VhdlEntityClass::constant:
                 return { Form::constant, Form::generic_constant };
-            }
-            if (equal_ignoring_ascii_case(entity_class, "type")) {
+            case support::VhdlEntityClass::type:
                 return { Form::type };
-            }
-            if (equal_ignoring_ascii_case(entity_class, "subtype")) {
+            case support::VhdlEntityClass::subtype:
                 return { Form::subtype };
+            default:
+                return { };
             }
-            return { };
         };
         std::set<std::tuple<std::uint32_t, std::string, std::string>>
             closed;
@@ -3163,14 +3161,12 @@ private:
             }
             const auto key = std::tuple { declaration.scope.value(),
                 attribute_name, entity_class };
-            const auto forms = class_forms(entity_class);
+            const auto forms = class_forms(profile.entity_class_kind);
+            if (profile.name_list != support::VhdlEntityNameList::designators) {
+                closed.insert(key);
+            }
             for (const auto& entity : profile.entity_names) {
                 const auto& spelling = entity.spelling;
-                if (equal_ignoring_ascii_case(spelling, "others")
-                    || equal_ignoring_ascii_case(spelling, "all")) {
-                    closed.insert(key);
-                    continue;
-                }
                 if (closed.contains(key)) {
                     report("FSIM-ELAB-VHATTR-016",
                         "an attribute specification for '" + spelling
@@ -5783,8 +5779,8 @@ private:
                     return support::with_stack([&] { return locally_static_expression(
                                association.value, active_expressions,
                                active_declarations, depth + 1U); })
-                        && (equal_ignoring_ascii_case(
-                                association.choice_spelling, "others")
+                        && (association.choice_marker
+                                == support::ExpressionMarker::vhdl_others_choice
                             || std::ranges::all_of(
                                 association.choices,
                                 [&](const semantic::ExpressionId choice) {
@@ -7377,8 +7373,8 @@ private:
         {
             const bool has_others = std::ranges::any_of(
                 expression.associations, [&](const auto& association) {
-                    return equal_ignoring_ascii_case(
-                        association.choice_spelling, "others");
+                    return association.choice_marker
+                        == support::ExpressionMarker::vhdl_others_choice;
                 });
             const auto shape = profile(context);
             if (shape.kind == ProfileKind::array && shape.dimensions.size() == 1U) {
@@ -9974,8 +9970,8 @@ private:
     bool choice_is_others(
         const semantic::vhdl::AggregateAssociation& association) const
     {
-        if (equal_ignoring_ascii_case(simple_name_of(association.choice_spelling),
-                "others")) {
+        if (association.choice_marker
+            == support::ExpressionMarker::vhdl_others_choice) {
             return true;
         }
         return std::ranges::any_of(association.choices,
@@ -9984,8 +9980,8 @@ private:
                 return choice && choice->vhdl != nullptr
                     && (choice->vhdl->kind
                             == semantic::vhdl::ExpressionKind::default_choice
-                        || equal_ignoring_ascii_case(
-                            choice->vhdl->text, "others"));
+                        || choice->vhdl->marker
+                            == support::ExpressionMarker::vhdl_others_choice);
             });
     }
 
@@ -10628,19 +10624,13 @@ private:
                 low = low ? std::min(*low, index) : index;
                 high = high ? std::max(*high, index) : index;
             };
-            const auto include_choice = [&](const auto& self,
-                                            const semantic::ExpressionId id)
+            const auto include_choice = [&](const semantic::ExpressionId id)
                 -> bool {
                 const auto choice = specialization_.find_expression(id);
                 if (!choice || choice->vhdl == nullptr) {
                     return false;
                 }
                 const auto& value = *choice->vhdl;
-                if (value.kind == semantic::vhdl::ExpressionKind::binary
-                    && value.text == "|" && value.operands.size() == 2U) {
-                    return self(self, value.operands[0])
-                        && self(self, value.operands[1]);
-                }
                 if (value.kind == semantic::vhdl::ExpressionKind::binary
                     && (value.text == "to" || value.text == "downto")
                     && value.operands.size() == 2U) {
@@ -10688,7 +10678,7 @@ private:
                     return std::nullopt;
                 }
                 for (const auto choice : association.choices) {
-                    if (!include_choice(include_choice, choice)) {
+                    if (!include_choice(choice)) {
                         return std::nullopt;
                     }
                 }
@@ -11060,18 +11050,8 @@ private:
         };
         const auto null_range_has_single_association =
             [&](const auto& association) {
-                bool has_choice_union { };
-                if (association.choices.size() == 1U) {
-                    const auto choice = specialization_.find_expression(
-                        association.choices.front());
-                    has_choice_union = choice && choice->vhdl != nullptr
-                        && choice->vhdl->kind
-                            == semantic::vhdl::ExpressionKind::binary
-                        && choice->vhdl->text == "|";
-                }
                 if (aggregate.associations.size() == 1U
-                    && association.choices.size() == 1U
-                    && !has_choice_union) {
+                    && association.choices.size() == 1U) {
                     return true;
                 }
                 report(
@@ -11240,8 +11220,7 @@ private:
                 validate_value(association.value, association.source);
                 continue;
             }
-            const auto assign_choice = [&](const auto& self,
-                                           const semantic::ExpressionId choice_id)
+            const auto assign_choice = [&](const semantic::ExpressionId choice_id)
                 -> void {
                 const auto choice = specialization_.find_expression(
                     choice_id);
@@ -11249,14 +11228,6 @@ private:
                     return;
                 }
                 const auto& value = *choice->vhdl;
-                if (value.kind
-                        == semantic::vhdl::ExpressionKind::binary
-                    && value.text == "|"
-                    && value.operands.size() == 2U) {
-                    self(self, value.operands[0]);
-                    self(self, value.operands[1]);
-                    return;
-                }
                 if (value.kind
                         == semantic::vhdl::ExpressionKind::binary
                     && (value.text == "to"
@@ -11486,7 +11457,7 @@ private:
                 assign(*index, association.value, association.source);
             };
             for (const auto choice_id : association.choices) {
-                assign_choice(assign_choice, choice_id);
+                assign_choice(choice_id);
             }
         }
         if (!has_others && !dynamic_sole_choice
@@ -13652,20 +13623,13 @@ private:
             validate_generate_ranges, entity_.generates);
         validate_generate_ranges(
             validate_generate_ranges, architecture_.generates);
-        const auto mark_aggregate_range_choice = [&](const auto& self,
-                                                     const semantic::ExpressionId id)
+        const auto mark_aggregate_range_choice = [&](const semantic::ExpressionId id)
             -> void {
             const auto choice = specialization_.find_expression(id);
             if (!choice || choice->vhdl == nullptr) {
                 return;
             }
             const auto& source = *choice->vhdl;
-            if (source.kind == semantic::vhdl::ExpressionKind::binary
-                && source.text == "|" && source.operands.size() == 2U) {
-                self(self, source.operands[0]);
-                self(self, source.operands[1]);
-                return;
-            }
             if (source.kind == semantic::vhdl::ExpressionKind::call
                 && (source.text == "'range"
                     || source.text == "'reverse_range")) {
@@ -13684,8 +13648,7 @@ private:
             for (const auto& association :
                 effective->vhdl->associations) {
                 for (const auto choice : association.choices) {
-                    mark_aggregate_range_choice(
-                        mark_aggregate_range_choice, choice);
+                    mark_aggregate_range_choice(choice);
                 }
             }
         }
@@ -14480,14 +14443,15 @@ resolve_vhdl_user_attribute_subtype(
             || !equal_ignoring_ascii_case(candidate.name, attribute_name)) {
             continue;
         }
-        int entity_rank = std::numeric_limits<int>::max();
+        int entity_rank = candidate.attribute->name_list
+                == support::VhdlEntityNameList::others
+            ? 1
+            : candidate.attribute->name_list == support::VhdlEntityNameList::all
+            ? 2
+            : std::numeric_limits<int>::max();
         for (const auto& entity : candidate.attribute->entity_names) {
             if (equal_ignoring_ascii_case(entity.spelling, target_name)) {
                 entity_rank = std::min(entity_rank, 0);
-            } else if (equal_ignoring_ascii_case(entity.spelling, "others")) {
-                entity_rank = std::min(entity_rank, 1);
-            } else if (equal_ignoring_ascii_case(entity.spelling, "all")) {
-                entity_rank = std::min(entity_rank, 2);
             }
         }
         if (entity_rank == std::numeric_limits<int>::max()) {

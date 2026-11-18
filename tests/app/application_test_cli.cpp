@@ -1547,7 +1547,7 @@ puts "structured-debug-cli-ok"
     std::string q_identifier;
     std::istringstream debug_vcd_lines { debug_vcd };
     for (std::string line; std::getline(debug_vcd_lines, line);) {
-        if (line.starts_with("$var wire 1 ")
+        if (line.starts_with("$var reg 1 ")
             && line.ends_with(" q $end")) {
             std::istringstream declaration { line };
             std::string directive;

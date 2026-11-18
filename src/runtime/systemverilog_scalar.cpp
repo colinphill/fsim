@@ -282,20 +282,18 @@ namespace {
         return value;
     }
 
+    // A real, realtime or shortreal holds every IEEE 754 value, infinities
+    // and NaN included (IEEE 1800-2023 6.12); a shortreal is the IEEE 754
+    // conversion of the double, so a finite value beyond its range becomes
+    // an infinity.
     SystemVerilogScalarResult real_target(
         const double value,
         const SystemVerilogScalarKind target) noexcept
     {
-        if (!std::isfinite(value))
-            return { { }, SystemVerilogScalarError::Nonfinite };
         if (target == SystemVerilogScalarKind::ShortReal) {
-            const auto narrowed = static_cast<float>(value);
-            return std::isfinite(narrowed)
-                ? SystemVerilogScalarResult {
-                      SystemVerilogScalarValue::shortreal(narrowed),
-                      SystemVerilogScalarError::None
-                  }
-                : SystemVerilogScalarResult { { }, SystemVerilogScalarError::Overflow };
+            return { SystemVerilogScalarValue::shortreal(
+                         static_cast<float>(value)),
+                SystemVerilogScalarError::None };
         }
         if (target == SystemVerilogScalarKind::Real) {
             return { SystemVerilogScalarValue::real(value),

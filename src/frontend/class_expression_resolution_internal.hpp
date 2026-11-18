@@ -18,6 +18,12 @@
 #include <cstddef>
 #include <utility>
 
+namespace fsim::frontend {
+// The spelling of a type actual in a `C#(...)` selection
+// (verilog_parser_expressions.cpp).
+[[nodiscard]] std::string class_actual_type_spelling(const Type& type);
+} // namespace fsim::frontend
+
 namespace fsim::frontend::class_resolution_detail {
 
 Type specialize_selected_class_type(Type type,
@@ -137,6 +143,9 @@ struct PropertyMatch {
 struct ClassSelection {
   const SystemVerilogClassDeclaration* declaration{};
   Type type;
+  // The selection is written as a specialization (`C#(...)`), also with no
+  // actuals (`C#()`, IEEE 1800-2023 8.25.1).
+  bool written_specialization{};
 };
 
 struct ConstraintMatch {
@@ -263,12 +272,9 @@ class Resolver final {
   // The class type of a structure or union member holding a class handle.
   [[nodiscard]] std::optional<Type> structure_member_class_type(
       const Type& type, std::string_view member, const Scope& scope) const;
-  [[nodiscard]] static std::string_view trim_type_spelling(
-      std::string_view spelling);
-  [[nodiscard]] Type selected_type_actual(
-      std::string_view source, const Scope& scope) const;
-  [[nodiscard]] static std::vector<std::string_view>
-  selected_parameter_actuals(std::string_view spelling);
+  // A type actual named `name`: the class it names, else the name kept.
+  [[nodiscard]] Type named_type_actual(
+      std::string_view name, const Scope& scope) const;
   // The value of a specialization's parameter or local parameter, with the
   // specialization's literal or named actuals substituted.
   // Replaces `C#(...)::name` value references in a module constant.
@@ -288,8 +294,13 @@ class Resolver final {
   // With `scope`, an actual that names another specialization's parameter
   // (`C#(15)::b`) takes that parameter's value.
   [[nodiscard]] std::optional<Expression> class_specialization_parameter_value(
-      const SystemVerilogClassDeclaration& owner, std::string_view spelling,
+      const SystemVerilogClassDeclaration& owner,
+      const std::vector<SystemVerilogClassTypeActual>& actuals,
       std::string_view member, const Scope* scope = nullptr) const;
+  // The name of a specialization selection with its actuals, as the parser
+  // spells one (`C#(4,int)`).
+  [[nodiscard]] static std::string class_selection_spelling(
+      const Type& selection);
   // `parsed` carries the selection's actuals as the parser read them; it
   // applies when its spelling is `spelling`.
   [[nodiscard]] std::optional<ClassSelection> resolve_class_selection(
@@ -457,8 +468,8 @@ class Resolver final {
       compilation_unit_aliases_;
   // The array typedef `named_type` names from `lexical`, walking outward,
   // then the unique compilation-unit typedef of that name.
-  [[nodiscard]] static std::optional<std::string>
-  class_specialization_spelling(const std::string& owner, const Type& type);
+  [[nodiscard]] static const std::vector<SystemVerilogClassTypeActual>*
+  class_specialization_actuals(const Type& type);
   [[nodiscard]] std::optional<Expression> class_scoped_parameter_value(
       const Type& type, const Scope& scope) const;
   [[nodiscard]] const Type* container_alias(

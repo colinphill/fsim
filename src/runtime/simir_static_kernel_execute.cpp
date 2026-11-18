@@ -145,8 +145,13 @@ void Interpreter::Impl::StaticKernel::execute_body(
     // The instruction before this one, when it stored a VHDL variable a
     // hook names (note_variable_store).
     std::uint32_t stored_variable = no_variable_store;
+    // The observed kernel dynamic object the last instruction wrote.
+    std::uint32_t written_object = no_variable_store;
     try {
     while (pc < size) {
+        if (written_object != no_variable_store) [[unlikely]] {
+            publish_dynamic_object(std::exchange(written_object, no_variable_store));
+        }
         if (stored_variable != no_variable_store) [[unlikely]] {
             (void)note_variable_store(
                 static_cast<std::uint32_t>(current - members_.data()),
@@ -160,6 +165,9 @@ void Interpreter::Impl::StaticKernel::execute_body(
         executing = at;
         if (variable_hooks_active_ && at < body.variable_stores.size()) [[unlikely]] {
             stored_variable = body.variable_stores[at];
+        }
+        if (dynamic_observed_ && at < body.container_publishes.size()) [[unlikely]] {
+            written_object = body.container_publishes[at];
         }
         ++pc;
         const auto mode = body.shadow_base != 0U ? body.u_mode[at]
@@ -588,6 +596,28 @@ void Interpreter::Impl::StaticKernel::execute_body(
         case KOp::dyn: {
             auto& header = dynamic_headers_[containers_[inst.aux].dynamic_header];
             const auto sub = static_cast<static_kernel_detail::DynOp>(inst.sub);
+            if (sub == static_kernel_detail::DynOp::aggregate_unpack
+                || sub == static_kernel_detail::DynOp::aggregate_pack) {
+                aggregate_slot_transfer(body, inst, member_index);
+                break;
+            }
+            if (sub == static_kernel_detail::DynOp::aggregate_element_read
+                || sub == static_kernel_detail::DynOp::aggregate_element_write) {
+                const auto failure = static_kernel_detail::execute_dyn_aggregate_element(inst,
+                    sub == static_kernel_detail::DynOp::aggregate_element_read
+                        ? dynamic_headers_[containers_[inst.z].dynamic_header] : header,
+                    sub == static_kernel_detail::DynOp::aggregate_element_read
+                        ? header : dynamic_headers_[containers_[inst.z].dynamic_header],
+                    registers, body.predicate_words.data()
+                        + static_cast<std::size_t>(inst.x)
+                            * static_kernel_detail::dyn_graph_node_words);
+                if (static_kernel_detail::dyn_warning(failure)) {
+                    warn(member_index, static_kernel_detail::dyn_fail_message(failure));
+                } else if (failure != static_kernel_detail::DynFailure::none) {
+                    fail_at(at, static_kernel_detail::dyn_fail_message(failure));
+                }
+                break;
+            }
             if (static_kernel_detail::dyn_stream(sub)) {
                 const bool paired = inst.z != no_container;
                 static_kernel_detail::execute_dyn_stream(inst, header, containers_[inst.aux].type,
@@ -1330,7 +1360,7 @@ bool Interpreter::Impl::StaticKernel::execute_generic(CompiledBody& body,
     generic_load_operands(body, registers, inst, member_index, reads);
     generic_load_written(body, registers, inst, member_index, reads, writes);
     if (shadow_ != nullptr && !shadow_->reference) {
-        shadow_note_reads(member_index, reads);
+        shadow_note_reads(member_index, inst.x, reads);
     }
     // Behavioral runtime-library operations (output, strings, plusargs)
     // run on the thread's reference state.
@@ -1372,7 +1402,7 @@ bool Interpreter::Impl::StaticKernel::execute_generic_kind(CompiledBody& body,
     generic_load_operands(body, registers, inst, member_index, reads);
     generic_load_written(body, registers, inst, member_index, reads, writes);
     if (shadow_ != nullptr && !shadow_->reference) {
-        shadow_note_reads(member_index, reads);
+        shadow_note_reads(member_index, inst.x, reads);
     }
     if (member.kind != StaticKernelMemberKind::behavioral
         || !(this->*behavioral_operation_steps()[K])(member_index, inst.x)) {
@@ -2812,7 +2842,13 @@ void Interpreter::Impl::StaticKernel::effect_slow_op(const CompiledBody& body,
         return;
     }
     case KOp::mem_copy:
-        // x carries the source container; resolved is the destination.
+        // x carries the source container; resolved is the destination. A
+        // nonblocking whole-array write (10.4.2) queues the elements now.
+        if ((inst.flags & flag_nba) != 0U) {
+            push_container_copy(resolved, static_cast<std::uint32_t>(x.a), member_index,
+                body_begin + at);
+            return;
+        }
         copy_container(resolved, static_cast<std::uint32_t>(x.a), member_index,
             body_begin + at);
         return;

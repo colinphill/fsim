@@ -148,12 +148,6 @@ Lowerer::hir_systemverilog_math_function(
             != semantic::sv::ExpressionKind::call) {
         return std::nullopt;
     }
-    // $simtime, which no clause defines, takes $time's routine; its tick
-    // count is chosen at the call (lower_hir_time_call).
-    if (expression->systemverilog->system_tf == support::SystemTf::none
-        && expression->systemverilog->text == "$simtime") {
-        return runtime::SystemVerilogMathFunction::Time;
-    }
     return systemverilog_math_function(expression->systemverilog->system_tf);
 }
 
@@ -534,9 +528,7 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_math_call(
         const auto* const context = time_unit_owner != nullptr
             ? &time_unit_owner->compilation
             : nullptr;
-        // $simtime counts simulation-precision ticks: the runtime's zero
-        // unit is the project resolution.
-        const auto time_unit = context == nullptr || call.text == "$simtime"
+        const auto time_unit = context == nullptr
             ? std::optional<std::uint64_t> { }
             : systemverilog_time_scale_femtoseconds(context->time_unit);
         const auto time_precision = context == nullptr

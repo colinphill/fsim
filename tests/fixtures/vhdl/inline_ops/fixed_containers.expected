@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+inl read 31 21 11 1 out=0 neg=0 unk=0
+inl write 31 21 11 1
+inl find_index 3: 3 2 1
+inl first 1: 1
+inl sum 146
+inl last 1: 4
+inl sorted 25 16 9 4
+inl reversed 4 9 16 25
+inl equal 1 1
+inl bytes ff xxxxxxxx
+inl each 3=31
+inl each 2=21
+inl each 1=11
+inl each 0=1

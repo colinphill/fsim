@@ -570,9 +570,8 @@ bool Lowerer::lower_hir_vhdl_vital_delay_call(
                     const auto& choice_source = *choice->vhdl;
                     if (choice_source.kind
                             == semantic::vhdl::ExpressionKind::default_choice
-                        || (choice_source.kind
-                                == semantic::vhdl::ExpressionKind::name
-                            && choice_source.text == "others")) {
+                        || choice_source.marker
+                            == support::ExpressionMarker::vhdl_others_choice) {
                         report(
                             "FSIM-ELAB-VITAL-021",
                             "an unconstrained VITAL path aggregate cannot "

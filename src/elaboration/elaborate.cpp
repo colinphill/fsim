@@ -157,7 +157,9 @@ ElaborationResult elaborate_impl(
     SystemCFactoryProvider* systemc_provider,
     const std::span<const std::string> search_libraries,
     const CoverageHirContext* coverage,
-    const std::span<const UserSystemTask> user_system_tasks) {
+    const std::span<const UserSystemTask> user_system_tasks,
+    std::vector<ExternalSystemVerilogDefparam> external_defparams,
+    std::vector<ExternalSystemVerilogDefparam>& deferred_defparams) {
     ElaborationResult result;
     const auto validated = semantic::validate_compiled_design(compiled);
     if (!validated) {
@@ -477,6 +479,16 @@ ElaborationResult elaborate_impl(
     auto builder = std::make_unique<HierarchyBuilder>(
         *validated, design, result.diagnostics, bindings,
         systemc_instances, systemc_provider, search_libraries, coverage);
+    {
+        std::vector<std::string> top_level_names;
+        top_level_names.reserve(resolved_roots.size());
+        for (const auto& root : resolved_roots) {
+            top_level_names.push_back(root.alias);
+        }
+        builder->set_top_level_names(std::move(top_level_names));
+    }
+    const bool external = !external_defparams.empty();
+    builder->set_external_defparams(std::move(external_defparams));
     std::vector<const ResolvedRoot*> elaboration_roots;
     elaboration_roots.reserve(resolved_roots.size());
     for (const auto& root : resolved_roots) {
@@ -582,6 +594,10 @@ ElaborationResult elaborate_impl(
         }
     }
     hierarchy_phase.reset();
+    if (external) {
+        builder->report_unmatched_external_defparams();
+    }
+    deferred_defparams = builder->take_deferred_external_defparams();
     ScopedLoweringEntryProfile::report_and_reset();
     // Finalizing drops the index of class specializations.
     result.instance_class_specializations
@@ -628,15 +644,55 @@ ElaborationResult elaborate(
     const CoverageHirContext* coverage,
     const std::span<const UserSystemTask> user_system_tasks)
 {
-    return elaborate_impl(
-        compiled,
-        roots,
-        bindings,
-        systemc_instances,
-        systemc_provider,
-        search_libraries,
-        coverage,
-        user_system_tasks);
+    // A defparam whose target lies outside the instance that holds it is
+    // applied by another pass from the root, with the value the pass before
+    // found; the passes repeat until they find the same such defparams with
+    // the same targets and values (IEEE 1800-2023 23.10.4.1). Without one,
+    // the first pass is the elaboration.
+    using External = ExternalSystemVerilogDefparam;
+    const auto key = [](const External& external) {
+        return std::tuple { external.source.value(), external.owner_path,
+            external.target_path, external.parameter, external.value_identity };
+    };
+    const auto keys = [&](const std::vector<External>& externals) {
+        std::vector<decltype(key(externals.front()))> result;
+        result.reserve(externals.size());
+        for (const auto& external : externals) {
+            result.push_back(key(external));
+        }
+        std::ranges::sort(result);
+        return result;
+    };
+    constexpr std::size_t maximum_passes = 8U;
+    std::vector<External> applied;
+    for (std::size_t pass = 1U;; ++pass) {
+        std::vector<External> deferred;
+        auto applied_keys = keys(applied);
+        auto result = elaborate_impl(
+            compiled,
+            roots,
+            bindings,
+            systemc_instances,
+            systemc_provider,
+            search_libraries,
+            coverage,
+            user_system_tasks,
+            std::move(applied),
+            deferred);
+        if (deferred.empty() || keys(deferred) == applied_keys) {
+            return result;
+        }
+        if (pass == maximum_passes) {
+            result.design.reset();
+            result.diagnostics.push_back({ "FSIM-ELAB-DEFPARAM-001",
+                "the defparams that target parameters outside their instances "
+                "do not settle after "
+                    + std::to_string(maximum_passes) + " elaboration passes",
+                compiled_source_span(compiled, deferred.front().source) });
+            return result;
+        }
+        applied = std::move(deferred);
+    }
 }
 
 } // namespace fsim::elaboration

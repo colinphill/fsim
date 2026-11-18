@@ -1798,7 +1798,6 @@ scheduler.
 | `FSIM-ELAB-SVRAND-004` | error | A packed `std::randomize` local has no nonempty width representable by SimIR metadata. |
 | `FSIM-ELAB-SVRAND-005` | error | A parsed `randomize with` call has lost its retained structured constraint block. |
 | `FSIM-ELAB-SVRAND-006` | error | An inline constraint uses a variable, constant, or operator that cannot be represented by the portable constraint graph. |
-| `FSIM-ELAB-SVRAND-007` | error | `$srandom` is outside SystemVerilog, has the wrong arity, or has a nonintegral seed. |
 | `FSIM-ELAB-SVRAND-008` | error | An IEEE random-distribution function has the wrong arity, a nonintegral argument, or a seed that is not a writable packed integer variable at least 32 bits wide. |
 | `FSIM-ELAB-SVRAND-009` | error | A `std::randomize` with-clause reads an array whose elements are not packed. |
 | `FSIM-ELAB-SVRAND-010` | error | A `std::randomize` enumeration variable's type has a literal whose value is not a known constant at the type's width. |
@@ -2052,10 +2051,12 @@ scheduler.
 | `FSIM-ELAB-DRV-001` | error | An unresolved variable has multiple process drivers that conflict: a continuous assignment with another driver, or several VHDL processes. Procedural writes from several SystemVerilog processes are legal (IEEE 1800-2017 6.5). |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |
-| `FSIM-ELAB-DEFPARAM-001` | error | A `defparam` hierarchy index or value cannot be resolved as a locally static SystemVerilog constant. |
-| `FSIM-ELAB-DEFPARAM-002` | error | A `defparam` target does not resolve to an elaborated descendant instance parameter, or names a type parameter, which a `defparam` cannot override (IEEE 1800-2017 6.20.3). |
+| `FSIM-ELAB-DEFPARAM-001` | error | A `defparam` hierarchy index or value cannot be resolved as a locally static SystemVerilog constant, or the values of the defparams that target parameters outside their instances depend on each other and do not settle (IEEE 1800-2023 23.10.4.1). |
+| `FSIM-ELAB-DEFPARAM-002` | error | A `defparam` path's first name names no scope of the upward search (IEEE 1800-2023 23.8), its target does not resolve to an elaborated descendant instance parameter, or it names a type parameter, which a `defparam` cannot override (6.20.3). |
 | `FSIM-ELAB-DEFPARAM-004` | error | A `defparam` path crosses an unsupported language boundary or targets an object that cannot accept parameter overrides. |
 | `FSIM-ELAB-DEFPARAM-005` | error | A defparam value names a variable, net or port instead of a constant expression (IEEE 1800-2017 23.10.1). |
+| `FSIM-ELAB-DEFPARAM-006` | error | A `defparam` in or under a generate block instance or an element of an array of instances targets a parameter outside that hierarchy (IEEE 1800-2023 23.10.1). |
+| `FSIM-ELAB-DEFPARAM-007` | error | A `defparam` hierarchical name resolved before the hierarchy was completely elaborated resolves to a different parameter in the elaborated hierarchy (IEEE 1800-2023 23.10.4.2). |
 | `FSIM-ELAB-SVEXTERN-001` | error | An extern module, interface, or program declaration has no unique definition in its logical library. |
 | `FSIM-ELAB-SVEXTERN-002` | error | An extern module, interface, or program header does not exactly match its definition. |
 | `FSIM-ELAB-SVCONFIG-001` | error | A SystemVerilog configuration selected as one simulation root does not contain exactly one design top. |
@@ -2658,7 +2659,7 @@ scheduler.
 | `FSIM-ELAB-SVSCOPE-002` | error | The Annex D task `$list` (IEEE 1800-2023 D.6) is not supported. |
 | `FSIM-ELAB-SVSIMCTL-001` | error | `$save`, `$incsave` or `$restart` is used outside SystemVerilog or without exactly one file name written as a string literal (IEEE 1800-2023 D.9), `$reset` with more than stop_value, reset_value and diagnostics_value or with named arguments (D.8), or `$reset_count` or `$reset_value` with an argument or outside SystemVerilog. |
 | `FSIM-ELAB-SVTIME-003` | error | `$time`, `$stime`, or `$realtime` is used outside SystemVerilog or with arguments. |
-| `FSIM-ELAB-SVCOV-001` | error | `$get_coverage` or `$get_inst_coverage` is used outside SystemVerilog or with arguments. |
+| `FSIM-ELAB-SVCOV-001` | error | `$get_coverage`, or a covergroup's `get_coverage()` or `get_inst_coverage()` method, is used outside SystemVerilog or with arguments. |
 | `FSIM-ELAB-SVCOV-002` | error | `$set_coverage_db_name` or `$load_coverage_db` is used outside SystemVerilog or without exactly one positional filename expression. |
 | `FSIM-ELAB-SVCONTAINER-001` | error | A container local is duplicated in one automatic scope. |
 | `FSIM-ELAB-SVCONTAINER-002` | error | A container element expression has no resolvable element type. |

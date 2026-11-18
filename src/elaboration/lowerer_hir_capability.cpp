@@ -1826,7 +1826,7 @@ Lowerer::hir_systemverilog_parameter_member(
             std::size_t position { };
             for (const auto& association :
                 pattern->systemverilog->associations) {
-                if (association.choice_spelling == "default") {
+                if (association.choice_marker == support::ExpressionMarker::sv_default_choice) {
                     fallback = association.value;
                 } else if (association.choice_marker
                     == support::ExpressionMarker::key) {
@@ -5615,6 +5615,13 @@ bool Lowerer::hir_expression_signed(
                     receiver = *binding->type;
                 }
             }
+            if (!receiver) {
+                if (const auto row = hir_probed_iterator_rows_.find(
+                        operands.front().value());
+                    row != hir_probed_iterator_rows_.end()) {
+                    receiver = row->second;
+                }
+            }
             if (receiver
                 && (receiver->element_kind == ContainerElementKind::Packed
                     || receiver->element_kind
@@ -5630,19 +5637,40 @@ bool Lowerer::hir_expression_signed(
                     ? std::string_view { iterator->systemverilog->text }
                     : std::string_view { "item" };
                 std::vector<std::uint32_t> probed;
-                if (receiver->signed_elements) {
-                    for (const auto& [id, is_index] :
-                        hir_container_iterator_references(
-                            operands.back(), iterator_name)) {
-                        if (!is_index
-                            && hir_probed_iterator_signed_.insert(id).second) {
-                            probed.push_back(id);
+                std::vector<std::uint32_t> rows;
+                // Over a multidimensional array the iterator is a row: the
+                // array without its first dimension (7.12.3).
+                const bool by_rows = receiver->fixed && receiver->dimensions.size() > 1U;
+                auto row_type = *receiver;
+                if (by_rows) {
+                    row_type.dimensions.erase(row_type.dimensions.begin());
+                    row_type.index_left = row_type.dimensions.front().first;
+                    row_type.index_right = row_type.dimensions.front().second;
+                    if (row_type.dimensions.size() == 1U) {
+                        row_type.dimensions.clear();
+                    }
+                }
+                for (const auto& [id, is_index] :
+                    hir_container_iterator_references(
+                        operands.back(), iterator_name)) {
+                    if (is_index) {
+                        continue;
+                    }
+                    if (by_rows) {
+                        if (hir_probed_iterator_rows_.emplace(id, row_type).second) {
+                            rows.push_back(id);
                         }
+                    } else if (receiver->signed_elements
+                        && hir_probed_iterator_signed_.insert(id).second) {
+                        probed.push_back(id);
                     }
                 }
                 const bool result = hir_expression_signed(operands.back());
                 for (const auto id : probed) {
                     hir_probed_iterator_signed_.erase(id);
+                }
+                for (const auto id : rows) {
+                    hir_probed_iterator_rows_.erase(id);
                 }
                 return result;
             }
@@ -13196,10 +13224,8 @@ bool Lowerer::hir_expression_is_string(
                 == support::SystemVerilogBuiltinType::string)
             // $typename returns a string (IEEE 1800-2017 20.6.1).
             || cast->systemverilog->system_tf == support::SystemTf::typename_query
-            || (cast->systemverilog->text == ".get_randstate"
-                && !cast->systemverilog->operands.empty()
-                && hir_process_handle_expression(
-                    cast->systemverilog->operands.front())))
+            || hir_process_method_call(*cast->systemverilog)
+                == support::ProcessMethod::get_randstate)
         && cast->systemverilog->operands.size() == 1U) {
         return true;
     }
@@ -13382,36 +13408,32 @@ bool Lowerer::hir_expression_is_string(
                 == support::ExpressionMarker::vhdl_qualified) {
             const auto subtype = hir_vhdl_expression_subtype(expression_id);
             if (subtype && hir_vhdl_predefined_string_type(*subtype)) {
-                // A positional STRING aggregate of STRING pieces and
-                // CHARACTER literals is a string (IEEE 1076-2008 9.3.3.3).
+                // A STRING aggregate of CHARACTER elements, positional or
+                // named, and of positional STRING pieces is a string (IEEE
+                // 1076-2019 9.3.3.3).
                 const auto operand = specialized_hir_unit_->find_expression(
                     source.operands.front());
+                if (operand && operand->vhdl != nullptr
+                    && hir_vhdl_named_character_string_aggregate(
+                        *operand->vhdl)) {
+                    return true;
+                }
                 if (operand && operand->vhdl != nullptr
                     && operand->vhdl->kind
                         == semantic::vhdl::ExpressionKind::aggregate
                     && !operand->vhdl->associations.empty()) {
-                    bool string_piece { };
-                    const bool pieces = std::ranges::all_of(
-                        operand->vhdl->associations,
+                    // Its elements are CHARACTER values or, positionally,
+                    // STRING slices of it: the qualifier makes it a STRING
+                    // (9.3.5).
+                    return std::ranges::all_of(operand->vhdl->associations,
                         [&](const semantic::vhdl::AggregateAssociation&
                                 association) {
-                            if (!association.positional()) {
-                                return false;
-                            }
-                            if (hir_expression_is_string(
-                                    association.value, process_scope)) {
-                                string_piece = true;
-                                return true;
-                            }
-                            const auto value
-                                = specialized_hir_unit_->find_expression(
-                                    association.value);
-                            return value && value->vhdl != nullptr
-                                && value->vhdl->kind
-                                    == semantic::vhdl::ExpressionKind::
-                                        logic_literal;
+                            return association.positional()
+                                && (hir_expression_is_string(
+                                        association.value, process_scope)
+                                    || hir_vhdl_character_expression(
+                                        association.value));
                         });
-                    return pieces && string_piece;
                 }
                 return hir_expression_is_string(
                     source.operands.front(), process_scope);
@@ -13869,6 +13891,34 @@ Lowerer::hir_vhdl_access_string_whole_slice(
     return whole;
 }
 
+bool Lowerer::hir_vhdl_named_character_string_aggregate(
+    const semantic::vhdl::Expression& aggregate) const
+{
+    const auto& associations = aggregate.associations;
+    if (aggregate.kind != semantic::vhdl::ExpressionKind::aggregate
+        || associations.empty()) {
+        return false;
+    }
+    // Named CHARACTER associations take POSITIVE's direction and the
+    // smallest and largest choice as bounds.
+    if (associations.size() == 1U && associations.front().choices.size() == 1U
+        && hir_vhdl_range_choice(associations.front().choices.front())
+        && hir_vhdl_character_expression(associations.front().value)) {
+        return true;
+    }
+    return std::ranges::all_of(associations,
+        [&](const semantic::vhdl::AggregateAssociation& association) {
+            return !association.choices.empty()
+                && hir_vhdl_character_expression(association.value)
+                && std::ranges::all_of(association.choices,
+                    [&](const semantic::ExpressionId choice) {
+                        const auto range = hir_vhdl_range_choice(choice);
+                        return range ? range->left && range->right
+                                     : hir_constant_integer(choice).has_value();
+                    });
+        });
+}
+
 bool Lowerer::can_lower_hir_string_expression(
     const semantic::ExpressionId expression,
     const semantic::ScopeId process_scope,
@@ -13899,12 +13949,14 @@ bool Lowerer::can_lower_hir_string_expression(
         if (source.marker
             == support::ExpressionMarker::vhdl_new_qualified
             && source.operands.size() == 2U) {
-            return can_lower_hir_string_expression(
-                source.operands[1], process_scope);
+            const auto context
+                = hir_vhdl_qualified_allocator_string_subtype(expression);
+            return can_lower_hir_string_expression(source.operands[1],
+                process_scope, context ? &*context : nullptr);
         }
         if (source.marker
             == support::ExpressionMarker::vhdl_new) {
-            return hir_vhdl_line_allocator_length(expression).has_value();
+            return hir_vhdl_line_allocator_range(expression).has_value();
         }
     }
     if (const auto whole = hir_vhdl_whole_range_slice(expression);
@@ -14012,13 +14064,19 @@ bool Lowerer::can_lower_hir_string_expression(
             && std::ranges::all_of(contextual_aggregate->associations, piece)) {
             return true;
         }
+        if (!effective_context->constraints.empty()
+            || contextual_aggregate->associations.empty()) {
+            return false;
+        }
         // Positional STRING pieces concatenate (lower_hir_string_expression).
-        return effective_context->constraints.empty()
-            && !contextual_aggregate->associations.empty()
-            && std::ranges::all_of(contextual_aggregate->associations,
+        if (std::ranges::all_of(contextual_aggregate->associations,
                 [&](const semantic::vhdl::AggregateAssociation& association) {
                     return association.choices.empty() && piece(association);
-                });
+                })) {
+            return true;
+        }
+        return hir_vhdl_named_character_string_aggregate(
+            *contextual_aggregate);
     }
     if (standard_string_context && contextual_concat) {
         const bool predefined_operator
@@ -22424,7 +22482,6 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
         // 19.8, 20.14).
         if (source.kind == semantic::sv::ExpressionKind::call
             && (source.system_tf == support::SystemTf::get_coverage
-                || source.text == "$get_inst_coverage"
                 || frontend::is_coverage_query(source.marker))) {
             return 64U;
         }
@@ -22850,9 +22907,8 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
             }();
             std::size_t width { };
             for (const auto& association : source.associations) {
-                auto choice = association.choice_spelling;
-                lowercase_ascii(choice);
-                if (choice.find("others") != std::string::npos) {
+                if (association.choice_marker
+                    == support::ExpressionMarker::vhdl_others_choice) {
                     return std::nullopt;
                 }
                 const auto value_width = hir_expression_width(

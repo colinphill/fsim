@@ -845,6 +845,13 @@ Expression VerilogParser::parse_postfix(Expression expression)
                 expression = Expression { ExpressionKind::Index, "index",
                     { std::move(expression), std::move(first) },
                     cover(expression.span, previous().span) };
+                // `new[size]` constructs a dynamic array (7.5.1); `new` is a
+                // keyword, so no declared name is spelled so.
+                if (auto& callee = expression.operands.front();
+                    callee.kind == ExpressionKind::Identifier
+                    && callee.text == "new") {
+                    callee.marker = support::ExpressionMarker::sv_new_array;
+                }
             }
         } else if (
             at(TokenKind::LeftParen)

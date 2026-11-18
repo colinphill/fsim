@@ -17,6 +17,8 @@ module kernel_real;
   real p_out, q_out;
   real invalid_quotient, invalid_difference, invalid_product;
   shortreal s = 0.5, p_short, q_short, invalid_short;
+  realtime infinite_time, invalid_time;
+  shortreal narrowed_infinity, narrowed_nan, narrowed_large, narrowed_negative;
   realtime rt;
   time t, p_time, q_time;
   int events;
@@ -71,5 +73,21 @@ module kernel_real;
     $display("nan %h %h %h %h", $realtobits(invalid_quotient),
         $realtobits(invalid_difference), $realtobits(invalid_product),
         $shortrealtobits(invalid_short));
+  end
+
+  // A realtime holds an infinity and NaN as a real does, and a shortreal
+  // is the IEEE 754 conversion of a real: an infinity and NaN stay so, a
+  // finite value beyond its range becomes an infinity (6.12).
+  initial #26 begin
+    infinite_time = (acc + 1.0e308) * 10.0;
+    invalid_time = infinite_time - infinite_time;
+    narrowed_infinity = infinite_time;
+    narrowed_nan = invalid_time;
+    narrowed_large = acc + 1.0e300;
+    narrowed_negative = -(acc + 1.0e300);
+    $display("nonfinite %h %h %h %h %h %h", $realtobits(infinite_time),
+        $realtobits(invalid_time), $shortrealtobits(narrowed_infinity),
+        $shortrealtobits(narrowed_nan), $shortrealtobits(narrowed_large),
+        $shortrealtobits(narrowed_negative));
   end
 endmodule

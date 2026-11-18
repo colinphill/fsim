@@ -11,6 +11,7 @@
 #include "fsim/support/rare_vector.hpp"
 #include "fsim/support/sva_marker.hpp"
 #include "fsim/support/systemverilog_builtin_type.hpp"
+#include "fsim/support/vhdl_entity_class.hpp"
 #include "fsim/support/uvm_role.hpp"
 #include "fsim/support/vhdl_formal_conversion.hpp"
 #include <cstddef>
@@ -139,6 +140,9 @@ struct Expression {
     // cache/source provenance.
     std::optional<std::string> decoded_string;
     std::optional<SystemVerilogDecimalLiteral> systemverilog_decimal_literal;
+    // An unbased unsized literal's value (5.7.1); none on every other node.
+    support::UnbasedUnsizedLiteral unbased_unsized {
+        support::UnbasedUnsizedLiteral::none };
     support::RareVector<std::string> call_argument_names;
     support::RareVector<PortDirection> call_argument_directions;
     std::uint64_t call_result_width { };
@@ -856,6 +860,9 @@ struct Type {
     std::string systemverilog_interface_modport;
     std::vector<SystemVerilogClassTypeActual>
         systemverilog_class_parameter_actuals;
+    // For a specialization selection in a scope chain (`O#(1)::I#(2)`), the
+    // selection of the chain's earlier specialization (IEEE 1800-2023 8.25.1).
+    std::shared_ptr<const Type> systemverilog_class_enclosing_selection;
     // One-based parser-token ordinal of this type-name use; zero is unknown.
     std::uint64_t systemverilog_source_order { };
     // No data type was written (IEEE 1800-2023 6.8, 13.3, 23.2.2): the
@@ -974,10 +981,17 @@ struct SystemVerilogIntegralTypeDescriptor {
 };
 
 [[nodiscard]] std::optional<SystemVerilogIntegralTypeDescriptor>
+systemverilog_integral_type_descriptor(
+    support::SystemVerilogBuiltinType kind) noexcept;
+// The parser's keyword token (IEEE 1800-2023 5.6.2) read as its kind.
+[[nodiscard]] std::optional<SystemVerilogIntegralTypeDescriptor>
 systemverilog_integral_type_descriptor(std::string_view spelling) noexcept;
 
 /// Apply one built-in integral type to an otherwise unqualified Type. Returns
-/// false without modifying type when spelling is not a built-in integral type.
+/// false without modifying type when kind is not a built-in integral type.
+[[nodiscard]] bool apply_systemverilog_integral_type(
+    Type& type, support::SystemVerilogBuiltinType kind);
+// The same for the parser's keyword token.
 [[nodiscard]] bool apply_systemverilog_integral_type(
     Type& type, std::string_view spelling);
 
@@ -1149,10 +1163,15 @@ struct VhdlAttributeDeclaration {
     std::string name;
     Type type;
     bool specification { };
+    // The entity designators of a specification; empty for `all` and
+    // `others`, which name_list records (IEEE 1076-2019 7.2).
     std::vector<std::string> entity_names;
     std::string entity_class;
     Expression value;
     SourceSpan span;
+    support::VhdlEntityClass entity_class_kind { support::VhdlEntityClass::none };
+    support::VhdlEntityNameList name_list {
+        support::VhdlEntityNameList::designators };
 };
 
 struct VhdlGroupDeclaration {

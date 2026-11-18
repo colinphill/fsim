@@ -591,6 +591,11 @@ Lowerer::HirVhdlAccessHeap* Lowerer::hir_vhdl_access_heap(
     normalized_allocator_ranges.reserve(allocator_constraints.size());
     for (const auto& allocator_range : allocator_constraints) {
         const auto normalized = normalize_range(allocator_range);
+        // A STRING object keeps its own length, so its allocator's range
+        // may be evaluated when the allocator is (9.3.7).
+        if (!normalized && string_payload) {
+            continue;
+        }
         if (!normalized) {
             report(
                 "FSIM-ELAB-VHACCESS-006",
@@ -1681,16 +1686,27 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
                 }
             }
             std::optional<std::uint64_t> extent;
+            // The length of a range whose bounds are evaluated when the
+            // allocator is (9.3.7).
+            std::optional<RegisterId> run_time_extent;
             if (object_range != nullptr) {
                 const auto left = hir_range_left(*object_range);
                 const auto right = hir_range_right(*object_range);
                 if (!left || !right) {
-                    report(
-                        "FSIM-ELAB-VHACCESS-006",
-                        "a VHDL STRING allocator requires concrete index bounds",
-                        span);
-                    return std::nullopt;
+                    run_time_extent = lower_hir_vhdl_range_length(
+                        *object_range, 1, &span);
+                    if (!run_time_extent) {
+                        report(
+                            "FSIM-ELAB-VHACCESS-006",
+                            "a VHDL STRING allocator requires index bounds of an integer type",
+                            span);
+                        return std::nullopt;
+                    }
                 }
+            }
+            if (object_range != nullptr && !run_time_extent) {
+                const auto left = hir_range_left(*object_range);
+                const auto right = hir_range_right(*object_range);
                 const bool descending = object_range->direction_from_bounds
                     ? *left > *right
                     : object_range->descending;
@@ -1710,6 +1726,23 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
             const bool qualified = source.marker
                 == support::ExpressionMarker::vhdl_new_qualified
                 && source.operands.size() == 2U;
+            if (!qualified && run_time_extent) {
+                // The default value repeats CHARACTER'LEFT (6.4.2.3).
+                StringMethod fill;
+                fill.operation
+                    = runtime::simir::StringMethodOperator::vhdl_string_fill;
+                fill.string_destination = allocate_string_register();
+                fill.source = fill.string_destination;
+                fill.first = *run_time_extent;
+                fill.second = load_integer(0, 32U, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(fill);
+                return issue_hir_vhdl_access_handle(
+                    *heap, span, [&](const RegisterId handle) {
+                        process_.operations.emplace_back(ContainerStringWrite {
+                            heap->objects, handle, fill.string_destination,
+                            false, false, false, { } });
+                    });
+            }
             if (!qualified) {
                 if (!extent) {
                     report(
@@ -1741,7 +1774,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
                     span);
                 return std::nullopt;
             }
-            if (!extent) {
+            if (!extent && !run_time_extent) {
                 return issue_hir_vhdl_access_handle(
                     *heap, span, [&](const RegisterId handle) {
                         process_.operations.emplace_back(ContainerStringWrite {
@@ -1753,8 +1786,10 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
                 32U, frontend::ValueDomain::Bit2);
             process_.operations.emplace_back(
                 StringLength { actual_length, *text });
-            const auto required_length = load_constant(
-                unsigned_value(*extent, 32U), frontend::ValueDomain::Bit2);
+            const auto required_length = run_time_extent
+                ? *run_time_extent
+                : load_constant(
+                      unsigned_value(*extent, 32U), frontend::ValueDomain::Bit2);
             const auto correct_length = allocate_register(
                 1U, frontend::ValueDomain::Boolean);
             process_.operations.emplace_back(Binary {
@@ -2076,7 +2111,10 @@ std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_line_value(
     }
     if (source.marker
         == support::ExpressionMarker::vhdl_new_qualified && source.operands.size() == 2U) {
-        return lower_hir_string_expression(source.operands[1]);
+        const auto context = hir_vhdl_qualified_allocator_string_subtype(
+            expression_id);
+        return lower_hir_string_expression(
+            source.operands[1], context ? &*context : nullptr);
     }
     // `new string(1 to n)`: a STRING of n CHARACTER'LEFT (NUL) elements
     // (IEEE 1076-2008 9.3.7, 6.4.2.3).
@@ -2084,7 +2122,10 @@ std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_line_value(
         != support::ExpressionMarker::vhdl_new || source.operands.size() != 1U) {
         return std::nullopt;
     }
-    const auto count = hir_vhdl_line_allocator_length(expression_id);
+    const auto range = hir_vhdl_line_allocator_range(expression_id);
+    const auto span = hir_source_span(source.source);
+    const auto count = range ? lower_hir_vhdl_range_length(*range, 1, &span)
+                             : std::nullopt;
     if (!count) {
         return std::nullopt;
     }
@@ -2092,14 +2133,59 @@ std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_line_value(
     fill.operation = runtime::simir::StringMethodOperator::vhdl_string_fill;
     fill.string_destination = allocate_string_register();
     fill.source = fill.string_destination;
-    fill.first = load_integer(static_cast<std::int64_t>(*count), 32U,
-        frontend::ValueDomain::Bit2);
+    fill.first = *count;
     fill.second = load_integer(0, 32U, frontend::ValueDomain::Bit2);
     process_.operations.emplace_back(fill);
     return fill.string_destination;
 }
 
-std::optional<std::size_t> Lowerer::hir_vhdl_line_allocator_length(
+std::optional<semantic::vhdl::SubtypeIndication>
+Lowerer::hir_vhdl_qualified_allocator_string_subtype(
+    const semantic::ExpressionId expression_id) const
+{
+    const auto value = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_expression(expression_id)
+        : std::nullopt;
+    if (!value || value->vhdl == nullptr
+        || value->vhdl->marker != support::ExpressionMarker::vhdl_new_qualified
+        || value->vhdl->operands.size() != 2U) {
+        return std::nullopt;
+    }
+    const auto qualifier = specialized_hir_unit_->find_expression(
+        value->vhdl->operands.front());
+    if (!qualifier || qualifier->vhdl == nullptr
+        || qualifier->vhdl->marker != support::ExpressionMarker::vhdl_subtype) {
+        return std::nullopt;
+    }
+    const auto name = std::string_view { qualifier->vhdl->marker_argument };
+    semantic::vhdl::SubtypeIndication subtype;
+    subtype.type_mark.spelling = std::string { name };
+    const auto resolved = hir_resolver().resolve_vhdl_type_identity(
+        name, value->vhdl->scope);
+    if (resolved.status == semantic::CompiledResolutionStatus::unique
+        && resolved.type) {
+        subtype.type_mark.target = *resolved.type;
+    } else if (hir_vhdl_standard_array_builtin_type(*specialized_hir_unit_,
+                   subtype, value->vhdl->scope, hir_generic_binding_frames_)
+        == semantic::vhdl::BuiltinTypeIdentity::std_standard_string) {
+        // STD.STANDARD's STRING, which the tool supplies (16.3).
+        subtype.builtin_type
+            = semantic::vhdl::BuiltinTypeIdentity::std_standard_string;
+        subtype.domain = semantic::vhdl::ValueDomain::string;
+        subtype.unconstrained = true;
+        return subtype;
+    } else {
+        return std::nullopt;
+    }
+    auto effective = hir_effective_vhdl_subtype(subtype);
+    if (!effective || !hir_vhdl_predefined_string_type(*effective)) {
+        return std::nullopt;
+    }
+    return effective;
+}
+
+std::optional<semantic::vhdl::RangeConstraint>
+Lowerer::hir_vhdl_line_allocator_range(
     const semantic::ExpressionId expression_id) const
 {
     const auto value = specialized_hir_unit_ != nullptr
@@ -2112,10 +2198,18 @@ std::optional<std::size_t> Lowerer::hir_vhdl_line_allocator_length(
     }
     const auto subtype = specialized_hir_unit_->find_expression(
         value->vhdl->operands.front());
-    const auto bound = subtype && subtype->vhdl != nullptr
-            && subtype->vhdl->operands.size() == 1U
-        ? specialized_hir_unit_->find_expression(
-              subtype->vhdl->operands.front())
+    if (!subtype || subtype->vhdl == nullptr
+        || subtype->vhdl->operands.size() != 1U) {
+        return std::nullopt;
+    }
+    return hir_vhdl_range_choice(subtype->vhdl->operands.front());
+}
+
+std::optional<semantic::vhdl::RangeConstraint> Lowerer::hir_vhdl_range_choice(
+    const semantic::ExpressionId choice) const
+{
+    const auto bound = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_expression(choice)
         : std::nullopt;
     if (!bound || bound->vhdl == nullptr
         || bound->vhdl->kind != semantic::vhdl::ExpressionKind::binary
@@ -2123,20 +2217,123 @@ std::optional<std::size_t> Lowerer::hir_vhdl_line_allocator_length(
         || bound->vhdl->operands.size() != 2U) {
         return std::nullopt;
     }
-    const auto left = hir_constant_integer(bound->vhdl->operands[0]);
-    const auto right = hir_constant_integer(bound->vhdl->operands[1]);
+    semantic::vhdl::RangeConstraint range;
+    range.kind = semantic::vhdl::RangeKind::array_index;
+    range.left_expression = bound->vhdl->operands[0];
+    range.right_expression = bound->vhdl->operands[1];
+    range.left = hir_constant_integer(bound->vhdl->operands[0]);
+    range.right = hir_constant_integer(bound->vhdl->operands[1]);
+    range.descending = bound->vhdl->text == "downto";
+    range.source = bound->vhdl->source;
+    return range;
+}
+
+std::optional<RegisterId> Lowerer::lower_hir_vhdl_range_length(
+    const semantic::vhdl::RangeConstraint& range,
+    const std::optional<std::int64_t> minimum_bound,
+    const frontend::SourceSpan* const span)
+{
+    using frontend::ValueDomain;
+    const auto static_left = range.left ? range.left : hir_range_left(range);
+    const auto static_right
+        = range.right ? range.right : hir_range_right(range);
+    if (static_left && static_right
+        && (!range.direction_from_bounds
+            || hir_vhdl_range_direction(range, hir_process_scope_))) {
+        const bool descending = range.direction_from_bounds
+            ? *hir_vhdl_range_direction(range, hir_process_scope_)
+            : range.descending;
+        const bool null_range = descending ? *static_left < *static_right
+                                           : *static_left > *static_right;
+        const auto distance = null_range
+            ? std::uint64_t { }
+            : index_distance(*static_left, *static_right) + 1U;
+        return load_integer(
+            distance > static_cast<std::uint64_t>(
+                std::numeric_limits<std::int32_t>::max())
+                ? -1
+                : static_cast<std::int64_t>(distance),
+            32U, ValueDomain::Integer);
+    }
+    const auto bound = [&](const std::optional<std::int64_t> constant,
+                           const std::optional<semantic::ExpressionId> source)
+        -> std::optional<RegisterId> {
+        if (constant) {
+            return load_integer(*constant, 64U, ValueDomain::Integer);
+        }
+        if (!source) {
+            return std::nullopt;
+        }
+        const auto width = hir_expression_width(
+            *source, hir_process_scope_).value_or(32U);
+        const auto value = lower_hir_expression(*source, width);
+        return value ? std::optional { resize_register(*value, 64U, true) }
+                     : std::nullopt;
+    };
+    const auto left = bound(static_left, range.left_expression);
+    const auto right = bound(static_right, range.right_expression);
     if (!left || !right) {
         return std::nullopt;
     }
-    const auto descending = bound->vhdl->text == "downto";
-    const auto count = descending
-        ? (*left >= *right ? *left - *right + 1 : 0)
-        : (*right >= *left ? *right - *left + 1 : 0);
-    if (count < 0
-        || count > static_cast<std::int64_t>(maximum_string_bytes)) {
-        return std::nullopt;
+    const bool descending = range.direction_from_bounds
+        ? hir_vhdl_range_direction(range, hir_process_scope_)
+              .value_or(range.descending)
+        : range.descending;
+    const auto integer = [&] {
+        return allocate_register(64U, ValueDomain::Integer);
+    };
+    const auto binary = [&](const BinaryOperator operation,
+                            const RegisterId destination, const RegisterId lhs,
+                            const RegisterId rhs) {
+        process_.operations.emplace_back(
+            Binary { operation, destination, lhs, rhs });
+        return destination;
+    };
+    const auto condition = [&] {
+        return allocate_register(1U, ValueDomain::Boolean);
+    };
+    const auto select = [&](const RegisterId test, const RegisterId when_true,
+                            const RegisterId when_false) {
+        const auto destination = integer();
+        process_.operations.emplace_back(
+            ConditionalSelect { destination, test, when_true, when_false });
+        return destination;
+    };
+    // The bounds' distance plus one, in the range's direction.
+    const auto distance = binary(BinaryOperator::subtract_signed, integer(),
+        descending ? *left : *right, descending ? *right : *left);
+    const auto counted = binary(BinaryOperator::add_signed, integer(),
+        distance, load_integer(1, 64U, ValueDomain::Integer));
+    const auto zero = load_integer(0, 64U, ValueDomain::Integer);
+    const auto length = select(
+        binary(BinaryOperator::less_signed, condition(), counted, zero), zero,
+        counted);
+    if (minimum_bound && span != nullptr) {
+        const auto minimum
+            = load_integer(*minimum_bound, 64U, ValueDomain::Integer);
+        const auto in_subtype = binary(BinaryOperator::bit_and, condition(),
+            binary(BinaryOperator::greater_equal_signed, condition(), *left,
+                minimum),
+            binary(BinaryOperator::greater_equal_signed, condition(), *right,
+                minimum));
+        const auto satisfied = binary(BinaryOperator::bit_or, condition(),
+            binary(BinaryOperator::equal, condition(), length, zero),
+            in_subtype);
+        process_.operations.emplace_back(Assert {
+            satisfied,
+            "VHDL STRING index range is outside its POSITIVE index subtype",
+            AssertionSeverity::failure,
+            runtime_source_location(*span),
+        });
     }
-    return static_cast<std::size_t>(count);
+    const auto limit = load_integer(
+        std::numeric_limits<std::int32_t>::max(), 64U, ValueDomain::Integer);
+    // The low 32 bits of -1 or of a length that fits are the same value.
+    return resize_register(
+        select(binary(BinaryOperator::greater_signed, condition(), length,
+                   limit),
+            load_integer(-1, 64U, ValueDomain::Integer), length),
+        32U, false);
 }
 
 bool Lowerer::reject_hir_vhdl_access_signal_escape(

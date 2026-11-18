@@ -1093,6 +1093,8 @@ Expression VhdlParser::parse_primary()
                     others = true;
                     choices.push_back(Expression { ExpressionKind::Identifier,
                         "others", { }, previous().span });
+                    choices.back().marker
+                        = support::ExpressionMarker::vhdl_others_choice;
                 } else {
                     auto choice = parse_expression(0, false);
                     if (match_keyword("to", true)
@@ -1576,38 +1578,48 @@ Expression VhdlParser::parse_primary()
                     const auto entity = separator == std::string::npos
                         ? canonical
                         : canonical.substr(separator + 1U);
-                    auto found = values->second.find(entity);
+                    const auto& named = values->second.named;
+                    const Expression* found_value { };
+                    if (const auto found = named.find(entity);
+                        found != named.end()) {
+                        found_value = &found->second;
+                    }
                     // An attribute of an object applies to its aliases.
                     auto specified_entity = entity;
                     for (auto alias = vhdl_object_alias_targets_.find(entity);
-                         found == values->second.end()
+                         found_value == nullptr
                          && alias != vhdl_object_alias_targets_.end()
                          && alias->second != alias->first;
                          alias = vhdl_object_alias_targets_.find(alias->second)) {
-                        found = values->second.find(alias->second);
-                        if (found != values->second.end()) {
+                        if (const auto found = named.find(alias->second);
+                            found != named.end()) {
+                            found_value = &found->second;
                             specified_entity = alias->second;
                         }
                     }
                     if (const auto object_class
                         = vhdl_object_classes_.find(entity);
-                        found == values->second.end()
+                        found_value == nullptr
                         && object_class != vhdl_object_classes_.end()) {
-                        found = values->second.find(
-                            "others:" + object_class->second);
-                        if (found == values->second.end()) {
-                            found = values->second.find(
-                                "all:" + object_class->second);
+                        for (const auto* const by_class :
+                             { &values->second.others_by_class,
+                               &values->second.all_by_class }) {
+                            if (const auto found
+                                = by_class->find(object_class->second);
+                                found_value == nullptr
+                                && found != by_class->end()) {
+                                found_value = &found->second;
+                            }
                         }
                     }
-                    if (found == values->second.end()) {
-                        found = values->second.find("others");
+                    if (found_value == nullptr && values->second.latest_others) {
+                        found_value = &*values->second.latest_others;
                     }
-                    if (found == values->second.end()) {
-                        found = values->second.find("all");
+                    if (found_value == nullptr && values->second.latest_all) {
+                        found_value = &*values->second.latest_all;
                     }
-                    if (found != values->second.end()) {
-                        auto value = found->second;
+                    if (found_value != nullptr) {
+                        auto value = *found_value;
                         value.span = cover(name.span, attribute.span);
                         // Keep the specification's prefix and designator so
                         // the HIR can recover the declared attribute subtype
@@ -1952,6 +1964,8 @@ Expression VhdlParser::parse_primary()
                         choice_expression.text = vhdl_name(choice_expression.text);
                         if (choice_expression.text == "others") {
                             ++others_count;
+                            choice_expression.marker
+                                = support::ExpressionMarker::vhdl_others_choice;
                         }
                     }
                 }
@@ -1972,7 +1986,9 @@ Expression VhdlParser::parse_primary()
                 auto choice_marker = support::ExpressionMarker::vhdl_array_choice;
                 if (choices.size() == 1 && choices.front().kind == ExpressionKind::Identifier) {
                     choice = choices.front().text;
-                    choice_marker = support::ExpressionMarker::none;
+                    choice_marker = others_count != 0
+                        ? support::ExpressionMarker::vhdl_others_choice
+                        : support::ExpressionMarker::none;
                 }
                 Expression value;
                 if (at(TokenKind::Comma) || at(TokenKind::RightParen) || at_end()) {

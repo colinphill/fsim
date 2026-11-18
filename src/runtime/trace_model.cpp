@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/trace_model.hpp"
+#include "fsim/frontend/systemverilog_scalars.hpp"
 
 #include <algorithm>
 #include <functional>
@@ -577,10 +578,53 @@ TraceSignalId TraceDeclarationBuilder::add_typed_variable(
         id.value, impl_->model->variables.size());
     impl_->model->variables.push_back(TraceVariableDeclaration {
         id, scope, type, source, TracePathName { },
-        std::string { name.reference } });
+        std::string { name.reference },
+        frontend::is_real_scalar_kind(scalar_kind) ? TraceVarKind::Real
+                                                   : TraceVarKind::Wire });
     impl_->variable_paths.push_back(path);
     impl_->model->entries.push_back({ id, TraceDeclarationKind::Variable });
     return id;
+}
+
+void TraceDeclarationBuilder::set_var_kind(
+    const TraceSignalId variable, const TraceVarKind kind)
+{
+    if (!impl_) {
+        throw std::logic_error("trace declaration builder was already frozen");
+    }
+    if (const auto found = impl_->model->variable_indices.find(variable.value);
+        found != impl_->model->variable_indices.end()) {
+        impl_->model->variables[found->second].var_kind = kind;
+        return;
+    }
+    const auto alias = impl_->model->alias_indices.find(variable.value);
+    if (alias == impl_->model->alias_indices.end()) {
+        throw std::invalid_argument("trace var kind names no declaration");
+    }
+    impl_->model->aliases[alias->second].var_kind = kind;
+}
+
+std::string_view trace_var_keyword(const TraceVarKind kind) noexcept
+{
+    switch (kind) {
+    case TraceVarKind::Wire: return "wire";
+    case TraceVarKind::Tri: return "tri";
+    case TraceVarKind::Triand: return "triand";
+    case TraceVarKind::Trior: return "trior";
+    case TraceVarKind::Trireg: return "trireg";
+    case TraceVarKind::Tri0: return "tri0";
+    case TraceVarKind::Tri1: return "tri1";
+    case TraceVarKind::Wand: return "wand";
+    case TraceVarKind::Wor: return "wor";
+    case TraceVarKind::Supply0: return "supply0";
+    case TraceVarKind::Supply1: return "supply1";
+    case TraceVarKind::Reg: return "reg";
+    case TraceVarKind::Integer: return "integer";
+    case TraceVarKind::Real: return "real";
+    case TraceVarKind::Realtime: return "realtime";
+    case TraceVarKind::Time: return "time";
+    }
+    return "wire";
 }
 
 TraceSignalId TraceDeclarationBuilder::add_alias(
@@ -613,9 +657,11 @@ TraceSignalId TraceDeclarationBuilder::add_alias(
     const auto source = impl_->add_source(source_metadata, path);
     const auto scope = impl_->add_scopes(name.scope, source);
     impl_->model->alias_indices.emplace(id.value, impl_->model->aliases.size());
+    const auto target_kind = impl_->model->variables
+        [impl_->model->variable_indices.at(target.value)].var_kind;
     impl_->model->aliases.push_back(TraceAliasDeclaration {
         id, scope, target, source, TracePathName { },
-        std::string { name.reference } });
+        std::string { name.reference }, target_kind });
     impl_->alias_paths.push_back(path);
     impl_->model->entries.push_back({ id, TraceDeclarationKind::Alias });
     return id;

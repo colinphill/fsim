@@ -56,7 +56,7 @@ namespace {
 
 namespace {
 
-constexpr std::string_view bodies_magic { "fsim-static-kernel-bodies-v14" };
+constexpr std::string_view bodies_magic { "fsim-static-kernel-bodies-v15" };
 
 // The not-compiled reason of an operation kind the compiled tier has no form
 // for: "operation:" and the kind's name. The text lives for the process.
@@ -74,6 +74,34 @@ const char* unsupported_operation_reason()
     return reason.c_str();
 }
 
+// The dyn_layout_fixed bits of a dense fixed-size array's instructions
+// (nothing for another container).
+[[nodiscard]] std::uint64_t fixed_layout(const ContainerType& type) noexcept
+{
+    if (!type.fixed || type.sparse) {
+        return 0U;
+    }
+    return static_kernel_detail::dyn_layout_fixed
+        | (type.index_left >= type.index_right ? static_kernel_detail::dyn_layout_descending : 0U)
+        | (std::uint64_t { static_cast<std::uint32_t>(type.index_left) } << 32U);
+}
+
+// The not-compiled reason of a container operation the compiled tier has
+// no native form for.
+template <typename Op>
+const char* dynamic_containers_operation_reason()
+{
+    static const std::string reason = [] {
+        int status = 0;
+        char* name = abi::__cxa_demangle(typeid(Op).name(), nullptr, nullptr,
+            &status);
+        std::string key = name != nullptr ? name : "?";
+        std::free(name);
+        return "dynamic_containers:operation:" + key.substr(key.rfind(':') + 1U);
+    }();
+    return reason.c_str();
+}
+
 } // namespace
 
 std::string static_kernel_compiler_identity()
@@ -82,15 +110,21 @@ std::string static_kernel_compiler_identity()
         + static_kernel_specializer_identity();
 }
 
-bool Interpreter::Impl::StaticKernel::native_dynamic_containers(
+const char* Interpreter::Impl::StaticKernel::dynamic_containers_reason(
     const Member& member) const
 {
-    if (member.vhdl || member.dynamic_containers.empty()) {
-        return false;
+    if (member.dynamic_containers.empty()) {
+        return nullptr;
+    }
+    if (member.vhdl) {
+        return "dynamic_containers:vhdl";
     }
     for (const auto& value : member.dynamic_containers) {
-        if (value && !static_kernel_detail::native_dynamic_type(value->type)) {
-            return false;
+        if (value) {
+            if (const auto* const reason
+                = static_kernel_detail::native_dynamic_type_reason(value->type)) {
+                return reason;
+            }
         }
     }
     const auto dynamic = [&](const ContainerRegisterId id) {
@@ -127,9 +161,44 @@ bool Interpreter::Impl::StaticKernel::native_dynamic_containers(
         if (!names) {
             continue;
         }
+        // A binding of a kernel dynamic object (storage dynamic) and a
+        // blocking write of one: a copy or nothing (dynamic_object_aliases).
+        // Or an object the host bridges to a kernel slot, whose binding
+        // into a kernel container unpacks the slot (DynOp::aggregate_unpack).
+        const auto kernel_object = [&](const ContainerObjectId object) {
+            if (object >= container_of_object_.size()
+                || container_of_object_[object] == no_container) {
+                return false;
+            }
+            const auto container = container_of_object_[object];
+            return containers_[container].storage == StaticKernelContainerStorage::dynamic
+                || bridged_object(container);
+        };
+        if (const auto* bind = operation_get_if<ReadContainerObject>(&operation)) {
+            if (!kernel_object(bind->object)) {
+                return "dynamic_containers:host_object";
+            }
+            continue;
+        }
+        if (const auto* write = operation_get_if<WriteContainerObject>(&operation)) {
+            if (!kernel_object(write->object)) {
+                return "dynamic_containers:host_object";
+            }
+            if (write->nonblocking) {
+                return "dynamic_containers:nonblocking_object_write";
+            }
+            if (write->transaction_signal) {
+                return "dynamic_containers:transaction_object_write";
+            }
+            continue;
+        }
         const bool native = visit_operation([](const auto& op) {
             using T = std::decay_t<decltype(op)>;
             return std::is_same_v<T, ContainerRead> || std::is_same_v<T, ContainerWrite>
+                || std::is_same_v<T, ContainerAggregateRead>
+                || std::is_same_v<T, ContainerAggregateWrite>
+                || std::is_same_v<T, ContainerElementRead>
+                || std::is_same_v<T, ContainerElementWrite>
                 || std::is_same_v<T, ContainerStringRead>
                 || std::is_same_v<T, ContainerStringWrite>
                 || std::is_same_v<T, AppendContainer>
@@ -147,10 +216,318 @@ bool Interpreter::Impl::StaticKernel::native_dynamic_containers(
                 || std::is_same_v<T, ContainerBitstream>;
         }, operation);
         if (!native) {
-            return false;
+            return visit_operation([](const auto& op) {
+                return dynamic_containers_operation_reason<std::decay_t<decltype(op)>>();
+            }, operation);
         }
     }
-    return true;
+    return nullptr;
+}
+
+std::uint32_t Interpreter::Impl::StaticKernel::dynamic_object_binding(
+    const Member& member, const ContainerRegisterId id) const
+{
+    for (const auto& operation : member.operations()) {
+        const auto* bind = operation_get_if<ReadContainerObject>(&operation);
+        if (bind != nullptr && bind->destination == id
+            && bind->object < container_of_object_.size()
+            && container_of_object_[bind->object] != no_container
+            && containers_[container_of_object_[bind->object]].storage
+                == StaticKernelContainerStorage::dynamic) {
+            return container_of_object_[bind->object];
+        }
+    }
+    return no_container;
+}
+
+std::vector<std::uint8_t> Interpreter::Impl::StaticKernel::dynamic_object_aliases(
+    const Member& member) const
+{
+    const auto& operations = member.operations();
+    const auto count = operations.size();
+    const auto registers = member.container_registers.size();
+    std::vector<std::uint8_t> alias(registers, 0U);
+    const auto kernel_object = [&](const ContainerObjectId object) {
+        return object < container_of_object_.size()
+                && container_of_object_[object] != no_container
+                && containers_[container_of_object_[object]].storage
+                    == StaticKernelContainerStorage::dynamic
+            ? container_of_object_[object]
+            : no_container;
+    };
+    constexpr auto none = std::numeric_limits<std::size_t>::max();
+    std::vector<std::uint32_t> object(registers, no_container);
+    std::vector<std::uint8_t> conflict(registers, 0U);
+    std::vector<std::uint8_t> mutated(registers, 0U);
+    std::vector<std::size_t> first(registers, none);
+    std::vector<std::size_t> last(registers, 0U);
+    std::vector<std::uint32_t> binds(registers, 0U);
+    std::vector<std::uint32_t> write_backs(registers, 0U);
+    std::vector<std::size_t> bind_pc(registers, none);
+    std::vector<std::size_t> write_pc(registers, none);
+    // Instructions control reaches other than from the one before.
+    std::vector<std::uint8_t> leader(count + 1U, 0U);
+    const auto lead = [&](const InstructionIndex target) {
+        if (target <= count) {
+            leader[target] = 1U;
+        }
+    };
+    const auto note = [&](const ContainerRegisterId id, const std::size_t pc,
+                          const bool changes) {
+        if (id >= registers) {
+            return;
+        }
+        first[id] = std::min(first[id], pc);
+        last[id] = std::max(last[id], pc);
+        if (changes) {
+            mutated[id] = 1U;
+        }
+    };
+    // Whether `operation` only reads container register `id`.
+    const auto reads_only = [](const Operation& operation, const ContainerRegisterId id) {
+        return visit_operation([&](const auto& op) {
+            using T = std::decay_t<decltype(op)>;
+            if constexpr (std::is_same_v<T, ContainerRead>
+                || std::is_same_v<T, ContainerStringRead>
+                || std::is_same_v<T, ContainerSize>
+                || std::is_same_v<T, ContainerExists>
+                || std::is_same_v<T, TraverseContainer>
+                || std::is_same_v<T, ContainerReduction>
+                || std::is_same_v<T, FormatContainerPattern>
+                || std::is_same_v<T, ContainerAggregateRead>
+                || std::is_same_v<T, CompareContainers>) {
+                return true;
+            } else if constexpr (std::is_same_v<T, CopyContainerRegister>
+                || std::is_same_v<T, LocateContainer>
+                || std::is_same_v<T, ContainerElementRead>
+                || std::is_same_v<T, ConditionalContainerSelect>) {
+                return op.destination != id;
+            } else {
+                return false;
+            }
+        }, operation);
+    };
+    for (std::size_t pc = 0U; pc < count; ++pc) {
+        const auto& operation = operations[pc];
+        visit_operation([&](const auto& op) {
+            using T = std::decay_t<decltype(op)>;
+            if constexpr (std::is_same_v<T, Jump>) {
+                lead(op.target);
+            } else if constexpr (std::is_same_v<T, Branch>) {
+                lead(op.when_true);
+                lead(op.when_false);
+            } else if constexpr (std::is_same_v<T, Call>) {
+                lead(op.target);
+                lead(op.return_target);
+            } else if constexpr (std::is_same_v<T, Fork>) {
+                for (const auto branch : op.branches) {
+                    lead(branch);
+                }
+            } else if constexpr (std::is_same_v<T, DisableBlock>) {
+                lead(op.begin);
+                lead(op.end);
+            }
+        }, operation);
+        if (const auto* bind = operation_get_if<ReadContainerObject>(&operation)) {
+            const auto id = bind->destination;
+            const auto target = kernel_object(bind->object);
+            if (id < registers && target != no_container) {
+                if (object[id] != no_container && object[id] != target) {
+                    conflict[id] = 1U;
+                }
+                object[id] = target;
+                ++binds[id];
+                bind_pc[id] = pc;
+            } else if (id < registers) {
+                conflict[id] = 1U;
+            }
+            note(id, pc, false);
+            continue;
+        }
+        if (const auto* write = operation_get_if<WriteContainerObject>(&operation)) {
+            const auto id = write->source;
+            if (id < registers && object[id] != no_container
+                && kernel_object(write->object) == object[id]) {
+                ++write_backs[id];
+                write_pc[id] = pc;
+            }
+            note(id, pc, false);
+            continue;
+        }
+        static_kernel_container_operands(operation, [&](const ContainerRegisterId id) {
+            note(id, pc, !reads_only(operation, id));
+        });
+        visit_operation([&](const auto& op) {
+            using T = std::decay_t<decltype(op)>;
+            if constexpr (std::is_same_v<T, WriteContainerObjectString>) {
+                if (op.source_kind == ContainerElementSourceKind::container) {
+                    note(op.container_source, pc, false);
+                }
+            } else if constexpr (std::is_same_v<T, LoadMemory>) {
+                note(op.target, pc, true);
+            } else if constexpr (std::is_same_v<T, FileBinaryRead>) {
+                if (op.target_kind == FileBinaryTargetKind::container_register) {
+                    note(op.target, pc, true);
+                }
+            }
+        }, operation);
+    }
+    // Operations between a binding and its write-back that run no other
+    // code, wait for nothing and touch no design state but registers.
+    const auto straight = [](const Operation& operation) {
+        return visit_operation([](const auto& op) {
+            using T = std::decay_t<decltype(op)>;
+            if constexpr (std::is_same_v<T, ReadSignal>) {
+                return op.kind == SignalReadKind::current && op.ticks == 1U
+                    && !op.clock && !op.gate;
+            } else {
+                return std::is_same_v<T, LoadConstant>
+                    || std::is_same_v<T, CopyRegister>
+                    || std::is_same_v<T, Binary>
+                    || std::is_same_v<T, Reduction>
+                    || std::is_same_v<T, UnaryNot>
+                    || std::is_same_v<T, LogicalNot>
+                    || std::is_same_v<T, LogicalBinary>
+                    || std::is_same_v<T, Shift>
+                    || std::is_same_v<T, Extract>
+                    || std::is_same_v<T, Insert>
+                    || std::is_same_v<T, Concatenate>
+                    || std::is_same_v<T, ConditionalSelect>
+                    || std::is_same_v<T, ConvertToTwoState>
+                    || std::is_same_v<T, DynamicExtract>
+                    || std::is_same_v<T, DynamicPartSelect>
+                    || std::is_same_v<T, DynamicInsert>
+                    || std::is_same_v<T, DynamicPartInsert>
+                    || std::is_same_v<T, SystemVerilogScalarBinary>
+                    || std::is_same_v<T, LoadStringConstant>
+                    || std::is_same_v<T, CopyStringRegister>
+                    || std::is_same_v<T, ConcatenateStrings>
+                    || std::is_same_v<T, StringLength>
+                    || std::is_same_v<T, StringIndex>
+                    || std::is_same_v<T, CompareStrings>
+                    || std::is_same_v<T, ContainerRead>
+                    || std::is_same_v<T, ContainerWrite>
+                    || std::is_same_v<T, ContainerStringRead>
+                    || std::is_same_v<T, ContainerStringWrite>
+                    || std::is_same_v<T, ContainerAggregateRead>
+                    || std::is_same_v<T, ContainerAggregateWrite>
+                    || std::is_same_v<T, ContainerSize>
+                    || std::is_same_v<T, ResizeContainer>
+                    || std::is_same_v<T, DeleteContainer>
+                    || std::is_same_v<T, PushContainer>
+                    || std::is_same_v<T, PopContainer>
+                    || std::is_same_v<T, ContainerExists>
+                    || std::is_same_v<T, TraverseContainer>
+                    || std::is_same_v<T, AppendContainer>
+                    || std::is_same_v<T, CopyContainerRegister>;
+            }
+        }, operation);
+    };
+    for (std::size_t id = 0U; id < registers; ++id) {
+        if (object[id] == no_container || conflict[id] != 0U) {
+            continue;
+        }
+        // No other register changes the object, and no write-back reaches
+        // it, between the binding and the register's last use.
+        const auto untouched = [&](const std::size_t begin, const std::size_t end) {
+            for (auto pc = begin; pc < end && pc < count; ++pc) {
+                bool touched = false;
+                if (const auto* write
+                    = operation_get_if<WriteContainerObject>(&operations[pc])) {
+                    touched = write->source != id
+                        && kernel_object(write->object) == object[id];
+                }
+                static_kernel_container_operands(operations[pc],
+                    [&](const ContainerRegisterId other) {
+                        if (other != id && other < registers
+                            && object[other] == object[id] && mutated[other] != 0U) {
+                            touched = true;
+                        }
+                    });
+                if (touched) {
+                    return false;
+                }
+            }
+            return true;
+        };
+        if (mutated[id] == 0U) {
+            if (binds[id] == 1U && first[id] == bind_pc[id]
+                && untouched(bind_pc[id] + 1U, last[id] + 1U)) {
+                alias[id] = 1U;
+            }
+            continue;
+        }
+        if (binds[id] != 1U || write_backs[id] != 1U || bind_pc[id] >= write_pc[id]
+            || first[id] != bind_pc[id] || last[id] != write_pc[id]) {
+            continue;
+        }
+        bool ok = true;
+        for (auto pc = bind_pc[id] + 1U; ok && pc < write_pc[id]; ++pc) {
+            ok = leader[pc] == 0U && straight(operations[pc]);
+            // No other register reaches the object in the run.
+            static_kernel_container_operands(operations[pc],
+                [&](const ContainerRegisterId other) {
+                    if (other != id && other < registers && object[other] == object[id]) {
+                        ok = false;
+                    }
+                });
+        }
+        if (ok && leader[write_pc[id]] == 0U) {
+            alias[id] = 1U;
+        }
+    }
+    return alias;
+}
+
+/// FSIM_PROFILE_KERNEL: the first member a reason keeps off the compiled
+/// tier, with its operations.
+void Interpreter::Impl::StaticKernel::profile_not_compiled_example(
+    const std::size_t index, const std::string& reason) const
+{
+    if (index >= profile_names_.size()) {
+        return;
+    }
+    std::size_t widest = 0U;
+    for (const auto& operation : members_[index].operations()) {
+        visit_operation([&](const auto& op) {
+            using T = std::decay_t<decltype(op)>;
+            if constexpr (std::is_same_v<T, LoadConstant>) {
+                widest = std::max(widest, op.value.width());
+            } else if constexpr (std::is_same_v<T, Concatenate>
+                || std::is_same_v<T, Extract>) {
+                widest = std::max<std::size_t>(widest, op.width);
+            }
+        }, operation);
+    }
+    std::cerr << "fsim-kernel: not compiled example reason="
+              << reason << " member="
+              << profile_names_[index] << " widest=" << widest
+              << " ops=" << members_[index].operations().size()
+              << ' ' << compile_failure_detail_ << '\n';
+    for (std::size_t pc = 0U; pc < members_[index].operations().size(); ++pc) {
+        std::cerr << "    " << pc << ": variant="
+                  << members_[index].operations()[pc].storage.index();
+        visit_operation([&](const auto& op) {
+            if constexpr (requires { op.destination; }) {
+                if constexpr (std::is_integral_v<
+                                  std::decay_t<decltype(op.destination)>>) {
+                    std::cerr << " dst=" << op.destination;
+                }
+            }
+            int status = 0;
+            char* name = abi::__cxa_demangle(
+                typeid(op).name(), nullptr, nullptr, &status);
+            std::cerr << ' ' << (name != nullptr ? name : "?");
+            std::free(name);
+            if constexpr (requires { op.source; }) {
+                if constexpr (std::is_integral_v<
+                                  std::decay_t<decltype(op.source)>>) {
+                    std::cerr << " src=" << op.source;
+                }
+            }
+        }, members_[index].operations()[pc]);
+        std::cerr << '\n';
+    }
 }
 
 void Interpreter::Impl::StaticKernel::hold_dynamic_containers(const std::uint32_t index)
@@ -371,9 +748,13 @@ void Interpreter::Impl::StaticKernel::compile_members()
         // Reference-format container registers run the reference's
         // container operations on the operation tier, unless they are all
         // queues and dynamic arrays the kernel holds (KOp::dyn).
-        if (!members_[index].dynamic_containers.empty()
-            && !native_dynamic_containers(members_[index])) {
-            not_compiled_reason_[index] = "dynamic_containers";
+        if (const auto* const reason
+            = dynamic_containers_reason(members_[index])) {
+            not_compiled_reason_[index] = reason;
+            if (failures[reason]++ == 0U && profile_) {
+                compile_failure_detail_.clear();
+                profile_not_compiled_example(index, reason);
+            }
             continue;
         }
         // Assertion evaluators and region members compile like any other
@@ -609,49 +990,8 @@ void Interpreter::Impl::StaticKernel::compile_members()
                     headers_before);
             }
             not_compiled_reason_[index] = failure.reason;
-            if (failures[failure.reason]++ == 0U && profile_
-                && index < profile_names_.size()) {
-                std::size_t widest = 0U;
-                for (const auto& operation : members_[index].operations()) {
-                    visit_operation([&](const auto& op) {
-                        using T = std::decay_t<decltype(op)>;
-                        if constexpr (std::is_same_v<T, LoadConstant>) {
-                            widest = std::max(widest, op.value.width());
-                        } else if constexpr (std::is_same_v<T, Concatenate>
-                            || std::is_same_v<T, Extract>) {
-                            widest = std::max<std::size_t>(widest, op.width);
-                        }
-                    }, operation);
-                }
-                std::cerr << "fsim-kernel: not compiled example reason="
-                          << failure.reason << " member="
-                          << profile_names_[index] << " widest=" << widest
-                          << " ops=" << members_[index].operations().size()
-                          << ' ' << compile_failure_detail_ << '\n';
-                for (std::size_t pc = 0U; pc < members_[index].operations().size(); ++pc) {
-                    std::cerr << "    " << pc << ": variant="
-                              << members_[index].operations()[pc].storage.index();
-                    visit_operation([&](const auto& op) {
-                        if constexpr (requires { op.destination; }) {
-                            if constexpr (std::is_integral_v<
-                                              std::decay_t<decltype(op.destination)>>) {
-                                std::cerr << " dst=" << op.destination;
-                            }
-                        }
-                        int status = 0;
-                        char* name = abi::__cxa_demangle(
-                            typeid(op).name(), nullptr, nullptr, &status);
-                        std::cerr << ' ' << (name != nullptr ? name : "?");
-                        std::free(name);
-                        if constexpr (requires { op.source; }) {
-                            if constexpr (std::is_integral_v<
-                                              std::decay_t<decltype(op.source)>>) {
-                                std::cerr << " src=" << op.source;
-                            }
-                        }
-                    }, members_[index].operations()[pc]);
-                    std::cerr << '\n';
-                }
+            if (failures[failure.reason]++ == 0U && profile_) {
+                profile_not_compiled_example(index, failure.reason);
             }
         }
     }
@@ -1595,6 +1935,8 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
     // ReadContainerObject.
     std::vector<std::uint32_t> container_of_register(
         member.container_registers.begin(), member.container_registers.end());
+    // Registers that are the storage of the kernel dynamic object they bind.
+    const auto dynamic_alias = dynamic_object_aliases(member);
     // The width of local variable `local` of the plan of the tick at `site`
     // (the lowering filled it in; 16.10).
     const auto sva_local_width = [&](const std::uint32_t site,
@@ -1871,6 +2213,30 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                     }
                     auto& bound = container_of_register[op.destination];
                     const auto container = container_of_object_[op.object];
+                    // A slot object (bridged_object) bound into a kernel
+                    // container: the slot's fields unpacked into it.
+                    const bool unpacked = bridged_object(container)
+                        && (containers_[container].type.element_kind
+                                == ContainerElementKind::Aggregate
+                            || (bound != no_container
+                                && containers_[bound].storage
+                                    == StaticKernelContainerStorage::dynamic));
+                    if (containers_[container].storage
+                            == StaticKernelContainerStorage::dynamic
+                        || unpacked) {
+                        // The object's storage, or the register's own copy
+                        // the binding fills (KOp::dyn copy).
+                        if (bound == no_container
+                            || !(containers_[bound].type == containers_[container].type)) {
+                            throw reject("dyn_binding");
+                        }
+                        if (op.destination < dynamic_alias.size()
+                            && dynamic_alias[op.destination] != 0U
+                            && !unpacked) {
+                            bound = container;
+                        }
+                        return;
+                    }
                     if (bound != no_container && bound != container) {
                         throw reject("container_rebinding");
                     }
@@ -1883,6 +2249,82 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                     define(op.destination, static_cast<std::uint32_t>(
                         containers_[container_of_register[op.source]]
                             .type.element_width));
+                } else if constexpr (std::is_same_v<T, ClassAllocate>
+                    || std::is_same_v<T, MailboxCreate>
+                    || std::is_same_v<T, SemaphoreCreate>
+                    || std::is_same_v<T, ProcessSelf>) {
+                    // A class, mailbox, semaphore or process handle is 64
+                    // bits (run_class_operation, run_synchronization, 9.7).
+                    define(op.destination, 64U);
+                } else if constexpr (std::is_same_v<T, ProcessStatusQuery>) {
+                    // A status ordinal (9.7) of a 64-bit handle.
+                    define(op.destination, 32U);
+                    define(op.source, 64U);
+                } else if constexpr (std::is_same_v<T, ProcessGetRandState>
+                    || std::is_same_v<T, ProcessSetRandState>) {
+                    define(op.source, 64U);
+                } else if constexpr (std::is_same_v<T, ProcessSrandom>) {
+                    define(op.source, 64U);
+                    define(op.seed, 32U);
+                } else if constexpr (std::is_same_v<T, MailboxGet>) {
+                    // A packed message has the mailbox's element width; a
+                    // try_get/try_peek result is an int (run_synchronization).
+                    if (op.element_kind == MailboxElementKind::packed) {
+                        define(op.destination, op.element_width);
+                    }
+                    if (op.result) {
+                        define(*op.result, 32U);
+                    }
+                    define(op.receiver, 64U);
+                } else if constexpr (std::is_same_v<T, MailboxPut>
+                    || std::is_same_v<T, SemaphoreGet>) {
+                    if (op.result) {
+                        define(*op.result, 32U);
+                    }
+                    define(op.receiver, 64U);
+                } else if constexpr (std::is_same_v<T, MailboxNum>) {
+                    define(op.destination, 32U);
+                    define(op.receiver, 64U);
+                } else if constexpr (std::is_same_v<T, SemaphorePut>) {
+                    define(op.receiver, 64U);
+                } else if constexpr (std::is_same_v<T, DynamicEvent>) {
+                    // An event handle is 64 bits; triggered is one bit.
+                    if (op.operation == DynamicEventOperation::create) {
+                        define(op.destination, 64U);
+                    } else if (op.operation == DynamicEventOperation::triggered) {
+                        define(op.destination, 1U);
+                        define(op.receiver, 64U);
+                    } else {
+                        define(op.receiver, 64U);
+                    }
+                } else if constexpr (std::is_same_v<T, RandomDistribution>) {
+                    // $dist_* returns an integer and writes the seed
+                    // variable back (IEEE 1800-2023 20.14.2;
+                    // execute_random_distribution).
+                    define(op.destination, 32U);
+                    define(op.seed, 32U);
+                } else if constexpr (std::is_same_v<T, ClassPropertyRead>
+                    || std::is_same_v<T, ClassStaticPropertyRead>) {
+                    // The property's value at the read's width
+                    // (resize_class_value), through a 64-bit handle.
+                    define(op.destination, op.width);
+                    if constexpr (std::is_same_v<T, ClassPropertyRead>) {
+                        define(op.receiver, 64U);
+                    }
+                } else if constexpr (std::is_same_v<T, ClassPropertyWrite>) {
+                    define(op.receiver, 64U);
+                } else if constexpr (std::is_same_v<T, ContainerAggregateRead>) {
+                    // A flat aggregate's member: its leaf's width.
+                    if (op.source < container_of_register.size()
+                        && container_of_register[op.source] != no_container) {
+                        const auto& type = containers_[container_of_register[op.source]].type;
+                        if (static_kernel_detail::flat_aggregate_type(type)) {
+                            if (const auto leaf = static_kernel_detail::aggregate_leaf(
+                                    type, op.members)) {
+                                define(op.destination, leaf->type->element_width);
+                            }
+                        }
+                    }
                 } else if constexpr (std::is_same_v<T, PopContainer>) {
                     // A kernel queue's element (KOp::dyn).
                     if (op.target < container_of_register.size()
@@ -2058,7 +2500,7 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
     };
     const auto string_count = member.string_scratch != no_slot
         ? member.string_scratch : static_cast<std::uint32_t>(member.strings.size());
-    const auto emit_dyn = [&](KInst& inst, const auto& op) -> bool {
+    const auto emit_dyn_operation = [&](KInst& inst, const auto& op) -> bool {
         using T = std::decay_t<decltype(op)>;
         const auto set = [&](const DynOp sub, const std::uint32_t container) {
             inst.op = KOp::dyn;
@@ -2079,6 +2521,7 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                         ? static_kernel_detail::dyn_layout_text_keys : 0U)
                 | (type.signed_elements ? static_kernel_detail::dyn_layout_signed_elements
                                         : 0U);
+            inst.imm_a |= fixed_layout(type);
             if (type.element_kind == ContainerElementKind::Scalar) {
                 inst.imm_a |= type.scalar_kind == SystemVerilogScalarKind::ShortReal
                     ? static_kernel_detail::dyn_layout_scalar_float
@@ -2090,6 +2533,11 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
         };
         const auto sparse = [&](const std::uint32_t container) {
             return containers_[container].type.sparse;
+        };
+        // A dense fixed-size array (dyn_layout_fixed): indexed by its
+        // declared range as a sparse array is.
+        const auto fixed = [&](const std::uint32_t container) {
+            return containers_[container].type.fixed && !containers_[container].type.sparse;
         };
         // A sparse array's index: a linear ordinal, or the declared range
         // (left in imm_b's low half).
@@ -2244,7 +2692,7 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             }
             const auto& type = containers_[container].type;
             const auto parts = (op.container ? 1 : 0) + (op.value ? 1 : 0) + (op.text ? 1 : 0);
-            if (type.associative || type.sparse || parts > 1) {
+            if (type.associative || type.sparse || type.fixed || parts > 1) {
                 throw reject("dyn_append");
             }
             if (op.container) {
@@ -2276,6 +2724,103 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             }
             inst.imm_b = op.clear ? 1U : 0U;
             return true;
+        } else if constexpr (std::is_same_v<T, ContainerAggregateRead>
+            || std::is_same_v<T, ContainerAggregateWrite>) {
+            // A member of a flat aggregate (dyn_layout_aggregate): one leaf
+            // of the element the index selects, or of the structure value.
+            constexpr bool reading = std::is_same_v<T, ContainerAggregateRead>;
+            RegisterId value { };
+            std::uint32_t container = no_container;
+            if constexpr (reading) {
+                value = op.destination;
+                container = dyn_container(op.source);
+            } else {
+                value = op.source;
+                container = dyn_container(op.target);
+            }
+            if (container == no_container) {
+                return false;
+            }
+            const auto& type = containers_[container].type;
+            const auto leaf = static_kernel_detail::flat_aggregate_type(type)
+                ? static_kernel_detail::aggregate_leaf(type, op.members)
+                : std::nullopt;
+            if (!leaf || op.linear_index || w(value) != leaf->type->element_width
+                || w(op.index) == 0U || w(op.index) > 64U) {
+                throw reject("dyn_aggregate");
+            }
+            set(reading ? DynOp::read : DynOp::write, container);
+            if constexpr (reading) {
+                inst.d = narrow(op.destination);
+            } else {
+                inst.x = narrow(op.source);
+            }
+            sparse_index(container, op.index, false);
+            inst.offset = leaf->type->element_width;
+            inst.imm_a = (inst.imm_a & 0xFFFF'FFFFU) | static_kernel_detail::dyn_layout_aggregate
+                | (type.aggregate_value ? static_kernel_detail::dyn_layout_aggregate_box : 0U)
+                | (leaf->type->two_state
+                            || leaf->type->element_kind == ContainerElementKind::Scalar
+                        ? static_kernel_detail::dyn_layout_leaf_zero : 0U)
+                | (leaf->type->two_state ? static_kernel_detail::dyn_layout_leaf_two_state : 0U)
+                | (std::uint64_t { leaf->offset } << 32U)
+                | (std::uint64_t { static_kernel_detail::aggregate_leaf_count(type) } << 48U);
+            return true;
+        } else if constexpr (std::is_same_v<T, ContainerElementRead>
+            || std::is_same_v<T, ContainerElementWrite>) {
+            // A whole element or nested structure member of a flat aggregate
+            // to or from a structure register of its type (7.2).
+            constexpr bool reading = std::is_same_v<T, ContainerElementRead>;
+            std::uint32_t array = no_container;
+            std::uint32_t box = no_container;
+            if constexpr (reading) {
+                array = dyn_container(op.source);
+                box = dyn_container(op.destination);
+            } else {
+                array = dyn_container(op.target);
+                box = dyn_container(op.source);
+            }
+            if (array == no_container && box == no_container) {
+                return false;
+            }
+            if (array == no_container || box == no_container || op.string_index
+                || op.linear_index) {
+                throw reject("dyn_aggregate");
+            }
+            const auto& type = containers_[array].type;
+            const auto& box_type = containers_[box].type;
+            const auto range = static_kernel_detail::flat_aggregate_type(type)
+                ? static_kernel_detail::aggregate_range(type, op.members)
+                : std::nullopt;
+            if (!range || range->leaves > 256U || !box_type.aggregate_value
+                || !static_kernel_detail::flat_aggregate_type(box_type)
+                || !(box_type.element_types == range->type->element_types)
+                || static_kernel_detail::aggregate_leaf_count(box_type) != range->leaves
+                || w(op.index) == 0U || w(op.index) > 64U) {
+                throw reject("dyn_aggregate");
+            }
+            set(reading ? DynOp::aggregate_element_read : DynOp::aggregate_element_write,
+                reading ? box : array);
+            inst.z = reading ? array : box;
+            sparse_index(array, op.index, false);
+            // The leaves' nodes: width | zero-initial << 32.
+            const auto begin = body.predicate_words.size()
+                / static_kernel_detail::dyn_graph_node_words;
+            for (const auto* leaf : static_kernel_detail::aggregate_leaf_types(box_type)) {
+                const bool zero = leaf->two_state
+                    || leaf->element_kind == ContainerElementKind::Scalar;
+                body.predicate_words.insert(body.predicate_words.end(),
+                    { std::uint64_t { leaf->element_width }
+                            | (zero ? std::uint64_t { 1 } << 32U : 0U),
+                        0U, 0U, 0U, 0U });
+            }
+            inst.x = static_cast<std::uint32_t>(begin);
+            inst.offset = range->leaves;
+            inst.imm_a = (inst.imm_a & 0xFFFF'FFFFU) | static_kernel_detail::dyn_layout_aggregate
+                | (type.aggregate_value ? static_kernel_detail::dyn_layout_aggregate_box : 0U)
+                | (std::uint64_t { range->offset } << 32U)
+                | (std::uint64_t { static_kernel_detail::aggregate_leaf_count(type) } << 48U);
+            return true;
         } else if constexpr (std::is_same_v<T, ContainerRead>) {
             const auto container = dyn_container(op.source);
             if (container == no_container) {
@@ -2294,7 +2839,7 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             if (op.string_index) {
                 throw reject("dyn_read");
             }
-            if (sparse(container)) {
+            if (sparse(container) || fixed(container)) {
                 set(DynOp::read, container);
                 inst.d = narrow(op.destination);
                 sparse_index(container, op.index, op.linear_index);
@@ -2305,6 +2850,33 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             inst.y = narrow(op.index);
             inst.width = w(op.index);
             inst.flags = op.signed_index ? flag_signed : 0U;
+            return true;
+        } else if constexpr (std::is_same_v<T, WriteContainerObjectElement>) {
+            // A blocking element write of a kernel dynamic object (IEEE
+            // 1800-2023 7.5-7.10), as ContainerWrite of its binding.
+            if (op.object >= container_of_object_.size()
+                || container_of_object_[op.object] == no_container
+                || containers_[container_of_object_[op.object]].storage
+                    != StaticKernelContainerStorage::dynamic) {
+                return false;
+            }
+            const auto container = container_of_object_[op.object];
+            if (op.nonblocking || op.transaction_signal || op.dynamic_part
+                || !op.members.empty() || !op.levels.empty()
+                || w(op.source) != element_width(container)) {
+                throw reject("dyn_object_write");
+            }
+            set(associative(container) ? DynOp::assoc_write : DynOp::write, container);
+            inst.x = narrow(op.source);
+            if (associative(container)) {
+                key(container, op.index, false, op.linear_index, "dyn_object_write");
+            } else if (sparse(container) || fixed(container)) {
+                sparse_index(container, op.index, op.linear_index);
+            } else {
+                inst.y = narrow(op.index);
+                inst.width = w(op.index);
+                inst.flags = op.signed_index ? flag_signed : 0U;
+            }
             return true;
         } else if constexpr (std::is_same_v<T, ContainerWrite>) {
             const auto container = dyn_container(op.target);
@@ -2331,7 +2903,7 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             if (op.associative_default) {
                 throw reject("dyn_write");
             }
-            if (sparse(container)) {
+            if (sparse(container) || fixed(container)) {
                 set(DynOp::write, container);
                 inst.x = narrow(op.source);
                 sparse_index(container, op.index, op.linear_index);
@@ -2360,7 +2932,7 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                 return false;
             }
             if ((queue(container) && !op.allow_queue) || associative(container)
-                || sparse(container)) {
+                || sparse(container) || fixed(container)) {
                 throw reject("dyn_resize");
             }
             set(DynOp::resize, container);
@@ -2384,7 +2956,7 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             if (container == no_container) {
                 return false;
             }
-            if (sparse(container)) {
+            if (sparse(container) || fixed(container)) {
                 // delete() of a static array is the reference's error.
                 throw reject("dyn_delete");
             }
@@ -2435,6 +3007,76 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             set(op.front ? DynOp::pop_front : DynOp::pop_back, container);
             inst.d = narrow(op.destination);
             return true;
+        } else if constexpr (std::is_same_v<T, ReadContainerObject>
+            || std::is_same_v<T, WriteContainerObject>) {
+            // A binding of a kernel dynamic object, or a blocking write of
+            // one: nothing when the register is the object's storage, else
+            // a whole copy (IEEE 1800-2023 7.6).
+            if (op.object >= container_of_object_.size()
+                || container_of_object_[op.object] == no_container
+                || (containers_[container_of_object_[op.object]].storage
+                        != StaticKernelContainerStorage::dynamic
+                    && !bridged_object(container_of_object_[op.object]))) {
+                return false;
+            }
+            const auto object = container_of_object_[op.object];
+            const bool slot_object = bridged_object(object);
+            ContainerRegisterId bound_id { };
+            if constexpr (std::is_same_v<T, ReadContainerObject>) {
+                bound_id = op.destination;
+            } else {
+                bound_id = op.source;
+            }
+            if (slot_object
+                && containers_[object].type.element_kind != ContainerElementKind::Aggregate
+                && dyn_container(bound_id) == no_container) {
+                // A packed memory bound as itself (mem_read, mem_write).
+                return false;
+            }
+            ContainerRegisterId id { };
+            if constexpr (std::is_same_v<T, ReadContainerObject>) {
+                id = op.destination;
+            } else {
+                id = op.source;
+                if (op.nonblocking || op.transaction_signal) {
+                    throw reject("dyn_object_write");
+                }
+            }
+            const auto container = dyn_container(id);
+            if (container == no_container
+                || !(containers_[container].type == containers_[object].type)) {
+                throw reject("dyn_binding");
+            }
+            if (slot_object) {
+                // The register's leaves from or to the object's slot fields;
+                // the graph imm_b one node per leaf width of an element.
+                set(std::is_same_v<T, ReadContainerObject> ? DynOp::aggregate_unpack
+                                                           : DynOp::aggregate_pack,
+                    container);
+                inst.z = object;
+                const auto begin = body.predicate_words.size()
+                    / static_kernel_detail::dyn_graph_node_words;
+                const auto widths
+                    = static_kernel_detail::bridged_leaf_widths(containers_[object].type);
+                for (const auto width : widths) {
+                    body.predicate_words.insert(body.predicate_words.end(),
+                        { std::uint64_t { width }, 0U, 0U, 0U, 0U });
+                }
+                inst.imm_b = static_kernel_detail::dyn_graph(begin, widths.size());
+                return true;
+            }
+            if (container == object) {
+                inst.op = KOp::nop;
+                return true;
+            }
+            if constexpr (std::is_same_v<T, ReadContainerObject>) {
+                set(DynOp::copy, container);
+                inst.z = object;
+            } else {
+                set(DynOp::copy, object);
+                inst.z = container;
+            }
+            return true;
         } else if constexpr (std::is_same_v<T, CopyContainerRegister>) {
             const auto container = dyn_container(op.destination);
             const auto source = dyn_container(op.source);
@@ -2468,7 +3110,8 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             }
             const auto& lt = containers_[left].type;
             const auto& rt = containers_[right].type;
-            if (lt.sparse || rt.sparse || lt.element_kind != rt.element_kind
+            if (lt.sparse || rt.sparse || lt.fixed != rt.fixed
+                || lt.element_kind != rt.element_kind
                 || lt.element_width != rt.element_width || lt.associative != rt.associative
                 || lt.string_indices != rt.string_indices || lt.index_width != rt.index_width
                 || lt.signed_indices != rt.signed_indices || lt.scalar_kind != rt.scalar_kind
@@ -2558,8 +3201,10 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             inst.x = static_cast<std::uint32_t>(op.operation);
             inst.imm_b = graph(predicate ? op.predicate : op.transformation, "dyn_locate");
             // The source's layout (its signed elements) for the comparisons.
-            inst.imm_a = (inst.imm_a & ~static_kernel_detail::dyn_layout_signed_elements)
-                | (st.signed_elements ? static_kernel_detail::dyn_layout_signed_elements : 0U);
+            inst.imm_a = (inst.imm_a & ~static_kernel_detail::dyn_layout_signed_elements
+                             & ~fixed_layout(tt))
+                | (st.signed_elements ? static_kernel_detail::dyn_layout_signed_elements : 0U)
+                | fixed_layout(st);
             inst.offset = static_cast<std::uint32_t>(st.element_width);
             return true;
         } else if constexpr (std::is_same_v<T, ContainerBitstream>) {
@@ -2586,6 +3231,7 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                 // Elements of a stream target are packed or scalar; a source
                 // may also hold strings.
                 if (ot.sparse
+                    || (ot.fixed && op.operation != Stream::append_container)
                     || (text(other) && op.operation != Stream::append_container)) {
                     throw reject("dyn_stream");
                 }
@@ -2662,6 +3308,28 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
         } else {
             return false;
         }
+    };
+    // A flat aggregate's leaves are no elements: only its member reads and
+    // writes and whole copies run as KOp::dyn.
+    const auto emit_dyn = [&](KInst& inst, const auto& op) -> bool {
+        if (!emit_dyn_operation(inst, op)) {
+            return false;
+        }
+        const auto aggregate = [&](const std::uint32_t container) {
+            return container < containers_.size()
+                && containers_[container].type.element_kind == ContainerElementKind::Aggregate;
+        };
+        const auto sub = static_cast<DynOp>(inst.sub);
+        const bool member = ((sub == DynOp::read || sub == DynOp::write)
+                                && (inst.imm_a & static_kernel_detail::dyn_layout_aggregate) != 0U)
+            || sub == DynOp::aggregate_unpack || sub == DynOp::aggregate_pack
+            || sub == DynOp::aggregate_element_read || sub == DynOp::aggregate_element_write;
+        if (!member && sub != DynOp::copy
+            && (aggregate(inst.aux) || aggregate(inst.z)
+                || (static_kernel_detail::dyn_third_container(sub) && aggregate(inst.y)))) {
+            throw reject("dyn_aggregate");
+        }
+        return true;
     };
     // KOp::scalar for real, shortreal and time arithmetic, comparisons and
     // conversions and the math functions (IEEE 1800-2023 6.12, 20.5, 20.8)
@@ -4360,10 +5028,70 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                     || std::is_same_v<T, CopyStringRegister>
                     || std::is_same_v<T, PlusArgSelect>
                     || std::is_same_v<T, CodeCoverageHit>
-                    || std::is_same_v<T, CodeCoverageToggle>) {
+                    || std::is_same_v<T, CodeCoverageToggle>
+                    || std::is_same_v<T, ClassAllocate>
+                    || std::is_same_v<T, ClassPropertyRead>
+                    || std::is_same_v<T, ClassPropertyWrite>
+                    || std::is_same_v<T, ClassStaticPropertyRead>
+                    || std::is_same_v<T, ClassStaticPropertyWrite>
+                    // $timeformat (IEEE 1800-2023 20.4.2) sets the host's
+                    // format; process::self (9.7) takes the running
+                    // thread's handle (run_thread names it for generated
+                    // code too).
+                    || std::is_same_v<T, TimeFormatControl>
+                    || std::is_same_v<T, ProcessSelf>
+                    // A process handle's status and random state (9.7,
+                    // 18.13.3 - 18.13.5): the process records, which name a
+                    // running thread's live stream (thread_random_state).
+                    || std::is_same_v<T, ProcessStatusQuery>
+                    || std::is_same_v<T, ProcessGetRandState>
+                    || std::is_same_v<T, ProcessSetRandState>
+                    || std::is_same_v<T, ProcessSrandom>
+                    // $dist_* (20.14.2): the result and the seed written
+                    // back (operation_written_registers_of).
+                    || std::is_same_v<T, RandomDistribution>
+                    // $sformatf with a run-time format string (21.3.3):
+                    // format_runtime_string on the member's string file.
+                    || std::is_same_v<T, RuntimeStringFormat>
+                    // Force and release of a host signal (IEEE 1800-2023
+                    // 10.6.2, 1076-2019 10.5.2.1; the planner keeps the
+                    // target on the host, static_kernel_host_signal): the
+                    // host's force layers, then the input mirror refreshed.
+                    || std::is_same_v<T, ForceSignalSlice>
+                    || std::is_same_v<T, ReleaseSignalSlice>) {
                     inst.op = KOp::generic;
                     inst.x = pc;
                     inst.y = 0U;
+                    if constexpr (std::is_same_v<T, ProcessStatusQuery>
+                        || std::is_same_v<T, ProcessGetRandState>
+                        || std::is_same_v<T, ProcessSetRandState>
+                        || std::is_same_v<T, ProcessSrandom>) {
+                        if (op.source >= register_count || width[op.source] != 64U) {
+                            throw reject("process_handle");
+                        }
+                    }
+                    if constexpr (std::is_same_v<T, ProcessSrandom>
+                        || std::is_same_v<T, RandomDistribution>) {
+                        if (op.seed >= register_count || width[op.seed] != 32U) {
+                            throw reject("process_seed");
+                        }
+                    }
+                    if constexpr (std::is_same_v<T, RandomDistribution>) {
+                        if (op.first >= register_count || width[op.first] == 0U
+                            || width[op.first] > 64U
+                            || (op.second && (*op.second >= register_count
+                                || width[*op.second] == 0U || width[*op.second] > 64U))) {
+                            throw reject("distribution_operand");
+                        }
+                    }
+                    if constexpr (std::is_same_v<T, TimeFormatControl>) {
+                        for (const auto operand : { op.units, op.precision, op.minimum_width }) {
+                            if (operand >= register_count || width[operand] == 0U
+                                || width[operand] == polymorphic || width[operand] > 64U) {
+                                throw reject("time_format_operand");
+                            }
+                        }
+                    }
                     if constexpr (std::is_same_v<T, CodeCoverageToggle>) {
                         for (const auto sample : { op.previous, op.current }) {
                             if (sample >= register_count || width[sample] == 0U
@@ -4377,6 +5105,59 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                         if (op.source >= register_count || width[op.source] == 0U
                             || width[op.source] == polymorphic) {
                             throw reject("display_source");
+                        }
+                        has_wide = has_wide || width[op.source] > 64U;
+                    }
+                    if constexpr (std::is_same_v<T, ForceSignalSlice>
+                        || std::is_same_v<T, ReleaseSignalSlice>) {
+                        if constexpr (std::is_same_v<T, ForceSignalSlice>) {
+                            if (op.source >= register_count || width[op.source] == 0U
+                                || width[op.source] == polymorphic) {
+                                throw reject("force_source");
+                            }
+                            has_wide = has_wide || width[op.source] > 64U;
+                        }
+                        if (op.selection && (op.selection->index >= register_count
+                                || width[op.selection->index] == 0U
+                                || width[op.selection->index] > 64U)) {
+                            throw reject("force_selection");
+                        }
+                    }
+                    if constexpr (std::is_same_v<T, RuntimeStringFormat>) {
+                        for (const auto& argument : op.arguments) {
+                            if (argument.string) {
+                                continue;
+                            }
+                            if (argument.value >= register_count
+                                || width[argument.value] == 0U
+                                || width[argument.value] == polymorphic) {
+                                throw reject("format_argument");
+                            }
+                            has_wide = has_wide || width[argument.value] > 64U;
+                        }
+                    }
+                    if constexpr (std::is_same_v<T, ClassAllocate>) {
+                        for (std::size_t index = 0U; index < op.constructor_actuals.size();
+                             ++index) {
+                            if (!op.constructor_actual_kinds.empty()
+                                && op.constructor_actual_kinds[index] == 1U) {
+                                continue;
+                            }
+                            const auto actual = op.constructor_actuals[index];
+                            if (actual >= register_count || width[actual] == 0U
+                                || width[actual] == polymorphic) {
+                                throw reject("class_constructor_actual");
+                            }
+                            has_wide = has_wide || width[actual] > 64U;
+                        }
+                    } else if constexpr (std::is_same_v<T, ClassPropertyRead>
+                        || std::is_same_v<T, ClassStaticPropertyRead>) {
+                        has_wide = has_wide || op.width > 64U;
+                    } else if constexpr (std::is_same_v<T, ClassPropertyWrite>
+                        || std::is_same_v<T, ClassStaticPropertyWrite>) {
+                        if (op.source >= register_count || width[op.source] == 0U
+                            || width[op.source] == polymorphic) {
+                            throw reject("class_property_source");
                         }
                         has_wide = has_wide || width[op.source] > 64U;
                     }
@@ -5742,9 +6523,6 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                     } else {
                         inst.op = KOp::nop;
                     }
-                } else if constexpr (std::is_same_v<T, Assert>) {
-                    inst.op = KOp::assert_check;
-                    inst.x = narrow(op.condition);
                 } else {
                     handled = false;
                 }
@@ -5770,6 +6548,41 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                 const auto bval = value.bval_words();
                 inst.imm_a = aval.empty() ? 0U : aval[0];
                 inst.imm_b = bval.empty() ? 0U : bval[0];
+            } else if constexpr (std::is_same_v<T, Assert>) {
+                // An assertion of a condition's bit 0 (IEEE 1076-2019 10.3,
+                // and SystemVerilog's lowering of a failing check): a true
+                // condition does nothing, else the reference reports it.
+                if (w(op.condition) == 0U) {
+                    throw reject("assert_condition");
+                }
+                inst.op = KOp::assert_check;
+                inst.x = narrow(op.condition);
+            } else if constexpr (std::is_same_v<T, IntegerBinary>) {
+                // The checked integer arithmetic SystemVerilog lowering uses
+                // for index and ordinal computations (an element copy's
+                // ordinals, a stream target's bits): the reference's one
+                // form, as for VHDL members.
+                if (w(op.lhs) != w(op.rhs)) {
+                    throw reject("integer_widths");
+                }
+                inst.op = KOp::integer_binary;
+                inst.sub = static_cast<std::uint8_t>(op.operation);
+                inst.d = narrow(op.destination);
+                inst.x = narrow(op.lhs);
+                inst.y = narrow(op.rhs);
+                inst.width = w(op.lhs);
+            } else if constexpr (std::is_same_v<T, IntegerUnary>) {
+                inst.op = KOp::integer_unary;
+                inst.sub = static_cast<std::uint8_t>(op.operation);
+                inst.d = narrow(op.destination);
+                inst.x = narrow(op.source);
+                inst.width = w(op.source);
+            } else if constexpr (std::is_same_v<T, IntegerCheck>) {
+                inst.op = KOp::integer_check;
+                inst.x = narrow(op.source);
+                inst.width = w(op.source);
+                inst.imm_a = static_cast<std::uint64_t>(op.lower);
+                inst.imm_b = static_cast<std::uint64_t>(op.upper);
             } else if constexpr (std::is_same_v<T, CopyRegister>) {
                 inst.op = KOp::copy;
                 inst.d = narrow(op.destination);
@@ -6365,7 +7178,57 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                     }
                 }
             } else if constexpr (std::is_same_v<T, ReadContainerObject>) {
-                inst.op = KOp::nop;
+                if (!emit_dyn(inst, op)) {
+                    inst.op = KOp::nop;
+                }
+            } else if constexpr (std::is_same_v<T, WriteContainerObject>) {
+                // A blocking write of a kernel dynamic object
+                // (dynamic_containers_reason admitted the member).
+                if (emit_dyn(inst, op)) {
+                    return;
+                }
+                // Or a write of a kernel array from a register bound to one
+                // of its shape (a continuous or procedural assignment of a
+                // whole unpacked array, IEEE 1800-2023 10.3, 10.4, 7.6): its
+                // elements copied as CopyContainerRegister's are, a
+                // nonblocking one queued (flag_nba).
+                if (op.transaction_signal
+                    || op.object >= container_of_object_.size()
+                    || container_of_object_[op.object] == no_container
+                    || op.source >= container_of_register.size()
+                    || container_of_register[op.source] == no_container) {
+                    throw reject(unsupported_operation_reason<T>());
+                }
+                const auto destination = container_of_object_[op.object];
+                const auto source = container_of_register[op.source];
+                if (source == destination) {
+                    // The write-back of the object's own binding.
+                    inst.op = KOp::nop;
+                    return;
+                }
+                if (!(containers_[destination].type == containers_[source].type)
+                    || containers_[destination].count != containers_[source].count) {
+                    throw reject("container_copy");
+                }
+                inst.op = KOp::mem_copy;
+                inst.d = destination;
+                inst.x = source;
+                inst.sub = memory_copy_form(destination, source);
+                inst.width = copy_form_width(inst.sub, destination);
+                inst.imm_a = inst.sub == 3U
+                    ? (bridged_object(destination) ? 1U : 0U) | (bridged_object(source) ? 2U : 0U)
+                    : 0U;
+                if (op.nonblocking) {
+                    // Queue entries for a slot of up to eight words, else
+                    // the helper's element pushes.
+                    inst.flags = flag_nba;
+                    if (!((inst.sub == 2U && inst.width <= 512U)
+                            || (inst.sub == 3U && (inst.imm_a & 1U) != 0U))) {
+                        inst.sub = 0U;
+                        inst.width = 0U;
+                        inst.imm_a = 0U;
+                    }
+                }
             } else if constexpr (std::is_same_v<T, ContainerSize>
                 || std::is_same_v<T, ResizeContainer>
                 || std::is_same_v<T, DeleteContainer>
@@ -6378,10 +7241,15 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                 || std::is_same_v<T, ContainerReduction>
                 || std::is_same_v<T, OrderContainer>
                 || std::is_same_v<T, LocateContainer>
-                || std::is_same_v<T, ContainerBitstream>) {
+                || std::is_same_v<T, ContainerBitstream>
+                || std::is_same_v<T, ContainerAggregateRead>
+                || std::is_same_v<T, ContainerAggregateWrite>
+                || std::is_same_v<T, ContainerElementRead>
+                || std::is_same_v<T, ContainerElementWrite>) {
                 // Only a kernel queue, dynamic array or associative array
-                // (IEEE 1800-2023 7.5, 7.8 - 7.10; native_dynamic_containers
-                // admitted the member).
+                // (IEEE 1800-2023 7.5, 7.8 - 7.10), or a flat aggregate's
+                // member (7.2; dynamic_containers_reason admitted the
+                // member).
                 if (!emit_dyn(inst, op)) {
                     throw reject(unsupported_operation_reason<T>());
                 }
@@ -6450,7 +7318,15 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                 inst.op = KOp::mem_copy;
                 inst.d = destination;
                 inst.x = source;
+                inst.sub = memory_copy_form(destination, source);
+                inst.width = copy_form_width(inst.sub, destination);
+                inst.imm_a = inst.sub == 3U
+                    ? (bridged_object(destination) ? 1U : 0U) | (bridged_object(source) ? 2U : 0U)
+                    : 0U;
             } else if constexpr (std::is_same_v<T, WriteContainerObjectElement>) {
+                if (emit_dyn(inst, op)) {
+                    return;
+                }
                 if (op.object >= container_of_object_.size()
                     || container_of_object_[op.object] == no_container
                     || op.transaction_signal || !op.levels.empty()) {
@@ -6802,6 +7678,33 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
     // that may follow a store needs it: one whose code-order predecessor
     // stores a signal or calls, or that control flow enters by a jump (the
     // jump's statement may have stored). A body without a store has none.
+    if (!vhdl) {
+        // The writes of kernel dynamic objects (container_publishes).
+        const auto& operations = member.operations();
+        const auto size = static_cast<std::uint32_t>(std::min<std::size_t>(
+            body.code.size(),
+            operations.size() > begin ? operations.size() - begin : 0U));
+        for (std::uint32_t at = 0U; at < size; ++at) {
+            std::optional<ContainerObjectId> object;
+            if (const auto* write
+                = operation_get_if<WriteContainerObject>(&operations[begin + at])) {
+                object = write->object;
+            } else if (const auto* element = operation_get_if<WriteContainerObjectElement>(
+                           &operations[begin + at])) {
+                object = element->object;
+            }
+            if (!object || *object >= container_of_object_.size()
+                || container_of_object_[*object] == no_container
+                || containers_[container_of_object_[*object]].storage
+                    != StaticKernelContainerStorage::dynamic) {
+                continue;
+            }
+            if (body.container_publishes.empty()) {
+                body.container_publishes.assign(body.code.size(), no_variable_store);
+            }
+            body.container_publishes[at] = container_of_object_[*object];
+        }
+    }
     if (!vhdl) {
         const auto& operations = member.operations();
         const auto size = static_cast<std::uint32_t>(std::min<std::size_t>(

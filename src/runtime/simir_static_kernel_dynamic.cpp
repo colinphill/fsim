@@ -294,6 +294,33 @@ struct SparseOrdinal {
     return { ordinal, DynFailure::none };
 }
 
+// The leaf ordinal of a flat aggregate's member read or write
+// (dyn_layout_aggregate) among the `size` leaves: of the element the index
+// selects as a dense fixed-size array's does (the reference's
+// fixed_offset), or of the structure value itself.
+[[nodiscard]] SparseOrdinal aggregate_ordinal(const KInst& inst, const Word index,
+    const std::uint64_t size, const bool writing) noexcept
+{
+    const auto leaves = dyn_aggregate_leaves(inst.imm_a);
+    const auto leaf = dyn_aggregate_leaf(inst.imm_a);
+    if ((inst.imm_a & dyn_layout_aggregate_box) != 0U) {
+        return { leaf, DynFailure::none };
+    }
+    const auto element = sparse_ordinal(inst, index, size / leaves, writing);
+    if (!element.ordinal) {
+        return element;
+    }
+    return { *element.ordinal * leaves + leaf, DynFailure::none };
+}
+
+// The value of a flat aggregate's member read with an unknown or
+// out-of-range index: the leaf type's initial value (7.4.6).
+[[nodiscard]] Word aggregate_leaf_initial(const KInst& inst) noexcept
+{
+    return (inst.imm_a & dyn_layout_leaf_zero) != 0U ? Word { }
+                                                     : kernel_word::all_x(inst.offset);
+}
+
 // Stores element `ordinal` of a sparse array as the reference does
 // (write_sparse_container_element): the dense image once enough elements
 // are stored; else only elements that differ from the background are kept.
@@ -522,26 +549,226 @@ void erase_key_slot(StaticKernelDynamicContainer& container, const std::uint64_t
 
 } // namespace
 
-bool native_dynamic_type(const ContainerType& type) noexcept
+namespace {
+
+// A structure member the kernel holds as one leaf: a packed or scalar value
+// of at most 64 bits (ContainerAggregateRead's leaf).
+[[nodiscard]] bool leaf_member(const ContainerType& type) noexcept
+{
+    return (type.element_kind == ContainerElementKind::Packed
+               || type.element_kind == ContainerElementKind::Scalar)
+        && type.fixed && !type.sparse && !type.associative && !type.queue
+        && !type.vhdl_shaped && type.element_width != 0U && type.element_width <= 64U
+        && sparse_container_element_count(type) == 1U;
+}
+
+// A structure (not a union) whose members are leaves or such structures.
+[[nodiscard]] bool flat_structure_members(const ContainerType& type) noexcept
+{
+    return !type.union_aggregate && !type.tagged_union && !type.element_types.empty()
+        && std::ranges::all_of(type.element_types, [](const ContainerType& member) {
+               return member.element_kind == ContainerElementKind::Aggregate
+                   ? member.aggregate_value && flat_structure_members(member)
+                   : leaf_member(member);
+           });
+}
+
+[[nodiscard]] std::uint32_t member_leaves(const ContainerType& type) noexcept
+{
+    std::uint32_t count = 0U;
+    for (const auto& member : type.element_types) {
+        count += member.element_kind == ContainerElementKind::Aggregate
+            ? member_leaves(member) : 1U;
+    }
+    return count;
+}
+
+// The elements of flat aggregate `type`: one for a structure value.
+[[nodiscard]] std::uint64_t aggregate_elements(const ContainerType& type) noexcept
+{
+    return type.aggregate_value ? 1U : sparse_container_element_count(type);
+}
+
+} // namespace
+
+bool flat_aggregate_type(const ContainerType& type) noexcept
+{
+    if (type.element_kind != ContainerElementKind::Aggregate || type.vhdl_shaped
+        || !flat_structure_members(type)) {
+        return false;
+    }
+    if (!type.aggregate_value
+        && (!type.fixed || type.sparse || type.associative || type.queue)) {
+        return false;
+    }
+    // Leaf offsets and counts fit the instruction (dyn_aggregate_leaf).
+    const auto leaves = member_leaves(type);
+    return leaves <= 0xFFFFU
+        && aggregate_elements(type) <= maximum_container_elements(type) / leaves;
+}
+
+std::uint32_t aggregate_leaf_count(const ContainerType& type) noexcept
+{
+    return member_leaves(type);
+}
+
+std::uint64_t aggregate_element_count(const ContainerType& type) noexcept
+{
+    return aggregate_elements(type);
+}
+
+namespace {
+
+void append_leaf_types(const ContainerType& type, std::vector<const ContainerType*>& leaves)
+{
+    for (const auto& member : type.element_types) {
+        if (member.element_kind == ContainerElementKind::Aggregate) {
+            append_leaf_types(member, leaves);
+        } else {
+            leaves.push_back(&member);
+        }
+    }
+}
+
+} // namespace
+
+std::vector<const ContainerType*> aggregate_leaf_types(const ContainerType& type)
+{
+    std::vector<const ContainerType*> leaves;
+    append_leaf_types(type, leaves);
+    return leaves;
+}
+
+std::vector<std::uint32_t> aggregate_leaf_widths(const ContainerType& type)
+{
+    std::vector<std::uint32_t> widths;
+    for (const auto* leaf : aggregate_leaf_types(type)) {
+        widths.push_back(static_cast<std::uint32_t>(leaf->element_width));
+    }
+    return widths;
+}
+
+std::vector<std::uint32_t> bridged_leaf_widths(const ContainerType& type)
+{
+    if (type.element_kind == ContainerElementKind::Aggregate) {
+        return aggregate_leaf_widths(type);
+    }
+    return { static_cast<std::uint32_t>(type.element_width) };
+}
+
+std::uint64_t aggregate_bridge_bits(const ContainerType& type)
+{
+    std::uint64_t bits = 0U;
+    for (const auto width : aggregate_leaf_widths(type)) {
+        bits += width;
+    }
+    return bits * aggregate_elements(type);
+}
+
+std::optional<AggregateLeaf> aggregate_leaf(const ContainerType& type,
+    const std::span<const std::uint32_t> members) noexcept
+{
+    const ContainerType* selected = &type;
+    std::uint32_t offset = 0U;
+    for (const auto member : members) {
+        if (selected->element_kind != ContainerElementKind::Aggregate
+            || member >= selected->element_types.size()) {
+            return std::nullopt;
+        }
+        for (std::uint32_t before = 0U; before < member; ++before) {
+            const auto& sibling = selected->element_types[before];
+            offset += sibling.element_kind == ContainerElementKind::Aggregate
+                ? member_leaves(sibling) : 1U;
+        }
+        selected = &selected->element_types[member];
+    }
+    if (selected->element_kind == ContainerElementKind::Aggregate) {
+        return std::nullopt;
+    }
+    return AggregateLeaf { offset, selected };
+}
+
+std::optional<AggregateRange> aggregate_range(const ContainerType& type,
+    const std::span<const std::uint32_t> members) noexcept
+{
+    const ContainerType* selected = &type;
+    std::uint32_t offset = 0U;
+    for (const auto member : members) {
+        if (selected->element_kind != ContainerElementKind::Aggregate
+            || member >= selected->element_types.size()) {
+            return std::nullopt;
+        }
+        for (std::uint32_t before = 0U; before < member; ++before) {
+            const auto& sibling = selected->element_types[before];
+            offset += sibling.element_kind == ContainerElementKind::Aggregate
+                ? member_leaves(sibling) : 1U;
+        }
+        selected = &selected->element_types[member];
+    }
+    if (selected->element_kind != ContainerElementKind::Aggregate) {
+        return std::nullopt;
+    }
+    return AggregateRange { offset, member_leaves(*selected), selected };
+}
+
+DynFailure execute_dyn_aggregate_element(const KInst& inst,
+    StaticKernelDynamicContainer& array, StaticKernelDynamicContainer& box,
+    const kernel_word::Word* registers, const std::uint64_t* nodes)
+{
+    const bool reading = static_cast<DynOp>(inst.sub) == DynOp::aggregate_element_read;
+    const auto first = aggregate_ordinal(inst, registers[inst.y], array.size, !reading);
+    for (std::uint32_t leaf = 0U; leaf < inst.offset; ++leaf) {
+        const auto node = nodes[static_cast<std::size_t>(leaf) * dyn_graph_node_words];
+        if (reading) {
+            // An invalid index reads each leaf's initial value (7.4.6).
+            const auto width = static_cast<std::uint32_t>(node);
+            set_dynamic_element(box, leaf, first.ordinal
+                    ? dynamic_element(array, *first.ordinal + leaf)
+                    : (node >> 32U) != 0U ? Word { } : kernel_word::all_x(width));
+        } else {
+            if (!first.ordinal) {
+                return first.failure;
+            }
+            set_dynamic_element(array, *first.ordinal + leaf, dynamic_element(box, leaf));
+        }
+    }
+    return reading || first.ordinal ? DynFailure::none : first.failure;
+}
+
+const char* native_dynamic_type_reason(const ContainerType& type) noexcept
 {
     if (type.associative && !type.string_indices
         && (type.index_width == 0U || type.index_width > 64U)) {
-        return false;
+        return "dynamic_containers:type:index_width";
     }
-    if (type.fixed && !type.sparse) {
-        return false;
+    if (type.vhdl_shaped) {
+        return "dynamic_containers:type:vhdl_shaped";
+    }
+    if (type.element_kind == ContainerElementKind::Aggregate || type.aggregate_value
+        || type.union_aggregate) {
+        return flat_aggregate_type(type) ? nullptr : "dynamic_containers:type:aggregate";
     }
     if (type.element_kind == ContainerElementKind::String) {
         // Queues, dynamic arrays and associative arrays (integral keys) of
         // strings (text slots).
-        return !type.fixed && !type.vhdl_shaped && !type.aggregate_value
-            && !type.union_aggregate;
+        return type.fixed ? "dynamic_containers:type:fixed_string" : nullptr;
     }
-    return !type.vhdl_shaped
-        && !type.aggregate_value && !type.union_aggregate
-        && (type.element_kind == ContainerElementKind::Packed
-            || type.element_kind == ContainerElementKind::Scalar)
-        && type.element_width != 0U && type.element_width <= 64U;
+    if (type.element_kind == ContainerElementKind::Container) {
+        return "dynamic_containers:type:nested";
+    }
+    if (type.element_kind != ContainerElementKind::Packed
+        && type.element_kind != ContainerElementKind::Scalar) {
+        return "dynamic_containers:type:element_kind";
+    }
+    if (type.element_width == 0U || type.element_width > 64U) {
+        return "dynamic_containers:type:element_width";
+    }
+    return nullptr;
+}
+
+bool native_dynamic_type(const ContainerType& type) noexcept
+{
+    return native_dynamic_type_reason(type) == nullptr;
 }
 
 Word reserve_text(const Word slot, const std::uint64_t needed)
@@ -582,6 +809,19 @@ Word assign_text(const Word slot, const std::string_view text)
 StaticKernelDynamicContainer make_dynamic_header(const ContainerType& type)
 {
     StaticKernelDynamicContainer header;
+    if (type.element_kind == ContainerElementKind::Aggregate) {
+        // A flat aggregate holds every leaf from the start, each its
+        // initial value (default_container_value).
+        const auto count = aggregate_elements(type) * member_leaves(type);
+        header.maximum = count;
+        header.limit = count;
+        header.element_width = 64U;
+        header.flags = dynamic_aggregate_flag;
+        grow_dynamic(header, count);
+        header.size = count;
+        assign_dynamic_value(header, default_container_value(type));
+        return header;
+    }
     header.maximum = type.maximum_elements ? *type.maximum_elements
                                            : std::numeric_limits<std::uint64_t>::max();
     header.limit = maximum_container_elements(type);
@@ -619,6 +859,19 @@ StaticKernelDynamicContainer make_dynamic_header(const ContainerType& type)
             header.flags = (header.flags & ~dynamic_signed_keys_flag) | dynamic_text_keys_flag;
             header.key_width = 0U;
         }
+    }
+    if (type.fixed && !type.sparse && type.element_kind != ContainerElementKind::String) {
+        // A dense fixed-size array holds every element from the start
+        // (dyn_layout_fixed), each the element type's initial value
+        // (default_container_value).
+        const auto count = sparse_container_element_count(type);
+        header.maximum = count;
+        header.limit = count;
+        grow_dynamic(header, count);
+        for (std::uint64_t ordinal = 0U; ordinal < count; ++ordinal) {
+            set_dynamic_element(header, ordinal, Word { header.fill_a, header.fill_b });
+        }
+        header.size = count;
     }
     if (type.sparse) {
         header.flags |= dynamic_sparse_flag;
@@ -792,6 +1045,17 @@ void write_keys(StaticKernelDynamicContainer& container, const ContainerValue& v
 ContainerValue dynamic_value(const StaticKernelDynamicContainer& container,
     const ContainerType& type)
 {
+    if ((container.flags & dynamic_aggregate_flag) != 0U) {
+        auto value = default_container_value(type);
+        std::uint64_t ordinal = 0U;
+        auto visit = [&](ContainerValue& leaf) {
+            const auto element = dynamic_element(container, ordinal++);
+            leaf.elements.front() = PackedLogic4::from_aval_bval(
+                leaf.type.element_width, element.a, element.b);
+        };
+        for_each_aggregate_leaf(value, visit);
+        return value;
+    }
     ContainerValue value;
     value.type = type;
     if ((container.flags & dynamic_text_flag) != 0U) {
@@ -842,6 +1106,23 @@ ContainerValue dynamic_value(const StaticKernelDynamicContainer& container,
 void assign_dynamic_value(StaticKernelDynamicContainer& container,
     const ContainerValue& value)
 {
+    if ((container.flags & dynamic_aggregate_flag) != 0U) {
+        std::uint64_t ordinal = 0U;
+        auto visit = [&](const ContainerValue& leaf) {
+            if (ordinal >= container.size || leaf.elements.size() != 1U) {
+                throw std::invalid_argument { "aggregate value does not match its type" };
+            }
+            const auto a = leaf.elements.front().aval_words();
+            const auto b = leaf.elements.front().bval_words();
+            set_dynamic_element(container, ordinal++,
+                { a.empty() ? 0U : a.front(), b.empty() ? 0U : b.front() });
+        };
+        for_each_aggregate_leaf(value, visit);
+        if (ordinal != container.size) {
+            throw std::invalid_argument { "aggregate value does not match its type" };
+        }
+        return;
+    }
     if (sparse_layout(container)) {
         // Back to the stored-element layout, then the value's own.
         if (dense_layout(container)) {
@@ -1243,6 +1524,8 @@ const char* dyn_fail_message(const DynFailure failure) noexcept
         return "a bit stream is wider than its target";
     case DynFailure::stream_partial:
         return "a bit stream does not fill a whole number of elements of its variable-size target";
+    case DynFailure::aggregate_leaf:
+        return "aggregate member write leaf type mismatch";
     }
     return "static kernel container operation failed";
 }
@@ -1588,6 +1871,25 @@ DynFailure execute_dyn(const KInst& inst, StaticKernelDynamicContainer& containe
                 }
                 return DynFailure::none;
             }
+            if ((inst.imm_a & dyn_layout_aggregate) != 0U) {
+                const auto ordinal = aggregate_ordinal(inst, registers[inst.y],
+                    container.size, false);
+                registers[inst.d] = ordinal.ordinal
+                    ? dynamic_element(container, *ordinal.ordinal)
+                    : aggregate_leaf_initial(inst);
+                return DynFailure::none;
+            }
+            if ((inst.imm_a & dyn_layout_fixed) != 0U) {
+                // A dense fixed-size array: an unknown or out-of-range
+                // index reads the element type's invalid-index value
+                // (7.4.6), as a sparse array's does.
+                const auto ordinal = sparse_ordinal(inst, registers[inst.y],
+                    container.size, false);
+                registers[inst.d] = ordinal.ordinal
+                    ? dynamic_element(container, *ordinal.ordinal)
+                    : Word { container.empty_a, container.empty_b };
+                return DynFailure::none;
+            }
             std::uint64_t at { };
             if (is_signed) {
                 const auto index = signed_index(registers[inst.y], inst.width);
@@ -1623,6 +1925,33 @@ DynFailure execute_dyn(const KInst& inst, StaticKernelDynamicContainer& containe
                     return ordinal.failure;
                 }
                 return write_sparse(container, *ordinal.ordinal, value);
+            }
+            if ((inst.imm_a & dyn_layout_aggregate) != 0U) {
+                const auto value = registers[inst.x];
+                const auto ordinal = aggregate_ordinal(inst, registers[inst.y],
+                    container.size, true);
+                if (ordinal.failure != DynFailure::none) {
+                    return ordinal.failure;
+                }
+                if ((inst.imm_a & dyn_layout_leaf_two_state) != 0U
+                    && (value.b & kernel_word::mask(inst.offset)) != 0U) {
+                    return DynFailure::aggregate_leaf;
+                }
+                set_dynamic_element(container, *ordinal.ordinal, value);
+                return DynFailure::none;
+            }
+            if ((inst.imm_a & dyn_layout_fixed) != 0U) {
+                const auto value = registers[inst.x];
+                if (two_state && (value.b & element_mask) != 0U) {
+                    return DynFailure::write_mismatch;
+                }
+                const auto ordinal = sparse_ordinal(inst, registers[inst.y],
+                    container.size, true);
+                if (ordinal.failure != DynFailure::none) {
+                    return ordinal.failure;
+                }
+                set_dynamic_element(container, *ordinal.ordinal, value);
+                return DynFailure::none;
             }
             const auto value = registers[inst.x];
             if (two_state && (value.b & element_mask) != 0U) {
@@ -1905,6 +2234,10 @@ DynFailure execute_dyn(const KInst& inst, StaticKernelDynamicContainer& containe
         case DynOp::stream_take_value:
         case DynOp::stream_to_container:
         case DynOp::stream_take_container:
+        case DynOp::aggregate_unpack:
+        case DynOp::aggregate_pack:
+        case DynOp::aggregate_element_read:
+        case DynOp::aggregate_element_write:
             throw std::logic_error { "static kernel whole-array operation misplaced" };
         }
     } catch (const std::bad_alloc&) {

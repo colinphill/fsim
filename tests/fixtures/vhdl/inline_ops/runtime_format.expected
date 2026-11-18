@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+inl packed 123456789abcdef01111 -12 1x0z0101
+inl real string 2.50|abc|  abc
+inl time 3 3
+inl scope top

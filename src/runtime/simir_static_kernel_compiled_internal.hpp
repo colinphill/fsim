@@ -188,6 +188,21 @@ inline void operation_registers_of(const T& op, std::vector<RegisterId>& reads,
             reads.push_back(op.condition);
         } else if constexpr (std::is_same_v<T, FormatDisplay>) {
             reads.push_back(op.source);
+        } else if constexpr (std::is_same_v<T, ForceSignalSlice>
+            || std::is_same_v<T, ReleaseSignalSlice>) {
+            if constexpr (std::is_same_v<T, ForceSignalSlice>) {
+                reads.push_back(op.source);
+            }
+            if (op.selection) {
+                reads.push_back(op.selection->index);
+            }
+        } else if constexpr (std::is_same_v<T, RuntimeStringFormat>) {
+            // The packed arguments; a string argument is a string register.
+            for (const auto& argument : op.arguments) {
+                if (!argument.string) {
+                    reads.push_back(argument.value);
+                }
+            }
         } else if constexpr (std::is_same_v<T, HostRequest>) {
             for (const auto& argument : op.arguments) {
                 reads.push_back(argument.source);
@@ -206,8 +221,22 @@ inline void operation_registers_of(const T& op, std::vector<RegisterId>& reads,
                 reads.insert(reads.end(), op.bounds.begin(), op.bounds.end());
             }
             write = op.result;
-        } else if constexpr (std::is_same_v<T, PlusArgSelect>) {
+        } else if constexpr (std::is_same_v<T, PlusArgSelect>
+            || std::is_same_v<T, ProcessSelf>) {
             write = op.destination;
+        } else if constexpr (std::is_same_v<T, ProcessStatusQuery>) {
+            reads.push_back(op.source);
+            write = op.destination;
+        } else if constexpr (std::is_same_v<T, ProcessGetRandState>
+            || std::is_same_v<T, ProcessSetRandState>) {
+            reads.push_back(op.source);
+        } else if constexpr (std::is_same_v<T, ProcessSrandom>) {
+            reads.push_back(op.source);
+            reads.push_back(op.seed);
+        } else if constexpr (std::is_same_v<T, TimeFormatControl>) {
+            reads.push_back(op.units);
+            reads.push_back(op.precision);
+            reads.push_back(op.minimum_width);
         } else if constexpr (std::is_same_v<T, StringMethod>) {
             // The reference's execute_string_method and execute_string_format
             // (StaticKernel::behavioral_step): which registers an operator
@@ -389,12 +418,41 @@ inline void operation_registers_of(const T& op, std::vector<RegisterId>& reads,
             if constexpr (std::is_same_v<T, WriteProjectedWaveformDynamicSlice>) {
                 reads.push_back(op.selection.index);
             }
+        } else if constexpr (std::is_same_v<T, ContainerElementRead>
+            || std::is_same_v<T, ContainerElementWrite>) {
+            reads.push_back(op.index);
+        } else if constexpr (std::is_same_v<T, ContainerAggregateRead>) {
+            reads.push_back(op.index);
+            write = op.destination;
+        } else if constexpr (std::is_same_v<T, ContainerAggregateWrite>) {
+            reads.push_back(op.index);
+            reads.push_back(op.source);
         } else if constexpr (std::is_same_v<T, ContainerRead>) {
             // A string key is a string register.
             if (!op.string_index) {
                 reads.push_back(op.index);
             }
             write = op.destination;
+        } else if constexpr (std::is_same_v<T, ClassAllocate>) {
+            // The constructor's value actuals (a string actual is a string
+            // register) and the new object's handle.
+            for (std::size_t index = 0U; index < op.constructor_actuals.size(); ++index) {
+                if (op.constructor_actual_kinds.empty()
+                    || op.constructor_actual_kinds[index] != 1U) {
+                    reads.push_back(op.constructor_actuals[index]);
+                }
+            }
+            write = op.destination;
+        } else if constexpr (std::is_same_v<T, ClassPropertyRead>) {
+            reads.push_back(op.receiver);
+            write = op.destination;
+        } else if constexpr (std::is_same_v<T, ClassPropertyWrite>) {
+            reads.push_back(op.receiver);
+            reads.push_back(op.source);
+        } else if constexpr (std::is_same_v<T, ClassStaticPropertyRead>) {
+            write = op.destination;
+        } else if constexpr (std::is_same_v<T, ClassStaticPropertyWrite>) {
+            reads.push_back(op.source);
         } else if constexpr (std::is_same_v<T, WriteContainerObjectElement>) {
             reads.push_back(op.index);
             reads.push_back(op.source);
@@ -452,6 +510,10 @@ inline void operation_written_registers_of(const T& op,
         if (op.target_kind == FileBinaryTargetKind::packed_register) {
             writes.push_back({ op.target, op.width });
         }
+    } else if constexpr (std::is_same_v<T, RandomDistribution>) {
+        // $dist_* writes the seed variable back (IEEE 1800-2023 20.14.2).
+        writes.push_back({ op.destination, 32U });
+        writes.push_back({ op.seed, 32U });
     } else {
         std::vector<RegisterId> reads;
         std::optional<RegisterId> write;
@@ -1032,6 +1094,7 @@ public:
         // template's code key, so a restored body must carry them.
         raw(body.statement_starts);
         grouped(body.variable_stores);
+        grouped(body.container_publishes);
         grouped(body.u_operand_begin);
         grouped(body.u_operands);
         put(body.call_stack_base);
@@ -1402,6 +1465,7 @@ public:
             && get(body.shadow_base) && get(body.weak) && raw(body.tracked)
             && raw(body.u_mode) && raw(body.statement_starts)
             && grouped(body.variable_stores)
+            && grouped(body.container_publishes)
             && grouped(body.u_operand_begin)
             && grouped(body.u_operands) && get(body.call_stack_base)
             && grouped(body.resume_entries) && get(body.frame_stack_base)

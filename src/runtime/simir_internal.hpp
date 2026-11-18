@@ -2469,6 +2469,9 @@ struct Interpreter::Impl : SchedulerBatchTask {
     };
     std::vector<PlanStep> plan_journal;
     std::set<SignalId> plan_watched;
+    /// Design containers a host observer follows
+    /// (watch_container_object_changes), for every kernel installed later.
+    std::set<ContainerObjectId> watched_container_objects;
     std::set<SignalId> plan_transactions;
     std::set<SignalId> plan_written;
     bool plan_boundary_open { };

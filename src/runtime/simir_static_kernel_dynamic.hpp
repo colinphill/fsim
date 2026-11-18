@@ -18,8 +18,10 @@
 #include <deque>
 #include <functional>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace fsim::runtime::simir::static_kernel_detail {
 
@@ -37,6 +39,9 @@ inline constexpr std::uint32_t dynamic_text_flag = 256U;
 /// String keys (an associative array): each key slot is a DynTextSlot,
 /// two words of `keys`, in std::string order.
 inline constexpr std::uint32_t dynamic_text_keys_flag = 512U;
+/// A flat aggregate's leaves (flat_aggregate_type): every leaf is held,
+/// its word pair masked to the leaf's width.
+inline constexpr std::uint32_t dynamic_aggregate_flag = 1024U;
 
 /// A text slot's bytes (DynTextSlot, as the slot's two words).
 [[nodiscard]] inline std::string_view text_of(const kernel_word::Word slot) noexcept
@@ -57,6 +62,62 @@ inline constexpr std::uint32_t dynamic_text_keys_flag = 512U;
 /// (integral or string keys) or sparse array of packed or scalar elements
 /// of at most 64 bits or of strings.
 [[nodiscard]] bool native_dynamic_type(const ContainerType& type) noexcept;
+/// Why `type` is no container the kernel holds: nullptr when it is one.
+[[nodiscard]] const char* native_dynamic_type_reason(
+    const ContainerType& type) noexcept;
+
+/// Whether `type` is a flat unpacked aggregate (dyn_layout_aggregate): a
+/// structure value, or a dense fixed-size array of structures, whose
+/// members are packed or scalar values of at most 64 bits or such
+/// structures (IEEE 1800-2023 7.2, 7.4). The kernel holds its elements'
+/// leaves: leaf l of element e at ordinal e * leaves + l, an element's
+/// leaves in member order, a nested structure's in its place.
+[[nodiscard]] bool flat_aggregate_type(const ContainerType& type) noexcept;
+/// The leaves of each element of flat aggregate `type`.
+[[nodiscard]] std::uint32_t aggregate_leaf_count(const ContainerType& type) noexcept;
+/// The elements of flat aggregate `type`: one for a structure value.
+[[nodiscard]] std::uint64_t aggregate_element_count(const ContainerType& type) noexcept;
+/// The widths of an element's leaves of flat aggregate `type`, in leaf
+/// order: the fields of its packed bridge (container_signal_bridge_width),
+/// the first leaf leftmost.
+[[nodiscard]] std::vector<std::uint32_t> aggregate_leaf_widths(const ContainerType& type);
+/// Visits each leaf value of flat aggregate value `value` in leaf order.
+template <typename Value, typename Visit>
+void for_each_aggregate_leaf(Value& value, Visit&& visit)
+{
+    for (auto& element : value.nested_elements) {
+        if (element.type.element_kind == ContainerElementKind::Aggregate) {
+            for_each_aggregate_leaf(element, visit);
+        } else {
+            visit(element);
+        }
+    }
+}
+/// The types of an element's leaves of flat aggregate `type`, in leaf order.
+[[nodiscard]] std::vector<const ContainerType*> aggregate_leaf_types(const ContainerType& type);
+/// The field widths of an element of an object bridged to a packed slot: a
+/// flat aggregate's leaves, else the one packed element.
+[[nodiscard]] std::vector<std::uint32_t> bridged_leaf_widths(const ContainerType& type);
+/// The bits of flat aggregate `type`'s packed bridge: every element's leaves.
+[[nodiscard]] std::uint64_t aggregate_bridge_bits(const ContainerType& type);
+/// The leaf member path `members` names in an element of flat aggregate
+/// `type`: its ordinal among the element's leaves and its type.
+struct AggregateLeaf {
+    std::uint32_t offset { };
+    const ContainerType* type { };
+};
+[[nodiscard]] std::optional<AggregateLeaf> aggregate_leaf(const ContainerType& type,
+    std::span<const std::uint32_t> members) noexcept;
+/// The leaves of the aggregate member `members` selects in an element of
+/// flat aggregate `type` (the whole element when `members` is empty): its
+/// first leaf, its leaf count and its type; none when it selects a leaf.
+struct AggregateRange {
+    std::uint32_t offset { };
+    std::uint32_t leaves { };
+    const ContainerType* type { };
+};
+[[nodiscard]] std::optional<AggregateRange> aggregate_range(const ContainerType& type,
+    std::span<const std::uint32_t> members) noexcept;
 
 /// An empty header for a container of `type` (native_dynamic_type).
 [[nodiscard]] StaticKernelDynamicContainer make_dynamic_header(
@@ -198,5 +259,12 @@ void execute_dyn_whole(const KInst& inst, const CompiledBody& body,
     StaticKernelDynamicContainer& container,
     const StaticKernelDynamicContainer* other, kernel_word::Word* registers,
     std::string* strings);
+/// DynOp::aggregate_element_read / aggregate_element_write: `box` is the
+/// structure register's container, `array` the indexed one; `nodes` the
+/// instruction's leaf nodes (dyn_graph_node_words words each: width | the
+/// zero-initial flag << 32).
+[[nodiscard]] DynFailure execute_dyn_aggregate_element(const KInst& inst,
+    StaticKernelDynamicContainer& array, StaticKernelDynamicContainer& box,
+    const kernel_word::Word* registers, const std::uint64_t* nodes);
 
 } // namespace fsim::runtime::simir::static_kernel_detail

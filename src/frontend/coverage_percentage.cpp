@@ -326,43 +326,4 @@ calculate_systemverilog_overall_coverage_percentage(
         exact_weighted_coverage);
 }
 
-SystemVerilogCoveragePercentage
-calculate_systemverilog_overall_instance_coverage_percentage(
-    const std::span<const SystemVerilogCovergroupDeclaration> declarations,
-    const std::span<const SystemVerilogCovergroupInstance> instances)
-{
-    std::uint64_t weighted_coverage { };
-    double exact_weighted_coverage { };
-    std::uint64_t total_weight { };
-    for (const auto& declaration : declarations) {
-        if (declaration.effective_instance_weight == 0U)
-            continue;
-        for (const auto& instance : instances) {
-            if (instance.declaration_identity
-                != declaration.canonical_identity) {
-                continue;
-            }
-            const auto coverage
-                = calculate_systemverilog_covergroup_instance_percentage(
-                    declaration, instance)
-                      .coverage;
-            if (coverage.empty)
-                continue;
-            total_weight = saturating_add(
-                total_weight, declaration.effective_instance_weight);
-            weighted_coverage = saturating_add(
-                weighted_coverage,
-                static_cast<std::uint64_t>(coverage.basis_points)
-                    * declaration.effective_instance_weight);
-            exact_weighted_coverage += coverage.percent() * 100.0
-                * static_cast<double>(declaration.effective_instance_weight);
-        }
-    }
-    return percentage(
-        weighted_coverage,
-        total_weight * full_coverage_basis_points,
-        100U,
-        exact_weighted_coverage);
-}
-
 } // namespace fsim::frontend

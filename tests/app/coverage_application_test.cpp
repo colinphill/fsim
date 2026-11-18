@@ -171,7 +171,6 @@ void verify_invalid_arity(
   real invalid;
   initial begin
     invalid = $get_coverage(1);
-    invalid = $get_inst_coverage(1);
   end
 endmodule
 )";
@@ -506,19 +505,23 @@ int main()
   real complete_instance_coverage;
   initial begin
     empty_coverage = $get_coverage();
-    empty_instance_coverage = $get_inst_coverage();
+    empty_instance_coverage
+        = (low.get_inst_coverage() + high.get_inst_coverage()) / 2.0;
     low.sample(0);
     high.sample(0);
     weighted_coverage = $get_coverage();
-    weighted_instance_coverage = $get_inst_coverage();
+    weighted_instance_coverage
+        = (low.get_inst_coverage() + high.get_inst_coverage()) / 2.0;
     low.sample(1);
     low.sample(2);
     low.sample(3);
     advanced_coverage = $get_coverage();
-    advanced_instance_coverage = $get_inst_coverage();
+    advanced_instance_coverage
+        = (low.get_inst_coverage() + high.get_inst_coverage()) / 2.0;
     high.sample(1);
     complete_coverage = $get_coverage();
-    complete_instance_coverage = $get_inst_coverage();
+    complete_instance_coverage
+        = (low.get_inst_coverage() + high.get_inst_coverage()) / 2.0;
     $finish;
   end
 endmodule

@@ -1276,6 +1276,8 @@ struct HdlVcdState {
     std::vector<bool> selected;
     std::vector<runtime::SystemVerilogScalarKind> scalar_kinds;
     std::vector<std::pair<std::string, runtime::simir::SignalId>> objects;
+    // The VCD var_type of each of `objects` (IEEE 1800-2023 21.7.2.1).
+    std::vector<runtime::TraceVarKind> object_var_kinds;
     std::vector<std::string> instances;
     std::uint64_t observer { };
     SimulationTick tick_multiplier { 1 };

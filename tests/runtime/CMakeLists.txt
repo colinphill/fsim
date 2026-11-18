@@ -1347,6 +1347,17 @@ target_include_directories(
 fsim_add_foreign_conformance_test(
   vpi-time-queue vpi foreign_vpi_time_queue.sv
   foreign_vpi_time_queue.expected "" fsim_foreign_vpi_time_queue_plugin)
+# A port is a net or a variable as its declaration says, whatever its
+# collapsed actual is (IEEE 1800-2023 23.2.2.3, 37.16, 37.17).
+add_library(fsim_foreign_vpi_port_kinds_plugin SHARED
+  foreign_vpi_port_kinds_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_port_kinds_plugin)
+target_link_libraries(fsim_foreign_vpi_port_kinds_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_port_kinds_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-port-kinds vpi foreign_vpi_port_kinds.sv
+  foreign_vpi_port_kinds.expected "" fsim_foreign_vpi_port_kinds_plugin)
 # Associative array words named by key, handles kept while the key exists
 # (IEEE 1800-2023 37.3.8, 37.17).
 add_library(fsim_foreign_vpi_assoc_words_plugin SHARED

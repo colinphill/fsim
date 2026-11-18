@@ -116,6 +116,31 @@ enum class TraceTypeKind : std::uint8_t {
   TypedLeaf
 };
 
+/// The VCD var_type keyword a variable is declared with (IEEE 1800-2023
+/// 21.7.2.1). A variable takes `real` for a real-family scalar and `wire`
+/// otherwise unless its producer sets the kind of its source object.
+enum class TraceVarKind : std::uint8_t {
+    Wire,
+    Tri,
+    Triand,
+    Trior,
+    Trireg,
+    Tri0,
+    Tri1,
+    Wand,
+    Wor,
+    Supply0,
+    Supply1,
+    Reg,
+    Integer,
+    Real,
+    Realtime,
+    Time
+};
+
+/// The VCD keyword of `kind`.
+[[nodiscard]] std::string_view trace_var_keyword(TraceVarKind kind) noexcept;
+
 enum class TraceDeclarationKind : std::uint8_t {
     Variable,
     Alias
@@ -174,6 +199,7 @@ struct TraceVariableDeclaration {
     TraceSourceId source;
     TracePathName hierarchical_name;
     std::string reference;
+    TraceVarKind var_kind { TraceVarKind::Wire };
 };
 
 struct TraceAliasDeclaration {
@@ -183,6 +209,9 @@ struct TraceAliasDeclaration {
     TraceSourceId source;
     TracePathName hierarchical_name;
     std::string reference;
+    // Its own object's, its target's unless set (an input port of a
+    // variable is a net, IEEE 1800-2023 23.2.2.3).
+    TraceVarKind var_kind { TraceVarKind::Wire };
 };
 
 struct TraceDeclarationEntry {
@@ -257,6 +286,9 @@ public:
     /// none of them is a block. A model built without them has instance
     /// scopes only.
     void set_instance_paths(std::span<const semantic::HierarchyPathId> paths);
+    /// The VCD var_type of a variable or alias this builder added
+    /// (21.7.2.1).
+    void set_var_kind(TraceSignalId variable, TraceVarKind kind);
     [[nodiscard]] TraceDeclarationModel freeze() &&;
 
 private:

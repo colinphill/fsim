@@ -2213,10 +2213,8 @@ public:
                     continue;
                 }
                 if (chosen->vhdl->kind == vhdl::ExpressionKind::default_choice
-                    || (chosen->vhdl->kind == vhdl::ExpressionKind::name
-                        && support::equal_ignoring_ascii_case(
-                            std::string_view { chosen->vhdl->text },
-                            "others"))) {
+                    || chosen->vhdl->marker
+                        == support::ExpressionMarker::vhdl_others_choice) {
                     others = association.value;
                 } else if (chosen->vhdl->kind != vhdl::ExpressionKind::slice
                     && evaluate(choice) == index) {
@@ -2323,10 +2321,8 @@ public:
                     continue;
                 }
                 if (chosen->vhdl->kind == vhdl::ExpressionKind::default_choice
-                    || (chosen->vhdl->kind == vhdl::ExpressionKind::name
-                        && support::equal_ignoring_ascii_case(
-                            std::string_view { chosen->vhdl->text },
-                            "others"))) {
+                    || chosen->vhdl->marker
+                        == support::ExpressionMarker::vhdl_others_choice) {
                     others = association.value;
                 } else if (chosen->vhdl->kind == vhdl::ExpressionKind::name
                     && support::equal_ignoring_ascii_case(
@@ -4293,8 +4289,8 @@ private:
     [[nodiscard]] bool vhdl_aggregate_uses_others(
         const vhdl::AggregateAssociation& association)
     {
-        if (support::equal_ignoring_ascii_case(
-                association.choice_spelling, "others")) {
+        if (association.choice_marker
+            == support::ExpressionMarker::vhdl_others_choice) {
             return true;
         }
         if (association.choices.size() != 1U) {
@@ -4304,8 +4300,8 @@ private:
             association.choices.front());
         return choice && choice->vhdl != nullptr
             && (choice->vhdl->kind == vhdl::ExpressionKind::default_choice
-                || choice->vhdl->kind == vhdl::ExpressionKind::name)
-            && support::equal_ignoring_ascii_case(choice->vhdl->text, "others");
+                || choice->vhdl->marker
+                    == support::ExpressionMarker::vhdl_others_choice);
     }
 
     [[nodiscard]] std::optional<VhdlConstantValue>
@@ -4435,8 +4431,8 @@ private:
                 }
                 if (choice->vhdl->kind
                         == vhdl::ExpressionKind::default_choice
-                    || support::equal_ignoring_ascii_case(
-                        std::string_view { choice->vhdl->text }, "others")) {
+                    || choice->vhdl->marker
+                        == support::ExpressionMarker::vhdl_others_choice) {
                     others = association.value;
                     named = true;
                     continue;
@@ -9360,11 +9356,8 @@ public:
                     *view->systemverilog->initializer);
                 if (result && *result == 1 && literal
                     && literal->systemverilog != nullptr
-                    && (literal->systemverilog->kind
-                            == sv::ExpressionKind::logic_literal
-                        || literal->systemverilog->kind
-                            == sv::ExpressionKind::integer_literal)
-                    && literal->systemverilog->text == "'1") {
+                    && literal->systemverilog->unbased_unsized
+                        == support::UnbasedUnsizedLiteral::one) {
                     result = -1;
                 }
             } else if (constant) {
@@ -10270,7 +10263,7 @@ private:
                 return true;
             };
             for (const auto& association : view->systemverilog->associations) {
-                if (association.choice_spelling == "default") {
+                if (association.choice_marker == support::ExpressionMarker::sv_default_choice) {
                     default_value = association.value;
                     continue;
                 }
@@ -16833,7 +16826,7 @@ bool append_systemverilog_array_values(const CompiledDesign& design,
     const auto& source = *view->systemverilog;
     if (source.kind == sv::ExpressionKind::assignment_pattern) {
         if (source.associations.size() == 1U
-            && source.associations.front().choice_spelling == "default") {
+            && source.associations.front().choice_marker == support::ExpressionMarker::sv_default_choice) {
             std::size_t count = 1U;
             for (const auto extent : extents) {
                 count *= extent;

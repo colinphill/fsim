@@ -1618,17 +1618,11 @@ endmodule
     const auto overall_percentage
         = calculate_systemverilog_overall_coverage_percentage(
             overall_declarations, overall_instances);
-    const auto overall_instance_percentage
-        = calculate_systemverilog_overall_instance_coverage_percentage(
-            overall_declarations, overall_instances);
     require(
         !overall_percentage.empty
             && overall_percentage.raw_basis_points == 5'000
-            && overall_percentage.basis_points == 5'000
-            && !overall_instance_percentage.empty
-            && overall_instance_percentage.raw_basis_points == 4'000
-            && overall_instance_percentage.basis_points == 4'000,
-        "overall coverage independently weights covergroup types and instances");
+            && overall_percentage.basis_points == 5'000,
+        "overall coverage weights covergroup types");
     const auto percentage_report = build_systemverilog_coverage_report(
         percentage_group, merged_instances);
     const std::vector<SystemVerilogCovergroupInstance>

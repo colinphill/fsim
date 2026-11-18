@@ -1032,8 +1032,9 @@ struct CoverageSample {
 };
 
 enum class CoverageQueryKind : std::uint8_t {
+    // `$get_coverage()`: the overall coverage of every covergroup type
+    // (IEEE 1800-2023 19.9).
     overall_type,
-    overall_instance,
     // `get_coverage()` of a covergroup variable: the coverage of the
     // covergroup type named by `identity` (IEEE 1800-2023 19.8).
     covergroup_type,

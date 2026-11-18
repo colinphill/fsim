@@ -60,10 +60,19 @@ private:
   // STANDARD declares FOREIGN (IEEE 1076-2008 16.3).
   std::unordered_map<std::string, std::string> vhdl_declared_attributes_ {
       {"foreign", "string"}};
-  // Attribute specification values by attribute and entity name, read in
-  // place of `name'attribute`.
-  std::unordered_map<std::string, std::unordered_map<std::string, Expression>>
-      vhdl_attribute_values_;
+  // Attribute specification values of one attribute, read in place of
+  // `name'attribute`: by entity name, and the `others` / `all` lists by
+  // entity class (IEEE 1076-2008 7.2).
+  struct VhdlAttributeValues {
+    std::unordered_map<std::string, Expression> named;
+    std::unordered_map<std::string, Expression> others_by_class;
+    std::unordered_map<std::string, Expression> all_by_class;
+    // The latest `others` / `all` value of any class, for a prefix whose
+    // entity class the parser does not record.
+    std::optional<Expression> latest_others;
+    std::optional<Expression> latest_all;
+  };
+  std::unordered_map<std::string, VhdlAttributeValues> vhdl_attribute_values_;
 
   Token expect_identifier(std::string_view description);
 

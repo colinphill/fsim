@@ -576,7 +576,7 @@ ICARUS_NONSTANDARD = {
     "br1029a": "formats a real with %d/%x/%b",
     "br1029b": "formats a real with %d/%x/%b",
     "pr1985582": "expects Icarus's default real formatting",
-    "pr2486350": "expects %h of a 64-bit value without leading zeros",
+    "pr2486350": "calls $simtime, which IEEE 1800-2023 does not define, and expects %h of a 64-bit value without leading zeros",
     "implicit_cast13": "checks only under __ICARUS__",
     "pr2815398a_std": "needs __ICARUS__",
     "pr1771903": "needs Icarus -gallow-real-arg-to-bits",

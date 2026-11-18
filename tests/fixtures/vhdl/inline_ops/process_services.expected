@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+inl self 1
+inl randstate 1
+inl srandom 1 child 1
+inl time [             1500000]
+inl time [   1.5 us]

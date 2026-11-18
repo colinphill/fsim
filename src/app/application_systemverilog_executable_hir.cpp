@@ -949,6 +949,7 @@ namespace {
             output.decimal_literal
                 = systemverilog_hir_detail::systemverilog_decimal_literal(
                     input.systemverilog_decimal_literal);
+            output.unbased_unsized = input.unbased_unsized;
             output.scalar_kind = static_cast<sv::ScalarKind>(
                 input.systemverilog_scalar_kind);
             output.generated_text

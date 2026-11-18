@@ -368,6 +368,10 @@ struct StaticKernelNativeHelpers {
     /// Hands the completed writes of watched outputs to the host
     /// (`fsim_sk_flush_writes`; StaticKernelNativeFrame::watch_writes).
     void (*flush_writes)(StaticKernelNativeFrame*) { };
+    /// After a write of kernel dynamic object `container`
+    /// (`fsim_sk_container_publish`; CompiledBody::container_publishes): an
+    /// observed object's value reaches the host and its observers.
+    void (*container_publish)(StaticKernelNativeFrame*, std::uint32_t container) { };
     /// Executes a generic instruction against the caller's registers, one
     /// helper per operation kind (the instruction's `sub`; generated code
     /// calls `fsim_sk_generic_<sub>`).

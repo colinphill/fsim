@@ -437,6 +437,7 @@ interp.impl	reset_twin_class_hooks	Cfg	set by the embedder before a reset (Inter
 interp.impl	run_state_event_host	Cfg	the embedder's scheduler-event owners and handle takers (Interpreter::set_run_state_event_host), installed by the application from the same command line
 interp.impl	plan_journal	Cfg	the foreign requests that change the plan (watches, boundary, foreign writes, grafts), in order; replay_plan_onto gives them to the reset twin, and the same libraries make the startup ones again in a restarted process (dropped callbacks need no plan)
 interp.impl	plan_watched	Cfg	dedup set of plan_journal
+interp.impl	watched_container_objects	Cfg	hook: the design containers host observers follow (watch_container_object_changes), which a restored run watches again
 interp.impl	plan_transactions	Cfg	dedup set of plan_journal
 interp.impl	plan_written	Cfg	dedup set of plan_journal
 interp.impl	plan_boundary_open	Cfg	dedup flag of plan_journal
@@ -923,6 +924,8 @@ kernel.impl	activating_	S	scratch: empty at a save point (a non-empty queue refu
 kernel.impl	vhdl_	Cfg	kernel mode from the artifact or command line
 kernel.impl	debug_points_	Cfg	kernel mode from the artifact or command line
 kernel.impl	watch_writes_	Cfg	hook: set by an observer's watch request (watch, apply_watches), which a restored run makes again
+kernel.impl	observed_containers_	Cfg	hook: the kernel dynamic objects an observer follows (watch_dynamic_object), which a restored run watches again
+kernel.impl	dynamic_observed_	Cfg	hook: set by an observer's container watch (watch_dynamic_object), which a restored run makes again
 kernel.impl	weak_sources_	Cfg	kernel mode from the artifact or command line
 kernel.impl	time_resolution_	Cfg	the design's time resolution from the artifact
 kernel.impl	host_original_	D	derived from the artifact or rebuilt after restore
@@ -953,6 +956,7 @@ kernel.impl	verify_thread_reason_	D	FSIM_KERNEL_VERIFY: a function of the member
 kernel.impl	verify_thread_decided_	D	FSIM_KERNEL_VERIFY: a function of the member's operations
 kernel.impl	verify_live_registers_	D	FSIM_KERNEL_VERIFY: a function of the member's operations
 kernel.impl	verify_operation_live_	D	FSIM_KERNEL_VERIFY: a function of the member's operations
+kernel.impl	verify_objects_	W	FSIM_KERNEL_VERIFY: set by the replay's object scope guard (verify_thread_activation) and cleared when it ends
 kernel.impl	shadow_	W	FSIM_KERNEL_VERIFY: set before a thread activation and cleared after it (run_behavioral_compiled)
 kernel.impl	verify_mirror_ahead_	W	FSIM_KERNEL_VERIFY: mirrors ahead of the host until its next commit; a save waits for pending updates, and restore_value_section clears it
 kernel.impl	interpreted_bytecode_runs_	Prof	profile counters
@@ -1312,6 +1316,7 @@ kernel.container	element_words	D	container map from the artifact
 kernel.container	element_offset	D	container map from the artifact
 kernel.container	element_slots	D	container map from the artifact
 kernel.container	packed_slot	D	container map from the artifact
+kernel.container	element_bits	D	container map from the artifact: the bits of one element of a packed-slot binding (an aggregate element's leaves together)
 kernel.container	dynamic_header	D	container map from the artifact: the header index of a queue or dynamic array the kernel holds (the elements are kernel.impl dynamic_headers_)
 kernel.container	string_member	D	container map from the artifact
 kernel.thread	member	P	kernel thread state

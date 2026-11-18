@@ -2210,6 +2210,31 @@ Interpreter::Impl::StaticKernel::behavioral_operation_steps()
     return steps;
 }
 
+void Interpreter::Impl::StaticKernel::check_assert(const std::uint32_t member_index,
+    const std::uint32_t pc, const Assert& op, const PackedLogic4& condition)
+{
+    if ((condition.width() == 1U && condition.get(0) == Logic4::one)
+        || (replaying_ && op.severity != AssertionSeverity::failure)) {
+        return;
+    }
+    const auto& member = members_[member_index];
+    const auto message = op.message.empty()
+        ? std::string_view { "assertion failed" }
+        : std::string_view { op.message };
+    if (member.vhdl_2019) {
+        report_vhdl(member_index, pc, message, op.severity, op.source, false);
+        return;
+    }
+    if (op.severity != AssertionSeverity::failure && impl_.report_hook) {
+        impl_.report_hook(member.process, message, op.severity, op.source,
+            kernel_now(), kernel_delta());
+    }
+    if (op.severity == AssertionSeverity::failure) {
+        throw AssertionError(member.process, member.original_instruction(pc),
+            std::string { message }, op.severity, op.source);
+    }
+}
+
 void Interpreter::Impl::StaticKernel::report_vhdl(const std::uint32_t member_index,
     const std::uint32_t pc, const std::string_view message,
     const AssertionSeverity severity, const SourceLocation& source,
@@ -3317,6 +3342,21 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                 auto& storage = member.dynamic_containers[op.destination];
                 ContainerValue value;
                 if (op.object < container_of_object_.size()
+                    && container_of_object_[op.object] != no_container
+                    && containers_[container_of_object_[op.object]].storage
+                        == StaticKernelContainerStorage::dynamic) {
+                    // A queue, dynamic, associative or sparse array the
+                    // kernel holds (storage dynamic).
+                    value = dynamic_object_value(container_of_object_[op.object]);
+                } else if (op.object < container_of_object_.size()
+                    && container_of_object_[op.object] != no_container
+                    && containers_[container_of_object_[op.object]].storage
+                        == StaticKernelContainerStorage::packed_signal
+                    && containers_[container_of_object_[op.object]].type.element_kind
+                        == ContainerElementKind::Aggregate) {
+                    // A flat aggregate the host bridges to a kernel slot.
+                    value = bridged_aggregate_value(container_of_object_[op.object]);
+                } else if (op.object < container_of_object_.size()
                     && container_of_object_[op.object] != no_container) {
                     const auto& container = containers_[container_of_object_[op.object]];
                     value.type = container.type;
@@ -3339,6 +3379,69 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                 return;
             }
         } else if constexpr (std::is_same_v<T, WriteContainerObjectElement>) {
+            if (op.object < container_of_object_.size()
+                && container_of_object_[op.object] != no_container
+                && containers_[container_of_object_[op.object]].storage
+                    == StaticKernelContainerStorage::dynamic) {
+                // A blocking element write of a kernel dynamic object (the
+                // planner leaves the others on the host): the reference's
+                // element write (ContainerWrite) of the object's value.
+                const auto target = container_of_object_[op.object];
+                if (op.nonblocking || op.transaction_signal || op.dynamic_part
+                    || !op.members.empty() || !op.levels.empty()) {
+                    fail(member_index, pc,
+                        "static kernel dynamic container element write is not "
+                        "a blocking element write");
+                }
+                auto value = dynamic_object_value(target);
+                // The reference's handler on `value` as a register no other
+                // operation names.
+                constexpr auto scratch = std::numeric_limits<ContainerRegisterId>::max();
+                struct ObjectAccess final : ContainerRegisterAccess {
+                    ContainerRegisterAccess& base;
+                    ContainerValue& object;
+                    ObjectAccess(ContainerRegisterAccess& base_value,
+                        ContainerValue& object_value) noexcept
+                        : base { base_value }, object { object_value }
+                    {
+                    }
+                    const PackedLogic4& read(const RegisterId id) override { return base.read(id); }
+                    void write(const RegisterId id, PackedLogic4 packed) override
+                    {
+                        base.write(id, std::move(packed));
+                    }
+                    const std::string& read_string(const StringRegisterId id) override
+                    {
+                        return base.read_string(id);
+                    }
+                    std::string& string(const StringRegisterId id) override
+                    {
+                        return base.string(id);
+                    }
+                    ContainerValue& container(const ContainerRegisterId id) override
+                    {
+                        return id == scratch ? object : base.container(id);
+                    }
+                    const ContainerValue& read_container(const ContainerRegisterId id) override
+                    {
+                        return id == scratch ? object : base.read_container(id);
+                    }
+                    std::uint32_t next_random() override { return base.next_random(); }
+                    void warn(const std::string_view message) override { base.warn(message); }
+                };
+                MemberContainerAccess member_access { *this, member_index, pc };
+                ObjectAccess access { member_access, value };
+                ContainerWrite write;
+                write.target = scratch;
+                write.index = op.index;
+                write.source = op.source;
+                write.signed_index = op.signed_index;
+                write.linear_index = op.linear_index;
+                execute_container_operation(write, access, member.process,
+                    pc < member.origin.size() ? member.origin[pc] : pc);
+                set_dynamic_object_value(target, value);
+                return;
+            }
             if (op.object >= container_of_object_.size()
                 || container_of_object_[op.object] == no_container) {
                 // An element write of a host object (the planner admits
@@ -3419,6 +3522,43 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
         } else if constexpr (std::is_same_v<T, WriteContainerObject>) {
             if (member.dynamic_container(op.source)) {
                 const auto& value = *member.dynamic_containers[op.source];
+                if (op.object < container_of_object_.size()
+                    && container_of_object_[op.object] != no_container
+                    && containers_[container_of_object_[op.object]].storage
+                        == StaticKernelContainerStorage::dynamic) {
+                    // A blocking write of a queue, dynamic, associative or
+                    // sparse array the kernel holds (the planner leaves
+                    // nonblocking and transaction writes on the host).
+                    const auto target = container_of_object_[op.object];
+                    if (op.nonblocking || op.transaction_signal
+                        || !(containers_[target].type == value.type)) {
+                        fail(member_index, pc,
+                            "static kernel dynamic container write is not a "
+                            "blocking write of its type");
+                    }
+                    set_dynamic_object_value(target, value);
+                    return;
+                }
+                if (op.object < container_of_object_.size()
+                    && container_of_object_[op.object] != no_container
+                    && containers_[container_of_object_[op.object]].storage
+                        == StaticKernelContainerStorage::packed_signal
+                    && containers_[container_of_object_[op.object]].type.element_kind
+                        == ContainerElementKind::Aggregate) {
+                    // A flat aggregate the host bridges to a kernel slot: its
+                    // leaves are the slot's fields (the planner leaves
+                    // nonblocking and transaction writes on the host).
+                    const auto target = container_of_object_[op.object];
+                    if (op.nonblocking || op.transaction_signal
+                        || !(containers_[target].type == value.type)) {
+                        fail(member_index, pc,
+                            "static kernel aggregate write is not a blocking write of "
+                            "its type");
+                    }
+                    set_bridged_aggregate_value(target, value, member_index,
+                        pc < member.origin.size() ? member.origin[pc] : pc);
+                    return;
+                }
                 if (op.object < container_of_object_.size()
                     && container_of_object_[op.object] != no_container) {
                     // A kernel array (a fixed array of the arena's shape):
@@ -3591,29 +3731,7 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             }
             behavioral_output(member_index, time_display_text(op), op.newline);
         } else if constexpr (std::is_same_v<T, Assert>) {
-            // An immediate assertion's failure (IEEE 1800-2023 16.3), as the
-            // reference reports it.
-            const auto& condition = packed_register(op.condition);
-            if (condition.width() != 1U || condition.get(0) != Logic4::one) {
-                const auto message = op.message.empty()
-                    ? std::string_view { "assertion failed" }
-                    : std::string_view { op.message };
-                if (member.vhdl_2019) {
-                    report_vhdl(member_index, pc, message, op.severity,
-                        op.source, false);
-                    return;
-                }
-                if (op.severity != AssertionSeverity::failure && impl_.report_hook) {
-                    impl_.report_hook(member.process, message, op.severity,
-                        op.source, kernel_now(),
-                        kernel_delta());
-                }
-                if (op.severity == AssertionSeverity::failure) {
-                    throw AssertionError(member.process,
-                        pc < member.origin.size() ? member.origin[pc] : pc,
-                        std::string { message }, op.severity, op.source);
-                }
-            }
+            check_assert(member_index, pc, op, packed_register(op.condition));
         } else if constexpr (std::is_same_v<T, RuntimeStringFormat>) {
             // $sformatf with a run-time format string (IEEE 1800-2023
             // 21.3.3), formatted as the reference formats it.
@@ -6006,6 +6124,7 @@ std::optional<std::uint32_t> Interpreter::Impl::StaticKernel::run_behavioral_com
         verify_before.emplace();
         verify_before->registers = body.registers;
         verify_before->containers = native_container_values(member);
+        verify_before->objects = native_object_values(member);
         verify_before->strings = member.strings;
         for (const auto& inst : body.code) {
             if (inst.op == KOp::str
@@ -6021,6 +6140,7 @@ std::optional<std::uint32_t> Interpreter::Impl::StaticKernel::run_behavioral_com
         }
         verify_before->random = *random_state_table()[member_index];
         verify_before->system_seed = impl_.system_random_seed;
+        verify_before->time_format = impl_.time_format;
         if (body.call_stack_base != 0U) {
             const auto depth = body.registers[body.call_stack_base].a;
             verify_before->stack.assign(body.call_entries.entries,
@@ -6237,7 +6357,22 @@ bool Interpreter::Impl::StaticKernel::replay_generic_record(
             : std::string { };
     };
     const auto& record = shadow.generic[shadow.consumed++];
-    for (std::size_t index = 0U; index < reads.size()
+    auto& random_stream = *random_state_table()[member_index];
+    if (random_stream != record.random_before) {
+        mismatch = "random state before operation " + std::to_string(pc) + ": compiled "
+            + std::to_string(record.random_before) + " reference "
+            + std::to_string(random_stream);
+    }
+    random_stream = record.random_after;
+    if (record.time_format) {
+        impl_.time_format = *record.time_format;
+    }
+    std::ranges::copy(record.mirror, arena_.data() + record.mirror_offset);
+    if (record.host_value) {
+        shadow.host_values.insert_or_assign(record.host_value->first,
+            record.host_value->second);
+    }
+    for (std::size_t index = 0U; mismatch.empty() && index < reads.size()
          && index < record.reads.size(); ++index) {
         if (image(reads[index]) != record.reads[index]) {
             mismatch = "operand r" + std::to_string(reads[index])
@@ -6299,15 +6434,40 @@ bool Interpreter::Impl::StaticKernel::replay_generic_record(
     return true;
 }
 
+namespace {
+
+// The host signal a force or release operation acts on.
+[[nodiscard]] std::optional<SignalId> forced_signal(const Operation& operation)
+{
+    return visit_operation([](const auto& op) -> std::optional<SignalId> {
+        using T = std::decay_t<decltype(op)>;
+        if constexpr (std::is_same_v<T, ForceSignalSlice>
+            || std::is_same_v<T, ReleaseSignalSlice>) {
+            return op.signal;
+        } else {
+            return std::nullopt;
+        }
+    }, operation);
+}
+
+} // namespace
+
 void Interpreter::Impl::StaticKernel::shadow_note_reads(
-    const std::uint32_t member_index, const std::vector<RegisterId>& reads)
+    const std::uint32_t member_index, const std::uint32_t pc,
+    const std::vector<RegisterId>& reads)
 {
     // The operands as the operation sees them, before it runs.
     const auto& member = members_[member_index];
+    if (const auto forced = forced_signal(member.operations()[pc])) {
+        // A force or release changes the host's value under the replay's
+        // reads: until it, the replay reads the value before it.
+        shadow_->host_values.try_emplace(*forced, read_signal(*forced));
+    }
     shadow_->pending_reads.clear();
     shadow_->pending_commits.clear();
     shadow_->pending_host_updates.clear();
     shadow_->pending_strings = member.strings;
+    shadow_->pending_random = *random_state_table()[member_index];
     shadow_->in_generic = true;
     for (const auto reg : reads) {
         shadow_->pending_reads.push_back(reg < member.registers.size()
@@ -6338,6 +6498,23 @@ void Interpreter::Impl::StaticKernel::shadow_record_generic(
         }
     }
     shadow_->pending_strings.clear();
+    record.random_before = shadow_->pending_random;
+    record.random_after = *random_state_table()[member_index];
+    if (operation_holds<TimeFormatControl>(member.operations()[pc])) {
+        record.time_format = impl_.time_format;
+    }
+    const auto forced = forced_signal(member.operations()[pc]);
+    if (forced) {
+        record.host_value.emplace(*forced, read_signal(*forced));
+    }
+    if (forced && *forced < input_of_signal_.size()
+        && input_of_signal_[*forced] != no_slot
+        && inputs_[input_of_signal_[*forced]].mirror != no_slot) {
+        const auto& slot = slots_[inputs_[input_of_signal_[*forced]].mirror];
+        const auto* const first = arena_.data() + slot.offset;
+        record.mirror_offset = slot.offset;
+        record.mirror.assign(first, first + std::size_t { slot.planes } * slot.words);
+    }
     for (const auto& written : writes) {
         if (written.reg < member.registers.size()) {
             record.results.emplace_back(written.reg, member.registers[written.reg]);
@@ -6588,6 +6765,14 @@ void Interpreter::Impl::StaticKernel::verify_thread_activation(
     };
     // The replay's queues and dynamic arrays: the kernel's at the start.
     const ReferenceContainerScope reference_containers { member, before.containers };
+    // The replay's design queues and arrays (storage dynamic): theirs at the
+    // start; the compiled run's values stand.
+    auto replay_objects = before.objects;
+    struct ObjectScope {
+        NativeObjectValues*& slot;
+        ~ObjectScope() { slot = nullptr; }
+    } object_scope { verify_objects_ };
+    verify_objects_ = &replay_objects;
     // The replay's string registers: the activation's at the start.
     const ReferenceStringScope reference_strings { member, before.strings };
     // The string variables the compiled run wrote in place: the replay's
@@ -6604,6 +6789,7 @@ void Interpreter::Impl::StaticKernel::verify_thread_activation(
     const auto compiled_seed = impl_.system_random_seed;
     *random_stream = before.random;
     impl_.system_random_seed = before.system_seed;
+    impl_.time_format = before.time_format;
     shadow.reference = true;
     std::string mismatch;
     std::uint32_t pc = start;
@@ -6879,6 +7065,19 @@ void Interpreter::Impl::StaticKernel::verify_thread_activation(
     }
     if (mismatch.empty()) {
         mismatch = native_container_mismatch(member, before.containers);
+    }
+    for (const auto& [index, replay] : replay_objects) {
+        if (!mismatch.empty()) {
+            break;
+        }
+        const auto compiled = static_kernel_detail::dynamic_value(
+            dynamic_headers_[containers_[index].dynamic_header], containers_[index].type);
+        if (!(compiled == replay)) {
+            mismatch = "design container " + std::to_string(index) + " compiled "
+                + std::to_string(compiled.elements.size() + compiled.string_elements.size())
+                + " elements, reference "
+                + std::to_string(replay.elements.size() + replay.string_elements.size());
+        }
     }
     if (mismatch.empty()) {
         mismatch = reference_strings.mismatch();

@@ -147,12 +147,25 @@ enum class ExpressionMarker : std::uint8_t {
     // Class, callable, built-in method and container forms.
     class_forms_begin_,
     vhdl_array_choice,            // an aggregate choice that is not a simple name
+    sv_default_choice,            // the `default:` key of an assignment pattern (10.9)
+    vhdl_others_choice,           // the `others` choice of an aggregate (9.3.3)
+    sv_new_array,                 // the `new` of a dynamic array new[size] (7.5.1)
 
     // VHDL, configuration and design-unit forms.
     vhdl_unit_forms_begin_,
 
     // One past the last marker.
     end_,
+};
+
+// The value of an unbased unsized literal (`'0`, `'1`, `'x`, `'z`; IEEE
+// 1800-2023 5.7.1), which sets every bit of its context's width.
+enum class UnbasedUnsizedLiteral : std::uint8_t {
+    none,
+    zero,
+    one,
+    unknown,
+    high_impedance,
 };
 
 [[nodiscard]] constexpr bool expression_marker_valid(

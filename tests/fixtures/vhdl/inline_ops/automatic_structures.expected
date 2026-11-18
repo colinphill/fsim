@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+inl box 5 3 6 2.500000
+inl arr 7 9 7 x 5 0
+inl out 0 x
+inl copy 5 9 3

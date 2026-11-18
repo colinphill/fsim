@@ -40,6 +40,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <map>
+#include <numeric>
 #include <optional>
 #include <span>
 #include <unordered_map>
@@ -1028,11 +1029,41 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
             for (const auto signal : container_spec.element_signals) {
                 container.element_slots.push_back(owned_slot(signal));
             }
+        } else if (container.storage == StaticKernelContainerStorage::dynamic) {
+            // A queue, dynamic, associative or sparse array of the design
+            // (IEEE 1800-2023 7.5-7.10) the planner gave the kernel.
+            if (!static_kernel_detail::native_dynamic_type(initial.type)) {
+                throw std::invalid_argument(
+                    "static kernel dynamic container has another type");
+            }
+            container.count = 0U;
+            container.element_words = 1U;
+            container.dynamic_header = dynamic_headers_.add(
+                static_kernel_detail::make_dynamic_header(initial.type));
+            static_kernel_detail::assign_dynamic_value(
+                dynamic_headers_[container.dynamic_header], initial);
         } else if (container.storage
             == StaticKernelContainerStorage::packed_signal) {
             container.packed_slot = owned_slot(container_spec.packed_signal);
-            if (slots_[container.packed_slot].width
-                != container.count * container.type.element_width) {
+            if (initial.type.element_kind == ContainerElementKind::Aggregate) {
+                // A flat aggregate's leaves are the slot's fields
+                // (DynOp::aggregate_unpack): every element's, in order, of
+                // a variable's two-plane slot.
+                if (slots_[container.packed_slot].planes != 2U
+                    || slots_[container.packed_slot].resolved) {
+                    throw std::invalid_argument(
+                        "static kernel bridged aggregate slot is not a variable slot");
+                }
+                const auto widths = static_kernel_detail::aggregate_leaf_widths(initial.type);
+                container.count = static_cast<std::uint32_t>(
+                    static_kernel_detail::aggregate_element_count(initial.type));
+                container.element_bits = std::accumulate(widths.begin(), widths.end(), 0U);
+            }
+            if (initial.type.element_kind != ContainerElementKind::Aggregate) {
+                container.element_bits = static_cast<std::uint32_t>(container.type.element_width);
+            }
+            const auto element_width = container.element_bits;
+            if (slots_[container.packed_slot].width != container.count * element_width) {
                 throw std::invalid_argument(
                     "static kernel packed memory width is inconsistent");
             }
@@ -2202,6 +2233,17 @@ void Interpreter::Impl::StaticKernel::build_container_info()
             info.packed_offset = slot.offset;
             info.packed_words = slot.words;
             info.packed_width = slot.width;
+        } else if (type.element_kind == ContainerElementKind::Aggregate
+            && container.storage == StaticKernelContainerStorage::packed_signal
+            && slots_[container.packed_slot].planes == 2U) {
+            // A flat aggregate the host bridges to the slot: its leaves are
+            // the slot's fields (DynOp::aggregate_unpack, aggregate_pack).
+            const auto& slot = slots_[container.packed_slot];
+            info.storage = 2U;
+            info.slot = container.packed_slot;
+            info.packed_offset = slot.offset;
+            info.packed_words = slot.words;
+            info.packed_width = slot.width;
         } else if (shape
             && container.storage == StaticKernelContainerStorage::elements) {
             // Kernel-held elements: nothing observes them, so native code
@@ -2214,7 +2256,10 @@ void Interpreter::Impl::StaticKernel::build_container_info()
         info.left = type.index_left;
         info.low = std::min(type.index_left, type.index_right);
         info.high = std::max(type.index_left, type.index_right);
-        info.element_width = static_cast<std::uint32_t>(type.element_width);
+        info.element_width = type.element_kind == ContainerElementKind::Aggregate
+                && container.storage == StaticKernelContainerStorage::packed_signal
+            ? container.element_bits
+            : static_cast<std::uint32_t>(type.element_width);
         const Word unknown = type.two_state
             ? Word { }
             : kernel_word::all_x(info.element_width);
@@ -6570,6 +6615,177 @@ void Interpreter::Impl::StaticKernel::write_host_projected(
         elements, offset, rejection, mode);
 }
 
+namespace {
+
+// The slot bit of each leaf of a bridged object's elements, in leaf order:
+// element e's leaf l at (count - 1 - e) * bits + the bits after the leaf in
+// its element (the first leaf leftmost).
+[[nodiscard]] std::vector<std::pair<std::uint32_t, std::uint32_t>> bridged_leaf_fields(
+    const ContainerType& type, const std::uint32_t count, const std::uint32_t bits)
+{
+    const auto widths = static_kernel_detail::bridged_leaf_widths(type);
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> fields;
+    fields.reserve(widths.size() * count);
+    for (std::uint32_t element = 0U; element < count; ++element) {
+        auto below = bits;
+        for (const auto width : widths) {
+            below -= width;
+            fields.emplace_back((count - 1U - element) * bits + below, width);
+        }
+    }
+    return fields;
+}
+
+} // namespace
+
+bool Interpreter::Impl::StaticKernel::bridged_object(const std::uint32_t container) const noexcept
+{
+    if (container >= containers_.size()) {
+        return false;
+    }
+    const auto& object = containers_[container];
+    if (object.storage != StaticKernelContainerStorage::packed_signal
+        || object.packed_slot >= slots_.size() || slots_[object.packed_slot].planes != 2U
+        || slots_[object.packed_slot].resolved) {
+        return false;
+    }
+    return object.type.element_kind == ContainerElementKind::Aggregate
+        || (object.type.element_kind == ContainerElementKind::Packed
+            && object.type.element_width >= 1U && object.type.element_width <= 64U);
+}
+
+std::uint8_t Interpreter::Impl::StaticKernel::memory_copy_form(const std::uint32_t destination,
+    const std::uint32_t source) const noexcept
+{
+    // Two kernel-held arrays (container info storage 3, which
+    // build_container_info gives them): their arena words copied (sub 1).
+    const auto held = [&](const std::uint32_t container) {
+        const auto& held_container = containers_[container];
+        const auto& type = held_container.type;
+        return (!vhdl_ || mixed_)
+            && held_container.storage == StaticKernelContainerStorage::elements
+            && type.fixed && !type.associative
+            && held_container.element_words == 1U
+            && (type.element_kind == ContainerElementKind::Packed
+                || type.element_kind == ContainerElementKind::Scalar);
+    };
+    if (held(destination) && held(source)) {
+        return 1U;
+    }
+    // Two packed memories in variables' two-plane slots of one width
+    // (bridged_object): the target's words stored as slot fields (sub 2).
+    const auto& to = containers_[destination];
+    const auto& from = containers_[source];
+    if (bridged_object(destination) && bridged_object(source)
+        && to.type.element_kind == ContainerElementKind::Packed
+        && slots_[to.packed_slot].width == slots_[from.packed_slot].width) {
+        return 2U;
+    }
+    // A kernel-held array and a packed memory's slot (either way), packed
+    // elements of up to 64 bits: element by element (sub 3).
+    const auto packed = [&](const std::uint32_t container) {
+        return bridged_object(container)
+            && containers_[container].type.element_kind == ContainerElementKind::Packed;
+    };
+    if (to.type.element_kind == ContainerElementKind::Packed && to.type.element_width <= 64U
+        && ((held(destination) && packed(source)) || (packed(destination) && held(source)))) {
+        return 3U;
+    }
+    // Else the runtime's copy (copy_container).
+    return 0U;
+}
+
+std::uint32_t Interpreter::Impl::StaticKernel::copy_form_width(const std::uint8_t form,
+    const std::uint32_t destination) const noexcept
+{
+    // Form 2 copies the slots' words, form 3 the elements.
+    return form == 2U ? slots_[containers_[destination].packed_slot].width
+        : form == 3U  ? static_cast<std::uint32_t>(containers_[destination].type.element_width)
+                      : 0U;
+}
+
+ContainerValue Interpreter::Impl::StaticKernel::bridged_aggregate_value(
+    const std::uint32_t container) const
+{
+    const auto& object = containers_[container];
+    auto value = default_container_value(object.type);
+    const auto slot = slot_value(object.packed_slot);
+    const auto fields = bridged_leaf_fields(object.type, object.count, object.element_bits);
+    std::size_t leaf = 0U;
+    static_kernel_detail::for_each_aggregate_leaf(value, [&](ContainerValue& element) {
+        if (leaf >= fields.size() || element.elements.size() != 1U) {
+            throw std::logic_error { "static kernel bridged aggregate does not match its slot" };
+        }
+        element.elements.front() = extract_value(slot, fields[leaf].first, fields[leaf].second);
+        ++leaf;
+    });
+    return value;
+}
+
+void Interpreter::Impl::StaticKernel::set_bridged_aggregate_value(const std::uint32_t container,
+    const ContainerValue& value, const std::uint32_t member, const InstructionIndex instruction)
+{
+    const auto& object = containers_[container];
+    const auto fields = bridged_leaf_fields(object.type, object.count, object.element_bits);
+    std::size_t leaf = 0U;
+    static_kernel_detail::for_each_aggregate_leaf(value, [&](const ContainerValue& element) {
+        if (leaf >= fields.size() || element.elements.size() != 1U
+            || element.elements.front().width() != fields[leaf].second) {
+            throw std::invalid_argument { "aggregate value does not match its type" };
+        }
+        write_slot_value(object.packed_slot, element.elements.front(), fields[leaf].first,
+            member, instruction);
+        ++leaf;
+    });
+    if (leaf != fields.size()) {
+        throw std::invalid_argument { "aggregate value does not match its type" };
+    }
+}
+
+void Interpreter::Impl::StaticKernel::aggregate_slot_transfer(const CompiledBody& body,
+    const KInst& inst, const std::uint32_t member)
+{
+    // DynOp::aggregate_unpack and aggregate_pack on the bytecode tier, as
+    // generated code runs them (emit_dyn_aggregate_slot).
+    auto& header = dynamic_headers_[containers_[inst.aux].dynamic_header];
+    const auto& object = containers_[inst.z];
+    const auto& slot = slots_[object.packed_slot];
+    const auto begin = static_kernel_detail::dyn_graph_begin(inst.imm_b);
+    const auto leaves = static_kernel_detail::dyn_graph_count(inst.imm_b);
+    const auto elements = header.size / leaves;
+    const bool pack = static_cast<static_kernel_detail::DynOp>(inst.sub)
+        == static_kernel_detail::DynOp::aggregate_pack;
+    for (std::uint64_t element = 0U; element < elements; ++element) {
+        auto below = static_cast<std::uint64_t>(object.element_bits);
+        const auto base = (elements - 1U - element) * object.element_bits;
+        for (std::uint64_t leaf = 0U; leaf < leaves; ++leaf) {
+            const auto width = static_cast<std::uint32_t>(body.predicate_words[
+                static_cast<std::size_t>((begin + leaf) * static_kernel_detail::dyn_graph_node_words)]);
+            below -= width;
+            const auto bit = static_cast<std::uint32_t>(base + below);
+            const auto ordinal = element * leaves + leaf;
+            if (pack) {
+                write_slot_word(object.packed_slot,
+                    static_kernel_detail::dynamic_element(header, ordinal), bit, width, member);
+                continue;
+            }
+            const auto word = bit / 64U;
+            const auto shift = bit % 64U;
+            const auto* a = arena_.data() + slot.offset;
+            const auto* b = a + slot.words;
+            auto value_a = a[word] >> shift;
+            auto value_b = b[word] >> shift;
+            if (shift != 0U && word + 1U < slot.words) {
+                value_a |= a[word + 1U] << (64U - shift);
+                value_b |= b[word + 1U] << (64U - shift);
+            }
+            const auto m = kernel_word::mask(width);
+            static_kernel_detail::set_dynamic_element(header, ordinal,
+                { value_a & m, value_b & m });
+        }
+    }
+}
+
 Interpreter::Impl::StaticKernel::Word
 Interpreter::Impl::StaticKernel::container_element_word(
     const Container& container, const std::size_t ordinal) const
@@ -6668,6 +6884,13 @@ bool Interpreter::Impl::StaticKernel::read_owned_container_object(
         return false;
     }
     const auto& container = containers_[container_of_object_[object]];
+    if (container.storage == StaticKernelContainerStorage::dynamic) {
+        // A queue, dynamic, associative or sparse array of the design: the
+        // host's copy takes the kernel's value whole.
+        value = static_kernel_detail::dynamic_value(
+            dynamic_headers_[container.dynamic_header], container.type);
+        return true;
+    }
     if (container.storage != StaticKernelContainerStorage::elements
         || value.elements.size() != container.count) {
         return false;
@@ -6686,6 +6909,14 @@ bool Interpreter::Impl::StaticKernel::write_owned_container_object(
         return false;
     }
     auto& container = containers_[container_of_object_[object]];
+    if (container.storage == StaticKernelContainerStorage::dynamic) {
+        if (!(value.type == container.type)) {
+            return false;
+        }
+        static_kernel_detail::assign_dynamic_value(
+            dynamic_headers_[container.dynamic_header], value);
+        return true;
+    }
     if (container.storage != StaticKernelContainerStorage::elements
         || value.elements.size() != container.count) {
         return false;
@@ -6708,6 +6939,19 @@ Interpreter::Impl::StaticKernel::owned_container_element(
         return std::nullopt;
     }
     const auto& container = containers_[container_of_object_[object]];
+    if (container.storage == StaticKernelContainerStorage::dynamic) {
+        // The element at `ordinal` of the kernel's value, as the host's
+        // copy orders it (a string element goes through the whole value).
+        if (container.type.element_kind == ContainerElementKind::String) {
+            return std::nullopt;
+        }
+        const auto value = static_kernel_detail::dynamic_value(
+            dynamic_headers_[container.dynamic_header], container.type);
+        if (ordinal >= container_element_count(value)) {
+            return std::nullopt;
+        }
+        return container_packed_element(value, ordinal);
+    }
     if (container.storage != StaticKernelContainerStorage::elements
         || ordinal >= container.count) {
         return std::nullopt;
@@ -6724,6 +6968,19 @@ bool Interpreter::Impl::StaticKernel::write_owned_container_element(
         return false;
     }
     auto& container = containers_[container_of_object_[object]];
+    if (container.storage == StaticKernelContainerStorage::dynamic) {
+        if (container.type.element_kind == ContainerElementKind::String) {
+            return false;
+        }
+        auto& header = dynamic_headers_[container.dynamic_header];
+        auto current = static_kernel_detail::dynamic_value(header, container.type);
+        if (ordinal >= container_element_count(current)) {
+            return false;
+        }
+        set_container_packed_element(current, ordinal, value);
+        static_kernel_detail::assign_dynamic_value(header, current);
+        return true;
+    }
     if (container.storage != StaticKernelContainerStorage::elements
         || ordinal >= container.count) {
         return false;
@@ -6791,6 +7048,21 @@ void Interpreter::Impl::StaticKernel::write_container_element(
         arena_[base + word] = word < aval.size() ? aval[word] : 0U;
         arena_[base + container.element_words + word]
             = word < bval.size() ? bval[word] : 0U;
+    }
+}
+
+void Interpreter::Impl::StaticKernel::push_container_copy(
+    const std::uint32_t destination, const std::uint32_t source,
+    const std::uint32_t member, const InstructionIndex instruction)
+{
+    const auto& to = containers_[destination];
+    const auto& from = containers_[source];
+    if (!(to.type == from.type) || to.count != from.count) {
+        fail(member, instruction, "static kernel container copy needs arrays of one type");
+    }
+    for (std::uint32_t ordinal = 0U; ordinal < to.count; ++ordinal) {
+        push_container_element(destination, ordinal, container_element(from, ordinal), member,
+            instruction);
     }
 }
 
@@ -8520,6 +8792,66 @@ Interpreter::Impl::StaticKernel::native_container_values(const Member& member) c
     return out;
 }
 
+Interpreter::Impl::StaticKernel::NativeObjectValues
+Interpreter::Impl::StaticKernel::native_object_values(const Member& member) const
+{
+    NativeObjectValues out;
+    const auto add = [&](const ContainerObjectId object) {
+        if (object >= container_of_object_.size()
+            || container_of_object_[object] == no_container) {
+            return;
+        }
+        const auto index = container_of_object_[object];
+        if (containers_[index].storage != StaticKernelContainerStorage::dynamic
+            || std::ranges::any_of(out, [&](const auto& entry) { return entry.first == index; })) {
+            return;
+        }
+        out.emplace_back(index, static_kernel_detail::dynamic_value(
+            dynamic_headers_[containers_[index].dynamic_header], containers_[index].type));
+    };
+    for (const auto& operation : member.operations()) {
+        visit_operation([&](const auto& op) {
+            using T = std::decay_t<decltype(op)>;
+            if constexpr (std::is_same_v<T, ReadContainerObject>
+                || std::is_same_v<T, WriteContainerObject>
+                || std::is_same_v<T, WriteContainerObjectElement>) {
+                add(op.object);
+            }
+        }, operation);
+    }
+    return out;
+}
+
+ContainerValue Interpreter::Impl::StaticKernel::dynamic_object_value(
+    const std::uint32_t container) const
+{
+    if (verify_objects_ != nullptr) {
+        for (const auto& [index, value] : *verify_objects_) {
+            if (index == container) {
+                return value;
+            }
+        }
+    }
+    return static_kernel_detail::dynamic_value(
+        dynamic_headers_[containers_[container].dynamic_header], containers_[container].type);
+}
+
+void Interpreter::Impl::StaticKernel::set_dynamic_object_value(
+    const std::uint32_t container, const ContainerValue& value)
+{
+    if (verify_objects_ != nullptr) {
+        for (auto& [index, replay] : *verify_objects_) {
+            if (index == container) {
+                replay = value;
+                return;
+            }
+        }
+    }
+    static_kernel_detail::assign_dynamic_value(
+        dynamic_headers_[containers_[container].dynamic_header], value);
+    publish_dynamic_object(container);
+}
+
 Interpreter::Impl::StaticKernel::ReferenceContainerScope::ReferenceContainerScope(
     Member& owner, const NativeContainerValues& values)
     : member { owner }
@@ -8576,6 +8908,11 @@ std::string Interpreter::Impl::StaticKernel::native_container_mismatch(
     for (const auto& entry : values) {
         const auto id = entry.first;
         const auto& container = containers_[member.container_registers[id]];
+        // A register that is a design object's storage is checked as the
+        // object (verify_thread_activation).
+        if (container.object != no_container_object) {
+            continue;
+        }
         const auto compiled = static_kernel_detail::dynamic_value(
             dynamic_headers_[container.dynamic_header], container.type);
         if (!member.dynamic_container(id)) {
@@ -8634,6 +8971,7 @@ void Interpreter::Impl::StaticKernel::verify_run(const std::uint32_t member_inde
     auto* const random_stream = random_state_table()[member_index];
     const auto random_before = *random_stream;
     const auto seed_before = impl_.system_random_seed;
+    const auto time_format_before = impl_.time_format;
     run_compiled(member_index);
     const auto compiled_random = *random_stream;
     const auto compiled_seed = impl_.system_random_seed;
@@ -8647,6 +8985,7 @@ void Interpreter::Impl::StaticKernel::verify_run(const std::uint32_t member_inde
     // Replay from the same state on the reference evaluator.
     *random_stream = random_before;
     impl_.system_random_seed = seed_before;
+    impl_.time_format = time_format_before;
     writes_.count = static_cast<std::uint32_t>(nba_size);
     pending_generic_.resize(generic_size);
     nba_.resize(element_count);
@@ -9520,29 +9859,7 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_operation(
                     fail(member_index, pc, message);
                 }
             } else if constexpr (std::is_same_v<T, Assert>) {
-                const auto& condition = reg(op.condition, pc);
-                if ((condition.width() != 1U || condition.get(0) != Logic4::one)
-                    && !(replaying_ && op.severity != AssertionSeverity::failure)) {
-                    const auto message = op.message.empty()
-                        ? std::string_view { "assertion failed" }
-                        : std::string_view { op.message };
-                    if (member.vhdl_2019) {
-                        report_vhdl(member_index, pc, message, op.severity,
-                            op.source, false);
-                        return;
-                    }
-                    if (op.severity != AssertionSeverity::failure
-                        && impl_.report_hook) {
-                        impl_.report_hook(member.process, message, op.severity,
-                            op.source, kernel_now(),
-                            kernel_delta());
-                    }
-                    if (op.severity == AssertionSeverity::failure) {
-                        throw AssertionError(member.process,
-                            member.original_instruction(pc),
-                            std::string { message }, op.severity, op.source);
-                    }
-                }
+                check_assert(member_index, pc, op, reg(op.condition, pc));
             } else if constexpr (std::is_same_v<T, Display>
                 || std::is_same_v<T, HostRequest>
                 || std::is_same_v<T, FormatDisplay>
@@ -11620,6 +11937,73 @@ void Interpreter::Impl::StaticKernel::native_flush_writes(
     }
 }
 
+void Interpreter::Impl::StaticKernel::native_container_publish(
+    StaticKernelNativeFrame* frame, const std::uint32_t container)
+{
+    auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
+    try {
+        kernel.publish_dynamic_object(container);
+    } catch (...) {
+        kernel.scratch().native_exception = std::current_exception();
+        frame->status = 1U;
+    }
+}
+
+void Interpreter::Impl::StaticKernel::watch_dynamic_object(const ContainerObjectId object)
+{
+    if (object >= container_of_object_.size()
+        || container_of_object_[object] == no_container) {
+        return;
+    }
+    const auto container = container_of_object_[object];
+    if (containers_[container].storage != StaticKernelContainerStorage::dynamic) {
+        return;
+    }
+    if (observed_containers_.size() <= container) {
+        observed_containers_.resize(containers_.size(), 0U);
+    }
+    if (std::exchange(observed_containers_[container], 1U) != 0U) {
+        return;
+    }
+    dynamic_observed_ = true;
+    // The host copy starts from the kernel's value.
+    publish_dynamic_object(container);
+    // The object's writers report each write from their next run on.
+    if (!activating_) {
+        observe_units();
+    } else {
+        observe_pending_ = true;
+        for (auto& fast : fast_runs_) {
+            fast.entry = nullptr;
+        }
+    }
+}
+
+void Interpreter::Impl::StaticKernel::publish_dynamic_object(const std::uint32_t container)
+{
+    if (verify_objects_ != nullptr || container >= observed_containers_.size()
+        || observed_containers_[container] == 0U) {
+        return;
+    }
+    const auto object = containers_[container].object;
+    impl_.get_container_object(object).initial_value = static_kernel_detail::dynamic_value(
+        dynamic_headers_[containers_[container].dynamic_header], containers_[container].type);
+    if (impl_.container_object_change_hook) {
+        impl_.container_object_change_hook(object, impl_.scheduler.now());
+    }
+}
+
+bool Interpreter::Impl::StaticKernel::member_publishes_observed(
+    const std::uint32_t index) const
+{
+    const auto& compiled = members_[index].compiled;
+    return compiled && std::ranges::any_of(compiled->container_publishes,
+        [&](const std::uint32_t container) {
+            return container < observed_containers_.size()
+                && observed_containers_[container] != 0U;
+        });
+}
+
 std::uint32_t Interpreter::Impl::StaticKernel::native_variable_store(
     StaticKernelNativeFrame* frame, Word* registers, const std::uint32_t reg)
 {
@@ -13092,6 +13476,10 @@ void Interpreter::watch_container_object_changes(
     if (!signals.empty()) {
         watch_signal_changes(signals);
     }
+    impl_->watched_container_objects.insert(object);
+    if (impl_->static_kernel) {
+        impl_->static_kernel->watch_dynamic_object(object);
+    }
 }
 
 void Interpreter::watch_signal_transactions(
@@ -13412,6 +13800,9 @@ void InterpreterProgramAccess::install_static_kernel(
     auto kernel = std::make_shared<Interpreter::Impl::StaticKernel>(
         impl, std::move(spec));
     impl.static_kernel = kernel;
+    for (const auto object : impl.watched_container_objects) {
+        kernel->watch_dynamic_object(object);
+    }
     interpreter.set_process_executor(host,
         std::make_unique<StaticKernelExecutor>(
             [kernel = std::move(kernel)] { return kernel->activate(); }));

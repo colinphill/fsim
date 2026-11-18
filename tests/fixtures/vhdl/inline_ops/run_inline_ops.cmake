@@ -34,7 +34,9 @@
 # the kernel, such as FSIM_KERNEL_NO_MIRRORS, which leaves every host signal
 # unmirrored). FSIM_REPORTS=warnings compares the simulation's warning
 # reports (`warning[FSIM-HDL-REPORT]: ...`, without source locations)
-# instead of the `inl` lines of a SystemVerilog case. FSIM_COMPARE_TRACE,
+# instead of the `inl` lines of a SystemVerilog case; FSIM_REPORTS=all
+# compares both, in the order printed (the `inl` lines and the warning and
+# error reports). FSIM_COMPARE_TRACE,
 # when set, also runs the interpreter and the kernel with a VCD trace (which
 # makes the kernel publish every change of the traced signals to the host)
 # and requires the two traces to be equal. FSIM_EXPECT_ERROR, a diagnostic
@@ -110,6 +112,8 @@ else()
   set(elaborate_arguments elaborate -q --top top ${generic_arguments} --no-aot)
   if("${FSIM_REPORTS}" STREQUAL "warnings")
     set(report_regex "warning\\[FSIM-HDL-REPORT\\]: [^\n]*")
+  elseif("${FSIM_REPORTS}" STREQUAL "all")
+    set(report_regex "(inl |(warning|error)\\[FSIM-HDL-REPORT\\]: )[^\n]*")
   else()
     set(report_regex "inl [^\n]*")
   endif()

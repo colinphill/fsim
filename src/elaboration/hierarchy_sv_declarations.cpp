@@ -42,7 +42,7 @@ namespace {
 [[nodiscard]] bool default_choice(
     const semantic::sv::AssignmentPatternAssociation& association) noexcept
 {
-    return association.choice_spelling == "default";
+    return association.choice_marker == support::ExpressionMarker::sv_default_choice;
 }
 
 // A built-in data type or net type (`void` excluded), or an implicit type.
@@ -807,8 +807,8 @@ std::shared_ptr<const runtime::SystemVerilogVpiTypespec> vpi_typespec(
                 const auto callee = specialization.find_expression(
                     initializer_source->operands.front());
                 if (callee && callee->systemverilog != nullptr
-                    && callee->systemverilog->kind == ExpressionKind::name
-                    && callee->systemverilog->text == "new") {
+                    && callee->systemverilog->marker
+                        == support::ExpressionMarker::sv_new_array) {
                     return initializer_source->operands.back();
                 }
             }
@@ -920,14 +920,16 @@ std::shared_ptr<const runtime::SystemVerilogVpiTypespec> vpi_typespec(
                     // `'0`, `'1`: an unsized fill of the element.
                     const auto fill = specialization.find_expression(
                         keyed_leaves[at]);
-                    const auto text = fill && fill->systemverilog != nullptr
-                        ? fill->systemverilog->text
-                        : std::string { };
-                    if (text != "'0" && text != "'1") {
+                    const auto literal = fill && fill->systemverilog != nullptr
+                        ? fill->systemverilog->unbased_unsized
+                        : support::UnbasedUnsizedLiteral::none;
+                    if (literal != support::UnbasedUnsizedLiteral::zero
+                        && literal != support::UnbasedUnsizedLiteral::one) {
                         return std::nullopt;
                     }
                     value.elements[at] = PackedLogic4(type.element_width,
-                        text == "'1" ? Logic4::one : Logic4::zero);
+                        literal == support::UnbasedUnsizedLiteral::one ? Logic4::one
+                                                    : Logic4::zero);
                     continue;
                 }
                 PackedLogic4 element(type.element_width,
@@ -2386,12 +2388,14 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                     // `'0` and `'1` fill the member (5.7.1).
                     const auto fill = working_specialization.find_expression(
                         *members[member_index].initializer);
-                    const auto text = fill && fill->systemverilog != nullptr
-                        ? fill->systemverilog->text
-                        : std::string { };
-                    if (text == "'0" || text == "'1") {
+                    const auto literal = fill && fill->systemverilog != nullptr
+                        ? fill->systemverilog->unbased_unsized
+                        : support::UnbasedUnsizedLiteral::none;
+                    if (literal == support::UnbasedUnsizedLiteral::zero
+                        || literal == support::UnbasedUnsizedLiteral::one) {
                         leaf.elements.front() = PackedLogic4(width,
-                            text == "'1" ? Logic4::one : Logic4::zero);
+                            literal == support::UnbasedUnsizedLiteral::one ? Logic4::one
+                                                        : Logic4::zero);
                         defaulted = true;
                         continue;
                     }

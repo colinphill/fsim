@@ -581,8 +581,8 @@ std::optional<ContainerRegisterId> Lowerer::lower_hir_vhdl_shaped_materialize(
                     values[position++] = association.value;
                     continue;
                 }
-                if (support::equal_ignoring_ascii_case(
-                        association.choice_spelling, "others")) {
+                if (association.choice_marker
+                    == support::ExpressionMarker::vhdl_others_choice) {
                     for (auto& entry : values) {
                         if (!entry) {
                             entry = association.value;

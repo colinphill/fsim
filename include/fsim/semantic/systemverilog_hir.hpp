@@ -435,6 +435,10 @@ struct Expression {
     // takes its operand's type, and on every other node.
     std::uint32_t call_result_width { };
     CallResultValues call_result_values { CallResultValues::none };
+    // The value of an unbased unsized literal (`'0`, `'1`, `'x`, `'z`,
+    // IEEE 1800-2023 5.7.1); none on every other node.
+    support::UnbasedUnsizedLiteral unbased_unsized {
+        support::UnbasedUnsizedLiteral::none };
     // Exact semantic type selected for an explicitly typed assignment pattern.
     // Invalid or unresolved names leave this disengaged.
     std::optional<TypeId> nominal_type_target;

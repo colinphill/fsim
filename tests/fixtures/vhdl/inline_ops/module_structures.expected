@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+inl box 3c a 5 -7 w=3c
+inl nested 2 0
+inl member copy a 5 300
+inl invalid xx x 0 0
+inl whole 10 1 100
+inl element 3c -7
+inl assign 10 100 w=10
+inl memories 1
+inl memories 0

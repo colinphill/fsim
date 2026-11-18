@@ -1196,6 +1196,130 @@ struct FstTraceType {
     return { };
 }
 
+// A port's own kind (IEEE 1800-2023 23.2.2.3), from its declaration: the
+// signal it shares may be a variable of the instance above.
+struct VcdPortKind {
+    bool net { };
+    support::SystemVerilogNetKind net_kind { support::SystemVerilogNetKind::none };
+};
+
+// The VCD var_type of a SystemVerilog object (IEEE 1800-2023 21.7.2.1). A
+// port is a net or a variable as its declaration says; any other object as
+// VPI tells them (37.16, 37.17): a net has a net type, a user-defined
+// nettype or a resolution. A real-family object is `real` (`realtime` for a
+// realtime variable). A net of a built-in net type takes its keyword (a
+// `uwire`, which 21.7.2.1 does not list, is a `wire`), any other net is a
+// `wire`. A variable of a time or integer type takes that keyword, and any
+// other variable `reg`.
+[[nodiscard]] runtime::TraceVarKind systemverilog_vcd_var_kind(
+    const elaboration::SignalInfo& signal,
+    const std::optional<VcdPortKind> port) noexcept
+{
+    using Var = runtime::TraceVarKind;
+    using Net = support::SystemVerilogNetKind;
+    using Scalar = runtime::SystemVerilogScalarKind;
+    using Builtin = support::SystemVerilogBuiltinType;
+    const bool net = port ? port->net
+                          : signal.systemverilog_net_kind != Net::none
+            || !signal.systemverilog_net_type.empty()
+            || signal.resolution != runtime::simir::ResolutionKind::none;
+    const auto net_kind = port ? port->net_kind : signal.systemverilog_net_kind;
+    if (signal.systemverilog_scalar == Scalar::Realtime) {
+        return net ? Var::Real : Var::Realtime;
+    }
+    if (frontend::is_real_scalar_kind(signal.systemverilog_scalar)) {
+        return Var::Real;
+    }
+    if (!net) {
+        if (signal.systemverilog_scalar == Scalar::Time) {
+            return Var::Time;
+        }
+        switch (signal.systemverilog_builtin) {
+        case Builtin::integer:
+        case Builtin::int_type:
+        case Builtin::shortint:
+        case Builtin::longint:
+        case Builtin::byte:
+            return Var::Integer;
+        default:
+            return Var::Reg;
+        }
+    }
+    switch (net_kind) {
+    case Net::tri:
+        return Var::Tri;
+    case Net::wand:
+        return Var::Wand;
+    case Net::triand:
+        return Var::Triand;
+    case Net::wor:
+        return Var::Wor;
+    case Net::trior:
+        return Var::Trior;
+    case Net::tri0:
+        return Var::Tri0;
+    case Net::tri1:
+        return Var::Tri1;
+    case Net::trireg:
+        return Var::Trireg;
+    case Net::supply0:
+        return Var::Supply0;
+    case Net::supply1:
+        return Var::Supply1;
+    case Net::wire:
+    case Net::uwire:
+    case Net::none:
+        break;
+    }
+    return Var::Wire;
+}
+
+// Whether `language` declares its objects with the Verilog VCD var_types
+// (IEEE 1364-2005 18.2.3.1, IEEE 1800-2023 21.7.2.1).
+[[nodiscard]] bool verilog_vcd_language(const semantic::Language language) noexcept
+{
+    return language == semantic::Language::verilog
+        || language == semantic::Language::system_verilog;
+}
+
+// The kind of each port object, by the object (IEEE 1800-2023 23.2.2.3): an
+// input or inout port is a net; an output or ref port is a net when its
+// declaration has a net type, which a port written without a data type
+// takes from the default net type (22.8), and a variable otherwise.
+[[nodiscard]] std::unordered_map<std::uint64_t, VcdPortKind> port_objects(
+    const semantic::design::DesignIr& design, const semantic::sv::Hir& hir)
+{
+    using Direction = semantic::design::Direction;
+    std::unordered_map<std::uint64_t, VcdPortKind> result;
+    for (const auto& port : design.ports()) {
+        const auto* const declaration = port.declaration
+            ? hir.find_declaration(*port.declaration)
+            : nullptr;
+        const auto* const type = declaration != nullptr && declaration->type
+            ? &*declaration->type
+            : nullptr;
+        VcdPortKind kind;
+        kind.net_kind = type != nullptr ? type->net_kind
+                                        : support::SystemVerilogNetKind::none;
+        kind.net = port.direction == Direction::input
+            || port.direction == Direction::inout
+            || (type != nullptr
+                && (type->net_kind != support::SystemVerilogNetKind::none
+                    || !type->systemverilog_net_type.empty()));
+        result.emplace(port.object.value(), kind);
+    }
+    return result;
+}
+
+[[nodiscard]] std::optional<VcdPortKind> port_kind_of(
+    const std::unordered_map<std::uint64_t, VcdPortKind>& ports,
+    const semantic::design::Object& object)
+{
+    const auto found = ports.find(object.id.value());
+    return found == ports.end() ? std::nullopt
+                                : std::optional { found->second };
+}
+
 [[nodiscard]] runtime::TraceSignalId add_fst_trace_variable(
     runtime::TraceDeclarationBuilder& builder,
     const std::string_view name,
@@ -1307,6 +1431,8 @@ std::unique_ptr<TraceState> attach_trace(
                 }
             }
         }
+        const auto ports_by_object = port_objects(
+        simulation.design_ir(), simulation.systemverilog_hir());
         // A variable of an unnamed block has no hierarchical name, so no
         // trace scope declares it (a VCD scope has an identifier, IEEE
         // 1800-2023 21.7.2.3); nor is a root-relative lookup name one. An
@@ -1367,6 +1493,14 @@ std::unique_ptr<TraceState> attach_trace(
                         ? declaration_builder.add_variable(design_path,
                               signal.width, signal.systemverilog_scalar)
                         : declaration_builder.add_alias(design_path, primary);
+                }
+                if (verilog_vcd_language(simulation.design_ir()
+                            .specializations()
+                            .at(object.specialization.value())
+                            .language)) {
+                    declaration_builder.set_var_kind(declaration,
+                        systemverilog_vcd_var_kind(signal,
+                            port_kind_of(ports_by_object, object)));
                 }
                 if (primary.value == 0) {
                     primary = declaration;
@@ -2287,6 +2421,8 @@ void initialize_hdl_vcd_inventory(HdlVcdState& state)
         state.instances.emplace_back(
             simulation.design_ir().path(instance.path));
     }
+    const auto ports_by_object = port_objects(
+        simulation.design_ir(), simulation.systemverilog_hir());
     for (const auto& object : simulation.design_ir().objects()) {
         // As the run trace: objects with a hierarchical name, declared in
         // the source (IEEE 1800-2023 21.7.2.2, 21.7.2.3).
@@ -2303,6 +2439,17 @@ void initialize_hdl_vcd_inventory(HdlVcdState& state)
             = static_cast<runtime::simir::SignalId>(object.runtime_index);
         state.objects.emplace_back(
             simulation.design_ir().path(object.path), signal);
+        const auto& info = simulation.runtime_adapter().signals().at(signal);
+        state.object_var_kinds.push_back(
+            verilog_vcd_language(simulation.design_ir()
+                                     .specializations()
+                                     .at(object.specialization.value())
+                                     .language)
+                ? systemverilog_vcd_var_kind(
+                      info, port_kind_of(ports_by_object, object))
+                : frontend::is_real_scalar_kind(info.systemverilog_scalar)
+                ? runtime::TraceVarKind::Real
+                : runtime::TraceVarKind::Wire);
     }
     for (const auto& port : simulation.design_ir().ports()) {
         const auto& object = simulation.design_ir().objects().at(
@@ -2443,18 +2590,22 @@ void attach_hdl_vcd_control(
                         }
                     }
                 }
-                for (const auto& [path, signal] : state.objects) {
+                for (std::size_t index = 0; index < state.objects.size();
+                     ++index) {
+                    const auto& [path, signal] = state.objects[index];
                     if (!state.selected.at(signal)) {
                         continue;
                     }
                     const auto& info
                         = state.simulation->runtime_adapter().signals().at(signal);
+                    const auto var_kind = state.object_var_kinds.at(index);
                     state.handles.at(signal).push_back(
                         info.systemverilog_scalar
                                 == runtime::SystemVerilogScalarKind::None
-                            ? state.writer->declare_signal(path, info.width)
+                            ? state.writer->declare_signal(
+                                  path, info.width, var_kind)
                             : state.writer->declare_systemverilog_scalar(
-                                  path, info.systemverilog_scalar));
+                                  path, info.systemverilog_scalar, var_kind));
                 }
                 state.writer->begin(event.time * state.tick_multiplier);
                 state.begun = true;

@@ -592,7 +592,11 @@ void Interpreter::Impl::StaticKernel::build_parallel_plan()
                 // errors run on the leader.
                 touch_container(inst.aux, true);
                 if (inst.z != no_container) {
-                    touch_container(inst.z, false);
+                    // A blocking write-back of a bridged aggregate stores
+                    // the object's slot fields (DynOp::aggregate_pack).
+                    touch_container(inst.z,
+                        static_cast<static_kernel_detail::DynOp>(inst.sub)
+                            == static_kernel_detail::DynOp::aggregate_pack);
                 }
                 ok = false;
                 break;

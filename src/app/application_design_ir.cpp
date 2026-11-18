@@ -252,22 +252,10 @@ class DesignIrBuilder final {
             == *input.source_instance) {
       return input.source_instance;
     }
-    auto name = std::string{leaf_name(input.instance)};
-    if (const auto generated = name.find('[');
-        generated != std::string::npos) {
-      name.erase(generated);
-    }
-    std::optional<semantic::InstanceId> match;
-    for (const auto& instance : model_.instances()) {
-      if (instance.name != name) {
-        continue;
-      }
-      if (match) {
-        return std::nullopt;
-      }
-      match = instance.id;
-    }
-    return match;
+    // An instance without an instantiation record (a top-level instance, a
+    // SystemC parent's child) has no source instance; a record is never
+    // found by the instance's name.
+    return std::nullopt;
   }
 
   [[nodiscard]] std::optional<semantic::DeclarationId> declaration(

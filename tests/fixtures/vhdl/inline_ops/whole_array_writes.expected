@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+inl now 1 7 x 0
+inl c1 2 at 0
+inl delta 1 7
+inl c1 8 at 0
+inl after 7 8 9 / 1 2 3 c=7 8 9
+inl wide 123456789a ff00000001
+inl c1 2 at 1
+inl blocking 1 2 3 c=3

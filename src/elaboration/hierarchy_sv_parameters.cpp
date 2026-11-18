@@ -215,16 +215,9 @@ namespace fsim::elaboration {
 std::optional<semantic::DeclarationId>
 HierarchyBuilder::compiled_systemverilog_scoped_parameter(
     const semantic::CompiledUnitView& child,
-    const std::string_view scope_path,
+    const std::span<const std::string> scope_names,
     const std::string_view name) const
 {
-    std::vector<std::string_view> segments;
-    for (std::size_t begin { }; begin <= scope_path.size();) {
-        const auto end = std::min(scope_path.find('.', begin),
-            scope_path.size());
-        segments.push_back(scope_path.substr(begin, end - begin));
-        begin = end + 1U;
-    }
     std::optional<semantic::DeclarationId> found;
     for (const auto& declaration : compiled_->systemverilog_hir.declarations()) {
         if (declaration.form != semantic::sv::DeclarationForm::parameter
@@ -254,7 +247,7 @@ HierarchyBuilder::compiled_systemverilog_scoped_parameter(
             current = scope->parent;
         }
         if (inside && std::ranges::equal(names | std::views::reverse,
-                          segments)) {
+                          scope_names)) {
             if (found) {
                 return std::nullopt;
             }
@@ -359,20 +352,60 @@ HierarchyBuilder::resolve_compiled_systemverilog_parameters(
         assign.parameter_scope = std::string { child_path };
         result.param_assigns.push_back(std::move(assign));
     }
+    // Of several defparams for one parameter the last one in the source
+    // text applies (IEEE 1800-2023 23.10.1): they are applied in source
+    // order (by file, then position; the order across files is undefined).
+    std::vector<ActiveCompiledSystemVerilogDefparam*> in_source_order;
+    // A defparam's value is evaluated in the scope of the defparam
+    // statement (23.10), which need not be the instantiating scope.
+    std::vector<std::pair<semantic::DeclarationId,
+        const semantic::SpecializedHirUnit*>> defparam_value_scopes;
+    in_source_order.reserve(active_compiled_systemverilog_defparams_.size());
     for (auto& defparam : active_compiled_systemverilog_defparams_) {
+        in_source_order.push_back(&defparam);
+    }
+    if (in_source_order.size() > 1U) {
+        const auto& spans = compiled_->semantics.source_spans();
+        const auto position = [&](const ActiveCompiledSystemVerilogDefparam* defparam) {
+            const auto id = defparam->source;
+            if (!id.valid() || id.value() >= spans.size()) {
+                return std::pair<std::uint64_t, std::uint64_t> { };
+            }
+            const auto& span = spans[id.value()];
+            return std::pair<std::uint64_t, std::uint64_t> {
+                span.file.valid() ? span.file.value() : 0U, span.begin.offset };
+        };
+        std::ranges::stable_sort(in_source_order, { }, position);
+    }
+    for (auto* const defparam_entry : in_source_order) {
+        auto& defparam = *defparam_entry;
         // A parameter of a named block, task or function in the instance
         // is redefined through its scope's hierarchical name (IEEE
         // 1800-2017 23.10.1).
         std::optional<semantic::DeclarationId> scoped_parameter;
         if (defparam.target_path != child_path) {
-            if (defparam.target_path.size() <= child_path.size() + 1U
-                || !defparam.target_path.starts_with(child_path)
-                || defparam.target_path[child_path.size()] != '.') {
+            // The path's scopes below the instance, when the instance is
+            // one of the path's scopes.
+            std::optional<std::size_t> consumed;
+            auto scope = defparam.base;
+            if (scope == child_path) {
+                consumed = 0U;
+            }
+            for (std::size_t index = 0U;
+                 !consumed && index < defparam.below.size()
+                 && scope.size() < child_path.size();
+                 ++index) {
+                scope += '.';
+                scope += defparam.below[index];
+                if (scope == child_path) {
+                    consumed = index + 1U;
+                }
+            }
+            if (!consumed || *consumed == defparam.below.size()) {
                 continue;
             }
             scoped_parameter = compiled_systemverilog_scoped_parameter(
-                child, std::string_view { defparam.target_path }.substr(
-                           child_path.size() + 1U),
+                child, std::span { defparam.below }.subspan(*consumed),
                 defparam.parameter);
             if (!scoped_parameter) {
                 continue;
@@ -454,12 +487,20 @@ HierarchyBuilder::resolve_compiled_systemverilog_parameters(
             &semantic::SpecializedHirAssociationBinding::formal);
         // A defparam takes precedence over the instance's parameter value
         // assignment (IEEE 1800-2023 23.10), and of several defparams for
-        // one parameter the last one applies (23.10.1). The replaced
-        // override keeps its own VPI object (37.28).
+        // one parameter the last one in the source text applies (23.10.1,
+        // the order above). The replaced override keeps its own VPI object
+        // (37.28).
         if (duplicate != parameter_bindings.bindings.end()) {
             *duplicate = override_binding;
         } else {
             parameter_bindings.bindings.push_back(override_binding);
+        }
+        std::erase_if(defparam_value_scopes, [&](const auto& entry) {
+            return entry.first == override_binding.formal;
+        });
+        if (defparam.owner != nullptr) {
+            defparam_value_scopes.emplace_back(
+                override_binding.formal, defparam.owner);
         }
         // The defparam's VPI object, held by the scope of the statement
         // (37.28 vpiDefParam): the parameter it sets, in the instance or a
@@ -481,6 +522,13 @@ HierarchyBuilder::resolve_compiled_systemverilog_parameters(
                 && !binding.actual_declaration)) {
             continue;
         }
+        const auto value_scope_entry = std::ranges::find(
+            defparam_value_scopes, binding.formal,
+            &decltype(defparam_value_scopes)::value_type::first);
+        const semantic::SpecializedHirUnit& value_scope
+            = value_scope_entry != defparam_value_scopes.end()
+            ? *value_scope_entry->second
+            : working_specialization;
         if (binding.kind
                 == semantic::SpecializedHirAssociationKind::expression
             && binding.expression) {
@@ -488,7 +536,7 @@ HierarchyBuilder::resolve_compiled_systemverilog_parameters(
             if (formal && formal->systemverilog != nullptr
                 && hierarchy_sv_parameters_detail::
                     systemverilog_string_actual_incompatible(
-                        working_specialization, *formal->systemverilog,
+                        value_scope, *formal->systemverilog,
                         *binding.expression)) {
                 add_diagnostic(
                     "FSIM-ELAB-SVSTRING-002",
@@ -551,11 +599,11 @@ HierarchyBuilder::resolve_compiled_systemverilog_parameters(
             const auto scalar_applicable = target_scalar
                     != frontend::SystemVerilogScalarKind::None
                 || hir_systemverilog_scalar_expression_applicable(
-                    working_specialization, *binding.expression);
+                    value_scope, *binding.expression);
             if (scalar_applicable) {
                 std::string scalar_error;
                 auto scalar = evaluate_hir_systemverilog_value(
-                    working_specialization, *binding.expression,
+                    value_scope, *binding.expression,
                     scalar_error);
                 if (scalar
                     && target_scalar
@@ -581,7 +629,7 @@ HierarchyBuilder::resolve_compiled_systemverilog_parameters(
                 std::string constant_error;
                 // An assignment pattern or unpacked aggregate takes the
                 // formal's layout (IEEE 1800-2017 10.9, 6.24.3).
-                const auto actual_view = working_specialization.find_expression(
+                const auto actual_view = value_scope.find_expression(
                     *binding.expression);
                 const bool typed_actual = formal->systemverilog->type
                     && ((actual_view && actual_view->systemverilog != nullptr
@@ -596,21 +644,21 @@ HierarchyBuilder::resolve_compiled_systemverilog_parameters(
                 // 6.20.2), unless the instance is of the parent's own unit,
                 // whose formals the actual's expressions read.
                 const auto typing = typed_actual && !result.actuals.empty()
-                        && child.identity->id != working_specialization.unit()
+                        && child.identity->id != value_scope.unit()
                     ? std::optional {
-                          working_specialization.with_local_actual_identities(
+                          value_scope.with_local_actual_identities(
                               result.actuals) }
                     : std::nullopt;
                 auto constant = typed_actual
                     ? evaluate_hir_systemverilog_typed_constant(
-                          typing ? *typing : working_specialization,
+                          typing ? *typing : value_scope,
                           *binding.expression, *formal->systemverilog->type,
                           constant_error)
                     : std::nullopt;
                 if (!constant) {
                     constant_error.clear();
                     constant = evaluate_hir_systemverilog_constant(
-                        working_specialization, *binding.expression,
+                        value_scope, *binding.expression,
                         constant_error);
                 }
                 if (!constant
@@ -623,7 +671,7 @@ HierarchyBuilder::resolve_compiled_systemverilog_parameters(
                 if (constant) {
                     identity_value = constant->canonical();
                 } else if (const auto value
-                    = working_specialization.evaluate_integral_expression(
+                    = value_scope.evaluate_integral_expression(
                         *binding.expression)) {
                     identity_value
                         = hierarchy_sv_parameters_detail::

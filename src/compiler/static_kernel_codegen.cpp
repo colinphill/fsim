@@ -5254,6 +5254,7 @@ public:
             emit_instruction(at);
             unknown_after(at, result_unknown, result_weak);
             emit_variable_store_hook(at);
+            emit_container_publish(at);
             // Every instruction's inner blocks rejoin in the block it ends
             // in, which dominates the rest of the KIR block; values defined
             // in its inner blocks must not be reused after it.
@@ -5949,6 +5950,32 @@ private:
     /// puts back the forced elements in the register file and reports the
     /// change (IEEE 1076-2019 22.5.2, 21.3.2.2). Two-state code continues
     /// in the full code when the register now holds unknown bits.
+    /// After a write of a kernel dynamic object
+    /// (CompiledBody::container_publishes), in code compiled for an
+    /// observer: `fsim_sk_container_publish` hands an observed object's
+    /// value to the host (IEEE 1800-2023 38.36.1).
+    void emit_container_publish(const std::uint32_t at)
+    {
+        if (!observer_hooks_ || at >= body_.container_publishes.size()
+            || body_.container_publishes[at] == detail::no_variable_store
+            || builder_.GetInsertBlock() == nullptr
+            || builder_.GetInsertBlock()->getTerminator() != nullptr) {
+            return;
+        }
+        spine_.insert(builder_.GetInsertBlock());
+        auto* type = llvm::FunctionType::get(llvm::Type::getVoidTy(context_),
+            { ptr_, i32_ }, false);
+        builder_.CreateCall(type, helper_symbol("fsim_sk_container_publish", type),
+            { frame_, llvm::ConstantInt::get(i32_, body_.container_publishes[at]) });
+        auto* next = llvm::BasicBlock::Create(context_, "publish_next", &function_);
+        auto* status = builder_.CreateLoad(i32_, frame_field(40U));
+        builder_.CreateCondBr(
+            builder_.CreateICmpNE(status, llvm::ConstantInt::get(i32_, 0U)),
+            failure_block_, next);
+        builder_.SetInsertPoint(next);
+        spine_.insert(next);
+    }
+
     void emit_variable_store_hook(const std::uint32_t at)
     {
         if (!observer_hooks_ || at >= body_.variable_stores.size()
@@ -7488,6 +7515,377 @@ private:
         }
     }
 
+    /// The ordinal a declared index (a sparse or dense fixed-size array's,
+    /// imm_b's range, or a linear ordinal: dyn_layout_linear) of register
+    /// y addresses among `count` elements, and for a read whether it is
+    /// one (an invalid read index reads the invalid-index value); a write
+    /// reports the reference's error instead (sparse_offset, known_index).
+    [[nodiscard]] std::pair<llvm::Value*, llvm::Value*> dyn_declared_ordinal(const KInst& inst,
+        const std::uint32_t at, const bool writing, llvm::Value* count)
+    {
+        using detail::DynFailure;
+        const auto width = inst.width;
+        const auto index = load_register(inst.y);
+        const auto index_mask = width >= 64U ? ~std::uint64_t { 0 }
+                                             : (std::uint64_t { 1 } << width) - 1U;
+        auto* known = builder_.CreateICmpEQ(builder_.CreateAnd(index.b, constant(index_mask)),
+            constant(0U));
+        auto* value = sign_extend(index.a, width);
+        llvm::Value* ordinal = nullptr;
+        llvm::Value* valid = nullptr;
+        if ((inst.imm_a & detail::dyn_layout_linear) != 0U) {
+            auto* nonnegative = builder_.CreateICmpSGE(value, constant(0U));
+            auto* inside = builder_.CreateICmpULT(value, count);
+            ordinal = value;
+            if (writing) {
+                dyn_check(known, at, DynFailure::linear_unknown);
+                dyn_check(nonnegative, at, DynFailure::linear_negative);
+                dyn_check(inside, at, DynFailure::linear_range);
+            } else {
+                valid = builder_.CreateAnd(known, builder_.CreateAnd(nonnegative, inside));
+            }
+        } else {
+            const auto left = static_cast<std::int32_t>(static_cast<std::uint32_t>(inst.imm_b));
+            const auto right
+                = static_cast<std::int32_t>(static_cast<std::uint32_t>(inst.imm_b >> 32U));
+            const auto signed_constant = [&](const std::int64_t number) {
+                return constant(static_cast<std::uint64_t>(number));
+            };
+            auto* in_range = builder_.CreateAnd(
+                builder_.CreateICmpSGE(value, signed_constant(std::min(left, right))),
+                builder_.CreateICmpSLE(value, signed_constant(std::max(left, right))));
+            ordinal = left >= right ? builder_.CreateSub(signed_constant(left), value)
+                                    : builder_.CreateSub(value, signed_constant(left));
+            auto* below_count = builder_.CreateICmpULT(ordinal, count);
+            if (writing) {
+                auto* fits = builder_.CreateAnd(known,
+                    builder_.CreateAnd(
+                        builder_.CreateICmpSGE(value,
+                            signed_constant(std::numeric_limits<std::int32_t>::min())),
+                        builder_.CreateICmpSLE(value,
+                            signed_constant(std::numeric_limits<std::int32_t>::max()))));
+                dyn_check(fits, at, DynFailure::fixed_unknown);
+                dyn_check(in_range, at, DynFailure::fixed_range);
+                dyn_check(below_count, at, DynFailure::linear_range);
+            } else {
+                valid = builder_.CreateAnd(known, builder_.CreateAnd(in_range, below_count));
+            }
+        }
+        return { ordinal, valid };
+    }
+
+    /// The declared index (32 bits) of ordinal `ordinal` of the container
+    /// whose layout `imm_a` describes: a dense fixed-size array's
+    /// (dyn_layout_fixed, container_declared_index), else the ordinal.
+    [[nodiscard]] llvm::Value* dyn_declared_index(const std::uint64_t imm_a, llvm::Value* ordinal)
+    {
+        if ((imm_a & detail::dyn_layout_fixed) == 0U) {
+            return ordinal;
+        }
+        auto* left = constant(static_cast<std::uint64_t>(
+            static_cast<std::int64_t>(static_cast<std::int32_t>(
+                static_cast<std::uint32_t>(imm_a >> 32U)))));
+        return builder_.CreateAnd((imm_a & detail::dyn_layout_descending) != 0U
+                ? builder_.CreateSub(left, ordinal)
+                : builder_.CreateAdd(left, ordinal),
+            constant(0xFFFF'FFFFU));
+    }
+
+    /// KOp::dyn element read or write of a dense fixed-size array
+    /// (dyn_layout_fixed): the dynamic array layout, a declared index.
+    void emit_dyn_fixed(const KInst& inst, const std::uint32_t at, llvm::Value* header)
+    {
+        using detail::DynFailure;
+        using detail::DynOp;
+        const bool writing = static_cast<DynOp>(inst.sub) == DynOp::write;
+        const auto [ordinal, valid] = dyn_declared_ordinal(inst, at, writing,
+            dyn_load(header, dyn_size));
+        if (!writing) {
+            store_register(inst.d, dyn_choose(valid,
+                [&] { return dyn_load_element(header, ordinal); },
+                dyn_pair(header, dyn_empty)));
+            return;
+        }
+        const auto source = load_register(inst.x);
+        dyn_check_value(header, source, at, DynFailure::write_mismatch);
+        dyn_store_element(header, ordinal, source);
+    }
+
+    /// DynOp::aggregate_unpack and aggregate_pack: the leaves of container
+    /// aux from or to the fields of the slot container z's info (storage 2)
+    /// names; leaf l of element e at bit (count - 1 - e) * bits + the
+    /// leaf's place in its element, the first leaf leftmost. A pack stores
+    /// each field as a slot store does (emit_store_field), announcing a
+    /// change.
+    void emit_dyn_aggregate_slot(const KInst& inst, llvm::Value* header)
+    {
+        using detail::DynOp;
+        const bool pack = static_cast<DynOp>(inst.sub) == DynOp::aggregate_pack;
+        const auto begin = detail::dyn_graph_begin(inst.imm_b);
+        const auto leaves = detail::dyn_graph_count(inst.imm_b);
+        std::vector<std::uint32_t> widths;
+        std::uint64_t element_bits = 0U;
+        for (std::uint64_t node = 0U; node < leaves; ++node) {
+            widths.push_back(static_cast<std::uint32_t>(body_.predicate_words[
+                static_cast<std::size_t>((begin + node) * detail::dyn_graph_node_words)]));
+            element_bits += widths.back();
+        }
+        auto* table = builder_.CreateLoad(ptr_, frame_field(64U));
+        auto* info = builder_.CreateInBoundsGEP(i8_, table,
+            builder_.CreateMul(builder_.CreateZExt(binding(inst.z, 0U), i64_),
+                constant(sizeof(runtime::simir::StaticKernelContainerInfo))));
+        auto* arena_offset = builder_.CreateZExt(info_field(info, i32_, 72U), i64_);
+        auto* words = builder_.CreateZExt(info_field(info, i32_, 76U), i64_);
+        auto* slot = info_field(info, i32_, 4U);
+        auto* silent = nonzero(builder_.CreateAnd(
+            builder_.CreateZExt(info_field(info, i32_, 60U), i64_), constant(8U)));
+        auto* elements = builder_.CreateUDiv(dyn_load(header, dyn_size), constant(leaves));
+        dyn_loop(constant(0U), elements, false, [&](llvm::Value* element) {
+            // The element's rightmost bit.
+            auto* base = builder_.CreateMul(
+                builder_.CreateSub(builder_.CreateSub(elements, constant(1U)), element),
+                constant(element_bits));
+            auto* first_leaf = builder_.CreateMul(element, constant(leaves));
+            std::uint64_t below = element_bits;
+            for (std::uint64_t leaf = 0U; leaf < leaves; ++leaf) {
+                const auto width = widths[static_cast<std::size_t>(leaf)];
+                below -= width;
+                auto* bit = builder_.CreateAdd(base, constant(below));
+                auto* ordinal = builder_.CreateAdd(first_leaf, constant(leaf));
+                if (pack) {
+                    auto* next = llvm::BasicBlock::Create(context_, "aggregate_field",
+                        &function_);
+                    emit_store_field(width, arena_offset, words, bit, slot, silent,
+                        dyn_load_element(header, ordinal), next);
+                    builder_.SetInsertPoint(next);
+                    continue;
+                }
+                dyn_store_element(header, ordinal,
+                    load_slot_field(arena_offset, words, bit, width));
+            }
+        });
+        cache_.clear();
+    }
+
+    /// The `width` bits (1 to 64) of a slot at `bit`: its two planes from
+    /// arena_offset on, `words` words each.
+    [[nodiscard]] Pair load_slot_field(llvm::Value* arena_offset, llvm::Value* words,
+        llvm::Value* bit, const std::uint32_t width)
+    {
+        const auto m = mask_of(width);
+        auto* word = builder_.CreateLShr(bit, constant(6U));
+        auto* shift = builder_.CreateAnd(bit, constant(63U));
+        auto* last = builder_.CreateSub(words, constant(1U));
+        auto* next = builder_.CreateSelect(builder_.CreateICmpULT(word, last),
+            builder_.CreateAdd(word, constant(1U)), word);
+        const auto plane = [&](llvm::Value* first) {
+            auto* low = builder_.CreateLoad(i64_, builder_.CreateInBoundsGEP(i64_,
+                arena_, builder_.CreateAdd(first, word)));
+            auto* high = builder_.CreateLoad(i64_, builder_.CreateInBoundsGEP(i64_,
+                arena_, builder_.CreateAdd(first, next)));
+            auto* spill = builder_.CreateSelect(
+                builder_.CreateICmpEQ(shift, constant(0U)), constant(0U),
+                builder_.CreateShl(high, builder_.CreateSub(constant(64U), shift)));
+            return builder_.CreateAnd(
+                builder_.CreateOr(builder_.CreateLShr(low, shift), spill), constant(m));
+        };
+        return Pair { plane(arena_offset), plane(builder_.CreateAdd(arena_offset, words)) };
+    }
+
+    /// KOp::mem_copy sub 3: the elements (inst.width bits, up to 64) between
+    /// a kernel-held array (info storage 3: two words an element from
+    /// packed_offset on) and a packed memory's slot (storage 2: element o at
+    /// bit width - (o + 1) * inst.width); imm_a bit 0 the target is the slot,
+    /// bit 1 the source. A slot target stores each element as a slot field
+    /// (announcing a change) or, nonblocking (flag_nba), queues it.
+    void emit_mem_copy_elements(const KInst& inst, const std::uint32_t at, llvm::Value* to,
+        llvm::Value* from)
+    {
+        const bool to_slot = (inst.imm_a & 1U) != 0U;
+        const bool from_slot = (inst.imm_a & 2U) != 0U;
+        const auto width = inst.width;
+        auto* count = info_field(to, i64_, 8U);
+        struct Side {
+            llvm::Value* offset { };
+            llvm::Value* words { };
+            llvm::Value* bits { };
+        };
+        const auto side = [&](llvm::Value* info) {
+            return Side { builder_.CreateZExt(info_field(info, i32_, 72U), i64_),
+                builder_.CreateZExt(info_field(info, i32_, 76U), i64_),
+                builder_.CreateZExt(info_field(info, i32_, 80U), i64_) };
+        };
+        const auto target = side(to);
+        const auto source = side(from);
+        const auto slot_bit = [&](const Side& slot, llvm::Value* ordinal) {
+            return builder_.CreateSub(slot.bits,
+                builder_.CreateMul(builder_.CreateAdd(ordinal, constant(1U)), constant(width)));
+        };
+        const auto load = [&](llvm::Value* ordinal) {
+            if (from_slot) {
+                return load_slot_field(source.offset, source.words, slot_bit(source, ordinal),
+                    width);
+            }
+            auto* at_word = builder_.CreateAdd(source.offset,
+                builder_.CreateMul(ordinal, constant(2U)));
+            return Pair { builder_.CreateLoad(i64_,
+                              builder_.CreateInBoundsGEP(i64_, arena_, at_word)),
+                builder_.CreateLoad(i64_, builder_.CreateInBoundsGEP(i64_, arena_,
+                    builder_.CreateAdd(at_word, constant(1U)))) };
+        };
+        auto* slot = info_field(to, i32_, 4U);
+        if ((inst.flags & detail::flag_nba) != 0U) {
+            // Only a slot target is queued (memory_copy_form).
+            auto* queue = builder_.CreateLoad(ptr_, frame_field(56U));
+            auto* queued = builder_.CreateLoad(i32_,
+                builder_.CreateConstInBoundsGEP1_64(i8_, queue, 8U));
+            auto* capacity = builder_.CreateLoad(i32_,
+                builder_.CreateConstInBoundsGEP1_64(i8_, queue, 12U));
+            auto* fits = builder_.CreateICmpULE(
+                builder_.CreateAdd(builder_.CreateZExt(queued, i64_), count),
+                builder_.CreateZExt(capacity, i64_));
+            auto* fast = llvm::BasicBlock::Create(context_, "mem_copy_append", &function_);
+            auto* slow = llvm::BasicBlock::Create(context_, "mem_copy_slow", &function_);
+            auto* done = llvm::BasicBlock::Create(context_, "mem_copy_queued", &function_);
+            builder_.CreateCondBr(fits, fast, slow);
+            builder_.SetInsertPoint(fast);
+            auto* data = builder_.CreateLoad(ptr_, queue);
+            auto* member = builder_.CreateLoad(i32_, frame_field(32U));
+            dyn_loop(constant(0U), count, false, [&](llvm::Value* ordinal) {
+                auto* entry = builder_.CreateInBoundsGEP(i8_, data,
+                    builder_.CreateMul(builder_.CreateAdd(builder_.CreateZExt(queued, i64_),
+                                           ordinal),
+                        constant(56U)));
+                const auto entry_field = [&](const std::uint64_t offset) {
+                    return builder_.CreateConstInBoundsGEP1_64(i8_, entry, offset);
+                };
+                const auto value = load(ordinal);
+                builder_.CreateStore(slot, entry_field(0U));
+                builder_.CreateStore(builder_.CreateTrunc(slot_bit(target, ordinal), i32_),
+                    entry_field(4U));
+                builder_.CreateStore(llvm::ConstantInt::get(i32_, width), entry_field(8U));
+                builder_.CreateStore(member, entry_field(12U));
+                builder_.CreateStore(value.a, entry_field(16U));
+                builder_.CreateStore(value.b, entry_field(24U));
+                builder_.CreateStore(constant(0U), entry_field(32U));
+                builder_.CreateStore(llvm::ConstantInt::get(i32_, 0U), entry_field(40U));
+                builder_.CreateStore(llvm::ConstantInt::get(i32_, at), entry_field(44U));
+                if (body_.weak != 0U) {
+                    builder_.CreateStore(constant(0U), entry_field(48U));
+                }
+            });
+            builder_.CreateStore(builder_.CreateAdd(queued, builder_.CreateTrunc(count, i32_)),
+                builder_.CreateConstInBoundsGEP1_64(i8_, queue, 8U));
+            emit_write_mark(slot, done);
+            builder_.SetInsertPoint(slow);
+            call_effect(at, zero_pair(), zero_pair(), zero_pair(), 1U);
+            builder_.CreateBr(done);
+            builder_.SetInsertPoint(done);
+            cache_.clear();
+            return;
+        }
+        auto* silent = to_slot ? nonzero(builder_.CreateAnd(
+                                     builder_.CreateZExt(info_field(to, i32_, 60U), i64_),
+                                     constant(8U)))
+                               : nullptr;
+        dyn_loop(constant(0U), count, false, [&](llvm::Value* ordinal) {
+            const auto value = load(ordinal);
+            if (to_slot) {
+                auto* next = llvm::BasicBlock::Create(context_, "mem_copy_element", &function_);
+                emit_store_field(width, target.offset, target.words, slot_bit(target, ordinal),
+                    slot, silent, value, next);
+                builder_.SetInsertPoint(next);
+                return;
+            }
+            auto* at_word = builder_.CreateAdd(target.offset,
+                builder_.CreateMul(ordinal, constant(2U)));
+            builder_.CreateStore(value.a, builder_.CreateInBoundsGEP(i64_, arena_, at_word));
+            builder_.CreateStore(value.b, builder_.CreateInBoundsGEP(i64_, arena_,
+                builder_.CreateAdd(at_word, constant(1U))));
+        });
+        cache_.clear();
+    }
+
+    /// DynOp::aggregate_element_read / aggregate_element_write: the leaves
+    /// of an element (or nested structure member) of a flat aggregate to
+    /// or from a structure register's container.
+    void emit_dyn_aggregate_element(const KInst& inst, const std::uint32_t at,
+        llvm::Value* header)
+    {
+        using detail::DynOp;
+        const bool reading = static_cast<DynOp>(inst.sub) == DynOp::aggregate_element_read;
+        auto* array = reading ? dyn_header(inst.z) : header;
+        auto* box = reading ? header : dyn_header(inst.z);
+        const auto leaves = detail::dyn_aggregate_leaves(inst.imm_a);
+        const auto first = detail::dyn_aggregate_leaf(inst.imm_a);
+        llvm::Value* base = constant(first);
+        llvm::Value* valid = nullptr;
+        if ((inst.imm_a & detail::dyn_layout_aggregate_box) == 0U) {
+            const auto [ordinal, ok] = dyn_declared_ordinal(inst, at, !reading,
+                builder_.CreateUDiv(dyn_load(array, dyn_size), constant(leaves)));
+            base = builder_.CreateAdd(builder_.CreateMul(ordinal, constant(leaves)),
+                constant(first));
+            valid = ok;
+        }
+        for (std::uint32_t leaf = 0U; leaf < inst.offset; ++leaf) {
+            auto* slot = builder_.CreateAdd(base, constant(leaf));
+            if (!reading) {
+                dyn_store_element(array, slot, dyn_load_element(box, constant(leaf)));
+                continue;
+            }
+            const auto node = body_.predicate_words[
+                (static_cast<std::size_t>(inst.x) + leaf) * detail::dyn_graph_node_words];
+            const auto mask = mask_of(static_cast<std::uint32_t>(node));
+            const bool zero = (node >> 32U) != 0U;
+            const Pair initial { constant(zero ? 0U : mask), constant(zero ? 0U : mask) };
+            dyn_store_element(box, constant(leaf), valid == nullptr
+                    ? dyn_load_element(array, slot)
+                    : dyn_choose(valid, [&] { return dyn_load_element(array, slot); }, initial));
+        }
+    }
+
+    /// KOp::dyn member read or write of a flat aggregate
+    /// (dyn_layout_aggregate): leaf dyn_aggregate_leaf of the element the
+    /// index selects (a dense fixed-size array's index) or of the structure
+    /// value.
+    void emit_dyn_aggregate(const KInst& inst, const std::uint32_t at, llvm::Value* header)
+    {
+        using detail::DynFailure;
+        using detail::DynOp;
+        const bool writing = static_cast<DynOp>(inst.sub) == DynOp::write;
+        const auto leaves = detail::dyn_aggregate_leaves(inst.imm_a);
+        const auto leaf = detail::dyn_aggregate_leaf(inst.imm_a);
+        const bool box = (inst.imm_a & detail::dyn_layout_aggregate_box) != 0U;
+        llvm::Value* slot = constant(leaf);
+        llvm::Value* valid = nullptr;
+        if (!box) {
+            const auto [ordinal, ok] = dyn_declared_ordinal(inst, at, writing,
+                builder_.CreateUDiv(dyn_load(header, dyn_size), constant(leaves)));
+            slot = builder_.CreateAdd(builder_.CreateMul(ordinal, constant(leaves)),
+                constant(leaf));
+            valid = ok;
+        }
+        const auto mask = inst.offset >= 64U ? ~std::uint64_t { 0 }
+                                             : (std::uint64_t { 1 } << inst.offset) - 1U;
+        if (!writing) {
+            // An invalid index reads the leaf type's initial value (7.4.6).
+            const bool zero = (inst.imm_a & detail::dyn_layout_leaf_zero) != 0U;
+            const Pair initial { constant(zero ? 0U : mask), constant(zero ? 0U : mask) };
+            store_register(inst.d, box ? dyn_load_element(header, slot)
+                                       : dyn_choose(valid,
+                                             [&] { return dyn_load_element(header, slot); },
+                                             initial));
+            return;
+        }
+        const auto source = load_register(inst.x);
+        if ((inst.imm_a & detail::dyn_layout_leaf_two_state) != 0U) {
+            dyn_check(builder_.CreateICmpEQ(builder_.CreateAnd(source.b, constant(mask)),
+                          constant(0U)),
+                at, DynFailure::aggregate_leaf);
+        }
+        dyn_store_element(header, slot, source);
+    }
+
     /// KOp::dyn on a sparse fixed array (imm_a dyn_layout_sparse): element
     /// reads and writes and whole copies, in either layout.
     void emit_dyn_sparse(const KInst& inst, const std::uint32_t at, llvm::Value* header)
@@ -7541,54 +7939,8 @@ private:
             throw std::logic_error("static kernel sparse array operation has no inline form");
         }
         const bool writing = op == DynOp::write;
-        const auto width = inst.width;
-        const auto index = load_register(inst.y);
-        const auto index_mask = width >= 64U ? ~std::uint64_t { 0 }
-                                             : (std::uint64_t { 1 } << width) - 1U;
-        auto* known = builder_.CreateICmpEQ(builder_.CreateAnd(index.b, constant(index_mask)),
-            constant(0U));
-        auto* value = sign_extend(index.a, width);
-        auto* count = dyn_load(header, dyn_maximum);
-        llvm::Value* ordinal = nullptr;
-        llvm::Value* valid = nullptr;
-        if ((inst.imm_a & detail::dyn_layout_linear) != 0U) {
-            auto* nonnegative = builder_.CreateICmpSGE(value, constant(0U));
-            auto* inside = builder_.CreateICmpULT(value, count);
-            ordinal = value;
-            if (writing) {
-                dyn_check(known, at, DynFailure::linear_unknown);
-                dyn_check(nonnegative, at, DynFailure::linear_negative);
-                dyn_check(inside, at, DynFailure::linear_range);
-            } else {
-                valid = builder_.CreateAnd(known, builder_.CreateAnd(nonnegative, inside));
-            }
-        } else {
-            const auto left = static_cast<std::int32_t>(static_cast<std::uint32_t>(inst.imm_b));
-            const auto right
-                = static_cast<std::int32_t>(static_cast<std::uint32_t>(inst.imm_b >> 32U));
-            const auto signed_constant = [&](const std::int64_t number) {
-                return constant(static_cast<std::uint64_t>(number));
-            };
-            auto* in_range = builder_.CreateAnd(
-                builder_.CreateICmpSGE(value, signed_constant(std::min(left, right))),
-                builder_.CreateICmpSLE(value, signed_constant(std::max(left, right))));
-            ordinal = left >= right ? builder_.CreateSub(signed_constant(left), value)
-                                    : builder_.CreateSub(value, signed_constant(left));
-            auto* below_count = builder_.CreateICmpULT(ordinal, count);
-            if (writing) {
-                auto* fits = builder_.CreateAnd(known,
-                    builder_.CreateAnd(
-                        builder_.CreateICmpSGE(value,
-                            signed_constant(std::numeric_limits<std::int32_t>::min())),
-                        builder_.CreateICmpSLE(value,
-                            signed_constant(std::numeric_limits<std::int32_t>::max()))));
-                dyn_check(fits, at, DynFailure::fixed_unknown);
-                dyn_check(in_range, at, DynFailure::fixed_range);
-                dyn_check(below_count, at, DynFailure::linear_range);
-            } else {
-                valid = builder_.CreateAnd(known, builder_.CreateAnd(in_range, below_count));
-            }
-        }
+        const auto [ordinal, valid] = dyn_declared_ordinal(inst, at, writing,
+            dyn_load(header, dyn_maximum));
         const auto dense_element = [&] {
             auto* data = builder_.CreateLoad(ptr_, dyn_address(header, dyn_data));
             auto* unknown = builder_.CreateInBoundsGEP(i64_, data, dyn_load(header, dyn_capacity));
@@ -7928,16 +8280,13 @@ private:
         return builder_.CreateSIToFP(bits, f64_type());
     }
 
-    /// real_target: a double as a real kind's payload.
+    /// real_target: a double as a real kind's payload, every IEEE 754
+    /// value included; a shortreal is the IEEE 754 conversion.
     [[nodiscard]] llvm::Value* scalar_real_target(llvm::Value* number,
-        const SystemVerilogScalarKind target, llvm::Value*& error)
+        const SystemVerilogScalarKind target)
     {
-        scalar_flag(error, builder_.CreateNot(scalar_finite(number)),
-            SystemVerilogScalarError::Nonfinite);
         if (target == SystemVerilogScalarKind::ShortReal) {
             auto* narrowed = builder_.CreateFPTrunc(number, f32_type());
-            scalar_flag(error, builder_.CreateNot(scalar_finite(narrowed)),
-                SystemVerilogScalarError::Overflow);
             return builder_.CreateZExt(builder_.CreateBitCast(narrowed, i32_), i64_);
         }
         return builder_.CreateBitCast(number, i64_);
@@ -7958,7 +8307,7 @@ private:
                 scalar_flag(error, scalar_rounding_changed(),
                     SystemVerilogScalarError::UnsupportedRoundingMode);
             }
-            return scalar_real_target(scalar_as_real(bits, from), to, error);
+            return scalar_real_target(scalar_as_real(bits, from), to);
         }
         if (to == Kind::None && from == Kind::Time) {
             scalar_flag(error, builder_.CreateICmpSLT(bits, constant(0U)),
@@ -9525,8 +9874,26 @@ private:
             emit_dyn_stream(inst, at, header);
             return;
         }
+        if (op == DynOp::aggregate_unpack || op == DynOp::aggregate_pack) {
+            emit_dyn_aggregate_slot(inst, header);
+            return;
+        }
+        if (op == DynOp::aggregate_element_read || op == DynOp::aggregate_element_write) {
+            emit_dyn_aggregate_element(inst, at, header);
+            return;
+        }
+        if ((inst.imm_a & detail::dyn_layout_aggregate) != 0U
+            && (op == DynOp::read || op == DynOp::write)) {
+            emit_dyn_aggregate(inst, at, header);
+            return;
+        }
         if ((inst.imm_a & detail::dyn_layout_sparse) != 0U) {
             emit_dyn_sparse(inst, at, header);
+            return;
+        }
+        if ((inst.imm_a & detail::dyn_layout_fixed) != 0U
+            && (op == DynOp::read || op == DynOp::write)) {
+            emit_dyn_fixed(inst, at, header);
             return;
         }
         if ((inst.imm_a & detail::dyn_layout_associative) != 0U && op != DynOp::size
@@ -9765,6 +10132,10 @@ private:
         case DynOp::stream_take_value:
         case DynOp::stream_to_container:
         case DynOp::stream_take_container:
+        case DynOp::aggregate_unpack:
+        case DynOp::aggregate_pack:
+        case DynOp::aggregate_element_read:
+        case DynOp::aggregate_element_write:
             throw std::logic_error("static kernel whole-array operation misplaced");
         }
     }
@@ -10088,13 +10459,15 @@ private:
     /// index) when it has one, else the element.
     void scratch_fill(llvm::Value* header, llvm::Value* base, llvm::Value* size,
         const std::uint64_t imm, const bool keyed, const std::uint32_t width,
-        const bool is_signed)
+        const bool is_signed, const std::uint64_t layout)
     {
         dyn_loop(constant(0U), size, false, [&](llvm::Value* ordinal) {
             const auto element = dyn_load_element(header, ordinal);
             auto* entry = scratch_entry(base, ordinal);
             scratch_store(entry, 0U,
-                keyed ? emit_predicate(imm, element, ordinal, width, is_signed) : element);
+                keyed ? emit_predicate(imm, element, dyn_declared_index(layout, ordinal), width,
+                            is_signed)
+                      : element);
             scratch_store(entry, 2U, element);
         });
     }
@@ -10150,7 +10523,7 @@ private:
         auto* block = dyn_scratch(builder_.CreateShl(entries, constant(3U)), at);
         auto* source_slot = str_slot(ptr_, block);
         auto* target_slot = str_slot(ptr_, scratch_entry(block, entries));
-        scratch_fill(header, block, size, inst.imm_b, keyed, width, is_signed);
+        scratch_fill(header, block, size, inst.imm_b, keyed, width, is_signed, inst.imm_a);
         auto* run = str_slot(i64_, constant(1U));
         dyn_while([&] { return builder_.CreateICmpULT(builder_.CreateLoad(i64_, run), size); },
             [&] {
@@ -10230,7 +10603,7 @@ private:
         auto* block = dyn_scratch(builder_.CreateShl(builder_.CreateAdd(size, constant(1U)),
                                       constant(2U)),
             at);
-        scratch_fill(source, block, size, inst.imm_b, keyed, width, is_signed);
+        scratch_fill(source, block, size, inst.imm_b, keyed, width, is_signed, inst.imm_a);
         dyn_store(header, dyn_size, constant(0U));
         dyn_store(header, dyn_head, constant(0U));
         // Appends the entry at `ordinal` (its element or its index), up to
@@ -10242,7 +10615,9 @@ private:
             dyn_reserve(header, grown, at);
             dyn_store_element(header, count,
                 index_result
-                    ? Pair { builder_.CreateAnd(ordinal, constant(0xFFFF'FFFFU)), constant(0U) }
+                    ? Pair { builder_.CreateAnd(dyn_declared_index(inst.imm_a, ordinal),
+                                 constant(0xFFFF'FFFFU)),
+                          constant(0U) }
                     : scratch_load(scratch_entry(block, ordinal), 2U));
             dyn_store(header, dyn_size, grown);
             dyn_end(room);
@@ -10272,7 +10647,8 @@ private:
                         : step;
                     const auto element = scratch_load(scratch_entry(block, ordinal), 2U);
                     const auto [one, unknown] = truth(
-                        emit_predicate(inst.imm_b, element, ordinal, width, is_signed));
+                        emit_predicate(inst.imm_b, element,
+                            dyn_declared_index(inst.imm_a, ordinal), width, is_signed));
                     static_cast<void>(unknown);
                     auto* matched = dyn_when(one);
                     append(ordinal);
@@ -10727,7 +11103,8 @@ private:
                 [&](llvm::Value* ordinal) {
                     auto value = dyn_load_element(header, ordinal);
                     if (detail::dyn_graph_count(inst.imm_b) != 0U) {
-                        value = emit_predicate(inst.imm_b, value, ordinal, width, is_signed);
+                        value = emit_predicate(inst.imm_b, value,
+                            dyn_declared_index(inst.imm_a, ordinal), width, is_signed);
                     }
                     const auto folded = emit_binary(fold,
                         { builder_.CreateLoad(i64_, result_a),
@@ -11252,6 +11629,148 @@ private:
         default:
             throw std::logic_error("static kernel string container operation is invalid");
         }
+    }
+
+    /// KOp::mem_copy (StaticKernel::copy_container): two kernel-held
+    /// arrays (sub 1: container info storage 3, nothing observes their
+    /// elements) copy their arena words in place; a design memory or one
+    /// held as signals takes the runtime's copy, whose element writes
+    /// notify the memory's readers.
+    void emit_mem_copy(const std::uint32_t at)
+    {
+        const auto& inst = body_.code[at];
+        if (inst.sub != 1U && inst.sub != 2U && inst.sub != 3U) {
+            call_effect(at, zero_pair(), zero_pair(), zero_pair());
+            return;
+        }
+        auto* table = builder_.CreateLoad(ptr_, frame_field(64U));
+        const auto info_of = [&](const std::uint32_t index) {
+            return builder_.CreateInBoundsGEP(i8_, table,
+                builder_.CreateMul(builder_.CreateZExt(binding(index, 0U), i64_),
+                    constant(sizeof(runtime::simir::StaticKernelContainerInfo))));
+        };
+        auto* to = info_of(inst.d);
+        auto* from = info_of(inst.x);
+        if (inst.sub == 3U) {
+            emit_mem_copy_elements(inst, at, to, from);
+            return;
+        }
+        if (inst.sub == 2U) {
+            // Two packed memories' slots of `width` bits (info storage 2):
+            // the target's words stored from the source's as slot fields
+            // (emit_store_field), so a change is announced.
+            auto* to_offset = builder_.CreateZExt(info_field(to, i32_, 72U), i64_);
+            auto* to_words = builder_.CreateZExt(info_field(to, i32_, 76U), i64_);
+            auto* from_offset = builder_.CreateZExt(info_field(from, i32_, 72U), i64_);
+            auto* from_words = builder_.CreateZExt(info_field(from, i32_, 76U), i64_);
+            auto* slot = info_field(to, i32_, 4U);
+            const auto chunks = (inst.width + 63U) / 64U;
+            const auto source_chunk = [&](const std::uint32_t chunk) {
+                const auto m = constant(mask_of(std::min(64U, inst.width - 64U * chunk)));
+                const auto plane = [&](llvm::Value* base) {
+                    return builder_.CreateAnd(builder_.CreateLoad(i64_,
+                        builder_.CreateInBoundsGEP(i64_, arena_,
+                            builder_.CreateAdd(base, constant(chunk)))), m);
+                };
+                return Pair { plane(from_offset),
+                    plane(builder_.CreateAdd(from_offset, from_words)) };
+            };
+            if ((inst.flags & detail::flag_nba) != 0U) {
+                // A nonblocking write (10.4.2): the source's words now, as
+                // the nonblocking queue's slot writes of the target (one per
+                // word, in order); a full queue takes the helper, which
+                // queues the elements.
+                auto* queue = builder_.CreateLoad(ptr_, frame_field(56U));
+                auto* count = builder_.CreateLoad(i32_,
+                    builder_.CreateConstInBoundsGEP1_64(i8_, queue, 8U));
+                auto* capacity = builder_.CreateLoad(i32_,
+                    builder_.CreateConstInBoundsGEP1_64(i8_, queue, 12U));
+                auto* fits = builder_.CreateICmpULE(
+                    builder_.CreateAdd(count, llvm::ConstantInt::get(i32_, chunks)), capacity);
+                auto* fast = llvm::BasicBlock::Create(context_, "mem_copy_append", &function_);
+                auto* slow = llvm::BasicBlock::Create(context_, "mem_copy_slow", &function_);
+                auto* done = llvm::BasicBlock::Create(context_, "mem_copy_queued", &function_);
+                builder_.CreateCondBr(fits, fast, slow);
+                builder_.SetInsertPoint(fast);
+                auto* data = builder_.CreateLoad(ptr_, queue);
+                for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
+                    auto* entry = builder_.CreateInBoundsGEP(i8_, data,
+                        builder_.CreateMul(builder_.CreateZExt(
+                            builder_.CreateAdd(count, llvm::ConstantInt::get(i32_, chunk)), i64_),
+                            constant(56U)));
+                    const auto entry_field = [&](const std::uint64_t offset) {
+                        return builder_.CreateConstInBoundsGEP1_64(i8_, entry, offset);
+                    };
+                    const auto value = source_chunk(chunk);
+                    builder_.CreateStore(slot, entry_field(0U));
+                    builder_.CreateStore(llvm::ConstantInt::get(i32_, 64U * chunk),
+                        entry_field(4U));
+                    builder_.CreateStore(llvm::ConstantInt::get(i32_,
+                                             std::min(64U, inst.width - 64U * chunk)),
+                        entry_field(8U));
+                    builder_.CreateStore(builder_.CreateLoad(i32_, frame_field(32U)),
+                        entry_field(12U));
+                    builder_.CreateStore(value.a, entry_field(16U));
+                    builder_.CreateStore(value.b, entry_field(24U));
+                    builder_.CreateStore(constant(0U), entry_field(32U));
+                    builder_.CreateStore(llvm::ConstantInt::get(i32_, 0U), entry_field(40U));
+                    builder_.CreateStore(llvm::ConstantInt::get(i32_, at), entry_field(44U));
+                    if (body_.weak != 0U) {
+                        builder_.CreateStore(constant(0U), entry_field(48U));
+                    }
+                }
+                builder_.CreateStore(
+                    builder_.CreateAdd(count, llvm::ConstantInt::get(i32_, chunks)),
+                    builder_.CreateConstInBoundsGEP1_64(i8_, queue, 8U));
+                emit_write_mark(slot, done);
+                builder_.SetInsertPoint(slow);
+                call_effect(at, zero_pair(), zero_pair(), zero_pair(), 1U);
+                builder_.CreateBr(done);
+                builder_.SetInsertPoint(done);
+                return;
+            }
+            auto* silent = nonzero(builder_.CreateAnd(
+                builder_.CreateZExt(info_field(to, i32_, 60U), i64_), constant(8U)));
+            const auto store_chunk = [&](llvm::Value* chunk, llvm::Value* m, llvm::Value* bits) {
+                const auto plane = [&](llvm::Value* base) {
+                    return builder_.CreateAnd(builder_.CreateLoad(i64_,
+                        builder_.CreateInBoundsGEP(i64_, arena_,
+                            builder_.CreateAdd(base, chunk))), m);
+                };
+                auto* next = llvm::BasicBlock::Create(context_, "mem_copy_chunk", &function_);
+                emit_store_field(m, bits, to_offset, to_words,
+                    builder_.CreateShl(chunk, constant(6U)), slot, silent,
+                    Pair { plane(from_offset), plane(builder_.CreateAdd(from_offset, from_words)) },
+                    next);
+                builder_.SetInsertPoint(next);
+            };
+            if (chunks <= 8U) {
+                for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
+                    const auto bits = std::min(64U, inst.width - 64U * chunk);
+                    store_chunk(constant(chunk), constant(mask_of(bits)), constant(bits));
+                }
+            } else {
+                dyn_loop(constant(0U), constant(chunks), false, [&](llvm::Value* chunk) {
+                    auto* last = builder_.CreateICmpEQ(chunk, constant(chunks - 1U));
+                    const auto tail = inst.width - 64U * (chunks - 1U);
+                    store_chunk(chunk,
+                        builder_.CreateSelect(last, constant(mask_of(tail)),
+                            constant(~std::uint64_t { 0 })),
+                        builder_.CreateSelect(last, constant(tail), constant(64U)));
+                });
+            }
+            cache_.clear();
+            return;
+        }
+        // Two planes of one word per element from packed_offset on.
+        const auto words = [&](llvm::Value* info) {
+            return builder_.CreateInBoundsGEP(i64_, arena_,
+                builder_.CreateZExt(info_field(info, i32_, 72U), i64_));
+        };
+        auto* bytes = builder_.CreateMul(info_field(to, i64_, 8U), constant(16U));
+        builder_.CreateMemMove(words(to), llvm::MaybeAlign(8U), words(from),
+            llvm::MaybeAlign(8U), bytes);
+        cache_.clear();
     }
 
     [[nodiscard]] Pair emit_mem_read(const KInst& inst, const std::uint32_t at)
@@ -19315,8 +19834,7 @@ private:
             emit_mem_write(inst, at);
             break;
         case KOp::mem_copy:
-            // The runtime copies the arena words of the two containers.
-            call_effect(at, zero_pair(), zero_pair(), zero_pair());
+            emit_mem_copy(at);
             break;
         case KOp::dyn:
             emit_dyn(inst, at);
@@ -21578,6 +22096,7 @@ private:
         add("fsim_sk_member_due", helpers.member_due);
         add("fsim_sk_variable_store", helpers.variable_store);
         add("fsim_sk_flush_writes", helpers.flush_writes);
+        add("fsim_sk_container_publish", helpers.container_publish);
         add("fsim_sk_net_delay", helpers.net_delay);
         add("fsim_sk_sva_tick", helpers.sva_tick);
         add("fsim_sk_sva_ensure", helpers.sva_ensure);
@@ -22231,6 +22750,7 @@ private:
         if (code.observer_hooks) {
             append_all(body.statement_starts);
             append_all(body.variable_stores);
+            append_all(body.container_publishes);
         }
         // A content key for this process's cache and the ahead-of-time
         // image (not an integrity check: the image's objects are checksummed

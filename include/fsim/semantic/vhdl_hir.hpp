@@ -2,6 +2,7 @@
 #pragma once
 
 #include "fsim/semantic/model.hpp"
+#include "fsim/support/vhdl_entity_class.hpp"
 #include "fsim/support/expression_marker.hpp"
 #include "fsim/support/rare_vector.hpp"
 #include "fsim/support/vhdl_formal_conversion.hpp"
@@ -839,9 +840,14 @@ struct PackageProfile {
 struct AttributeProfile {
     bool specification { };
     std::optional<SubtypeIndication> subtype;
+    // The entity designators of a specification; empty for `all` and
+    // `others`, which name_list records (IEEE 1076-2019 7.2).
     std::vector<Name> entity_names;
     std::string entity_class;
     std::optional<ExpressionId> value;
+    support::VhdlEntityClass entity_class_kind { support::VhdlEntityClass::none };
+    support::VhdlEntityNameList name_list {
+        support::VhdlEntityNameList::designators };
 };
 
 struct GroupProfile {

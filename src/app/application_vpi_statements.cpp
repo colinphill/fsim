@@ -6631,6 +6631,26 @@ std::optional<semantic::ExpressionId> VpiStatementModel::cast_expression(
     return record->id;
 }
 
+support::SystemTf VpiStatementModel::system_routine(
+    const std::uint64_t serial) const
+{
+    const auto& entry = nodes_.at(serial);
+    if (entry.kind == Kind::expression) {
+        const auto* const record = expression(entry.id);
+        return record != nullptr && record->call_kind == sv::CallKind::system
+            ? record->system_tf
+            : support::SystemTf::none;
+    }
+    if (entry.kind == Kind::statement) {
+        const auto* const record = statement(entry.id);
+        return record != nullptr
+                && record->task_call_kind == sv::CallKind::system
+            ? record->task_system_tf
+            : support::SystemTf::none;
+    }
+    return support::SystemTf::none;
+}
+
 std::optional<VpiStatementModel::CastTarget> VpiStatementModel::cast_target(
     const std::uint64_t serial)
 {
