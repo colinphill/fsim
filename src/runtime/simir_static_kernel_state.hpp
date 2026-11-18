@@ -22,6 +22,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <map>
 #include <memory>
@@ -2427,7 +2428,15 @@ private:
     /// statement has one, and while watch_writes_ a kernel without the
     /// debug plan stops there too, Member::statement_start), its
     /// suspension, each NBA update, and the end of the activation.
-    void flush_debug_writes();
+    void flush_debug_writes()
+    {
+        debug_write_flag_ = 0U;
+        if (!debug_writes_.empty()) [[unlikely]] {
+            drain_debug_writes();
+        }
+    }
+    /// flush_debug_writes with writes queued: publishes them in order.
+    void drain_debug_writes();
     void initialize();
     [[nodiscard]] bool scan_inputs(bool all = true);
     /// Take one input's committed host value into its mirror and wake its
@@ -2523,12 +2532,13 @@ private:
     /// would take its leader fast path (StaticKernelNativeFrame::fast_notify).
     void bind_fast_notify(StaticKernelNativeFrame& frame) noexcept
     {
-        if (worker_lane_ == nullptr && !profile_ && !committing_round_) {
+        const bool leader = worker_lane_ == nullptr;
+        if (leader && !profile_ && !committing_round_) {
             frame.fast_notify = fast_notify_.data();
             frame.partition_queued = partition_queued_.data();
             frame.running_partition = scratch_.running_partition;
         }
-        bind_write_marks(frame);
+        bind_write_marks(frame, leader);
     }
     /// Kernels whose code has an SVA operation (a directive's tick or
     /// outcome, or an inline sampled or $time read, which procedural code has
@@ -2548,8 +2558,47 @@ private:
     /// (StaticKernelNativeFrame::write_marks).
     void bind_write_marks(StaticKernelNativeFrame& frame) noexcept
     {
-        // Every frame of a member's code (not the worker lanes': a thread
-        // member runs on the leader).
+        bind_write_marks(frame, worker_lane_ == nullptr);
+    }
+    /// bind_write_marks where the caller knows whether it runs on the
+    /// leader (no worker lane).
+    void bind_write_marks(
+        StaticKernelNativeFrame& frame, const bool leader) noexcept
+    {
+        // Every frame of a member's code takes the environment fields
+        // (assertion_starts .. coverage, without the call and frame stacks
+        // the caller set). Worker lanes only read environment_frame_: the
+        // leader refreshes it before a parallel batch.
+        if (leader && environment_revision_ != impl_.kernel_environment_revision)
+            [[unlikely]] {
+            refresh_environment();
+        }
+        frame.assertion_starts = environment_frame_.assertion_starts;
+        frame.assertion_filter = environment_frame_.assertion_filter;
+        std::memcpy(&frame.variable_hooks, &environment_frame_.variable_hooks,
+            environment_bytes);
+        if (sva_table_used_) {
+            refresh_sva_table();
+            frame.sva = &sva_table_;
+        }
+        if (leader && !write_marks_.empty()) {
+            frame.write_round = write_round_;
+            frame.write_marks = write_marks_.data();
+        }
+    }
+    /// The environment fields of every member's frame (bind_write_marks),
+    /// as of Impl::kernel_environment_revision environment_revision_.
+    static constexpr std::uint64_t stale_environment
+        = std::numeric_limits<std::uint64_t>::max();
+    static constexpr std::size_t environment_bytes
+        = offsetof(StaticKernelNativeFrame, coverage)
+        + sizeof(StaticKernelNativeFrame::coverage)
+        - offsetof(StaticKernelNativeFrame, variable_hooks);
+    StaticKernelNativeFrame environment_frame_ { };
+    std::uint64_t environment_revision_ { stale_environment };
+    void refresh_environment() noexcept
+    {
+        auto& frame = environment_frame_;
         frame.assertion_starts = impl_.assertion_starts_bound ? 1U : 0U;
         frame.assertion_filter = impl_.fork_spawn_filter ? 1U : 0U;
         frame.variable_hooks
@@ -2563,14 +2612,7 @@ private:
         frame.reset_value = &impl_.reset_value_result;
         frame.string_objects = string_object_table();
         frame.coverage = refresh_coverage_table();
-        if (sva_table_used_) {
-            refresh_sva_table();
-            frame.sva = &sva_table_;
-        }
-        if (worker_lane_ == nullptr && !write_marks_.empty()) {
-            frame.write_round = write_round_;
-            frame.write_marks = write_marks_.data();
-        }
+        environment_revision_ = impl_.kernel_environment_revision;
     }
     /// StaticKernelNativeFrame::write_marks: VHDL kernels without a worker
     /// pool. Every write queued in the leader's writes_ marks its slot.
@@ -4185,7 +4227,8 @@ private:
     RunScratch scratch_;
     /// The lane of the parallel batch this thread is running; null outside
     /// one (the leader's serial path).
-    FSIM_STATIC_KERNEL_TLS static thread_local Lane* worker_lane_;
+    // constinit: reads need no dynamic-initialization guard.
+    FSIM_STATIC_KERNEL_TLS static constinit thread_local Lane* worker_lane_;
     /// Counts the pool's dispatches: a lane clears its logs when it first
     /// runs in one (the leader does not touch the workers' lines).
     std::uint64_t lane_epoch_ { };
@@ -4594,6 +4637,9 @@ private:
     /// Copies the wire's bit range; true when the target changed. A wire
     /// that feeds a source row (Wire::target_source) is not copied here.
     bool copy_wire(const Wire& wire);
+    /// copy_wire of a wire with a conversion function (kept out of line so
+    /// the plain copy inlines into its callers).
+    [[gnu::noinline]] bool copy_converted_wire(const Wire& wire);
     /// Lands the bits of a source-feeding wire in the target's next block
     /// (the update phase resolves the target after); `now` writes the
     /// current block too (time zero).

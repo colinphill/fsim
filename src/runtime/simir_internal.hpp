@@ -2427,6 +2427,11 @@ struct Interpreter::Impl : SchedulerBatchTask {
     /// while clear (generated code reads StaticKernelNativeFrame::
     /// assertion_starts).
     bool assertion_starts_bound { };
+    /// Bumped when an input of the kernel's frame environment changes
+    /// (assertion_starts_bound, fork_spawn_filter, plusargs, the code
+    /// coverage counters' storage or switches, a run-state load): the
+    /// kernel then refreshes the fields it copies into every member's frame.
+    std::uint64_t kernel_environment_revision { };
     ClassAllocateContextHook class_allocate_context_hook;
     std::optional<std::uint64_t> pending_class_allocation_seed;
     // While a class service runs for a thread, the thread's random stream:

@@ -567,6 +567,7 @@ interp.impl	logic9_batch_profile_enabled	Prof	profile counters, not saved
 interp.impl	program_owners	P	plain run state
 interp.impl	exited_programs	P	plain run state
 interp.impl	assertion_starts_bound	D	set again when a library registers an assertion-attempt callback (a restart re-registers them)
+interp.impl	kernel_environment_revision	D	bumped when a kernel frame-environment input changes; a run-state load bumps it
 interp.impl	vhdl_pending_disconnects	P	pending null transactions of VHDL drivers (14.7.2), read by the VHPI projected-waveform walk; saved in host.run beside the disconnect events
 interp.impl	split_gate_drivers	D	gate drivers a vpi_put_delays split; rebuilt by replaying the split from the plan journal (wave AE: the journal records gate splits and a restart replays its run-time steps)
 interp.signal_hot	initial_value	P	the signal's current value (updated in place despite the name)
@@ -1066,6 +1067,8 @@ kernel.impl	initial_update_pending_	S	the first simulation cycle's update commit
 kernel.impl	initial_update_running_	S	set only within the first simulation cycle's update task; false at every save point
 kernel.impl	initial_commit_due_	S	set only within the first simulation cycle's update task; false at every save point
 kernel.impl	variable_hooks_active_	D	rebuilt from Impl::debug_local_hooks (debug_local_hooks_changed)
+kernel.impl	environment_frame_	D	the frame-environment fields, refreshed from Impl when environment_revision_ is stale
+kernel.impl	environment_revision_	D	the Impl::kernel_environment_revision environment_frame_ was refreshed at; a new kernel starts stale
 kernel.impl	variable_hook_members_	D	rebuilt from Impl::debug_local_hooks (debug_local_hooks_changed)
 kernel.impl	watched_slot_	D	rebuilt from the watches (apply_watches); selects the members observe_units recompiles
 kernel.impl	observe_pending_	D	set by a variable hook made during an activation until the hooked code is swapped in before the next run; false between activations

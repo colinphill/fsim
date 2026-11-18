@@ -136,6 +136,7 @@ void run_io(RunStateArchive& ar, Impl& impl)
     // watched (39.4.2); the monitors' masks are cleared with them.
     if (ar.loading()) {
         impl.sva_instance_watches.clear();
+        ++impl.kernel_environment_revision;
     }
     // The disable nets each monitor registered when it was created (16.12).
     FSIM_RS_IO("interp.impl", sva_disable_watches, ar, impl);

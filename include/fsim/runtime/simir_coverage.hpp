@@ -64,8 +64,10 @@ public:
         std::size_t maximum_points = 1U << 20U);
     [[nodiscard]] CodeCoverageCounterUpdate record(
         ::fsim::runtime::CodeCoverageCounterId counter) noexcept;
-    [[nodiscard]] bool configured() const noexcept;
-    [[nodiscard]] bool enabled() const noexcept;
+    // The accessors generated kernel code's frame setup reads on every
+    // member run are defined here so they inline.
+    [[nodiscard]] bool configured() const noexcept { return configured_; }
+    [[nodiscard]] bool enabled() const noexcept { return enabled_; }
     void set_enabled(bool enabled) noexcept;
     [[nodiscard]] bool set_enabled(
         std::span<const ::fsim::runtime::CodeCoverageCounterId> counters,
@@ -76,7 +78,11 @@ public:
         noexcept;
     [[nodiscard]] std::span<const std::uint64_t> values() const noexcept;
     [[nodiscard]] std::span<std::uint64_t> mutable_values() noexcept;
-    [[nodiscard]] std::span<std::uint64_t> direct_values() noexcept;
+    [[nodiscard]] std::span<std::uint64_t> direct_values() noexcept
+    {
+        return enabled_ ? std::span<std::uint64_t> { values_ }
+                        : std::span<std::uint64_t> { };
+    }
     [[nodiscard]] bool overflowed(
         ::fsim::runtime::CodeCoverageCounterId counter) const noexcept;
     [[nodiscard]] std::size_t overflow_count() const noexcept;
@@ -84,7 +90,10 @@ public:
     /// (#128): a counter that saturated stays flagged after a restart, and a
     /// counter switched off stays off.
     [[nodiscard]] std::span<const std::uint8_t> overflow_flags() const noexcept;
-    [[nodiscard]] std::span<const std::uint8_t> enabled_flags() const noexcept;
+    [[nodiscard]] std::span<const std::uint8_t> enabled_flags() const noexcept
+    {
+        return enabled_counters_;
+    }
     /// Puts saved flags back; false, changing nothing, when a size differs
     /// from the counter table.
     [[nodiscard]] bool restore_flags(std::span<const std::uint8_t> overflowed,

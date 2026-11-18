@@ -38,7 +38,7 @@ namespace fsim::runtime::simir {
 
 using namespace static_kernel_detail;
 
-FSIM_STATIC_KERNEL_TLS thread_local Interpreter::Impl::StaticKernel::Lane*
+FSIM_STATIC_KERNEL_TLS constinit thread_local Interpreter::Impl::StaticKernel::Lane*
     Interpreter::Impl::StaticKernel::worker_lane_ = nullptr;
 
 namespace static_kernel_detail {
@@ -1566,6 +1566,9 @@ bool Interpreter::Impl::StaticKernel::run_parallel_batch(const BatchPhase phase,
     if (sva_table_used_) {
         refresh_sva_table();
     }
+    if (environment_revision_ != impl_.kernel_environment_revision) {
+        refresh_environment();
+    }
     if (inline_items) {
         batch_dispatch_ = BatchDispatch::inline_items;
         for (std::uint32_t item = 0U; item < count; ++item) {
@@ -2271,6 +2274,9 @@ void Interpreter::Impl::StaticKernel::run_domain_items(
     static const bool inline_items = std::getenv("FSIM_KERNEL_MT_INLINE") != nullptr;
     if (sva_table_used_) {
         refresh_sva_table();
+    }
+    if (environment_revision_ != impl_.kernel_environment_revision) {
+        refresh_environment();
     }
     if (inline_items) {
         for (std::uint32_t item = 0U; item < count; ++item) {

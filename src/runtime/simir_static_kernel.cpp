@@ -4946,19 +4946,26 @@ PackedLogic4 Interpreter::Impl::StaticKernel::wire_value(const Wire& wire)
     return value;
 }
 
+bool Interpreter::Impl::StaticKernel::copy_converted_wire(const Wire& wire)
+{
+    const auto& to = slots_[wire.target];
+    const WordSnapshot before(arena_.data() + to.offset,
+        static_cast<std::size_t>(to.planes) * to.words);
+    store_slot_bits(wire.target, wire_value(wire), wire.target_offset);
+    return !std::equal(before.begin(), before.end(), arena_.begin() + to.offset);
+}
+
 bool Interpreter::Impl::StaticKernel::copy_wire(const Wire& wire)
 {
-    if (wire.target_source != std::numeric_limits<std::uint32_t>::max()) {
+    if (wire.target_source != std::numeric_limits<std::uint32_t>::max())
+        [[unlikely]] {
         return false;
+    }
+    if (wire.convert != std::numeric_limits<ProcessId>::max()) [[unlikely]] {
+        return copy_converted_wire(wire);
     }
     const auto& from = slots_[wire.source];
     const auto& to = slots_[wire.target];
-    if (wire.convert != std::numeric_limits<ProcessId>::max()) {
-        const WordSnapshot before(arena_.data() + to.offset,
-            static_cast<std::size_t>(to.planes) * to.words);
-        store_slot_bits(wire.target, wire_value(wire), wire.target_offset);
-        return !std::equal(before.begin(), before.end(), arena_.begin() + to.offset);
-    }
     bool changed = false;
     for (std::uint32_t plane = 0U; plane < to.planes; ++plane) {
         const auto* source = arena_.data() + from.offset + plane * from.words;
@@ -10534,12 +10541,8 @@ void Interpreter::Impl::StaticKernel::note_debug_write(
     debug_write_flag_ = 1U;
 }
 
-void Interpreter::Impl::StaticKernel::flush_debug_writes()
+void Interpreter::Impl::StaticKernel::drain_debug_writes()
 {
-    debug_write_flag_ = 0U;
-    if (debug_writes_.empty()) {
-        return;
-    }
     // An observer the publish runs may make the kernel write again (a
     // foreign put is not noted, but the drain stays re-entrant).
     static_kernel_detail::QueueDrain<std::uint32_t> drained(
@@ -11799,6 +11802,7 @@ void Interpreter::Impl::StaticKernel::debug_local_hooks_changed()
     // stores (note_variable_store).
     variable_hook_members_.assign(members_.size(), 0U);
     variable_hooks_active_ = false;
+    environment_revision_ = stale_environment;
     member_pinned_.resize(members_.size(), 0U);
     for (const auto& hook : impl_.debug_local_hooks) {
         for (std::uint32_t member = 0U; member < members_.size(); ++member) {
@@ -14629,6 +14633,8 @@ ReplanResult Interpreter::Impl::StaticKernel::graft_net_delay(const NetDelayGraf
         }
         member.level = level;
         members_.push_back(std::move(member));
+        // The member tables of every frame grow with it (refresh_environment).
+        environment_revision_ = stale_environment;
         member_process_.push_back(process.id);
         fast_runs_.push_back(FastRun { });
         MemberSchedule state;

@@ -73,16 +73,6 @@ CodeCoverageCounterUpdate CodeCoverageCounters::record(
     return CodeCoverageCounterUpdate::Saturated;
 }
 
-bool CodeCoverageCounters::configured() const noexcept
-{
-    return configured_;
-}
-
-bool CodeCoverageCounters::enabled() const noexcept
-{
-    return enabled_;
-}
-
 void CodeCoverageCounters::set_enabled(const bool enabled) noexcept
 {
     enabled_ = enabled;
@@ -137,11 +127,6 @@ std::span<const std::uint8_t> CodeCoverageCounters::overflow_flags() const noexc
     return overflowed_;
 }
 
-std::span<const std::uint8_t> CodeCoverageCounters::enabled_flags() const noexcept
-{
-    return enabled_counters_;
-}
-
 bool CodeCoverageCounters::restore_flags(
     const std::span<const std::uint8_t> overflowed,
     const std::span<const std::uint8_t> enabled) noexcept
@@ -167,12 +152,6 @@ std::span<const std::uint64_t> CodeCoverageCounters::values() const noexcept
 std::span<std::uint64_t> CodeCoverageCounters::mutable_values() noexcept
 {
     return values_;
-}
-
-std::span<std::uint64_t> CodeCoverageCounters::direct_values() noexcept
-{
-    return enabled_ ? std::span<std::uint64_t> { values_ }
-                    : std::span<std::uint64_t> { };
 }
 
 bool CodeCoverageCounters::overflowed(
@@ -212,6 +191,7 @@ void Interpreter::set_code_coverage_counters(
         };
     }
     impl_->code_coverage_counters.reset(std::move(counters));
+    ++impl_->kernel_environment_revision;
 }
 
 std::span<const std::uint64_t>
@@ -245,24 +225,29 @@ void Interpreter::set_code_coverage_collection_enabled(
     const bool enabled) noexcept
 {
     impl_->code_coverage_counters.set_enabled(enabled);
+    ++impl_->kernel_environment_revision;
 }
 
 bool Interpreter::set_code_coverage_collection_enabled(
     const std::span<const ::fsim::runtime::CodeCoverageCounterId> counters,
     const bool enabled) noexcept
 {
+    // Switching counters may switch collection as a whole (enabled()).
+    ++impl_->kernel_environment_revision;
     return impl_->code_coverage_counters.set_enabled(counters, enabled);
 }
 
 void Interpreter::reset_code_coverage_counters() noexcept
 {
     impl_->code_coverage_counters.clear();
+    ++impl_->kernel_environment_revision;
 }
 
 bool Interpreter::reset_code_coverage_counters(
     const std::span<const ::fsim::runtime::CodeCoverageCounterId> counters)
     noexcept
 {
+    ++impl_->kernel_environment_revision;
     return impl_->code_coverage_counters.clear(counters);
 }
 

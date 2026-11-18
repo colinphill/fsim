@@ -110,6 +110,7 @@ void Interpreter::set_plusargs(const std::span<const std::string> plusargs)
         };
     }
     impl_->plusargs.assign(plusargs.begin(), plusargs.end());
+    ++impl_->kernel_environment_revision;
 }
 
 void Interpreter::set_time_resolution_femtoseconds(
@@ -6257,6 +6258,7 @@ void Interpreter::set_sva_disabled_hook(SvaDisabledHook hook)
 void Interpreter::bind_assertion_start_reports() noexcept
 {
     impl_->assertion_starts_bound = true;
+    ++impl_->kernel_environment_revision;
 }
 
 void Interpreter::set_sva_step_hook(SvaStepHook hook)
@@ -7103,6 +7105,7 @@ void Interpreter::set_fork_spawn_filter(
     }
     impl_->fork_spawn_filter = std::move(prepared);
     impl_->fork_spawn_filter_observes = observes_signals;
+    ++impl_->kernel_environment_revision;
 }
 
 } // namespace fsim::runtime::simir
