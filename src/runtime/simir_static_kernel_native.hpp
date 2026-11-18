@@ -174,9 +174,10 @@ struct StaticKernelSvaTable {
     /// Impl::sva_pop_serial: an inline outcome pop increments it and stamps
     /// the block with the result.
     std::int64_t* pop_serial { };
-    /// Impl::sampled_ring_words (clocked sampled-value histories).
+    /// The kernel's arena, which holds its clocked sampled-value histories
+    /// (StaticKernel::plan_sampled_state; instructions address ring starts).
     const std::uint64_t* rings { };
-    /// Impl::sampled_value_words (the Preponed sampled values).
+    /// The kernel's arena, which holds its Preponed sampled values.
     const std::uint64_t* sampled { };
     /// The current time step, for the $past sample test.
     const std::int64_t* now { };

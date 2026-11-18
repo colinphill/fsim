@@ -56,14 +56,23 @@ Interpreter::Impl::Impl(
             for (std::size_t signal = 0U;
                  signal < signals.size();
                  ++signal) {
-                if (!sampled_value_dependencies_unknown
-                    && sampled_value_dependency_mask[signal] == 0U) {
+                if ((!sampled_value_dependencies_unknown
+                        && sampled_value_dependency_mask[signal] == 0U)
+                    || sampled_value_in_kernel(static_cast<SignalId>(signal))) {
                     continue;
                 }
                 sampled_values[signal]
                     = logical_signal_value(static_cast<SignalId>(signal));
                 store_sampled_value_words(static_cast<SignalId>(signal));
             }
+            // The signals that sample an object's property take the
+            // property's Preponed value (IEEE 1800-2023 16.5.1).
+            refresh_sampled_properties(scheduler.now());
+        }
+        // The static kernel's Preponed values (IEEE 1800-2023 4.4.2.1): its
+        // own signals' snapshot, and the copies of the host's values above.
+        if (static_kernel != nullptr) {
+            kernel_sampled_slot_start();
         }
         // The concurrent assertion monitors that evaluate at this time step
         // without a clock tick (IEEE 1800-2023 16.12, 16.12.14), after the

@@ -409,6 +409,8 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         restored_native_.reset();
         stage("native");
     }
+    bind_sampled_state(std::getenv("FSIM_STATIC_KERNEL_GENERIC") == nullptr
+            ? codegen_.get() : nullptr);
     build_schedule_targets();
     // FSIM_KERNEL_WRITE_SKIP=0 queues every VHDL assignment.
     if (const char* skip = std::getenv("FSIM_KERNEL_WRITE_SKIP");
@@ -621,12 +623,22 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         || std::ranges::any_of(inputs_,
             [](const Input& input) { return !input.unwritten; })
         || std::ranges::any_of(slots_, [](const Slot& slot) { return slot.output; });
-    // Every process is a member and nothing crosses the host boundary.
-    // Assertion members run in the host's regions and read its sampled
-    // state, which follow the host's time.
-    const bool assertions = std::ranges::any_of(members_,
-        [](const Member& member) { return member.assertion; });
-    closed_ = !host_boundary_ && !has_hosted_ && !host_written && !assertions
+    // Every process is a member and nothing crosses the host boundary. The
+    // sampled state the members read is the kernel's (plan_sampled_state),
+    // which follows the kernel's time; but a member whose threads run in
+    // another region (a concurrent assertion's Observed region, an action
+    // block's Reactive region, IEEE 1800-2023 4.4.2, 16.14.1) runs from the
+    // host's region doorbells, which follow the host's time.
+    const bool regions = std::ranges::any_of(members_,
+        [](const Member& member) {
+            return !member.vhdl
+                && (member.phase != SchedulerPhase::active
+                    || std::ranges::any_of(member.operations(),
+                        [](const Operation& operation) {
+                            return operation_holds<WaitRegion>(operation);
+                        }));
+        });
+    closed_ = !host_boundary_ && !has_hosted_ && !host_written && !regions
         && !vhdl_host_cycles_ && impl_.processes.size() == members_.size();
     // A user-resolved signal starts at the resolution of its drivers'
     // initial values (IEEE 1076-2019 14.7.5.2): one pass of its resolver,
@@ -2050,6 +2062,8 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
     stage("levels");
     // The histories, and 'LAST_VALUE as a read, before the members compile.
     build_histories();
+    // The sampled state the members' inline loads address (16.5.1).
+    plan_sampled_state();
     if (std::getenv("FSIM_STATIC_KERNEL_GENERIC") == nullptr) {
         restored_specializations_ = std::move(spec.specializations);
         recorded_specializations_ = std::move(spec.record_specializations);
@@ -3051,6 +3065,18 @@ Interpreter::Impl::StaticKernel::~StaticKernel()
                   << '\n';
     }
     {
+        // The kernel's sampled state (plan_sampled_state).
+        std::size_t owned = 0U;
+        for (const auto& entry : sampled_.values) {
+            owned += entry.slot != no_slot ? 1U : 0U;
+        }
+        std::cerr << "fsim-kernel: sampled values=" << sampled_.values.size()
+                  << " kernel=" << owned << " rings=" << sampled_.rings.size()
+                  << " snapshot=" << (sampled_snapshot_entry_ != nullptr ? "native"
+                                                                       : "bytecode")
+                  << " closed=" << (closed_ ? 1 : 0) << '\n';
+    }
+    {
         // Executed instruction mix: each template's instructions by kind,
         // weighted by its runs (static counts, so branches over-count).
         std::map<int, std::uint64_t> mix;
@@ -3347,6 +3373,11 @@ void Interpreter::Impl::StaticKernel::slot_changed(const std::uint32_t slot_inde
     if (worker_lane_ == nullptr && slot_index < slot_history_.size()
         && slot_history_[slot_index] != no_slot) {
         history_event(slot_index, before);
+    }
+    if (worker_lane_ == nullptr && slot_index + 1U < sampled_.slot_ring_begin.size()
+        && sampled_.slot_ring_begin[slot_index]
+            != sampled_.slot_ring_begin[slot_index + 1U]) {
+        sampled_clock_changed(slot_index);
     }
     if (auto* const lane = worker_lane_) {
         if (lane->domain == no_slot) {
@@ -8989,6 +9020,10 @@ void Interpreter::Impl::StaticKernel::verify_run(const std::uint32_t member_inde
     writes_.count = static_cast<std::uint32_t>(nba_size);
     pending_generic_.resize(generic_size);
     nba_.resize(element_count);
+    // The sampled state the compiled run left (its clock edges' appends,
+    // which the replay's slot_changed does not make) is the run's.
+    const std::vector<std::uint64_t> sampled_after(
+        arena_.begin() + sampled_.region_begin, arena_.begin() + sampled_.region_end);
     arena_ = arena;
     write_marks_ = marks;
     member.call_stack = stack;
@@ -9072,6 +9107,7 @@ void Interpreter::Impl::StaticKernel::verify_run(const std::uint32_t member_inde
         replaying_ = false;
         verify_shadow.reference = false;
     }
+    std::ranges::copy(sampled_after, arena_.begin() + sampled_.region_begin);
     const auto reference_writes = verify_writes(nba_size);
     std::string mismatch = !replay_mismatch.empty() ? replay_mismatch
         : verify_effect_mismatch(compiled_writes, reference_writes, marks);
@@ -11285,6 +11321,8 @@ bool Interpreter::Impl::StaticKernel::activate()
         if (unknown_census_.stride != 0U) {
             sample_unknown_census();
         }
+        // The warped time slot's Preponed values (IEEE 1800-2023 4.4.2.1).
+        sampled_slot_start();
         activate_step();
     }
     if (behavioral_) {
@@ -14879,6 +14917,561 @@ ReplanResult Interpreter::Impl::StaticKernel::split_gate_delay(
         build_parallel_plan();
     }
     return { true, { } };
+}
+
+
+// Kernel-owned sampled state (IEEE 1800-2023 4.4.2.1, 16.5.1, 16.9.3).
+
+void Interpreter::Impl::StaticKernel::plan_sampled_state()
+{
+    sampled_ = SampledState { };
+    const auto signal_count = impl_.signals.size();
+    std::vector<SignalId> sampled_signals;
+    std::vector<std::uint8_t> wanted(signal_count, 0U);
+    std::vector<Impl::SampledHistoryKey> keys;
+    // Each key's ring holds the deepest history its kernel readers need;
+    // the host's plan sees only its own programs' reads.
+    std::map<Impl::SampledHistoryKey, std::size_t> capacity_of;
+    const auto want = [&](const SignalId signal) {
+        if (signal < signal_count && wanted[signal] == 0U) {
+            wanted[signal] = 1U;
+            sampled_signals.push_back(signal);
+        }
+    };
+    // The sampled reads of the SystemVerilog members, in member order: a
+    // read's signal and gate have Preponed values; a clocked history read
+    // ($sampled, $rose, $fell, $stable, $changed, $past of a clocking
+    // event) has its key's ring.
+    for (const auto& member : members_) {
+        if (member.vhdl) {
+            continue;
+        }
+        for (const auto& operation : member.operations()) {
+            const auto* read = operation_get_if<ReadSignal>(&operation);
+            if (read == nullptr || read->kind == SignalReadKind::future
+                || (read->kind == SignalReadKind::current && read->ticks == 1U
+                    && !read->clock && !read->gate)) {
+                continue;
+            }
+            want(read->signal);
+            if (read->gate) {
+                want(*read->gate);
+            }
+            bool history = false;
+            switch (read->kind) {
+            case SignalReadKind::sampled:
+            case SignalReadKind::rose:
+            case SignalReadKind::fell:
+            case SignalReadKind::stable:
+            case SignalReadKind::changed:
+            case SignalReadKind::past:
+                history = true;
+                break;
+            case SignalReadKind::current:
+            case SignalReadKind::future:
+            case SignalReadKind::rising:
+            case SignalReadKind::falling:
+            case SignalReadKind::steady:
+            case SignalReadKind::changing:
+                break;
+            }
+            if (!history || !read->clock || read->ticks == 0U
+                || *read->clock >= signal_count) {
+                continue;
+            }
+            // Keyed as the host's ring plan keys it: by the reading
+            // program's scheduling domain (Impl::sampled_ring_plan).
+            const Impl::SampledHistoryKey key { read->signal, read->clock,
+                read->clock_edge, read->gate,
+                impl_.processes.program_view(member.process)
+                    .scheduling_domain() };
+            if (std::ranges::find(keys, key) == keys.end()) {
+                keys.push_back(key);
+            }
+            auto& capacity = capacity_of[key];
+            capacity = std::max(capacity, Impl::sampled_history_capacity(*read));
+        }
+    }
+    if (sampled_signals.empty()) {
+        return;
+    }
+    sampled_.region_begin = static_cast<std::uint32_t>(arena_.size());
+    // A signal that samples an object's property is the host's: the host
+    // evaluates its chain at the slot start (Impl::refresh_sampled_properties,
+    // IEEE 1800-2023 16.5.1).
+    std::vector<std::uint8_t> property_sample(signal_count, 0U);
+    for (const auto& site : impl_.sampled_properties) {
+        if (site.signal < signal_count) {
+            property_sample[site.signal] = 1U;
+        }
+    }
+    // A signal the kernel owns in a two-plane slot is the kernel's to
+    // sample; any other is the host's, whose sampled words it copies.
+    const auto owned_sampled_slot = [&](const SignalId signal) {
+        if (property_sample[signal] != 0U
+            || signal >= slot_of_signal_.size() || slot_of_signal_[signal] == no_slot
+            || signal >= impl_.static_kernel_owned_signal.size()
+            || impl_.static_kernel_owned_signal[signal] == 0U) {
+            return no_slot;
+        }
+        const auto slot = slot_of_signal_[signal];
+        if (slots_[slot].mirror) {
+            return no_slot;
+        }
+        if (slots_[slot].planes != 2U) {
+            throw std::logic_error { "static kernel sampled signal "
+                + impl_.get_signal_cold(signal).name + " has a nine-value slot" };
+        }
+        return slot;
+    };
+    impl_.ensure_sampled_value_word_layout();
+    sampled_.value_of_signal.assign(signal_count, no_slot);
+    for (const auto signal : sampled_signals) {
+        const auto& initial = impl_.get_signal(signal).initial_value;
+        const auto width = static_cast<std::uint32_t>(initial.width());
+        if (width == 0U) {
+            continue;
+        }
+        SampledValueEntry entry;
+        entry.signal = signal;
+        entry.slot = owned_sampled_slot(signal);
+        entry.width = width;
+        entry.words = (width + 63U) / 64U;
+        if (entry.slot == no_slot) {
+            if (signal >= impl_.sampled_value_word_offsets.size()
+                || impl_.sampled_value_word_offsets[signal]
+                    == Impl::no_sampled_value_words) {
+                // Neither the kernel's nor sampled by the host: the
+                // members read it through the host's service.
+                continue;
+            }
+            entry.host_offset = impl_.sampled_value_word_offsets[signal];
+        }
+        entry.offset = static_cast<std::uint32_t>(arena_.size());
+        arena_.resize(arena_.size() + 2U * entry.words, 0U);
+        // The value before the first time slot: the signal's value at the
+        // start of simulation (16.5.1).
+        if (entry.slot != no_slot) {
+            std::copy_n(arena_.data() + slots_[entry.slot].offset, 2U * entry.words,
+                arena_.data() + entry.offset);
+        } else {
+            const auto value = Impl::coerce_value_kind(initial, ValueKind::logic4);
+            const auto aval = value.aval_words();
+            const auto bval = value.bval_words();
+            for (std::uint32_t word = 0U; word < entry.words; ++word) {
+                arena_[entry.offset + word] = word < aval.size() ? aval[word] : 0U;
+                arena_[entry.offset + entry.words + word]
+                    = word < bval.size() ? bval[word] : 0U;
+            }
+        }
+        sampled_.value_of_signal[signal]
+            = static_cast<std::uint32_t>(sampled_.values.size());
+        sampled_.values.push_back(entry);
+    }
+    // A key host programs read too holds the deepest history of either.
+    for (const auto& planned : impl_.sampled_ring_plan()) {
+        if (const auto found = capacity_of.find(planned.key);
+            found != capacity_of.end()) {
+            found->second = std::max(found->second, planned.capacity);
+        }
+    }
+    std::map<std::uint32_t, std::uint32_t> seen_of_slot;
+    for (const auto& key : keys) {
+        const auto value = sampled_.value_of_signal[key.signal];
+        if (value == no_slot) {
+            continue;
+        }
+        const auto capacity = capacity_of.find(key);
+        SampledRingEntry ring;
+        ring.key = key;
+        ring.value = value;
+        ring.kernel_sourced = sampled_.values[value].slot != no_slot;
+        ring.gate = key.gate ? sampled_.value_of_signal[*key.gate] : no_slot;
+        ring.clock_slot = owned_sampled_slot(*key.clock);
+        if (ring.clock_slot != no_slot) {
+            const auto [seen, inserted] = seen_of_slot.try_emplace(ring.clock_slot,
+                static_cast<std::uint32_t>(arena_.size()));
+            if (inserted) {
+                const auto words = 2U * slots_[ring.clock_slot].words;
+                arena_.resize(arena_.size() + words, 0U);
+                std::copy_n(arena_.data() + slots_[ring.clock_slot].offset, words,
+                    arena_.data() + seen->second);
+            }
+            ring.seen = seen->second;
+        }
+        const auto& shape = impl_.get_signal(key.signal).initial_value;
+        const auto ring_shape = ring.kernel_sourced
+            ? Impl::coerce_value_kind(shape, ValueKind::logic4) : shape;
+        ring.offset = static_cast<std::uint32_t>(arena_.size());
+        arena_.resize(arena_.size()
+                + Impl::sampled_ring_size(ring_shape.width(), ring_shape.is_logic9(),
+                    capacity->second),
+            0U);
+        Impl::init_sampled_ring(arena_.data() + ring.offset, ring_shape,
+            capacity->second);
+        sampled_.rings.push_back(std::move(ring));
+    }
+    // The rings by clock: kernel slots, and host signals.
+    const auto by_clock = [&](std::vector<std::uint32_t>& begin,
+                           std::vector<std::uint32_t>& members, const std::size_t size,
+                           const auto& clock_of) {
+        begin.assign(size + 1U, 0U);
+        for (const auto& ring : sampled_.rings) {
+            if (const auto clock = clock_of(ring); clock != no_slot) {
+                ++begin[clock + 1U];
+            }
+        }
+        for (std::size_t at = 0U; at < size; ++at) {
+            begin[at + 1U] += begin[at];
+        }
+        members.assign(begin.back(), 0U);
+        auto fill = begin;
+        for (std::uint32_t at = 0U; at < sampled_.rings.size(); ++at) {
+            if (const auto clock = clock_of(sampled_.rings[at]); clock != no_slot) {
+                members[fill[clock]++] = at;
+            }
+        }
+        if (members.empty()) {
+            begin.clear();
+        }
+    };
+    by_clock(sampled_.slot_ring_begin, sampled_.slot_rings, slots_.size(),
+        [](const SampledRingEntry& ring) { return ring.clock_slot; });
+    by_clock(sampled_.clock_ring_begin, sampled_.clock_rings, signal_count,
+        [](const SampledRingEntry& ring) {
+            return ring.clock_slot == no_slot
+                ? static_cast<std::uint32_t>(*ring.key.clock) : no_slot;
+        });
+    // A clock slot's every change reaches slot_changed (the general
+    // notification), on the leader.
+    slot_waitable_.resize(slots_.size(), 0U);
+    for (const auto& ring : sampled_.rings) {
+        if (ring.clock_slot != no_slot) {
+            slot_waitable_[ring.clock_slot] = 1U;
+        }
+    }
+    sampled_.stamp = static_cast<std::uint32_t>(arena_.size());
+    arena_.push_back(0U);
+    sampled_.region_end = static_cast<std::uint32_t>(arena_.size());
+    // The snapshot unit: the Preponed copy of each kernel signal.
+    for (const auto& entry : sampled_.values) {
+        if (entry.slot == no_slot) {
+            continue;
+        }
+        KInst inst;
+        inst.op = KOp::sampled_snapshot;
+        inst.width = entry.width;
+        inst.x = slots_[entry.slot].offset;
+        inst.y = entry.offset;
+        inst.z = entry.words;
+        sampled_.snapshot.code.push_back(inst);
+    }
+}
+
+void Interpreter::Impl::StaticKernel::bind_sampled_state(
+    StaticKernelCodegen* const codegen)
+{
+    impl_.sampled_kernel_owned.assign(impl_.signals.size(), 0U);
+    for (const auto& entry : sampled_.values) {
+        if (entry.slot != no_slot) {
+            impl_.sampled_kernel_owned[entry.signal] = 1U;
+        }
+    }
+    sampled_check_ = std::getenv("FSIM_KERNEL_SVA_CHECK") != nullptr;
+    reset_sampled_check();
+    sampled_snapshot_entry_ = nullptr;
+    if (codegen != nullptr && !sampled_.snapshot.code.empty()) {
+        StaticKernelTemplate unit;
+        unit.body = &sampled_.snapshot;
+        // It runs at every time slot's start.
+        unit.tier = 2U;
+        const std::array units { unit };
+        const auto entries = codegen->compile(units, native_helpers_);
+        if (!entries.empty()) {
+            sampled_snapshot_entry_ = entries.front();
+        }
+    }
+}
+
+void Interpreter::Impl::StaticKernel::reset_sampled_check()
+{
+    sampled_check_rings_.clear();
+    if (!sampled_check_) {
+        return;
+    }
+    for (const auto& ring : sampled_.rings) {
+        const auto* const words = arena_.data() + ring.offset;
+        sampled_check_rings_.emplace_back(words,
+            words + Impl::sampled_ring_size(words[Impl::SampledRing::width],
+                words[Impl::SampledRing::shape] != 0U,
+                words[Impl::SampledRing::capacity]));
+    }
+}
+
+std::optional<std::uint32_t> Interpreter::Impl::StaticKernel::sampled_words_offset(
+    const SignalId signal) const
+{
+    if (signal >= sampled_.value_of_signal.size()
+        || sampled_.value_of_signal[signal] == no_slot) {
+        return std::nullopt;
+    }
+    return sampled_.values[sampled_.value_of_signal[signal]].offset;
+}
+
+std::optional<std::uint32_t> Interpreter::Impl::StaticKernel::sampled_ring_offset(
+    const Impl::SampledHistoryKey& key) const
+{
+    for (const auto& ring : sampled_.rings) {
+        if (ring.key == key) {
+            return ring.offset;
+        }
+    }
+    return std::nullopt;
+}
+
+const std::uint64_t* Interpreter::Impl::StaticKernel::sampled_ring(
+    const Impl::SampledHistoryKey& key) const
+{
+    const auto offset = sampled_ring_offset(key);
+    return offset ? arena_.data() + *offset : nullptr;
+}
+
+PackedLogic4 Interpreter::Impl::StaticKernel::sampled_entry_value(
+    const std::uint32_t entry) const
+{
+    const auto& value = sampled_.values[entry];
+    const auto* const words = arena_.data() + value.offset;
+    return PackedLogic4::from_word_planes(value.width,
+        std::span<const std::uint64_t> { words, value.words },
+        std::span<const std::uint64_t> { words + value.words, value.words });
+}
+
+PackedLogic4 Interpreter::Impl::StaticKernel::sampled_current_value(
+    const SignalId signal) const
+{
+    return Impl::coerce_value_kind(slot_value(slot_of_signal_[signal]),
+        ValueKind::logic4);
+}
+
+void Interpreter::Impl::StaticKernel::sampled_slot_start(const bool force)
+{
+    if (sampled_.values.empty()) {
+        return;
+    }
+    auto& stamp = arena_[sampled_.stamp];
+    const auto now = static_cast<std::uint64_t>(sampled_time());
+    if (!force) {
+        // Once per time step: a host slot start of a step the kernel's
+        // time warp already ran (its end) samples nothing again.
+        if (stamp == now + 1U) {
+            return;
+        }
+        stamp = now + 1U;
+    }
+    // The host's samples of objects' properties at this slot's start (a
+    // time step the kernel's time warp runs has no host slot start), before
+    // their words are copied below (IEEE 1800-2023 16.5.1).
+    impl_.refresh_sampled_properties(now);
+    run_sampled_snapshot();
+    for (const auto& entry : sampled_.values) {
+        if (entry.slot != no_slot) {
+            if (sampled_check_) {
+                // FSIM_KERNEL_SVA_CHECK: the snapshot is the slot's value
+                // read as the host reads it.
+                const auto host = Impl::coerce_value_kind(slot_value(entry.slot),
+                    ValueKind::logic4);
+                if (host != sampled_entry_value(
+                        sampled_.value_of_signal[entry.signal])) {
+                    throw std::runtime_error { "FSIM_KERNEL_SVA_CHECK: the kernel's "
+                        "Preponed value of " + impl_.get_signal_cold(entry.signal).name
+                        + " differs from its value at the slot start" };
+                }
+            }
+            continue;
+        }
+        // A host signal: the host's sampled words of this slot.
+        if (entry.host_offset + 2U * entry.words <= impl_.sampled_value_words.size()) {
+            std::copy_n(impl_.sampled_value_words.data() + entry.host_offset,
+                2U * entry.words, arena_.data() + entry.offset);
+        }
+        if (sampled_check_ && entry.signal < impl_.sampled_values.size()
+            && impl_.sampled_values[entry.signal].width() == entry.width
+            && Impl::coerce_value_kind(impl_.sampled_values[entry.signal],
+                   ValueKind::logic4)
+                != sampled_entry_value(sampled_.value_of_signal[entry.signal])) {
+            // FSIM_KERNEL_SVA_CHECK: the copy is the host's sampled value
+            // of this slot (a sampled property's chain included).
+            throw std::runtime_error { "FSIM_KERNEL_SVA_CHECK: the kernel's "
+                "Preponed copy of " + impl_.get_signal_cold(entry.signal).name
+                + " differs from the host's sampled value" };
+        }
+    }
+}
+
+void Interpreter::Impl::StaticKernel::run_sampled_snapshot()
+{
+    if (sampled_.snapshot.code.empty()) {
+        return;
+    }
+    if (sampled_snapshot_entry_ != nullptr) {
+        StaticKernelNativeFrame frame;
+        frame.arena = arena_.data();
+        frame.kernel = this;
+        frame.program = &sampled_.snapshot;
+        frame.instance = &sampled_.snapshot;
+        frame.writes = &write_queue();
+        frame.containers = container_info_.data();
+        frame.position = 0U;
+        frame.status = 0U;
+        const auto status = sampled_snapshot_entry_(&frame,
+            sampled_.snapshot.registers.data());
+        if (status != 0U || frame.status != 0U) {
+            throw std::logic_error { "static kernel sampled snapshot unit stopped" };
+        }
+        return;
+    }
+    // The bytecode tier.
+    for (const auto& inst : sampled_.snapshot.code) {
+        std::copy_n(arena_.data() + inst.x, 2U * static_cast<std::size_t>(inst.z),
+            arena_.data() + inst.y);
+    }
+}
+
+void Interpreter::Impl::StaticKernel::sampled_clock_changed(const std::uint32_t slot)
+{
+    const auto begin = sampled_.slot_ring_begin[slot];
+    const auto end = sampled_.slot_ring_begin[slot + 1U];
+    const auto& state = slots_[slot];
+    const auto words = 2U * state.words;
+    auto* const seen = arena_.data() + sampled_.rings[sampled_.slot_rings[begin]].seen;
+    const auto* const now_words = arena_.data() + state.offset;
+    if (std::equal(now_words, now_words + words, seen)) {
+        // A notice of a value the edge test has seen: no event.
+        return;
+    }
+    const auto previous = kernel_word::bit(Word { seen[0], seen[state.words] }, 0U);
+    const auto current
+        = kernel_word::bit(Word { now_words[0], now_words[state.words] }, 0U);
+    std::copy_n(now_words, words, seen);
+    if (impl_.declaration_initialization_active) {
+        // A declaration initializer's write is no event (IEEE 1800-2023
+        // 6.8).
+        return;
+    }
+    for (auto at = begin; at < end; ++at) {
+        const auto ring = sampled_.slot_rings[at];
+        const auto edge = sampled_.rings[ring].key.edge;
+        if (edge == SampledClockEdge::any
+            || edge_matches(edge == SampledClockEdge::positive ? EdgeKind::posedge
+                                                               : EdgeKind::negedge,
+                previous, current)) {
+            sampled_append(ring);
+        }
+    }
+}
+
+void Interpreter::Impl::StaticKernel::sampled_host_clock_event(const SignalId clock,
+    const PackedLogic4& previous, const PackedLogic4& current)
+{
+    const auto begin = sampled_.clock_ring_begin[clock];
+    const auto end = sampled_.clock_ring_begin[clock + 1U];
+    for (auto at = begin; at < end; ++at) {
+        const auto ring = sampled_.clock_rings[at];
+        const auto edge = sampled_.rings[ring].key.edge;
+        if (edge == SampledClockEdge::any
+            || edge_matches(edge == SampledClockEdge::positive ? EdgeKind::posedge
+                                                               : EdgeKind::negedge,
+                previous.get(0U), current.get(0U))) {
+            sampled_append(ring);
+        }
+    }
+}
+
+void Interpreter::Impl::StaticKernel::sampled_append(const std::uint32_t index)
+{
+    const auto& entry = sampled_.rings[index];
+    // A gated clock samples only when the gate's sampled value is 1.
+    if (entry.gate != no_slot) {
+        const auto& gate = sampled_.values[entry.gate];
+        if (kernel_word::bit(Word { arena_[gate.offset], arena_[gate.offset + gate.words] },
+                0U)
+            != Logic4::one) {
+            return;
+        }
+    } else if (entry.key.gate) {
+        const auto gate = *entry.key.gate;
+        if (gate >= impl_.sampled_values.size()
+            || impl_.sampled_values[gate].width() == 0U
+            || impl_.sampled_values[gate].get(0U) != Logic4::one) {
+            return;
+        }
+    }
+    auto* const ring = arena_.data() + entry.offset;
+    const auto slot = Impl::make_sampled_history_slot(sampled_time(),
+        ProcessSchedulingDomain::systemverilog, SignalChangeOrigin { }, 0U);
+    if (Impl::same_sampled_history_slot(ring, slot)) {
+        return;
+    }
+    const auto value = entry.kernel_sourced ? sampled_entry_value(entry.value)
+                                            : impl_.sampled_values[entry.key.signal];
+    Impl::append_sampled_ring(ring, slot, value);
+    if (sampled_check_) {
+        // FSIM_KERNEL_SVA_CHECK: the host's append rule on the reference.
+        auto& reference = sampled_check_rings_[index];
+        if (!Impl::same_sampled_history_slot(reference.data(), slot)) {
+            Impl::append_sampled_ring(reference.data(), slot, value);
+        }
+        if (!std::equal(reference.begin(), reference.end(), ring)) {
+            throw std::runtime_error { "FSIM_KERNEL_SVA_CHECK: the kernel's sampled "
+                "history of " + impl_.get_signal_cold(entry.key.signal).name
+                + " differs from the host's" };
+        }
+    }
+}
+
+PackedLogic4 Interpreter::Impl::kernel_sampled_value(const SignalId signal) const
+{
+    return static_kernel->sampled_value(signal);
+}
+
+std::optional<PackedLogic4> Interpreter::Impl::kernel_owned_value(const SignalId signal)
+{
+    // A forced signal's value is the host's (Interpreter::kernel_signal_value).
+    if (!static_kernel || !started || signal >= static_kernel_owned_signal.size()
+        || static_kernel_owned_signal[signal] == 0U
+        || (signal < forced_values.size() && forced_values[signal])) {
+        return std::nullopt;
+    }
+    return static_kernel->owned_value(signal);
+}
+
+PackedLogic4 Interpreter::Impl::kernel_current_value(const SignalId signal) const
+{
+    return static_kernel->sampled_current_value(signal);
+}
+
+const std::uint64_t* Interpreter::Impl::kernel_sampled_ring(
+    const SampledHistoryKey& key) const
+{
+    return static_kernel->sampled_ring(key);
+}
+
+SimulationTick Interpreter::Impl::kernel_sampled_now() const
+{
+    return static_kernel->sampled_time();
+}
+
+void Interpreter::Impl::kernel_sampled_slot_start()
+{
+    static_kernel->sampled_slot_start();
+}
+
+void Interpreter::Impl::kernel_sampled_clock_event(const SignalId clock,
+    const PackedLogic4& previous, const PackedLogic4& current)
+{
+    if (static_kernel->has_host_sampled_clock(clock)) {
+        static_kernel->sampled_host_clock_event(clock, previous, current);
+    }
 }
 
 } // namespace fsim::runtime::simir

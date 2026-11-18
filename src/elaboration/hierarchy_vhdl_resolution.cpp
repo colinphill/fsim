@@ -433,8 +433,7 @@ bool vhdl_conversion_actual(
                 // (`p(3 downto 2) => std_ulogic_vector(s)`).
                 if (kind == semantic::vhdl::ExpressionKind::call
                     && value->vhdl->operands.size() == 1U
-                    && value->vhdl->marker == support::ExpressionMarker::none
-                    && !value->vhdl->text.starts_with('@')) {
+                    && value->vhdl->marker == support::ExpressionMarker::none) {
                     const auto operand = specialization.find_expression(
                         value->vhdl->operands.front());
                     return operand && operand->vhdl != nullptr
@@ -463,8 +462,7 @@ bool vhdl_conversion_actual(
                     == semantic::vhdl::ExpressionKind::unary
                 && expression->vhdl->operator_symbol_call))
         || expression->vhdl->operands.size() != 1U
-        || expression->vhdl->marker != support::ExpressionMarker::none
-        || expression->vhdl->text.starts_with('@')) {
+        || expression->vhdl->marker != support::ExpressionMarker::none) {
         return false;
     }
     const auto operand = specialization.find_expression(

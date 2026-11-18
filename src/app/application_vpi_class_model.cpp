@@ -65,8 +65,7 @@ struct SourcePlace {
 // item, ...) is no function call.
 [[nodiscard]] bool marker_call(const sv::ConstraintExpression& expression)
 {
-    return expression.marker != support::ExpressionMarker::none
-        || expression.text.starts_with('@');
+    return expression.marker != support::ExpressionMarker::none;
 }
 
 // The operator of an operation leaf (IEEE 1800-2023 37.78 vpiOpType); empty

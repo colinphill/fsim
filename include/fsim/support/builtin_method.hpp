@@ -90,11 +90,15 @@ enum class BuiltinMethod : std::uint8_t {
     try_put,
     peek,
     try_peek,
+    // The iterator index query of an array method's with clause (7.12.4)
+    // and the triggered state of an event or sequence (15.5.3, 16.13.6).
+    index,
+    triggered,
 };
 
 namespace detail {
 
-inline constexpr std::array<std::pair<std::string_view, BuiltinMethod>, 58>
+inline constexpr std::array<std::pair<std::string_view, BuiltinMethod>, 60>
     kBuiltinMethodNames { {
         { "and", BuiltinMethod::reduce_and },
         { "atobin", BuiltinMethod::atobin },
@@ -117,6 +121,7 @@ inline constexpr std::array<std::pair<std::string_view, BuiltinMethod>, 58>
         { "getc", BuiltinMethod::getc },
         { "hextoa", BuiltinMethod::hextoa },
         { "icompare", BuiltinMethod::icompare },
+        { "index", BuiltinMethod::index },
         { "insert", BuiltinMethod::insert },
         { "itoa", BuiltinMethod::itoa },
         { "last", BuiltinMethod::last },
@@ -148,6 +153,7 @@ inline constexpr std::array<std::pair<std::string_view, BuiltinMethod>, 58>
         { "sum", BuiltinMethod::sum },
         { "tolower", BuiltinMethod::tolower },
         { "toupper", BuiltinMethod::toupper },
+        { "triggered", BuiltinMethod::triggered },
         { "try_get", BuiltinMethod::try_get },
         { "try_peek", BuiltinMethod::try_peek },
         { "try_put", BuiltinMethod::try_put },

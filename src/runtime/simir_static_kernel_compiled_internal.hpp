@@ -965,6 +965,10 @@ inline void kinst_flow(const KInst& inst, const std::uint32_t at,
                                                      : std::min(target, size));
         }
         break;
+    case KOp::sampled_snapshot:
+        // Arena words only; no register.
+        fall();
+        break;
     }
 }
 

@@ -287,7 +287,10 @@ enum class SystemVerilogConstraintTemplateRole : std::uint8_t {
     /// A Name for a std::randomize argument or with-clause array; its text
     /// is the solver variable it names.
     std_randomize_variable,
-    last = std_randomize_variable,
+    /// A Name `item.index`: the index query of a with-clause iterator
+    /// (IEEE 1800-2023 7.12.4); its text is the iterator and member.
+    iterator_index,
+    last = iterator_index,
 };
 
 struct SystemVerilogConstraintTemplate {

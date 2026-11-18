@@ -385,13 +385,14 @@ void restore_fires_no_start_callbacks(const fsim::project::Config& config,
   assert(restored_count == 0);
 }
 
-// A reset is refused (FSIM-SAVE-0018) while structure a foreign interface
-// created exists: a driver owner process (vhpi_create of a process or a driver
-// of no process) or a host driver (IEEE 1800-2023 D.8, IEEE 1076-2019 20.9,
-// 23.6). The twin a reset builds is the design from the artifact and cannot
-// recreate either. The refusal is saved with the run (app.control), so a
-// restored run is refused as well. A reset source is not installed here, so
-// the refusal text names the structure only after it was created.
+// A reset keeps the structure a foreign interface created: a driver owner
+// process (vhpi_create of a process or a driver of no process) or a host
+// driver (IEEE 1076-2019 20.9, 23.6). The engine journals both and the
+// reset's twin makes them again, so neither refuses a reset. A run restored
+// from a file holds what the saved run created without that journal (the
+// note is saved in app.control), so it is refused (FSIM-SAVE-0018). A reset
+// source is not installed here, so only the restored run's refusal names the
+// structure.
 void reset_refused_for_foreign_structure(const fsim::project::Config& config,
     const fsim::app::SimulationEngine engine,
     const std::filesystem::path& state) {
@@ -404,17 +405,14 @@ void reset_refused_for_foreign_structure(const fsim::project::Config& config,
   static_cast<void>(owner_run->run(7));
   assert(!created(owner_run->reset_refusal()));
   static_cast<void>(owner_run->add_foreign_driver_owner(0));
-  assert(created(owner_run->reset_refusal()));
-  assert(owner_run->reset_refusal().find("driver owner process")
-      != std::string::npos);
+  assert(!created(owner_run->reset_refusal()));
 
   auto driver_run = make_simulation(config, engine);
   const auto signal = driver_run->find_signal("run_state_counter.count");
   assert(signal);
   assert(!created(driver_run->reset_refusal()));
   driver_run->add_foreign_driver(0, *signal);
-  assert(created(driver_run->reset_refusal()));
-  assert(driver_run->reset_refusal().find("a driver created") != std::string::npos);
+  assert(!created(driver_run->reset_refusal()));
 
   // Saved in app.control: a restored run keeps the refusal.
   static_cast<void>(driver_run->run(7));
@@ -427,6 +425,7 @@ void reset_refused_for_foreign_structure(const fsim::project::Config& config,
   }
   assert(result.ok);
   assert(created(restored->reset_refusal()));
+  assert(restored->reset_refusal().find("a driver created") != std::string::npos);
 }
 
 }  // namespace

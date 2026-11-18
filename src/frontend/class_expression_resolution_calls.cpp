@@ -546,6 +546,10 @@ void Resolver::retain_task_profile(
           "index." + std::string{member},
           {std::move(property), std::move(element.operands[1])},
           expression.span};
+      selected.builtin_method = support::builtin_method_named(member)
+              == support::BuiltinMethod::triggered
+          ? support::BuiltinMethod::triggered
+          : support::BuiltinMethod::none;
       selected.systemverilog_source_order
           = expression.systemverilog_source_order;
       expression = std::move(selected);
@@ -580,6 +584,10 @@ void Resolver::retain_task_profile(
     if (!identity) {
       auto receiver = std::move(expression.operands.front());
       receiver.text += "." + std::string{member};
+      if (support::builtin_method_named(member)
+          == support::BuiltinMethod::triggered) {
+        receiver.builtin_method = support::BuiltinMethod::triggered;
+      }
       receiver.span = expression.span;
       expression = std::move(receiver);
       return receiver_type;
@@ -1162,7 +1170,7 @@ void Resolver::retain_task_profile(
         enum class Callee { none, object, caller };
         const auto callee_of = [&](const std::string_view text) {
           constexpr std::string_view local_prefix{"local::"};
-          if (text.empty() || text.front() == '.' || text.front() == '@'
+          if (text.empty() || text.front() == '.'
               || text.front() == '$') {
             return Callee::none;
           }
@@ -1305,7 +1313,7 @@ void Resolver::retain_task_profile(
           }
         }
         if (node.kind == ExpressionKind::Call && !node.text.empty()
-            && node.text.front() != '.' && node.text.front() != '@'
+            && node.text.front() != '.'
             && node.text.front() != '$') {
           constexpr std::string_view local_prefix{"local::"};
           const bool local = node.text.starts_with(local_prefix);
@@ -1737,6 +1745,10 @@ std::optional<Type> Resolver::resolve_expression(
         const auto member = path.substr(0, dot);
         auto select = marked_expression(support::ExpressionMarker::sv_select,
             std::string{member}, {}, expression.span);
+        if (support::builtin_method_named(member)
+            == support::BuiltinMethod::triggered) {
+          select.builtin_method = support::BuiltinMethod::triggered;
+        }
         select.operands.push_back(std::move(selected));
         selected = std::move(select);
         path = dot == std::string_view::npos ? std::string_view{}

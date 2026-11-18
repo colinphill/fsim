@@ -2235,7 +2235,6 @@ public:
         if ((name.kind == vhdl::ExpressionKind::index
                 || (name.kind == vhdl::ExpressionKind::call
                     && name.marker == support::ExpressionMarker::none
-                    && !name.text.starts_with("@")
                     && !name.text.starts_with("'")))
             && name.operands.size() == 2U) {
             return evaluate_vhdl_array_constant_element(name);
@@ -2550,7 +2549,6 @@ public:
                     || (view->vhdl->kind == vhdl::ExpressionKind::call
                         && view->vhdl->marker
                             == support::ExpressionMarker::none
-                        && !view->vhdl->text.starts_with('@')
                         && !view->vhdl->text.starts_with('\'')))
                 && declared_bounds()) {
                 if (const auto value = evaluate_vhdl_value(expression)) {
@@ -13018,8 +13016,7 @@ private:
         const bool indexed_call = prefix->vhdl->kind == vhdl::ExpressionKind::call
             && !prefix->vhdl->operands.empty()
             && !prefix->vhdl->text.starts_with('\'')
-            && prefix->vhdl->marker == support::ExpressionMarker::none
-            && !prefix->vhdl->text.starts_with('@');
+            && prefix->vhdl->marker == support::ExpressionMarker::none;
         if (declaration && declaration->vhdl != nullptr
             && !vhdl_type_declaration_form(declaration->vhdl->form)
             && !declaration->vhdl->callable
@@ -15542,7 +15539,6 @@ private:
         if (call.kind != vhdl::ExpressionKind::call || call.operands.empty()
             || call.text.starts_with('\'')
             || call.marker != support::ExpressionMarker::none
-            || call.text.starts_with('@')
             || std::ranges::any_of(call.argument_names,
                 [](const std::string& argument) {
                     return !argument.empty();
@@ -15711,7 +15707,6 @@ private:
         if (call.kind != vhdl::ExpressionKind::call || call.operands.empty()
             || call.text.starts_with('\'')
             || call.marker != support::ExpressionMarker::none
-            || call.text.starts_with('@')
             || std::ranges::any_of(call.argument_names,
                 [](const std::string& argument) {
                     return !argument.empty();

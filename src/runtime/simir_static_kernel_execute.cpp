@@ -958,6 +958,11 @@ void Interpreter::Impl::StaticKernel::execute_body(
         case KOp::step:
             // Operation-tier bodies run only as native code.
             throw std::logic_error { "static kernel bytecode met an operation-tier step" };
+        case KOp::sampled_snapshot:
+            // The Preponed copy (IEEE 1800-2023 4.4.2.1; run_sampled_snapshot).
+            std::copy_n(arena_.data() + inst.x, 2U * static_cast<std::size_t>(inst.z),
+                arena_.data() + inst.y);
+            break;
         }
         if (mode == 0U) {
             continue;
@@ -1404,8 +1409,31 @@ bool Interpreter::Impl::StaticKernel::execute_generic_kind(CompiledBody& body,
     if (shadow_ != nullptr && !shadow_->reference) {
         shadow_note_reads(member_index, inst.x, reads);
     }
-    if (member.kind != StaticKernelMemberKind::behavioral
-        || !(this->*behavioral_operation_steps()[K])(member_index, inst.x)) {
+    bool done = false;
+    if constexpr (std::is_same_v<T, FormatContainerPattern>) {
+        // `%p` of a container the kernel holds (IEEE 1800-2023 21.2.1.6):
+        // the reference's formatter on the elements of the kernel container
+        // the body binds the register to (a design object's own for an
+        // alias, CompiledBody::containers). A register in the reference's
+        // format (a reference run) takes the reference's operation.
+        if (!member.dynamic_container(op.source)) {
+            if (op.source >= body.containers.size()
+                || body.containers[op.source] >= containers_.size()
+                || containers_[body.containers[op.source]].storage
+                    != StaticKernelContainerStorage::dynamic
+                || op.destination >= member.strings.size()) {
+                fail(member_index, inst.x, "invalid container register ID");
+            }
+            const auto& container = containers_[body.containers[op.source]];
+            member.strings[op.destination] = format_container_assignment_pattern(
+                static_kernel_detail::dynamic_value(
+                    dynamic_headers_[container.dynamic_header], container.type));
+            done = true;
+        }
+    }
+    if (!done
+        && (member.kind != StaticKernelMemberKind::behavioral
+            || !(this->*behavioral_operation_steps()[K])(member_index, inst.x))) {
         (void)(this->*operation_steps()[K])(member_index, inst.x);
     }
     if (shadow_ != nullptr && !shadow_->reference) {
@@ -1496,8 +1524,8 @@ void Interpreter::Impl::StaticKernel::plan_sva_table()
     sva_table_used_ = false;
     sva_table_ = StaticKernelSvaTable { };
     sva_table_.pop_serial = &impl_.sva_pop_serial;
-    sva_table_.rings = impl_.sampled_ring_words.data();
-    sva_table_.sampled = impl_.sampled_value_words.data();
+    sva_table_.rings = arena_.data();
+    sva_table_.sampled = arena_.data();
     sva_table_.now = &sva_now_;
     sva_table_.control_base = sva_control_base_.data();
     sva_table_.controls = impl_.assertion_controls.data();
@@ -1822,12 +1850,12 @@ void Interpreter::Impl::StaticKernel::execute_sva_sampled_load(
     }
     if ((inst.aux & 1U) != 0U) {
         // $sampled: the Preponed value (16.5.1).
-        const auto* const words = impl_.sampled_value_words.data() + inst.x;
+        const auto* const words = arena_.data() + inst.x;
         registers[inst.d] = { words[0] & m, words[1] & m };
         return;
     }
     using Ring = Impl::SampledRing;
-    const auto* const ring = impl_.sampled_ring_words.data() + inst.x;
+    const auto* const ring = arena_.data() + inst.x;
     // Whether the clock's sample of this time step is in the ring (the
     // clock's publication appended it): this time step is a tick (16.9.3).
     const auto sampled_now_in = [this](const std::uint64_t* const words) {
@@ -1872,7 +1900,7 @@ void Interpreter::Impl::StaticKernel::execute_sva_sampled_load(
         // Logic4 mapping (21.2.1.3; strength is not part of the value).
         const bool between_ticks = inst.y != 0U && !sampled_now_in(ring);
         const auto* const preponed = between_ticks
-            ? impl_.sampled_value_words.data() + (inst.y - 1U) : nullptr;
+            ? arena_.data() + (inst.y - 1U) : nullptr;
         const auto previous_back = between_ticks ? 1U : 2U;
         const bool have_current = count_now >= 1U;
         const bool have_previous = count_now >= previous_back;
@@ -1944,8 +1972,8 @@ void Interpreter::Impl::StaticKernel::execute_sva_sampled_load(
     // bit of the signal (offset bits) is compared.
     const bool between_ticks = inst.y != 0U && !sampled_now_in(ring);
     const auto now_value = between_ticks
-        ? Word { impl_.sampled_value_words[inst.y - 1U],
-              impl_.sampled_value_words[inst.y] }
+        ? Word { arena_[inst.y - 1U],
+              arena_[inst.y] }
         : current;
     const auto previous = between_ticks ? current
         : count >= 2U ? value(count - 2U) : fallback;
@@ -3568,7 +3596,7 @@ void Interpreter::Impl::StaticKernel::execute_wide(const CompiledBody& body,
             // 5), read as the narrow KOp::sva_sampled_load reads them. A
             // register with masks gets them cleared (Logic4 values).
             if (inst.sub == 4U) {
-                const auto* const words = impl_.sampled_value_words.data() + inst.x;
+                const auto* const words = arena_.data() + inst.x;
                 for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
                     const auto m = kw::mask(chunk_width(chunk));
                     registers[inst.d + chunk] = { words[chunk] & m,
@@ -3576,7 +3604,7 @@ void Interpreter::Impl::StaticKernel::execute_wide(const CompiledBody& body,
                 }
             } else {
                 using Ring = Impl::SampledRing;
-                const auto* const ring = impl_.sampled_ring_words.data() + inst.x;
+                const auto* const ring = arena_.data() + inst.x;
                 const SampledEntryReader reader { ring,
                     body.wide_constants.data() + inst.imm_b, chunks,
                     (inst.imm_a >> 32U) != 0U ? 4U : 2U };

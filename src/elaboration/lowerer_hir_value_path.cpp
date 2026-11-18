@@ -154,7 +154,7 @@ std::optional<Lowerer::HirSvValuePath> Lowerer::hir_sv_value_path(
             if (source.text.size() > 6U
                 && !(hir_value_path_event_element_
                     && current == expression_id
-                    && source.text == "index.triggered")) {
+                    && semantic::sv::is_triggered_event_element(source))) {
                 auto members = dotted_names(
                     std::string_view { source.text }.substr(6U));
                 for (auto member = members.rbegin();

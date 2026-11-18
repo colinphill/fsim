@@ -1949,6 +1949,7 @@ tests/fixtures/compliance/physical_unit_range.vhd
 tests/fixtures/compliance/run_compliance.cmake
 tests/fixtures/compliance/runtime_errors/run_runtime_error.cmake
 tests/fixtures/compliance/runtime_errors/sv_stream_unpack_partial_element.sv
+tests/fixtures/compliance/runtime_errors/sv_sva_sampled_null_handle.sv
 tests/fixtures/compliance/runtime_errors/sv_typeless_mailbox_get_mismatch.sv
 tests/fixtures/compliance/sv_array_equality_bounds_20261013.sv
 tests/fixtures/compliance/sv_array_query_class_handles_batch57.sv
@@ -2146,7 +2147,10 @@ tests/fixtures/compliance/sv_string_conversion_signed.sv
 tests/fixtures/compliance/sv_string_methods_and_updates.sv
 tests/fixtures/compliance/sv_string_nonblocking_order.sv
 tests/fixtures/compliance/sv_sva_clock_declaration_forms.sv
+tests/fixtures/compliance/sv_sva_kernel_sampled_assertions.sv
+tests/fixtures/compliance/sv_sva_kernel_sampled_procedural.sv
 tests/fixtures/compliance/sv_sva_recursive_properties.sv
+tests/fixtures/compliance/sv_sva_sampled_class_property.sv
 tests/fixtures/compliance/sv_sva_sequence_endpoints.sv
 tests/fixtures/compliance/sv_sync_method_contexts.sv
 tests/fixtures/compliance/sv_sync_method_receivers.sv
@@ -2472,6 +2476,9 @@ tests/fixtures/foreign/foreign_vhpi_config_groups.vhd
 tests/fixtures/foreign/foreign_vhpi_connectivity.expected
 tests/fixtures/foreign/foreign_vhpi_connectivity.expected.license
 tests/fixtures/foreign/foreign_vhpi_connectivity.vhd
+tests/fixtures/foreign/foreign_vhpi_create_reset.expected
+tests/fixtures/foreign/foreign_vhpi_create_reset.expected.license
+tests/fixtures/foreign/foreign_vhpi_create_reset.vhd
 tests/fixtures/foreign/foreign_vhpi_deposit_history.expected
 tests/fixtures/foreign/foreign_vhpi_deposit_history.expected.license
 tests/fixtures/foreign/foreign_vhpi_deposit_history.vhd
@@ -3894,6 +3901,9 @@ tests/fixtures/vhdl/inline_ops/concat_logic9_narrow.expected.license
 tests/fixtures/vhdl/inline_ops/concat_logic9_narrow.sv
 tests/fixtures/vhdl/inline_ops/concat_logic9_narrow_vhdl.vhd
 tests/fixtures/vhdl/inline_ops/concat_logic9_vhdl.vhd
+tests/fixtures/vhdl/inline_ops/container_pattern.expected
+tests/fixtures/vhdl/inline_ops/container_pattern.expected.license
+tests/fixtures/vhdl/inline_ops/container_pattern.sv
 tests/fixtures/vhdl/inline_ops/conv_actual_integer.expected
 tests/fixtures/vhdl/inline_ops/conv_actual_integer.expected.license
 tests/fixtures/vhdl/inline_ops/conv_actual_integer.vhd
@@ -3948,6 +3958,9 @@ tests/fixtures/vhdl/inline_ops/family_access.sv
 tests/fixtures/vhdl/inline_ops/fixed_containers.expected
 tests/fixtures/vhdl/inline_ops/fixed_containers.expected.license
 tests/fixtures/vhdl/inline_ops/fixed_containers.sv
+tests/fixtures/vhdl/inline_ops/fixed_strings.expected
+tests/fixtures/vhdl/inline_ops/fixed_strings.expected.license
+tests/fixtures/vhdl/inline_ops/fixed_strings.sv
 tests/fixtures/vhdl/inline_ops/force_release.expected
 tests/fixtures/vhdl/inline_ops/force_release.expected.license
 tests/fixtures/vhdl/inline_ops/force_release.sv
@@ -4070,6 +4083,9 @@ tests/fixtures/vhdl/inline_ops/sampled_gclk_logic9_vhdl.vhd
 tests/fixtures/vhdl/inline_ops/sampled_glitch.expected
 tests/fixtures/vhdl/inline_ops/sampled_glitch.expected.license
 tests/fixtures/vhdl/inline_ops/sampled_glitch.sv
+tests/fixtures/vhdl/inline_ops/sampled_kernel_state.expected
+tests/fixtures/vhdl/inline_ops/sampled_kernel_state.expected.license
+tests/fixtures/vhdl/inline_ops/sampled_kernel_state.sv
 tests/fixtures/vhdl/inline_ops/sampled_logic9.expected
 tests/fixtures/vhdl/inline_ops/sampled_logic9.expected.license
 tests/fixtures/vhdl/inline_ops/sampled_logic9.sv
@@ -4378,6 +4394,7 @@ tests/runtime/foreign_vhpi_callee_drivers_plugin.c
 tests/runtime/foreign_vhpi_conc_call_frame_plugin.c
 tests/runtime/foreign_vhpi_config_groups_plugin.c
 tests/runtime/foreign_vhpi_connectivity_plugin.c
+tests/runtime/foreign_vhpi_create_reset_plugin.c
 tests/runtime/foreign_vhpi_deposit_history_plugin.c
 tests/runtime/foreign_vhpi_deref_obj_plugin.c
 tests/runtime/foreign_vhpi_direct_plugin.c

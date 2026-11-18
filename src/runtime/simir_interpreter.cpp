@@ -475,6 +475,12 @@ SignalId Interpreter::Impl::push_signal_late(Signal signal)
         vhdl_resolvers.emplace(id, std::move(*signal.vhdl_resolver));
         vhdl_driver_initial_values.emplace(id, signal.initial_value);
     }
+    if (signal.sampled_property) {
+        // A signal that samples an object's property (IEEE 1800-2023
+        // 16.5.1; refresh_sampled_properties).
+        sampled_properties.push_back({ id, std::move(*signal.sampled_property),
+            signal.initial_value, signal.initial_value });
+    }
     SignalHot hot {
         .initial_value = std::move(signal.initial_value),
         .resolution = signal.resolution,
@@ -4987,6 +4993,17 @@ void Interpreter::add_host_driver(const ProcessId process, const SignalId signal
                                       "signal with a resolution function" };
         }
     }
+    // A reset's twin makes the same driver (replay_foreign_structure_onto):
+    // the model a reset returns to has every driver the run has, each back
+    // at its initial contents (IEEE 1076-2019 20.9 c).
+    if (!impl.replaying_plan) {
+        Impl::PlanStep step;
+        step.kind = Impl::PlanStep::Kind::foreign_driver;
+        step.after_start = impl.started;
+        step.foreign_owner = process;
+        step.signals.push_back(signal);
+        impl.plan_journal.push_back(std::move(step));
+    }
     (void)impl.driver_slot(process, signal);
     if (!joins) {
         return;
@@ -5026,6 +5043,16 @@ ProcessId Interpreter::add_foreign_driver_owner(const ProcessId model)
     owner.status = ProcessStatus::waiting;
     impl.processes.push_back(std::move(owner));
     impl.static_kernel_adopt_fork_child(model, id);
+    // A reset's twin makes the same owner with the same id
+    // (replay_foreign_structure_onto; IEEE 1076-2019 20.9).
+    if (!impl.replaying_plan) {
+        Impl::PlanStep step;
+        step.kind = Impl::PlanStep::Kind::foreign_driver_owner;
+        step.after_start = impl.started;
+        step.foreign_model = model;
+        step.foreign_owner = id;
+        impl.plan_journal.push_back(std::move(step));
+    }
     return id;
 }
 

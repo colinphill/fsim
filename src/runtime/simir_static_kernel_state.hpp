@@ -2532,13 +2532,13 @@ private:
     }
     /// Kernels whose code has an SVA operation (a directive's tick or
     /// outcome, or an inline sampled or $time read, which procedural code has
-    /// too): the host's sampled words and rings may have moved (a late
-    /// allocation), and the time step. The leader refreshes it before worker
+    /// too): the arena holding the kernel's sampled words and rings may have
+    /// moved (a late allocation), and the time step. The leader refreshes it before worker
     /// lanes run, which only read it.
     void refresh_sva_table() noexcept
     {
-        sva_table_.rings = impl_.sampled_ring_words.data();
-        sva_table_.sampled = impl_.sampled_value_words.data();
+        sva_table_.rings = arena_.data();
+        sva_table_.sampled = arena_.data();
         sva_table_.controls = impl_.assertion_controls.data();
         sva_table_.history = history_words_.data();
         sva_now_ = static_cast<std::int64_t>(kernel_now());
@@ -2658,6 +2658,145 @@ private:
     void history_event(std::uint32_t slot, const std::uint64_t* before);
     /// A settling change that is no event: the histories take the value.
     void history_sync(std::uint32_t slot);
+
+    // Kernel-owned sampled state of SystemVerilog members (IEEE 1800-2023
+    // 4.4.2.1, 16.5.1, 16.9.3). The kernel holds, in arena regions, the
+    // Preponed value of every signal its members' sampled reads name and
+    // the history ring of every clocked key they read (Impl::SampledRing's
+    // layout), and the inline loads (KOp::sva_sampled_load, KOp::wide_load
+    // sub 4 and 5) read them through StaticKernelSvaTable::sampled and
+    // rings, which point at the arena. A signal the kernel owns (a slot it
+    // writes, not a mirror) is snapshot by the kernel at the start of each
+    // time slot (KOp::sampled_snapshot in sampled_.snapshot) and its rings
+    // are appended by the kernel at the clock's edge; a host signal's
+    // Preponed words and rings are the host's values, copied in at the
+    // slot start and appended when the host records the clock's event.
+    struct SampledValueEntry {
+        SignalId signal { };
+        /// The kernel slot whose value is snapshot (no_slot: host-sourced).
+        std::uint32_t slot { static_kernel_detail::no_slot };
+        /// Arena offset of the Preponed words: the aval plane, then the
+        /// bval plane, `words` words each (Logic4; a Logic9 host value reads
+        /// as its Logic4 counterpart, 21.2.1.3).
+        std::uint32_t offset { };
+        std::uint32_t words { };
+        std::uint32_t width { };
+        /// A host-sourced entry: the start of its words in
+        /// Impl::sampled_value_words.
+        std::uint32_t host_offset { };
+    };
+    struct SampledRingEntry {
+        Impl::SampledHistoryKey key;
+        /// Arena offset of the ring (Impl::SampledRing).
+        std::uint32_t offset { };
+        /// The Preponed entry of key.signal (kernel-sourced rings), and of
+        /// key.gate (no_slot without a gate).
+        std::uint32_t value { static_kernel_detail::no_slot };
+        std::uint32_t gate { static_kernel_detail::no_slot };
+        /// The kernel slot of the clock (no_slot: a host clock, whose
+        /// events the host reports, Impl::kernel_sampled_clock_event).
+        std::uint32_t clock_slot { static_kernel_detail::no_slot };
+        /// Arena offset of the clock's value at its last notice (the slot's
+        /// two planes), the edge test's previous value.
+        std::uint32_t seen { };
+        /// The signal is a kernel slot: the ring takes the kernel's
+        /// Preponed words; otherwise the host's sampled value.
+        bool kernel_sourced { };
+    };
+    struct SampledState {
+        std::vector<SampledValueEntry> values;
+        std::vector<SampledRingEntry> rings;
+        /// By signal: its entry in `values`, or no_slot.
+        std::vector<std::uint32_t> value_of_signal;
+        /// By slot: the rings whose clock it is, rings[slot_rings[begin[s]
+        /// .. begin[s + 1])]; empty without a kernel-clocked ring.
+        std::vector<std::uint32_t> slot_ring_begin;
+        std::vector<std::uint32_t> slot_rings;
+        /// By host clock signal: the rings it clocks, the same way.
+        std::vector<std::uint32_t> clock_ring_begin;
+        std::vector<std::uint32_t> clock_rings;
+        /// Arena offset of the snapshot stamp: 1 + the time step of the
+        /// last snapshot, 0 before the first.
+        std::uint32_t stamp { };
+        /// The arena words [region_begin, region_end) hold all of it.
+        std::uint32_t region_begin { };
+        std::uint32_t region_end { };
+        /// The snapshot unit: one KOp::sampled_snapshot per kernel-sourced
+        /// entry.
+        static_kernel_detail::CompiledBody snapshot;
+    };
+    SampledState sampled_;
+    /// The snapshot unit's generated code (null: the bytecode loop runs).
+    StaticKernelNativeEntry sampled_snapshot_entry_ { };
+    /// FSIM_KERNEL_SVA_CHECK: the reference rings, kept by the host's
+    /// append rule (Impl::append_sampled_ring) on the values the kernel's
+    /// rings take, compared with them word for word after each append.
+    bool sampled_check_ { };
+    std::vector<std::vector<std::uint64_t>> sampled_check_rings_;
+    /// The reference rings start as the kernel's (after the build and a
+    /// restore).
+    void reset_sampled_check();
+    /// Lays out sampled_ (after build_histories, before the members
+    /// compile): the Preponed entries and rings of the members' sampled
+    /// reads, and the snapshot unit.
+    void plan_sampled_state();
+    /// Compiles the snapshot unit (after build_native) and publishes the
+    /// kernel-owned signals to the host (Impl::sampled_kernel_owned).
+    void bind_sampled_state(StaticKernelCodegen* codegen);
+    /// The arena offset of a signal's Preponed words, or of a key's ring.
+    [[nodiscard]] std::optional<std::uint32_t> sampled_words_offset(
+        SignalId signal) const;
+    [[nodiscard]] std::optional<std::uint32_t> sampled_ring_offset(
+        const Impl::SampledHistoryKey& key) const;
+    /// Runs the snapshot unit: its generated code, or the bytecode loop.
+    void run_sampled_snapshot();
+    /// A change of a slot that clocks kernel rings (slot_changed).
+    void sampled_clock_changed(std::uint32_t slot);
+    /// Appends the ring's sample of this time step (IEEE 1800-2023 16.9.3)
+    /// unless it holds one.
+    void sampled_append(std::uint32_t ring);
+    /// The Preponed value of an entry.
+    [[nodiscard]] PackedLogic4 sampled_entry_value(std::uint32_t entry) const;
+public:
+    // The host's side of the sampled state (Impl::kernel_sampled_*): the
+    // slot start, a host clock's event, and the sampled-read service's
+    // reads (Impl::run_kernel_sampled_read).
+    /// The start of a time slot: the Preponed snapshot (once per time step;
+    /// `force` takes it again, as at initialization).
+    void sampled_slot_start(bool force = false);
+    /// The host recorded an event on a host clock of kernel rings.
+    void sampled_host_clock_event(SignalId clock, const PackedLogic4& previous,
+        const PackedLogic4& current);
+    /// The time step of the sampled state: the kernel's time warp's while
+    /// it runs one, else the scheduler's (warp_time_ outlives the
+    /// activation that warped).
+    [[nodiscard]] SimulationTick sampled_time() const noexcept
+    {
+        const auto warped = warped_now();
+        return warped ? *warped : impl_.scheduler.now();
+    }
+    [[nodiscard]] bool sampled_value_owned(SignalId signal) const noexcept
+    {
+        return signal < sampled_.value_of_signal.size()
+            && sampled_.value_of_signal[signal] != static_kernel_detail::no_slot
+            && sampled_.values[sampled_.value_of_signal[signal]].slot
+                != static_kernel_detail::no_slot;
+    }
+    [[nodiscard]] PackedLogic4 sampled_value(SignalId signal) const
+    {
+        return sampled_entry_value(sampled_.value_of_signal[signal]);
+    }
+    /// The ring of `key`, or null when the kernel holds none.
+    [[nodiscard]] const std::uint64_t* sampled_ring(
+        const Impl::SampledHistoryKey& key) const;
+    [[nodiscard]] bool has_host_sampled_clock(SignalId clock) const noexcept
+    {
+        return clock + 1U < sampled_.clock_ring_begin.size()
+            && sampled_.clock_ring_begin[clock] != sampled_.clock_ring_begin[clock + 1U];
+    }
+    /// The current value of a kernel-owned signal (its slot).
+    [[nodiscard]] PackedLogic4 sampled_current_value(SignalId signal) const;
+private:
     /// The transactions of the round's assignments (commit_writes), and of
     /// one matured transaction on bits [offset, offset + width) of a slot.
     void note_history_transactions(std::uint32_t count);

@@ -484,8 +484,16 @@ public:
     /// (`after_start` false) or after it (true), in the order they were
     /// made. A reset replays them onto its twin, so the twin has this run's
     /// plan. False, with `reason`, when a graft cannot take the ids it had.
+    /// The driver owners and drivers a foreign interface created
+    /// (add_foreign_driver_owner, add_host_driver) are not among them: a
+    /// reset makes them inside its twin's start.
     [[nodiscard]] bool replay_plan_onto(
         Interpreter& target, bool after_start, std::string& reason) const;
+    /// Whether the plan journal holds driver owners or drivers a foreign
+    /// interface created (add_foreign_driver_owner, add_host_driver), which
+    /// a reset makes again. A run restored from a file has no journal of
+    /// what the saved run created.
+    [[nodiscard]] bool foreign_structure_journaled() const noexcept;
     /// While set, a split or graft made on this run is a replay of an earlier
     /// run's (a restart rebuilds the run-time plan of the saved run before
     /// the saved state replaces the tables, IEEE 1800-2023 D.9): the
@@ -571,7 +579,8 @@ public:
     /// owner of the drivers of one more process (or of a driver with no
     /// process) that a foreign program creates in the instance whose
     /// placeholder process is `model` (IEEE 1076-2019 23.6). It can be
-    /// added before or after the simulation starts.
+    /// added before or after the simulation starts. Journaled for a reset
+    /// (replay_foreign_structure_onto), as add_host_driver is.
     [[nodiscard]] ProcessId add_foreign_driver_owner(ProcessId model);
     /// Gives `process` a driver of `signal` at the driver's initial value
     /// (IEEE 1076-2019 14.7.2), unless it has one: a driver vhpi_create
@@ -1081,6 +1090,16 @@ private:
     /// graft_net_delay without the journal entry.
     [[nodiscard]] bool graft_net_delay_planned(
         NetDelayGraft& graft, std::string& reason);
+    /// Makes on `target`, a reset's twin inside its start, the driver owners
+    /// and drivers the journal holds, in order (IEEE 1076-2019 20.9, 23.6).
+    /// False, with `reason`, when an owner cannot take the id it had.
+    [[nodiscard]] bool replay_foreign_structure_onto(
+        Interpreter& target, std::string& reason) const;
+    /// What this run holds that `twin`, a reset's twin with the journal
+    /// replayed, lacks: a placeholder driver activated or a process created
+    /// at run time outside the journal. Empty when nothing.
+    [[nodiscard]] std::string unjournaled_structure(
+        const Interpreter& twin) const;
     [[nodiscard]] ProcessId
     add_process_impl(const Process& process, Process* owned_process);
     friend struct OwnedDriverDemotionTestAccess;

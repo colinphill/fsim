@@ -8860,12 +8860,11 @@ std::optional<SignalId> Lowerer::hir_systemverilog_event_signal(
         != semantic::sv::ExpressionKind::name) {
         return std::nullopt;
     }
-    constexpr auto triggered_suffix = std::string_view { ".triggered" };
     const auto& source = *expression->systemverilog;
-    const bool triggered = source.text.ends_with(triggered_suffix);
+    const bool triggered
+        = source.builtin_method == support::BuiltinMethod::triggered;
     const auto event_name = triggered
-        ? std::string_view { source.text }.substr(
-              0U, source.text.size() - triggered_suffix.size())
+        ? semantic::sv::selected_receiver_text(source)
         : std::string_view { source.text };
 
     const auto source_order = source.referenced_name
@@ -14511,7 +14510,6 @@ Lowerer::hir_vhdl_attribute_profile(
             && !prefix->vhdl->operands.empty()
             && !prefix->vhdl->text.starts_with('\'')
             && prefix->vhdl->marker == support::ExpressionMarker::none
-            && !prefix->vhdl->text.starts_with('@')
             && declaration && declaration->vhdl != nullptr
             && declaration->vhdl->subtype && !declaration->vhdl->callable
             && declaration->vhdl->form
@@ -19002,7 +19000,7 @@ frontend::SystemVerilogScalarKind Lowerer::hir_systemverilog_scalar_kind(
     // reached through a package import.
     if (source.kind == semantic::sv::ExpressionKind::call
         && source.marker == support::ExpressionMarker::none
-        && source.call_kind != semantic::sv::CallKind::system && !source.text.starts_with("@")
+        && source.call_kind != semantic::sv::CallKind::system
         && source.text != "?:") {
         if (const auto callee_id = hir_referenced_declaration(expression_id)) {
             const auto callee = specialized_hir_unit_->find_declaration(
@@ -21863,7 +21861,6 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
             || expression->vhdl->kind
                 == semantic::vhdl::ExpressionKind::unary)
         && expression->vhdl->marker == support::ExpressionMarker::none
-        && !expression->vhdl->text.starts_with('@')
         && hir_vhdl_record_result_possible(*expression->vhdl)
         && hir_vhdl_record_result_width_frames_.insert(
             expression_id.value()).second) {
@@ -28045,7 +28042,6 @@ Lowerer::compute_hir_vhdl_array_selection(
             == semantic::vhdl::ExpressionKind::call
         && root_prefix_record->vhdl->marker
             == support::ExpressionMarker::none
-        && !root_prefix_record->vhdl->text.starts_with('@')
         && root_prefix_record->vhdl->text.find('\'')
             == std::string::npos
         && resolve_hir_vhdl_function_call(
@@ -30069,8 +30065,7 @@ bool Lowerer::can_lower_hir_expression(
         const auto& source = *expression->systemverilog;
         operands = source.operands;
         operation = source.text;
-        if (source.kind == semantic::sv::ExpressionKind::index
-            && source.text == "index.triggered" && source.operands.size() == 2U) {
+        if (semantic::sv::is_triggered_event_element(source)) {
             // An element of an event array (7.4, 15.5.3); the index is an
             // ordinary expression.
             supported = expression_supported(source.operands[1]);
@@ -30078,7 +30073,7 @@ bool Lowerer::can_lower_hir_expression(
             return supported;
         }
         if (source.kind == semantic::sv::ExpressionKind::name
-            && source.text.ends_with(".triggered")) {
+            && source.builtin_method == support::BuiltinMethod::triggered) {
             supported = hir_systemverilog_event_signal(
                             expression_id, process_scope)
                             .has_value();

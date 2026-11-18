@@ -113,8 +113,14 @@ void Kernel::audit_run_state(std::vector<std::string>& messages) const
         "debugger write list");
     FSIM_RS_IDLE("kernel.impl", debug_write_flag_);
     busy(debug_write_flag_ != 0U, "debugger write list");
-    FSIM_RS_IDLE("kernel.impl", hosted_active_);
-    busy(!hosted_active_.empty(), "hosted Active queue");
+    // Before the kernel's first activation (a reset's time-zero state, which
+    // the reset's twin records before anything runs) the hosted Active list
+    // holds the hosted processes queued to start, and the kernel host
+    // process's queued first activation, an event of the scheduler section,
+    // runs them (IEEE 1076-2019 14.7.5.2, 20.9; IEEE 1800-2023 D.8): the list
+    // is saved (run_state_io). Once the kernel has run, a save point (a slot
+    // end) finds it empty.
+    busy(initialized_ && !hosted_active_.empty(), "hosted Active queue");
     FSIM_RS_IDLE("kernel.impl", hosted_inactive_);
     busy(!hosted_inactive_.empty(), "hosted Inactive queue");
     FSIM_RS_IDLE("kernel.impl", round_);
@@ -526,6 +532,8 @@ void Kernel::run_state_io(RunStateArchive& ar)
     queue_io(ar, hosted_timers_);
     FSIM_RS_IO("kernel.impl", hosted_sequence_, ar, *this);
     FSIM_RS_IO("kernel.impl", hosted_next_delta_, ar, *this);
+    // Empty unless the kernel has not been initialized (audit_run_state).
+    FSIM_RS_IO("kernel.impl", hosted_active_, ar, *this);
     FSIM_RS_CUSTOM("kernel.hosted_timer", time);
     FSIM_RS_CUSTOM("kernel.hosted_timer", sequence);
     FSIM_RS_CUSTOM("kernel.hosted_timer", ready);

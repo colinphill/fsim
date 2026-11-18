@@ -12535,8 +12535,7 @@ namespace {
                 if (value.kind == ExpressionKind::call
                     && ((value.call_kind != semantic::sv::CallKind::system
                             && value.marker
-                                == support::ExpressionMarker::none
-                            && !value.text.starts_with("@"))
+                                == support::ExpressionMarker::none)
                         || value.marker
                             == support::ExpressionMarker::sv_static_method)) {
                     return true;
@@ -14402,7 +14401,6 @@ namespace {
                 }
             }
             if (expression.marker == support::ExpressionMarker::none
-                && !expression.text.starts_with('@')
                 && expression.text.find("::") != std::string::npos) {
                 const auto first = expression.text.find("::");
                 const auto second = expression.text.find("::", first + 2U);
@@ -21651,7 +21649,6 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
                     == semantic::vhdl::ExpressionKind::call
                 && candidate->vhdl->marker
                     == support::ExpressionMarker::none
-                && !candidate->vhdl->text.starts_with("@")
                 && candidate->vhdl->operands.size() == 1U
                 && name_actual(name_actual,
                     candidate->vhdl->operands.front());
@@ -22751,8 +22748,7 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
                             == semantic::vhdl::ExpressionKind::call
                         && call->vhdl->operands.size() == 1U
                         && call->vhdl->marker
-                            == support::ExpressionMarker::none
-                        && !call->vhdl->text.starts_with('@')) {
+                            == support::ExpressionMarker::none) {
                         output_expression = call->vhdl->operands.front();
                     }
                 }

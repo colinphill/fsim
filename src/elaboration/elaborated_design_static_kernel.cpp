@@ -486,8 +486,14 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 && *value.change_signal < signal_count
                 && !graph_signals[*value.change_signal].readers.empty();
             const bool arena = static_kernel_arena_container_type(value.initial_value.type);
-            const auto* const type_reason
-                = static_kernel_detail::native_dynamic_type_reason(value.initial_value.type);
+            // A fixed-size array of strings of the design stays on the host:
+            // its element aliases are string variables the kernel reaches in
+            // the host's element vector (StaticKernelStringCell).
+            const auto& object_type = value.initial_value.type;
+            const auto* const type_reason = object_type.fixed
+                    && object_type.element_kind == ContainerElementKind::String
+                ? "dynamic_containers:type:fixed_string_object"
+                : static_kernel_detail::native_dynamic_type_reason(object_type);
             if (!value.slice_alias && !watched && !arena && type_reason == nullptr) {
                 kernel_dynamic_objects[object] = 1U;
                 any = true;
@@ -3100,11 +3106,73 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         }
     }
     stage("terminal_paths");
-    // Assertion members read the host's sampled state (run_sampled_read):
-    // a sampled signal, its sampling clock and its gate are host signals,
-    // whose values, histories and events the host keeps (IEEE 1800-2023
-    // 16.5.1, 16.9.3). A region member's writes are the host's: blocking
-    // ones commit at once, updates are staged from the member's region
+    // The kernel keeps the sampled state of the signals its members sample
+    // (StaticKernel::plan_sampled_state; IEEE 1800-2023 16.5.1, 16.9.3):
+    // the Preponed value ($sampled) and the clocked histories ($past, $rose,
+    // $fell, $stable, $changed and $sampled of a clocking event), so those
+    // reads leave their signal, clock and gate kernel signals. The other
+    // sampled reads use the host's state (run_sampled_read), whose values,
+    // histories and events the host keeps: their signals, clocks and gates
+    // are host signals. They are the global clocking comparisons, which
+    // compare the current value with the sampled one (16.9.4), the
+    // unclocked histories, and the reads of a current value with a delay,
+    // clock or gate. A member rejected later reads all of them on the host
+    // (sampled_kernel_readers, in the ownership fixpoint).
+    const auto kernel_sampled_read = [](const ReadSignal& read) {
+        switch (read.kind) {
+        case SignalReadKind::sampled:
+            return read.clock ? read.ticks != 0U : !read.gate.has_value();
+        case SignalReadKind::rose:
+        case SignalReadKind::fell:
+        case SignalReadKind::stable:
+        case SignalReadKind::changed:
+        case SignalReadKind::past:
+            return read.clock.has_value() && read.ticks != 0U;
+        case SignalReadKind::current:
+        case SignalReadKind::future:
+        case SignalReadKind::rising:
+        case SignalReadKind::falling:
+        case SignalReadKind::steady:
+        case SignalReadKind::changing:
+            return false;
+        }
+        return false;
+    };
+    const auto touch_sampled_reads = [&](const std::size_t index,
+                                         const bool kernel_reads) {
+        const auto touch = [&](const SignalId signal) {
+            if (signal < signal_count) {
+                host_touched[signal] = 1U;
+            }
+        };
+        const auto& operations = views[index].operations();
+        Operation expanded_scratch;
+        for (std::size_t op = 0U; op < operations.size(); ++op) {
+            visit_operation([&](const auto& value) {
+                using T = std::decay_t<decltype(value)>;
+                if constexpr (std::is_same_v<T, ReadSignal>) {
+                    if ((value.kind != SignalReadKind::current
+                            || value.ticks != 1U || value.clock || value.gate)
+                        && (kernel_reads || !kernel_sampled_read(value))) {
+                        touch(value.signal);
+                        if (value.clock) {
+                            touch(*value.clock);
+                        }
+                        if (value.gate) {
+                            touch(*value.gate);
+                        }
+                    }
+                }
+            }, operations.expanded_ref(op, expanded_scratch));
+        }
+    };
+    // The assertion members whose kernel sampled reads left their signals
+    // untouched; one the fixpoint rejects touches them (it is a host
+    // process then, reading the host's sampled state).
+    std::vector<std::size_t> sampled_kernel_readers;
+    std::vector<std::uint8_t> sampled_kernel_touched(process_count, 0U);
+    // A region member's writes are the host's: blocking ones commit at
+    // once, updates are staged from the member's region
     // (StaticKernel::write_host, Impl::capture_signal_change_origin).
     for (std::size_t index = 0U; index < process_count; ++index) {
         if (!candidates[index] || candidates[index]->vhdl
@@ -3118,23 +3186,14 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 host_touched[signal] = 1U;
             }
         };
+        touch_sampled_reads(index, false);
+        sampled_kernel_readers.push_back(index);
         const auto& operations = views[index].operations();
         Operation expanded_scratch;
         for (std::size_t op = 0U; op < operations.size(); ++op) {
             visit_operation([&](const auto& value) {
                 using T = std::decay_t<decltype(value)>;
-                if constexpr (std::is_same_v<T, ReadSignal>) {
-                    if (value.kind != SignalReadKind::current
-                        || value.ticks != 1U || value.clock || value.gate) {
-                        touch(value.signal);
-                        if (value.clock) {
-                            touch(*value.clock);
-                        }
-                        if (value.gate) {
-                            touch(*value.gate);
-                        }
-                    }
-                } else if constexpr (std::is_same_v<T, WriteBlocking>
+                if constexpr (std::is_same_v<T, WriteBlocking>
                     || std::is_same_v<T, WriteBlockingSlice>
                     || std::is_same_v<T, WriteBlockingDynamicSlice>
                     || std::is_same_v<T, WriteBlockingDynamicPartSlice>
@@ -3974,6 +4033,12 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     revalidate = false;
     for (bool changed = true; changed;) {
         changed = false;
+        for (const auto index : sampled_kernel_readers) {
+            if (!candidates[index] && sampled_kernel_touched[index] == 0U) {
+                sampled_kernel_touched[index] = 1U;
+                touch_sampled_reads(index, true);
+            }
+        }
         mark_edge_sensitive();
         std::ranges::fill(owned, 0U);
         std::ranges::fill(owned_container, 0U);

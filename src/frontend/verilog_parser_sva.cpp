@@ -6601,9 +6601,9 @@ void VerilogParser::resolve_procedural_sva_endpoints(DesignUnit& unit)
     const auto rewrite_expression = [&](const auto& self,
                                         Expression& expression) -> void {
         if (expression.kind == ExpressionKind::Identifier
-            && expression.text.ends_with(".triggered")) {
-            const auto receiver = expression.text.substr(
-                0U, expression.text.size() - std::string_view { ".triggered" }.size());
+            && expression.builtin_method == support::BuiltinMethod::triggered) {
+            const auto receiver
+                = expression.text.substr(0U, expression.text.rfind('.'));
             if (receiver.find('.') == std::string::npos
                 && sequence(receiver) != nullptr) {
                 if (const auto name = endpoint_name(receiver, expression.span)) {
@@ -6623,7 +6623,7 @@ void VerilogParser::resolve_procedural_sva_endpoints(DesignUnit& unit)
         // (the `triggered` selection of the call `s(actuals)`).
         if (expression.kind == ExpressionKind::Call
             && expression.marker == support::ExpressionMarker::sv_select
-            && expression.marker_argument == "triggered"
+            && expression.builtin_method == support::BuiltinMethod::triggered
             && expression.operands.size() == 1U
             && expression.operands.front().kind == ExpressionKind::Call
             && (expression.systemverilog_source_order != 0U

@@ -5513,6 +5513,9 @@ private:
                 }
                 writes = false;
                 return true;
+            case KOp::sampled_snapshot:
+                // Arena words only.
+                return true;
             case KOp::random:
                 if ((inst.imm_a & 1U) != 0U) {
                     reads.push_back(inst.x);
@@ -7609,6 +7612,30 @@ private:
         const auto source = load_register(inst.x);
         dyn_check_value(header, source, at, DynFailure::write_mismatch);
         dyn_store_element(header, ordinal, source);
+    }
+
+    /// DynOp::text_read or text_write of a dense fixed-size array of strings
+    /// (dyn_layout_fixed, dyn_layout_text): string register `offset` of the
+    /// string file z from or to the text slot a declared index selects. An
+    /// unknown or out-of-range index is the reference's error for a read as
+    /// for a write (its fixed_offset).
+    void emit_dyn_fixed_text(const KInst& inst, const std::uint32_t at, llvm::Value* header)
+    {
+        const bool writing = static_cast<detail::DynOp>(inst.sub) == detail::DynOp::text_write;
+        auto* ordinal = dyn_declared_ordinal(inst, at, true, dyn_load(header, dyn_size)).first;
+        auto* file = dyn_header(inst.z);
+        auto* slot = dyn_element_address(header, ordinal);
+        if (writing) {
+            text_from_register(slot, file, inst.offset, at);
+            return;
+        }
+        auto* target = str_object(file, inst.offset);
+        auto* size = builder_.CreateAnd(
+            builder_.CreateLoad(i64_, builder_.CreateConstInBoundsGEP1_64(i64_, slot, 1U)),
+            constant(text_size_mask));
+        str_reserve(target, size, at);
+        str_copy_bytes(str_data(target), builder_.CreateLoad(ptr_, slot), size);
+        str_set_size(target, size);
     }
 
     /// DynOp::aggregate_unpack and aggregate_pack: the leaves of container
@@ -9894,6 +9921,11 @@ private:
         if ((inst.imm_a & detail::dyn_layout_fixed) != 0U
             && (op == DynOp::read || op == DynOp::write)) {
             emit_dyn_fixed(inst, at, header);
+            return;
+        }
+        if ((inst.imm_a & detail::dyn_layout_fixed) != 0U
+            && (op == DynOp::text_read || op == DynOp::text_write)) {
+            emit_dyn_fixed_text(inst, at, header);
             return;
         }
         if ((inst.imm_a & detail::dyn_layout_associative) != 0U && op != DynOp::size
@@ -20104,6 +20136,16 @@ private:
             break;
         case KOp::frame_pop:
             emit_frame_pop(inst, at);
+            break;
+        case KOp::sampled_snapshot:
+            // The Preponed copy (IEEE 1800-2023 4.4.2.1): the slot's two
+            // planes of z words at arena offset x to the sampled words at
+            // arena offset y.
+            builder_.CreateMemCpy(
+                builder_.CreateConstInBoundsGEP1_64(i64_, arena_, inst.y),
+                llvm::MaybeAlign(8U),
+                builder_.CreateConstInBoundsGEP1_64(i64_, arena_, inst.x),
+                llvm::MaybeAlign(8U), constant(16U * std::uint64_t { inst.z }));
             break;
         }
     }

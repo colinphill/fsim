@@ -70,7 +70,7 @@ using namespace static_kernel_compiled_detail;
 
 namespace {
 
-constexpr std::string_view image_magic { "fsim-static-kernel-image-v14" };
+constexpr std::string_view image_magic { "fsim-static-kernel-image-v15" };
 
 template <typename T>
 struct is_vector : std::false_type { };
@@ -390,6 +390,7 @@ void Interpreter::Impl::StaticKernel::visit_image_fields(Self& self, Visit&& vis
     visit(self.history_slots_);
     visit(self.history_current_);
     visit(self.history_words_);
+    visit(self.sampled_);
     visit(self.behavioral_);
     visit(self.vhdl_threads_);
     visit(self.named_disable_);
@@ -455,6 +456,8 @@ bool Interpreter::Impl::StaticKernel::restore_value_section(
     // In place: the native code holds the arrays' addresses.
     std::ranges::copy(arena, arena_.begin());
     std::ranges::copy(published, published_.begin());
+    // The restored sampled rings are the reference's too.
+    reset_sampled_check();
     // A save waits for the host's pending updates: no mirror is ahead of the
     // host (FSIM_KERNEL_VERIFY).
     verify_mirror_ahead_.clear();

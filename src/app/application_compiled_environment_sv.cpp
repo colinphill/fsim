@@ -1488,8 +1488,7 @@ private:
             }
         }
         if (!scope.class_identity.empty()
-            && input.marker == support::ExpressionMarker::none
-            && !input.text.starts_with('@')) {
+            && input.marker == support::ExpressionMarker::none) {
             if (const auto* selected = method(scope.class_identity, input.text)) {
                 const auto member = input.text;
                 if (!selected->static_method) {

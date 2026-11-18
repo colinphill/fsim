@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+inl s [ab] [abxyz] [xyz] 5
+inl up [one] [] [three]
+inl down 2=d2
+inl down 1=d1
+inl down 0=d0
+inl equal 1 0
+inl changed 0 [q] [abxyz]
+inl dynamic [xyz]
+inl pattern '{"one","","three"} '{"d2","d1","d0"}

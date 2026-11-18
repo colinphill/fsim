@@ -14697,10 +14697,8 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
     if (const auto triggered = specialized_hir_unit_->find_expression(
             expression_id);
         triggered && triggered->systemverilog != nullptr
-        && triggered->systemverilog->kind
-            == semantic::sv::ExpressionKind::index
-        && triggered->systemverilog->text == "index.triggered"
-        && triggered->systemverilog->operands.size() == 2U) {
+        && semantic::sv::is_triggered_event_element(
+            *triggered->systemverilog)) {
         const auto destination = allocate_register(
             1U, frontend::ValueDomain::Bit2);
         process_.operations.emplace_back(
@@ -17213,9 +17211,14 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 return constant;
             }
         }
-        // An object's property in a time slot at time 0 has its default
-        // sampled value, its type's default (IEEE 1800-2023 16.5.1). Its
-        // Preponed value after time 0 is not kept: the run stops there.
+        // The sampled value of an object's property is the value it has in
+        // the Preponed region of the time slot, read through the objects
+        // the chain's handles hold there, and at time 0 its default sampled
+        // value, its type's default (IEEE 1800-2023 16.5.1). A generated
+        // signal samples the whole expression at the start of each time
+        // slot (Signal::sampled_property); its top bit is 1 when every
+        // handle of the chain held an object there. A read through a null
+        // handle fails as the property read does (8.4).
         if (const auto property
             = source.system_tf == support::SystemTf::sampled && !global
                 && sampled_source.kind
@@ -17224,47 +17227,164 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             : std::nullopt;
             property && !property->static_storage && !property->event
             && !property->constant && property->width != 0U) {
-            const auto now = allocate_register(
-                64U, frontend::ValueDomain::Bit2);
-            process_.operations.emplace_back(ReadSimulationTime { now });
-            const auto zero = load_constant(
-                unsigned_value(0U, 64U), frontend::ValueDomain::Bit2);
-            const auto at_zero = allocate_register(
+            // The chain, outermost handle first: a static variable's handle
+            // or a static property's, then the properties it selects.
+            runtime::simir::SampledPropertyChain chain;
+            chain.properties.push_back(property->identity);
+            auto receiver = property->receiver;
+            bool rooted { };
+            while (receiver) {
+                if (const auto root = hir_direct_signal(*receiver);
+                    root && *root < design_.signal_info_.size()
+                    && design_.signal_info_[*root].width == 64U) {
+                    chain.receiver = *root;
+                    rooted = true;
+                    break;
+                }
+                const auto outer = hir_class_property_profile(*receiver);
+                const bool handle = outer
+                    && (outer->type.value_form
+                            == semantic::sv::TypeForm::class_handle
+                        || !outer->type.class_identity.empty());
+                if (!outer || !handle || outer->event || outer->constant
+                    || outer->width != 64U) {
+                    break;
+                }
+                chain.properties.insert(
+                    chain.properties.begin(), outer->identity);
+                if (outer->static_storage) {
+                    rooted = true;
+                    break;
+                }
+                receiver = outer->receiver;
+            }
+            if (!rooted) {
+                // A chain through an automatic handle or `this` reads the
+                // Preponed value of the object the handle holds now (16.5.1:
+                // an automatic variable's sampled value is its current
+                // value), which the run does not keep yet: the default
+                // sampled value at time 0, and after it the run stops.
+                const auto now = allocate_register(
+                    64U, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(ReadSimulationTime { now });
+                const auto zero = load_constant(
+                    unsigned_value(0U, 64U), frontend::ValueDomain::Bit2);
+                const auto at_zero = allocate_register(
+                    1U, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(Binary {
+                    BinaryOperator::case_equal, at_zero, now, zero });
+                const auto branch = static_cast<InstructionIndex>(
+                    process_.operations.size());
+                process_.operations.emplace_back(Branch {
+                    at_zero, branch + 1U, 0U, UnknownBranchPolicy::when_false });
+                const auto sampled_default = load_constant(
+                    PackedLogic4(property->width,
+                        property->domain == frontend::ValueDomain::Bit2
+                            ? Logic4::zero
+                            : Logic4::x),
+                    property->domain == frontend::ValueDomain::Bit2
+                        ? frontend::ValueDomain::Bit2
+                        : frontend::ValueDomain::Logic4);
+                const auto done = static_cast<InstructionIndex>(
+                    process_.operations.size());
+                process_.operations.emplace_back(Jump { });
+                process_.operations[branch] = Branch { at_zero, branch + 1U,
+                    static_cast<InstructionIndex>(process_.operations.size()),
+                    UnknownBranchPolicy::when_false };
+                process_.operations.emplace_back(Report {
+                    "$sampled of an object's property through an automatic "
+                    "handle or `this` after time 0 needs the Preponed value "
+                    "of the object the handle holds, which the run does not "
+                    "keep (IEEE 1800-2023 16.5.1)",
+                    AssertionSeverity::failure,
+                    runtime_source_location(hir_source_span(source.source)) });
+                process_.operations.emplace_back(Halt { false });
+                process_.operations[done] = Jump {
+                    static_cast<InstructionIndex>(process_.operations.size()) };
+                return expected_width != 0U
+                        && register_width(sampled_default) != expected_width
+                    ? resize_register(sampled_default, expected_width,
+                          property->signed_value)
+                    : sampled_default;
+            }
+            if (property->width
+                    >= std::numeric_limits<std::uint32_t>::max()
+                || design_.signals_.size()
+                    >= std::numeric_limits<SignalId>::max()) {
+                report(
+                    "FSIM-ELAB-SVSAMPLE-001",
+                    "$sampled of an object's property needs a generated "
+                    "signal the design has no room for",
+                    argument_span(0U));
+                return std::nullopt;
+            }
+            const auto value_width
+                = static_cast<std::uint32_t>(property->width);
+            chain.width = value_width;
+            const bool two_state
+                = property->domain == frontend::ValueDomain::Bit2;
+            const auto domain = two_state ? frontend::ValueDomain::Bit2
+                                          : frontend::ValueDomain::Logic4;
+            guard_design_write();
+            const auto id = static_cast<SignalId>(design_.signals_.size());
+            const auto name
+                = (process_.name.empty() ? hierarchy_ : process_.name)
+                + ".$sampled_" + std::to_string(id);
+            SignalInfo info;
+            info.id = id;
+            info.name = name;
+            info.width = value_width + 1U;
+            info.type_name = two_state ? "bit" : "logic";
+            info.systemverilog_builtin = two_state
+                ? support::SystemVerilogBuiltinType::bit
+                : support::SystemVerilogBuiltinType::logic;
+            info.source_domain = domain;
+            info.origin = support::GeneratedObjectOrigin::monitored_value;
+            // Before the first time slot after 0: the default sampled value
+            // (16.5.1), with every handle present.
+            PackedLogic4 initial(value_width + 1U,
+                two_state ? Logic4::zero : Logic4::x);
+            initial.set(value_width, Logic4::one);
+            Signal signal {
+                name,
+                std::move(initial),
+                ResolutionKind::none,
+                value_kind(domain),
+            };
+            signal.sampled_property = std::move(chain);
+            design_.signal_info_.push_back(std::move(info));
+            design_.signals_.push_back(std::move(signal));
+            design_.signal_by_name_.emplace(name, id);
+            const auto sampled_word
+                = allocate_register(value_width + 1U, domain);
+            process_.operations.emplace_back(ReadSignal {
+                sampled_word, id, SignalReadKind::sampled });
+            const auto present = allocate_register(
                 1U, frontend::ValueDomain::Bit2);
-            process_.operations.emplace_back(Binary {
-                BinaryOperator::case_equal, at_zero, now, zero });
+            process_.operations.emplace_back(
+                Extract { present, sampled_word, value_width, 1U });
             const auto branch = static_cast<InstructionIndex>(
                 process_.operations.size());
             process_.operations.emplace_back(Branch {
-                at_zero, branch + 1U, 0U, UnknownBranchPolicy::when_false });
-            const auto sampled_default = load_constant(
-                PackedLogic4(property->width,
-                    property->domain == frontend::ValueDomain::Bit2
-                        ? Logic4::zero
-                        : Logic4::x),
-                property->domain == frontend::ValueDomain::Bit2
-                    ? frontend::ValueDomain::Bit2
-                    : frontend::ValueDomain::Logic4);
-            const auto done = static_cast<InstructionIndex>(
-                process_.operations.size());
-            process_.operations.emplace_back(Jump { });
-            process_.operations[branch] = Branch { at_zero, branch + 1U,
+                present, 0U, branch + 1U, UnknownBranchPolicy::when_false });
+            // A null handle in the chain: the read through it fails.
+            const auto null_handle = load_constant(
+                unsigned_value(0U, 64U), frontend::ValueDomain::Bit2);
+            const auto discarded = allocate_register(
+                property->width, property->domain);
+            process_.operations.emplace_back(ClassPropertyRead {
+                discarded, null_handle, property->identity, value_width });
+            process_.operations[branch] = Branch { present,
                 static_cast<InstructionIndex>(process_.operations.size()),
-                UnknownBranchPolicy::when_false };
-            process_.operations.emplace_back(Report {
-                "$sampled of an object's property after time 0 needs its "
-                "Preponed value, which the run does not keep (IEEE "
-                "1800-2023 16.5.1)",
-                AssertionSeverity::failure,
-                runtime_source_location(hir_source_span(source.source)) });
-            process_.operations.emplace_back(Halt { false });
-            process_.operations[done] = Jump {
-                static_cast<InstructionIndex>(process_.operations.size()) };
-            return expected_width != 0U
-                    && register_width(sampled_default) != expected_width
+                branch + 1U, UnknownBranchPolicy::when_false };
+            const auto value = allocate_register(
+                property->width, property->domain);
+            process_.operations.emplace_back(
+                Extract { value, sampled_word, 0U, value_width });
+            return expected_width != 0U && expected_width != property->width
                 ? resize_register(
-                      sampled_default, expected_width, property->signed_value)
-                : sampled_default;
+                      value, expected_width, property->signed_value)
+                : value;
         }
         auto signal = hir_direct_signal(*arguments.front());
         // Any other expression is sampled through a generated net that
@@ -20262,11 +20382,11 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
     } else if (expression->systemverilog != nullptr
         && expression->systemverilog->kind
             == semantic::sv::ExpressionKind::name
-        && expression->systemverilog->text.ends_with(".triggered")) {
-        const auto& text = expression->systemverilog->text;
+        && expression->systemverilog->builtin_method
+            == support::BuiltinMethod::triggered) {
         if (const auto handle = hir_systemverilog_event_handle(
-                std::string_view { text }.substr(
-                    0U, text.size() - std::string_view { ".triggered" }.size()),
+                semantic::sv::selected_receiver_text(
+                    *expression->systemverilog),
                 expression->systemverilog->scope)) {
             const auto destination = allocate_register(
                 1U, frontend::ValueDomain::Bit2);

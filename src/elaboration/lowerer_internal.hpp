@@ -6870,6 +6870,10 @@ private:
     // The simple name of each entry of the frame-local table, in its order.
     std::vector<std::string> frame_local_simple_names_;
     std::vector<std::string> local_scope_;
+    // The names of the unnamed block scopes that were pushed on local_scope_
+    // (`$block_<id>`, the VHDL `$loop_...`/`$when_...` debug levels):
+    // recorded when pushed; hir_named_scope_path leaves them out.
+    std::unordered_set<std::string> unnamed_local_scopes_;
     // The scopes enclosing a process local below its process, outermost
     // first, as the debugger names them: a named scope by its name, an
     // unnamed one that declares something by a debugger-only `$unnamed_<n>`.

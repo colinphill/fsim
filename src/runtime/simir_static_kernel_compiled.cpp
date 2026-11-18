@@ -213,7 +213,10 @@ const char* Interpreter::Impl::StaticKernel::dynamic_containers_reason(
                 || std::is_same_v<T, ContainerReduction>
                 || std::is_same_v<T, OrderContainer>
                 || std::is_same_v<T, LocateContainer>
-                || std::is_same_v<T, ContainerBitstream>;
+                || std::is_same_v<T, ContainerBitstream>
+                // `%p` (IEEE 1800-2023 21.2.1.6): the display's host call,
+                // which reads the kernel's container (execute_generic_kind).
+                || std::is_same_v<T, FormatContainerPattern>;
         }, operation);
         if (!native) {
             return visit_operation([](const auto& op) {
@@ -2651,6 +2654,18 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                 key(container, op.index, op.string_index, op.linear_index, "dyn_text_read");
                 return true;
             }
+            if (fixed(container)) {
+                // A dense fixed-size array of strings (IEEE 1800-2023 7.4):
+                // a declared index, as the reference's fixed_offset takes it.
+                if (op.string_index || op.linear_index) {
+                    throw reject("dyn_text_read");
+                }
+                set(DynOp::text_read, container);
+                inst.offset = string_register(op.destination);
+                inst.z = member.string_file;
+                sparse_index(container, op.index, false);
+                return true;
+            }
             if (op.string_index || op.linear_index || w(op.index) == 0U || w(op.index) > 64U) {
                 throw reject("dyn_text_read");
             }
@@ -2680,6 +2695,16 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                 inst.offset = string_register(op.source);
                 inst.z = member.string_file;
                 key(container, op.index, op.string_index, op.linear_index, "dyn_text_write");
+                return true;
+            }
+            if (fixed(container)) {
+                if (op.string_index || op.linear_index || op.associative_default) {
+                    throw reject("dyn_text_write");
+                }
+                set(DynOp::text_write, container);
+                inst.offset = string_register(op.source);
+                inst.z = member.string_file;
+                sparse_index(container, op.index, false);
                 return true;
             }
             if (op.string_index || op.linear_index || op.associative_default
@@ -4092,7 +4117,8 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
     };
     // A sampled-value read the kernel loads inline (KOp::sva_sampled_load;
     // KOp::wide_load sub 4 and 5 for a wide result): $sampled of the Preponed
-    // value (a signal with sampled words), or a clocked history read
+    // value (a signal the kernel's sampled state holds, plan_sampled_state),
+    // or a clocked history read
     // ($rose, $fell, $stable, $changed, $past, $sampled with a clock) of a
     // signal whose ring the plan lays out, of any width and any value kind
     // (a Logic9 signal reads through the Logic9 to Logic4 mapping of the
@@ -4118,10 +4144,7 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
         switch (op.kind) {
         case SignalReadKind::sampled:
             if (!op.clock) {
-                impl_.ensure_sampled_value_word_layout();
-                return op.signal < impl_.sampled_value_word_offsets.size()
-                    && impl_.sampled_value_word_offsets[op.signal]
-                        != Impl::no_sampled_value_words;
+                return sampled_words_offset(op.signal).has_value();
             }
             [[fallthrough]];
         case SignalReadKind::rose:
@@ -4130,7 +4153,7 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
         case SignalReadKind::changed:
         case SignalReadKind::past:
             if (!op.clock || op.ticks == 0U
-                || !impl_.planned_sampled_ring_offset(Impl::SampledHistoryKey {
+                || !sampled_ring_offset(Impl::SampledHistoryKey {
                            op.signal, op.clock, op.clock_edge, op.gate,
                            ProcessSchedulingDomain::systemverilog })
                         .has_value()) {
@@ -4141,11 +4164,9 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             }
             // A value change function also reads the Preponed value, which a
             // time step that is not a tick of its clock compares (16.9.3);
-            // the signals of clocked reads are in the sampled-value mask.
-            impl_.ensure_sampled_value_word_layout();
-            return op.signal < impl_.sampled_value_word_offsets.size()
-                && impl_.sampled_value_word_offsets[op.signal]
-                    != Impl::no_sampled_value_words;
+            // the kernel holds the Preponed words of every signal its
+            // members sample (plan_sampled_state).
+            return sampled_words_offset(op.signal).has_value();
         default:
             return false;
         }
@@ -5002,6 +5023,18 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                         inst.x = pc;
                         inst.y = 0U;
                     }
+                } else if constexpr (std::is_same_v<T, FormatContainerPattern>) {
+                    // `%p` of a container (IEEE 1800-2023 21.2.1.6) belongs
+                    // to its display, a host call: the operation helper
+                    // formats the elements of the kernel container the
+                    // register names (execute_generic_kind).
+                    if (dyn_container(op.source) == no_container
+                        || op.destination >= member.strings.size()) {
+                        throw reject("format_container_source");
+                    }
+                    inst.op = KOp::generic;
+                    inst.x = pc;
+                    inst.y = 0U;
                 } else if constexpr (std::is_same_v<T, HostRequest>) {
                     // An outcome or pending report is a kernel row; an
                     // attempt-start report (HostRequest::inert) tests the
@@ -5386,7 +5419,7 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                         && sampled_read(op) && inline_sampled_read(op)) {
                         // A wide $sampled or $past (IEEE 1800-2023 16.5.1,
                         // 16.9.3): the chunks of the Preponed value (sub 4,
-                        // x its words in Impl::sampled_value_words) or of a
+                        // x its words in the kernel's arena) or of a
                         // history ring entry (sub 5, x the ring's start,
                         // offset the read kind, z the $past depth, imm_a the
                         // chunks and, from bit 32, 1 for a Logic9 ring,
@@ -5399,18 +5432,17 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                         inst.imm_a = wide_chunks(inst.width);
                         if (op.kind == SignalReadKind::sampled && !op.clock) {
                             inst.sub = 4U;
-                            inst.x = impl_.sampled_value_word_offsets[op.signal];
+                            inst.x = *sampled_words_offset(op.signal);
                             lowered = true;
                             return;
                         }
-                        const auto ring = impl_.planned_sampled_ring_offset(
+                        const auto ring = sampled_ring_offset(
                             Impl::SampledHistoryKey { op.signal, op.clock,
                                 op.clock_edge, op.gate,
                                 ProcessSchedulingDomain::systemverilog });
                         if (!ring) {
                             throw reject("sampled_ring");
                         }
-                        impl_.sampled_ring_layout_baked = true;
                         inst.sub = 5U;
                         inst.x = static_cast<std::uint32_t>(*ring);
                         inst.offset = op.kind == SignalReadKind::past ? 1U : 0U;
@@ -6169,7 +6201,7 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                     }
                     family_generic_ = family_generic_ || proxy(op.signal);
                     // A sampled-value read of a narrow signal is an inline
-                    // load of the host's sampled words (KOp::sva_sampled_load,
+                    // load of the kernel's sampled words (KOp::sva_sampled_load,
                     // task #186); the global-clocking future forms read the
                     // signal's current value through the host.
                     generic = generic
@@ -6633,7 +6665,7 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                 if (sampled_read(op)) {
                     // A sampled value or sampled-value function (IEEE
                     // 1800-2023 16.5.1, 16.9.3): an inline load of the
-                    // host's sampled words (the generic classification
+                    // kernel's sampled words (the generic classification
                     // above kept the forms this cannot express).
                     inst.op = KOp::sva_sampled_load;
                     sva_table_used_ = true;
@@ -6644,31 +6676,27 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                     inst.z = op.ticks;
                     if (op.kind == SignalReadKind::sampled && !op.clock) {
                         inst.aux = 1U;
-                        inst.x = impl_.sampled_value_word_offsets[op.signal];
+                        inst.x = *sampled_words_offset(op.signal);
                         return;
                     }
-                    const auto ring = impl_.planned_sampled_ring_offset(
+                    const auto ring = sampled_ring_offset(
                         Impl::SampledHistoryKey { op.signal, op.clock,
                             op.clock_edge, op.gate,
                             ProcessSchedulingDomain::systemverilog });
                     if (!ring) {
                         throw reject("sampled_ring");
                     }
-                    impl_.sampled_ring_layout_baked = true;
-                    inst.x = static_cast<std::uint32_t>(*ring);
+                    inst.x = *ring;
                     if (op.kind != SignalReadKind::sampled
                         && op.kind != SignalReadKind::past) {
                         // $rose, $fell, $stable, $changed: between two
                         // ticks the Preponed value is the current one
-                        // (16.9.3), at y - 1 in the sampled words.
-                        impl_.ensure_sampled_value_word_layout();
-                        const auto words = op.signal < impl_.sampled_value_word_offsets.size()
-                            ? impl_.sampled_value_word_offsets[op.signal]
-                            : Impl::no_sampled_value_words;
-                        if (words == Impl::no_sampled_value_words) {
+                        // (16.9.3), at y - 1 in the kernel's Preponed words.
+                        const auto words = sampled_words_offset(op.signal);
+                        if (!words) {
                             throw reject("sampled_words");
                         }
-                        inst.y = words + 1U;
+                        inst.y = *words + 1U;
                     }
                     if (const auto& initial = impl_.get_signal(op.signal).initial_value;
                         signal_width(op.signal) > 64U || initial.is_logic9()) {

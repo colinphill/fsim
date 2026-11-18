@@ -556,15 +556,17 @@ std::string Simulation::Impl::reset_refusal() const
                "through the embedding API, which a reset does not return to "
                "its time-zero state (IEEE 1800-2023 D.8)";
     }
-    if (!foreign_structure.empty()) {
-        // The twin is the design as the artifact builds it; processes,
-        // drivers and sources a library added are not in it, and the library
-        // cannot be asked to make them again (IEEE 1800-2023 D.8, IEEE
-        // 1076-2019 20.9).
+    if (!foreign_structure.empty()
+        && !interpreter->foreign_structure_journaled()) {
+        // A reset keeps the processes and drivers vhpi_create made (IEEE
+        // 1076-2019 20.9 resets their waveforms and removes none, 23.6): the
+        // engine journals them and its twin makes them again
+        // (Interpreter::reset_run_state). A run restored from a file holds
+        // what the saved run created without that journal.
         return "FSIM-SAVE-0018: the run holds structure a foreign interface "
-               "created (" + foreign_structure + "), which a reset does not "
-               "rebuild from the artifact (IEEE 1800-2023 D.8, IEEE 1076-2019 "
-               "20.9)";
+               "created (" + foreign_structure + ") before it was restored "
+               "from a file, which carries no record a reset can rebuild it "
+               "from (IEEE 1800-2023 D.8, IEEE 1076-2019 20.9)";
     }
     if (!interpreter->can_reset_run_state()) {
         return "FSIM-SAVE-0018: this engine cannot reset the run (IEEE "

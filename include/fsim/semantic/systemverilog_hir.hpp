@@ -461,6 +461,46 @@ struct Expression {
         : support::BuiltinMethod::none;
 }
 
+/// The text of the name a member was selected on: `ev` for `ev.triggered`,
+/// `index` for the indexed path text `index.triggered`.
+[[nodiscard]] inline std::string_view selected_receiver_text(
+    const Expression& expression) noexcept
+{
+    const std::string_view text { expression.text };
+    return text.substr(0U, text.rfind('.'));
+}
+
+/// An element of an event array read through `.triggered` (IEEE 1800-2023
+/// 7.4, 15.5.3): an index node whose single member is the typed
+/// `triggered` method.
+[[nodiscard]] inline bool is_triggered_event_element(
+    const Expression& expression) noexcept
+{
+    return expression.kind == ExpressionKind::index
+        && expression.builtin_method == support::BuiltinMethod::triggered
+        && expression.operands.size() == 2U
+        && expression.text.find('.') == expression.text.rfind('.');
+}
+
+/// The name `<iterator>.index` (IEEE 1800-2023 7.12.4), the index query of
+/// an array method's iterator: the parser flags a selected name whose second
+/// component is `index`. `exact` rejects a longer selection.
+[[nodiscard]] inline bool is_iterator_index_name(
+    const Expression& expression, const std::string_view iterator,
+    const bool exact) noexcept
+{
+    if (expression.kind != ExpressionKind::name
+        || expression.builtin_method != support::BuiltinMethod::index
+        || expression.text.size() <= iterator.size()
+        || !expression.text.starts_with(iterator)
+        || expression.text[iterator.size()] != '.') {
+        return false;
+    }
+    return !exact
+        || expression.text.find('.', iterator.size() + 1U)
+            == std::string::npos;
+}
+
 /// The expression-sized cast introduced by the frontend stores its constant
 /// size expression first and its value operand second. Keep that source shape
 /// in one place so HIR consumers do not accidentally treat the size as the

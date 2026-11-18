@@ -1311,7 +1311,6 @@ private:
                    || record.kind == ExpressionKind::name)
             && record.referenced_name
             && record.marker == support::ExpressionMarker::none
-            && !record.text.starts_with("@")
             && !record.text.starts_with("'");
     }
 
@@ -2413,7 +2412,7 @@ private:
             const auto concrete = std::ranges::count_if(common,
                 [](const TypeKey& key) {
                     return key.id.valid()
-                        || (!key.builtin.empty() && key.builtin[0] != '@'
+                        || (!key.builtin.empty()
                             && key.builtin != universal_integer
                             && key.builtin != universal_real);
                 });
@@ -2421,7 +2420,7 @@ private:
                 operand_type = *std::ranges::find_if(common,
                     [](const TypeKey& key) {
                         return key.id.valid()
-                            || (!key.builtin.empty() && key.builtin[0] != '@'
+                            || (!key.builtin.empty()
                                 && key.builtin != universal_integer
                                 && key.builtin != universal_real);
                     });
@@ -2464,7 +2463,7 @@ private:
         std::optional<TypeKey> result;
         for (const auto& key : candidates(id)) {
             const bool concrete = key.id.valid()
-                || (!key.builtin.empty() && key.builtin[0] != '@'
+                || (!key.builtin.empty()
                     && key.builtin != universal_integer
                     && key.builtin != universal_real);
             if (!concrete) {

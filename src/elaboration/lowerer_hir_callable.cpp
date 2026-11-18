@@ -4639,6 +4639,10 @@ Lowerer::hir_inline_constraints(
                 return folded;
             }
             output.kind = TemplateKind::Name;
+            if (semantic::sv::member_builtin_method(source)
+                == support::BuiltinMethod::index) {
+                output.role = TemplateRole::iterator_index;
+            }
             // A property of the randomized object, named as `m`, `this.m`
             // or through its handle properties (`h.m`), is its variable
             // (18.7, 18.5.9); `with (names)` lists the names that resolve
@@ -4858,7 +4862,6 @@ Lowerer::hir_inline_constraints(
                 };
                 if (value.kind == semantic::sv::ExpressionKind::call) {
                     return value.marker == support::ExpressionMarker::none
-                        && !value.text.starts_with('@')
                         && value.call_kind != semantic::sv::CallKind::system
                         && !value.text.starts_with('.')
                         && (depth == 0U
@@ -5436,7 +5439,6 @@ std::optional<std::uint32_t> Lowerer::hir_scoped_class_owner(
     const semantic::SourceSpanId source, std::string_view& leaf) const
 {
     if (specialized_hir_unit_ == nullptr || text.empty()
-        || text.front() == '@'
         || text.find_first_of(".#$[( ") != std::string_view::npos) {
         return std::nullopt;
     }
@@ -10999,6 +11001,10 @@ bool Lowerer::allocate_hir_static_callable_declarations(
                 // A block that is no scope adds no level.
                 if (input.kind == semantic::sv::StatementKind::block
                     && (!input.label.empty() || input.nested_scope)) {
+                    if (input.label.empty()) {
+                        unnamed_local_scopes_.insert("$block_"
+                            + std::to_string(input.nested_scope->value()));
+                    }
                     local_scope_.push_back(!input.label.empty()
                             ? input.label
                             : "$block_"
@@ -26359,7 +26365,7 @@ frontend::VhdlSimulatorApi Lowerer::hir_vhdl_simulator_api(
     }
     if ((source.kind != semantic::vhdl::ExpressionKind::name
             && source.kind != semantic::vhdl::ExpressionKind::call)
-        || source.text.empty() || source.text.starts_with('@')
+        || source.text.empty()
         || source.text.find_first_of(".:'") != std::string::npos) {
         return frontend::VhdlSimulatorApi::none;
     }

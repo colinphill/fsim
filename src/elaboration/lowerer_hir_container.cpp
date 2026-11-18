@@ -95,7 +95,8 @@ Lowerer::lower_hir_container_expression_graph(
         if (expression.text == iterator_name) {
             return ValueKind::element;
         }
-        if (expression.text == std::string { iterator_name } + ".index") {
+        if (semantic::sv::is_iterator_index_name(
+                expression, iterator_name, true)) {
             return ValueKind::index;
         }
         return std::nullopt;
@@ -126,7 +127,6 @@ Lowerer::lower_hir_container_expression_graph(
         }
         return false;
     };
-    const auto index_name = std::string { iterator_name } + ".index";
     const auto contains_iterator = [&](const semantic::ExpressionId candidate) {
         return any_expression(
             candidate, [&](const semantic::sv::Expression& source) {
@@ -140,11 +140,11 @@ Lowerer::lower_hir_container_expression_graph(
         = [&](const semantic::ExpressionId candidate) {
         return any_expression(
             candidate, [&](const semantic::sv::Expression& source) {
-                return (source.kind == semantic::sv::ExpressionKind::name
-                           && (source.text == index_name
-                               || source.text.starts_with(index_name + ".")))
+                return semantic::sv::is_iterator_index_name(
+                           source, iterator_name, false)
                     || (source.kind == semantic::sv::ExpressionKind::call
-                        && source.text == ".index");
+                        && source.builtin_method
+                            == support::BuiltinMethod::index);
             });
     };
     const auto contains_unknown_index
@@ -152,8 +152,9 @@ Lowerer::lower_hir_container_expression_graph(
         return any_expression(
             candidate, [&](const semantic::sv::Expression& source) {
                 return source.kind == semantic::sv::ExpressionKind::name
-                    && source.text.find(".index") != std::string::npos
-                    && source.text != index_name;
+                    && source.builtin_method == support::BuiltinMethod::index
+                    && !semantic::sv::is_iterator_index_name(
+                        source, iterator_name, true);
             });
     };
     const auto report_reference = [&](const semantic::sv::Expression& source,
@@ -1495,7 +1496,6 @@ Lowerer::hir_container_iterator_references(
     std::vector<std::pair<std::uint32_t, bool>> references;
     std::vector<semantic::ExpressionId> pending { expression };
     std::unordered_set<std::uint32_t> visited;
-    const auto index_name = std::string { iterator_name } + ".index";
     while (!pending.empty()) {
         const auto current = pending.back();
         pending.pop_back();
@@ -1508,8 +1508,11 @@ Lowerer::hir_container_iterator_references(
         }
         const auto& node = *record->systemverilog;
         if (node.kind == semantic::sv::ExpressionKind::name
-            && (node.text == iterator_name || node.text == index_name)) {
-            references.emplace_back(current.value(), node.text == index_name);
+            && (node.text == iterator_name
+                || semantic::sv::is_iterator_index_name(
+                    node, iterator_name, true))) {
+            references.emplace_back(current.value(),
+                node.text != iterator_name);
             continue;
         }
         // A nested array method whose with clause names the same iterator

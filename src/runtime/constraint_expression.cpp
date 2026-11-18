@@ -1447,9 +1447,9 @@ namespace {
                         solver_.variables()[*frame->element].profile);
                 }
                 if (const auto dot = expression.text.rfind('.');
-                    dot != std::string::npos
-                    && std::string_view { expression.text }.substr(dot)
-                        == ".index") {
+                    expression.role
+                        == SystemVerilogConstraintTemplateRole::iterator_index
+                    && dot != std::string::npos) {
                     if (const auto* frame = iterator(
                             std::string_view { expression.text }.substr(0, dot));
                         frame != nullptr && frame->item) {

@@ -251,6 +251,7 @@ interp.impl	static_kernel_input_marks	W	assigned for every input at each kernel 
 interp.impl	static_kernel_dirty_inputs	P	inputs the idle kernel has not yet read; saved in kernel.state, marks set again at restore
 interp.impl	sampled_values	P	signal values, driver contributions, forces and history
 interp.impl	sampled_defaults	Cfg	configuration from the artifact or command line
+interp.impl	sampled_kernel_owned	D	derived: the signals whose sampled state the static kernel holds, published again when the kernel is built (StaticKernel::bind_sampled_state)
 interp.impl	sampled_value_dependency_mask	D	derived tables rebuilt from the artifact or from saved values
 interp.impl	sampled_value_dependencies_unknown	D	derived tables rebuilt from the artifact or from saved values
 interp.impl	requires_sampled_values	Cfg	configuration from the artifact or command line
@@ -263,8 +264,8 @@ interp.impl	sampled_ring_offsets	P	ring start of each sampled-history key
 interp.impl	sampled_value_words	D	flat Logic4 copy of sampled_values for the compiled kernel, rebuilt from them after a restore
 interp.impl	sampled_value_word_offsets	D	derived tables rebuilt from the artifact or from saved values
 interp.impl	sampled_history_keys_by_clock	D	derived tables rebuilt from the artifact or from saved values
-interp.impl	sampled_ring_layout_baked	D	set again when the compiled kernel built after a restore binds the ring layout
-interp.impl	sampled_ring_layout_building	W	true only while the start-of-run ring layout runs (laid out from the plan); false at rest
+interp.impl	sampled_properties	Cfg	the $sampled(h.p) sites of the artifact (Signal::sampled_property), registered when their signals are made
+interp.impl	sampled_property_stamp	D	the time step whose Preponed values the sites hold; derived from the saved sampled signals
 interp.impl	forced_values	P	signal values, driver contributions, forces and history
 interp.impl	forced_masks	P	signal values, driver contributions, forces and history
 interp.impl	port_force_layers	P	signal values, driver contributions, forces and history
@@ -436,7 +437,7 @@ interp.impl	held_prearmed_static_waits	W	set when a hold start returns, consumed
 interp.impl	reset_source	Cfg	factory the embedder installs; rebuilt from the same command line
 interp.impl	reset_twin_class_hooks	Cfg	set by the embedder before a reset (Interpreter::set_reset_twin_class_hooks)
 interp.impl	run_state_event_host	Cfg	the embedder's scheduler-event owners and handle takers (Interpreter::set_run_state_event_host), installed by the application from the same command line
-interp.impl	plan_journal	Cfg	the foreign requests that change the plan (watches, boundary, foreign writes, grafts), in order; replay_plan_onto gives them to the reset twin, and the same libraries make the startup ones again in a restarted process (dropped callbacks need no plan)
+interp.impl	plan_journal	Cfg	the foreign requests that change the plan (watches, boundary, foreign writes, grafts, the driver owners and drivers vhpi_create made), in order; replay_plan_onto and replay_foreign_structure_onto give them to the reset twin, and the same libraries make the startup ones again in a restarted process (dropped callbacks need no plan)
 interp.impl	plan_watched	Cfg	dedup set of plan_journal
 interp.impl	watched_container_objects	Cfg	hook: the design containers host observers follow (watch_container_object_changes), which a restored run watches again
 interp.impl	plan_transactions	Cfg	dedup set of plan_journal
@@ -985,7 +986,11 @@ kernel.impl	dynamic_headers_	P	kernel dynamic state: the elements of the members
 kernel.impl	sva_blocks_	D	block bases the monitors publish; rebound lazily after a restore (reset_sva_blocks)
 kernel.impl	sva_member_base_	D	derived from the artifact or rebuilt after restore
 kernel.impl	sva_control_base_	D	derived from the artifact or rebuilt after restore (plan_sva_table)
-kernel.impl	sva_table_	D	pointers into the host's sampled words and the block table, refreshed per frame
+kernel.impl	sva_table_	D	pointers into the kernel's arena (its sampled words and rings) and the block table, refreshed per frame
+kernel.impl	sampled_	D	derived: the sampled-state plan (plan_sampled_state, restored with the kernel image); its Preponed words, rings, clock edge baselines and snapshot stamp are arena words, saved with the arena
+kernel.impl	sampled_snapshot_entry_	D	the snapshot unit's generated code, compiled again when the kernel is built (bind_sampled_state)
+kernel.impl	sampled_check_	Cfg	FSIM_KERNEL_SVA_CHECK from the environment
+kernel.impl	sampled_check_rings_	D	FSIM_KERNEL_SVA_CHECK reference rings, copied from the arena at build and after a restore (reset_sampled_check)
 kernel.impl	sva_table_used_	D	set when the kernel's code has an SVA operation (lowering or a restored body), a function of the artifact
 kernel.impl	sva_now_	W	the time step copied for generated code at each frame bind
 kernel.impl	sva_delta_	W	the delta of sva_now_, copied for generated code at each frame bind
@@ -1092,7 +1097,7 @@ kernel.impl	batch_resume_queued_	S	empty or false at every save point: the save 
 kernel.impl	hosted_inactive_region_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
 kernel.impl	hosted_inactive_deferred_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
 kernel.impl	hosted_running_inactive_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
-kernel.impl	hosted_active_	S	scratch: empty at a save point (a non-empty queue refuses the save)
+kernel.impl	hosted_active_	P	the hosted processes queued in the Active region, saved in kernel.state (kernel_version 8): empty at every save point of a kernel that has run (the save audit refuses with FSIM-SAVE-0011), and before the kernel's first activation (a reset's time-zero state) the processes queued to start, whose doorbell is the host process's queued first activation (a scheduler event)
 kernel.impl	hosted_inactive_	S	scratch: empty at a save point (a non-empty queue refuses the save)
 kernel.impl	hosted_active_spare_	W	allocator cache or spare buffer: holds capacity, never run state
 kernel.impl	hosted_inactive_spare_	W	allocator cache or spare buffer: holds capacity, never run state
@@ -1521,7 +1526,7 @@ sim.impl	vpi_started	P	lifecycle flags (SystemC refuses save)
 sim.impl	foreign_update_serial	P	lifecycle flags (SystemC refuses save)
 sim.impl	vpi_ended	P	lifecycle flags (SystemC refuses save)
 sim.impl	lifecycle_hooks	Cfg	observers and hooks installed by the embedder
-sim.impl	foreign_structure	P	first foreign-created structure; refuses a reset (FSIM-SAVE-0018), saved in app.control
+sim.impl	foreign_structure	P	first foreign-created structure, saved in app.control; a run restored from a file whose engine journal holds no created structure refuses a reset (FSIM-SAVE-0018)
 sim.impl	reset_requests	S	exact test in the app.control audit (FSIM-SAVE-0011): a $reset or $restart stops the run and is carried out before the next save point; a failed save ends the run
 sim.impl	reset_count	P+ids	application run state (S6)
 sim.impl	reset_value	P+ids	application run state (S6)

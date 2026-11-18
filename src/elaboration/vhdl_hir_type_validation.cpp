@@ -3445,7 +3445,6 @@ private:
                 && !operator_expression)
             || !expression.referenced_name
             || expression.marker != support::ExpressionMarker::none
-            || expression.text.starts_with('@')
             || expression.text.find('\'') != std::string::npos) {
             return std::nullopt;
         }
@@ -5083,7 +5082,7 @@ private:
             return;
         }
         if (expression.marker != support::ExpressionMarker::none
-            || expression.text.starts_with('@') || !expression.referenced_name) {
+            || !expression.referenced_name) {
             return;
         }
         const semantic::CompiledDeclarationPredicate type_declaration
@@ -6483,7 +6482,6 @@ private:
     {
         if (!name.referenced_name || name.text.empty() || name.marker
             != support::ExpressionMarker::none
-            || name.text.starts_with('@')
             || name.text.find_first_of(".'") != std::string::npos) {
             return false;
         }
@@ -6560,7 +6558,6 @@ private:
         if (expression.kind != semantic::vhdl::ExpressionKind::call
             || !expression.referenced_name || expression.text.empty()
             || expression.marker != support::ExpressionMarker::none
-            || expression.text.starts_with('@')
             || expression.text.find('\'') != std::string::npos
             || expression.operands.empty()) {
             return;
@@ -6852,8 +6849,7 @@ private:
     {
         if (expression.kind != semantic::vhdl::ExpressionKind::name
             || expression.text.find('\'') != std::string::npos
-            || expression.marker != support::ExpressionMarker::none
-            || expression.text.starts_with('@')) {
+            || expression.marker != support::ExpressionMarker::none) {
             return;
         }
         const std::string_view text { expression.text };
@@ -7014,7 +7010,6 @@ private:
         if (expression.kind != semantic::vhdl::ExpressionKind::name
             || !expression.referenced_name || expression.text.empty()
             || expression.marker != support::ExpressionMarker::none
-            || expression.text.starts_with('@')
             || expression.text.find_first_of(".'") != std::string::npos) {
             return;
         }
@@ -10031,8 +10026,7 @@ private:
             if (subtype->unconstrained || expression_array_root(id)
                 || predefined_array_identity(*subtype, scope)
                 || (value.kind == semantic::vhdl::ExpressionKind::call
-                    && value.marker == support::ExpressionMarker::none
-                    && !value.text.starts_with('@'))) {
+                    && value.marker == support::ExpressionMarker::none)) {
                 return std::nullopt;
             }
             if (subtype->domain == semantic::vhdl::ValueDomain::bit2
@@ -12124,7 +12118,6 @@ private:
         const auto& value = *expression->vhdl;
         if (value.kind == semantic::vhdl::ExpressionKind::call) {
             if (value.text.empty() || value.text.front() == '\''
-                || value.text.front() == '@'
                 || value.marker != support::ExpressionMarker::none
                 || !value.referenced_name
                 || !value.referenced_name->selected) {
@@ -13139,7 +13132,6 @@ private:
             // A conversion to a floating or physical type (`real(i)`).
             if (value.kind == Kind::call && value.operands.size() == 1U
                 && value.marker == support::ExpressionMarker::none
-                && !value.text.starts_with('@')
                 && value.text.find('\'') == std::string::npos) {
                 // STD.STANDARD's REAL and TIME are not retained.
                 if (equal_ignoring_ascii_case(value.text, "real")) {
@@ -13445,7 +13437,6 @@ private:
                                 == semantic::vhdl::ExpressionKind::call) {
                                 if (current_value.text.empty()
                                     || current_value.text.front() == '\''
-                                    || current_value.text.front() == '@'
                                     || current_value.marker
                                         != support::ExpressionMarker::none) {
                                     return false;
@@ -14074,7 +14065,7 @@ private:
                 && expression.kind == semantic::vhdl::ExpressionKind::call
                 && expression.operands.size() == 1U
                 && expression.marker == support::ExpressionMarker::none
-                && !expression.text.starts_with('@') && expression.referenced_name
+                && expression.referenced_name
                 && expression.referenced_name->selected) {
                 const auto callee = specialization_.find_declaration(
                     *expression.referenced_name->selected);

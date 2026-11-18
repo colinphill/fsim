@@ -3312,6 +3312,10 @@ void Interpreter::Impl::StaticKernel::concatenate_members(CompiledBody& program,
             case KOp::load_field9:
                 throw std::logic_error(
                     "VHDL kernel instructions are not partitioned");
+            case KOp::sampled_snapshot:
+                // Only the sampled-state snapshot unit holds it.
+                throw std::logic_error(
+                    "the sampled-state snapshot is not partitioned");
             }
             program.code.push_back(inst);
         }

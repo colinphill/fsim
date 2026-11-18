@@ -437,8 +437,7 @@ GenerateRegion VhdlParser::parse_vhdl_static_block(
             if (actual.kind == ExpressionKind::Call
                 && actual.operands.size() == 1U
                 && actual.operands.front().kind == ExpressionKind::Identifier
-                && actual.marker == support::ExpressionMarker::none
-                && !actual.text.starts_with('@')) {
+                && actual.marker == support::ExpressionMarker::none) {
               actual_name = actual.operands.front();
             }
             Statement in;
@@ -1543,8 +1542,7 @@ void VhdlParser::rewrite_vhdl_formal_conversions(DesignUnit& unit,
         std::optional<std::string> actual_conversion;
         if (actual.kind == ExpressionKind::Call && actual.operands.size() == 1U
             && actual.operands.front().kind == ExpressionKind::Identifier
-            && actual.marker == support::ExpressionMarker::none
-            && !actual.text.starts_with('@')) {
+            && actual.marker == support::ExpressionMarker::none) {
           actual_conversion = actual.text;
           actual_name = actual.operands.front();
         }

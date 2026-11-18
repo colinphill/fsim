@@ -5026,60 +5026,15 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         published_string_paths.emplace(path, std::pair { string_id, handle });
     }
 
-    // The continuous assignments a gate, switch or pull instance is lowered
-    // to are not processes: the instance is a vpiGate or vpiSwitch the
-    // service builds from the primitive records (IEEE 1800-2023 37.35).
-    // Their labels are the instance name, `name[index]` for an array
-    // member, with an optional `$` suffix.
-    std::map<std::uint32_t, std::set<std::string, std::less<>>>
-        primitive_labels;
-    for (const auto& unit : project.systemverilog_hir.units()) {
-        auto& labels = primitive_labels[unit.id.value()];
-        const auto collect
-            = [&](const std::vector<semantic::sv::PrimitiveInstance>& list) {
-                  for (const auto& primitive : list) {
-                      if (primitive.name.empty()) {
-                          continue;
-                      }
-                      labels.insert(primitive.array_member
-                                  && !primitive.name.ends_with(']')
-                              ? primitive.name + "["
-                                  + std::to_string(primitive.array_index) + "]"
-                              : primitive.name);
-                  }
-              };
-        const auto regions
-            = [&](const auto& self,
-                  const std::vector<semantic::sv::GenerateRegion>& list)
-            -> void {
-            for (const auto& region : list) {
-                collect(region.primitives);
-                self(self, region.nested);
-            }
-        };
-        collect(unit.primitives);
-        regions(regions, unit.generates);
-    }
     for (const auto& process : project.design_ir.processes()) {
         // A process the frontend generated for an assertion construct is no
-        // process of the source (37.63).
+        // process of the source (37.63), nor is the continuous assignment a
+        // gate, switch or pull instance is lowered to: the instance is a
+        // vpiGate or vpiSwitch the service builds from the primitive records
+        // (37.35; its origin makes it synthesized).
         if (!relevant_specializations.contains(process.specialization.value())
             || process.synthesized) {
             continue;
-        }
-        if (const auto labels = primitive_labels.find(
-                project.design_ir.specializations()
-                    .at(process.specialization.value())
-                    .unit.value());
-            labels != primitive_labels.end() && !labels->second.empty()) {
-            const auto leaf = process.name.find_last_of('.');
-            auto local = leaf == std::string::npos
-                ? std::string_view { process.name }
-                : std::string_view { process.name }.substr(leaf + 1U);
-            local = local.substr(0U, local.find('$'));
-            if (labels->second.contains(local)) {
-                continue;
-            }
         }
         const auto process_index = static_cast<std::uint32_t>(
             &process - project.design_ir.processes().data());

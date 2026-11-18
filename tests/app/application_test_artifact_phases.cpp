@@ -39,11 +39,11 @@ void ApplicationTestFixture::test_artifact_phase_semantics()
 {
     install_governed_process_address_space_ceiling();
     const ScopedCurrentDirectory source_root { directory / "work" };
-    static_assert(app::kRuntimeStateSchema == 135);
+    static_assert(app::kRuntimeStateSchema == 136);
     static_assert(app::kSemanticStateSchema == 9);
     static_assert(app::kDesignIrStateSchema == 21);
     static_assert(app::kCompiledHirBundleSchema == 14);
-    static_assert(app::kSystemVerilogConstraintHirStateSchema == 45);
+    static_assert(app::kSystemVerilogConstraintHirStateSchema == 46);
     static_assert(app::kSystemVerilogCoverageStateSchema == 10);
     static_assert(app::kSystemVerilogUvmStateSchema == 3);
     static_assert(app::kVhdlHirStateSchema == 20);

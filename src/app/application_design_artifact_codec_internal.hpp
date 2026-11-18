@@ -370,7 +370,7 @@ namespace codec_detail {
         } else if constexpr (
             std::same_as<T, support::GeneratedObjectOrigin>) {
             return value >= support::GeneratedObjectOrigin::none
-                && value <= support::GeneratedObjectOrigin::vhdl_support_storage;
+                && value <= support::GeneratedObjectOrigin::primitive_assign;
         } else if constexpr (std::same_as<T, support::GateDriverSlot>) {
             return value >= support::GateDriverSlot::none
                 && value <= support::GateDriverSlot::switch_right;
@@ -1233,7 +1233,7 @@ namespace codec_detail {
             return fsim::support::expression_marker_valid(value);
         } else if constexpr (std::same_as<T, fsim::support::BuiltinMethod>) {
             return value >= fsim::support::BuiltinMethod::none
-                && value <= fsim::support::BuiltinMethod::try_peek;
+                && value <= fsim::support::BuiltinMethod::triggered;
         } else if constexpr (std::same_as<T, fsim::support::SystemTf>) {
             return value >= fsim::support::SystemTf::none
                 && value <= fsim::support::kLastSystemTf;
@@ -1457,14 +1457,26 @@ namespace codec_detail {
     {
         // Every member is listed: one added to the record and not here
         // fails the build (the binding names each member).
-        [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11, m12] = value;
+        [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11, m12, m13]
+            = value;
         return std::tie(
             value.name, value.initial_value, value.resolution, value.value_kind,
             value.implicit_driver, value.implicit_drive_strength,
             value.charge_strength, value.charge_decay,
             value.systemverilog_scalar, value.event_variable,
             value.vhdl_resolver, value.vhdl_scalar_width,
-            value.vhdl_conversion_drivers);
+            value.vhdl_conversion_drivers, value.sampled_property);
+    }
+
+    template <typename T>
+        requires std::same_as<
+            std::remove_cv_t<T>, runtime::simir::SampledPropertyChain>
+    auto archive_fields(T& value)
+    {
+        // Every member is listed: one added to the record and not here
+        // fails the build (the binding names each member).
+        [[maybe_unused]] auto& [m0, m1, m2] = value;
+        return std::tie(value.receiver, value.properties, value.width);
     }
 
     template <typename T>

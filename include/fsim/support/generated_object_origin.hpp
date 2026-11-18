@@ -80,6 +80,10 @@ enum class GeneratedObjectOrigin : std::uint8_t {
     // The bookkeeping containers of VHDL protected objects, file objects and
     // constants, named with a leading `@`; they stand for no declaration.
     vhdl_support_storage,
+    // A continuous assignment a gate, switch or pull instance is lowered to;
+    // VPI publishes the instance as a vpiGate or vpiSwitch (37.35), not
+    // this process.
+    primitive_assign,
 };
 
 // Whether the objects of this origin are named with a leading `$` and are
@@ -127,6 +131,7 @@ enum class GeneratedObjectOrigin : std::uint8_t {
     case GeneratedObjectOrigin::port_output_adapter:
     case GeneratedObjectOrigin::clocking_pending:
     case GeneratedObjectOrigin::procedural_assign_driver:
+    case GeneratedObjectOrigin::primitive_assign:
         return false;
     }
     return false;

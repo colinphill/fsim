@@ -3782,7 +3782,6 @@ std::vector<ClassInstanceActual> class_instance_actuals(
         if (expression.kind == ExpressionKind::call
             && !expression.text.empty() && expression.call_kind != semantic::sv::CallKind::system
             && expression.marker == support::ExpressionMarker::none
-            && expression.text.front() != '@'
             && expression.text.front() != '.') {
             return true;
         }

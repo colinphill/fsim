@@ -2797,9 +2797,14 @@ private:
         awaiting_update_ = false;
         due_timeouts_.clear();
         stepped_at_.reset();
-        // The reset restored the initial values (steps a) to d) of
-        // 14.7.5.2): the processes start at once.
-        start_of_simulation();
+        // The model is reset to the beginning of the initialization phase
+        // (IEEE 1076-2019 20.9), past its elaboration: the elaboration
+        // functions do not run again, and the processes and drivers they
+        // or any later callback created with vhpi_create still exist, their
+        // drivers back at their initial contents (20.9 c). The reset
+        // restored the initial values (steps a) to d) of 14.7.5.2): the
+        // processes start at once.
+        begin_initialization();
         start_of_processes();
     }
 
@@ -2817,6 +2822,12 @@ private:
             return;
         }
         elaborate_foreign_architectures();
+        begin_initialization();
+    }
+
+    // The initialization phase begins (IEEE 1076-2019 20.5, 21.3.7.5).
+    void begin_initialization()
+    {
         phase_ = vhpiInitializationPhase;
         processes_pending_ = true;
         dispatch(vhpiCbStartOfInitialization);
@@ -18910,8 +18921,6 @@ private:
                     return nullptr;
                 }
             }
-            simulation_.note_foreign_structure(
-                "a process created by vhpi_create");
             auto* const process
                 = make_object(vhpiProcessStmtK, name, nullptr);
             process->foreign = index;

@@ -633,7 +633,7 @@ std::vector<std::string> Lowerer::hir_named_scope_path() const
         first_local = std::min(hir_callable_scopes_.back().local_base, local_scope_.size());
     }
     for (const auto& scope : std::span { local_scope_ }.subspan(first_local)) {
-        if (!scope.empty() && scope.front() != '$') {
+        if (!scope.empty() && !unnamed_local_scopes_.contains(scope)) {
             path.push_back(scope);
         }
     }
@@ -4118,6 +4118,7 @@ std::optional<Process> Lowerer::lower_hir_concurrent_statement(
         result->gate_driver_output = source->systemverilog->gate_driver_output;
         result->gate_driver_instance = std::string { hierarchy } + "."
             + source->systemverilog->gate_driver_instance;
+        result->origin = support::GeneratedObjectOrigin::primitive_assign;
     }
     if (result && source->systemverilog != nullptr
         && source->systemverilog->drive_zero

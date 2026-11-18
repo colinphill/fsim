@@ -810,6 +810,21 @@ Expression VerilogParser::parse_postfix(Expression expression)
                         { expression.text, false });
                 }
                 expression.name_components.push_back({ member.text, false });
+                // `ev.triggered` reads the triggered state of an event or a
+                // sequence (IEEE 1800-2023 15.5.3, 16.13.6).
+                if (support::builtin_method_named(member.text)
+                    == support::BuiltinMethod::triggered) {
+                    expression.builtin_method
+                        = support::BuiltinMethod::triggered;
+                }
+                // `item.index` names the index of the iterator of an array
+                // method's with clause (IEEE 1800-2023 7.12.4): the second
+                // component is the method, read here once.
+                if (expression.name_components.size() == 2U
+                    && support::builtin_method_named(member.text)
+                        == support::BuiltinMethod::index) {
+                    expression.builtin_method = support::BuiltinMethod::index;
+                }
                 expression.text += '.';
                 expression.text += member.text;
                 expression.span = selected_span;
@@ -817,6 +832,11 @@ Expression VerilogParser::parse_postfix(Expression expression)
                 expression = marked_expression(
                     support::ExpressionMarker::sv_select, member.text,
                     { std::move(expression) }, selected_span);
+                if (support::builtin_method_named(member.text)
+                    == support::BuiltinMethod::triggered) {
+                    expression.builtin_method
+                        = support::BuiltinMethod::triggered;
+                }
             }
         } else if (match(TokenKind::LeftBracket)) {
             Expression first = parse_expression();

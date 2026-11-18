@@ -35,14 +35,14 @@ bool VerilogParser::reads_sequence_endpoint(const DesignUnit& unit,
     }
     const auto expression_reads = [&](const auto& self, const Expression& expression) -> bool {
         if (expression.kind == ExpressionKind::Identifier
-            && expression.text.ends_with(".triggered")
-            && sequences.contains(expression.text.substr(0U,
-                expression.text.size() - std::string_view { ".triggered" }.size()))) {
+            && expression.builtin_method == support::BuiltinMethod::triggered
+            && sequences.contains(
+                expression.text.substr(0U, expression.text.rfind('.')))) {
             return true;
         }
         if (expression.kind == ExpressionKind::Call
             && expression.marker == support::ExpressionMarker::sv_select
-            && expression.marker_argument == "triggered"
+            && expression.builtin_method == support::BuiltinMethod::triggered
             && expression.operands.size() == 1U
             && expression.operands.front().kind == ExpressionKind::Call
             && sequences.contains(expression.operands.front().text)) {

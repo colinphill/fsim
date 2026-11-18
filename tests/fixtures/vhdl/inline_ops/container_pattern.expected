@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+inl q '{7,3,-1}
+inl d '{10,4'bxxxx}
+inl aa '{-2:20,5:50}
+inl sq '{"a","bc"}
+inl sa '{"x":1,"y":2}
+inl f '{1,0,-3}
+inl b '{255,10}
+inl text '{7,3,-1}|'{10,4'bxxxx}
+inl empty '{}
+inl module '{4,9}

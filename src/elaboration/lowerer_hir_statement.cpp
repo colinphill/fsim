@@ -4515,6 +4515,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     + std::to_string(span.begin.line) + "_"
                     + std::to_string(span.begin.column) + "_"
                     + std::to_string(span.begin.offset);
+                unnamed_local_scopes_.insert(statement_scope);
             }
         }
     }
@@ -19904,6 +19905,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     + std::to_string(alternative_span.begin.line) + "_"
                     + std::to_string(alternative_span.begin.column) + "_"
                     + std::to_string(alternative_span.begin.offset);
+                unnamed_local_scopes_.insert(alternative_scope);
             }
             HirDebugScopeGuard guard {
                 local_scope_, std::move(alternative_scope)
@@ -22330,6 +22332,10 @@ bool Lowerer::lower_hir_statement_unsuspended(
         // adds no level.
         const bool scope_level = !label.empty() || nested_scope.has_value();
         if (scope_level) {
+            if (label.empty()) {
+                unnamed_local_scopes_.insert(
+                    "$block_" + std::to_string(nested_scope->value()));
+            }
             local_scope_.push_back(!label.empty()
                     ? std::string { label }
                     : "$block_" + std::to_string(nested_scope->value()));
@@ -25608,12 +25614,11 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 waited && waited->systemverilog != nullptr) {
                 const auto& wait_source = *waited->systemverilog;
                 const bool element
-                    = wait_source.kind == semantic::sv::ExpressionKind::index
-                    && wait_source.text == "index.triggered"
-                    && wait_source.operands.size() == 2U;
+                    = semantic::sv::is_triggered_event_element(wait_source);
                 const bool named
                     = wait_source.kind == semantic::sv::ExpressionKind::name
-                    && wait_source.text.ends_with(".triggered");
+                    && wait_source.builtin_method
+                        == support::BuiltinMethod::triggered;
                 if ((element
                         && !hir_systemverilog_event_array_selection(
                             *input.condition, hir_process_scope_))
@@ -25624,10 +25629,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         ? hir_systemverilog_event_handle(
                               { }, hir_process_scope_, *input.condition)
                         : hir_systemverilog_event_handle(
-                              std::string_view { wait_source.text }.substr(0U,
-                                  wait_source.text.size()
-                                      - std::string_view { ".triggered" }
-                                            .size()),
+                              semantic::sv::selected_receiver_text(
+                                  wait_source),
                               wait_source.scope);
                     if (handle) {
                         const auto triggered = allocate_register(
@@ -25674,9 +25677,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
             if (const auto element_wait
                 = specialized_hir_unit_->find_expression(*input.condition);
                 element_wait && element_wait->systemverilog != nullptr
-                && element_wait->systemverilog->kind
-                    == semantic::sv::ExpressionKind::index
-                && element_wait->systemverilog->text == "index.triggered") {
+                && semantic::sv::is_triggered_event_element(
+                    *element_wait->systemverilog)) {
                 if (const auto array = hir_systemverilog_event_array_selection(
                         *input.condition, hir_process_scope_)) {
                     for (const auto& element : array->elements) {
@@ -26752,8 +26754,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         if (expression.text == iterator_name) {
                             return ValueKind::element;
                         }
-                        if (expression.text
-                            == iterator_name + ".index") {
+                        if (semantic::sv::is_iterator_index_name(
+                                expression, iterator_name, true)) {
                             return ValueKind::index;
                         }
                         return std::nullopt;
@@ -28799,7 +28801,8 @@ std::optional<RegisterId> Lowerer::hir_systemverilog_event_handle(
         if (const auto source = specialized_hir_unit_->find_expression(
                 *expression);
             source && source->systemverilog != nullptr
-            && source->systemverilog->text == "index.triggered") {
+            && semantic::sv::is_triggered_event_element(
+                *source->systemverilog)) {
             hir_value_path_event_element_ = true;
         }
         if (const auto path = hir_sv_value_path(*expression);

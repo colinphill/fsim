@@ -269,11 +269,12 @@ enum class KOp : std::uint8_t {
     sva_outcome,
     /// A sampled-value read (16.5.1, 16.9.3) into the narrow register d
     /// (width bits): sub the SignalReadKind. aux bit 0 set: $sampled of the
-    /// Preponed value, x the offset in Impl::sampled_value_words; clear: a
-    /// clocked history read, x the ring's start in sampled_ring_words,
-    /// offset the signal's width, z the $past depth, imm_a/imm_b the
-    /// signal's default (an empty history). For $rose, $fell, $stable and
-    /// $changed y is 1 + the signal's offset in Impl::sampled_value_words:
+    /// Preponed value, x the arena offset of the kernel's Preponed words
+    /// (StaticKernel::plan_sampled_state); clear: a clocked history read, x
+    /// the arena offset of the kernel's ring of the key, offset the
+    /// signal's width, z the $past depth, imm_a/imm_b the signal's default
+    /// (an empty history). For $rose, $fell, $stable and $changed y is 1 +
+    /// the arena offset of the signal's Preponed words:
     /// in a time step that is not a tick of the clock (the ring's last
     /// sample is of an earlier one) they compare the Preponed value with
     /// the ring's last sample (16.9.3).
@@ -345,11 +346,18 @@ enum class KOp : std::uint8_t {
     /// first word and falls into its second. aux holds the operation's
     /// position, for the reference's failures.
     coverage,
+    /// The Preponed snapshot of a sampled signal (IEEE 1800-2023 4.4.2.1,
+    /// 16.5.1): at the start of a time slot the kernel copies the value of
+    /// the slot at arena offset x (its aval then bval plane, z words each)
+    /// to the sampled words at arena offset y (the same layout). Only the
+    /// kernel's sampled-state snapshot unit (StaticKernel::SampledState) holds
+    /// it; it reads no register.
+    sampled_snapshot,
 };
 
-/// Number of kernel instruction kinds (KOp values 0 .. coverage).
+/// Number of kernel instruction kinds (KOp values 0 .. sampled_snapshot).
 inline constexpr std::size_t kernel_op_count
-    = static_cast<std::size_t>(KOp::coverage) + 1U;
+    = static_cast<std::size_t>(KOp::sampled_snapshot) + 1U;
 
 /// KOp::coverage sub bits: a toggle (else a hit), counters in bindings,
 /// and a toggle of chunked wide registers (x and y their storage).

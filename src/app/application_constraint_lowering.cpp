@@ -264,9 +264,11 @@ class Lowerer final {
         use(*frame->element);
         return variable_node(*frame->element, frame->profile);
       }
+      // `item.index` (IEEE 1800-2023 7.12.4): the selected name's member is
+      // the typed index query.
       if (const auto dot = expression.text.rfind('.');
-          dot != std::string::npos
-          && expression.text.substr(dot) == ".index") {
+          expression.builtin_method == support::BuiltinMethod::index
+          && dot != std::string::npos) {
         if (const auto* frame = iterator(
                 std::string_view{expression.text}.substr(0, dot));
             frame != nullptr && frame->item) {
@@ -2431,9 +2433,11 @@ class Lowerer final {
         if (frame->string_key) return std::nullopt;
         return static_cast<std::int64_t>(frame->index);
       }
+      // `item.index` (IEEE 1800-2023 7.12.4): the selected name's member is
+      // the typed index query.
       if (const auto dot = expression.text.rfind('.');
-          dot != std::string::npos
-          && expression.text.substr(dot) == ".index") {
+          expression.builtin_method == support::BuiltinMethod::index
+          && dot != std::string::npos) {
         if (const auto* frame = iterator(
                 std::string_view{expression.text}.substr(0, dot));
             frame != nullptr && frame->item) {

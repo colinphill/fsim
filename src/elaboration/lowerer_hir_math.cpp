@@ -260,7 +260,6 @@ std::optional<std::string> Lowerer::hir_vhdl_math_real_function(
         || expression->vhdl->kind != semantic::vhdl::ExpressionKind::call
         || expression->vhdl->operands.empty()
         || expression->vhdl->operands.size() > 2U
-        || expression->vhdl->text.starts_with('@')
         || expression->vhdl->text.starts_with('\'')) {
         return std::nullopt;
     }

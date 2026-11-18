@@ -749,9 +749,9 @@ const char* native_dynamic_type_reason(const ContainerType& type) noexcept
         return flat_aggregate_type(type) ? nullptr : "dynamic_containers:type:aggregate";
     }
     if (type.element_kind == ContainerElementKind::String) {
-        // Queues, dynamic arrays and associative arrays (integral keys) of
-        // strings (text slots).
-        return type.fixed ? "dynamic_containers:type:fixed_string" : nullptr;
+        // Queues, dynamic arrays, associative arrays and dense fixed-size
+        // arrays of strings (text slots).
+        return type.sparse ? "dynamic_containers:type:sparse_string" : nullptr;
     }
     if (type.element_kind == ContainerElementKind::Container) {
         return "dynamic_containers:type:nested";
@@ -860,10 +860,10 @@ StaticKernelDynamicContainer make_dynamic_header(const ContainerType& type)
             header.key_width = 0U;
         }
     }
-    if (type.fixed && !type.sparse && type.element_kind != ContainerElementKind::String) {
+    if (type.fixed && !type.sparse) {
         // A dense fixed-size array holds every element from the start
         // (dyn_layout_fixed), each the element type's initial value
-        // (default_container_value).
+        // (default_container_value; the empty string, an empty text slot).
         const auto count = sparse_container_element_count(type);
         header.maximum = count;
         header.limit = count;
@@ -1690,6 +1690,17 @@ DynFailure execute_text_dyn(const KInst& inst, StaticKernelDynamicContainer& con
         return DynFailure::none;
     }
     case DynOp::text_read: {
+        if ((inst.imm_a & dyn_layout_fixed) != 0U) {
+            // A dense fixed-size array: a declared index, an unknown or
+            // out-of-range one the reference's error (fixed_offset).
+            const auto ordinal = sparse_ordinal(inst, registers[inst.y], container.size, true);
+            if (!ordinal.ordinal) {
+                return ordinal.failure;
+            }
+            strings[inst.offset]
+                = std::string { text_of(dynamic_element(container, *ordinal.ordinal)) };
+            return DynFailure::none;
+        }
         // An invalid or out-of-range index reads the empty string (7.4.6).
         const auto at = text_index(registers[inst.y], inst.width, is_signed);
         strings[inst.offset] = at && *at < container.size
@@ -1698,6 +1709,14 @@ DynFailure execute_text_dyn(const KInst& inst, StaticKernelDynamicContainer& con
         return DynFailure::none;
     }
     case DynOp::text_write: {
+        if ((inst.imm_a & dyn_layout_fixed) != 0U) {
+            const auto ordinal = sparse_ordinal(inst, registers[inst.y], container.size, true);
+            if (!ordinal.ordinal) {
+                return ordinal.failure;
+            }
+            set_text_element(container, *ordinal.ordinal, strings[inst.offset]);
+            return DynFailure::none;
+        }
         const auto at = text_index(registers[inst.y], inst.width, is_signed);
         const auto size = container.size;
         const bool queue = (container.flags & queue_flag) != 0U;

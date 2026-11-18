@@ -1861,11 +1861,45 @@ struct Interpreter::Impl : SchedulerBatchTask {
         std::uint64_t ring { };
     };
     std::vector<std::vector<SampledClockRing>> sampled_history_keys_by_clock;
-    // A compiled kernel baked ring starts into its instructions
-    // (KOp::sva_sampled_load): from then on a ring may not be added or moved
-    // while the run goes on, only laid out at start from the plan.
-    bool sampled_ring_layout_baked { };
-    bool sampled_ring_layout_building { };
+    // By signal: 1 when the static kernel holds its sampled state (a signal
+    // the kernel owns that its members sample; StaticKernel::
+    // plan_sampled_state). The host neither samples nor records it: its
+    // sampled reads read the kernel (run_sampled_read).
+    std::vector<std::uint8_t> sampled_kernel_owned;
+    [[nodiscard]] bool sampled_value_in_kernel(const SignalId signal) const noexcept
+    {
+        return static_kernel != nullptr && signal < sampled_kernel_owned.size()
+            && sampled_kernel_owned[signal] != 0U;
+    }
+    // The signals that sample an object's property (IEEE 1800-2023 16.5.1;
+    // Signal::sampled_property), in signal order: the chain, the signal's
+    // declared value (the default sampled value, with the presence bit 1),
+    // and the sample of the last time step taken.
+    struct SampledPropertySite {
+        SignalId signal { };
+        SampledPropertyChain chain;
+        PackedLogic4 initial;
+        PackedLogic4 value;
+    };
+    std::vector<SampledPropertySite> sampled_properties;
+    // 1 + the time step the sites' values sample (0 before the first).
+    std::uint64_t sampled_property_stamp { };
+    // The Preponed samples of the sites at the start of the time slot `now`
+    // (taken once per time step), as the signals' sampled values and words:
+    // the host's slot start and the static kernel's (its time warp) call it
+    // before the copies of the host's sampled words.
+    void refresh_sampled_properties(SimulationTick now);
+    [[nodiscard]] PackedLogic4 sample_property_chain(
+        const SampledPropertySite& site, SimulationTick now);
+    // The current value of a signal the static kernel owns, from its slot
+    // (StaticKernel::owned_value); nullopt for any other signal.
+    [[nodiscard]] std::optional<PackedLogic4> kernel_owned_value(SignalId signal);
+    // The start of a time slot, and an event of a host clock, for the
+    // static kernel's sampled state (StaticKernel::sampled_slot_start,
+    // sampled_host_clock_event).
+    void kernel_sampled_slot_start();
+    void kernel_sampled_clock_event(SignalId clock, const PackedLogic4& previous,
+        const PackedLogic4& current);
     std::vector<std::unique_ptr<PackedLogic4>> forced_values;
     std::vector<std::unique_ptr<PackedLogic4>> forced_masks;
     // A force on a port-connected net by its own name and one through a
@@ -2440,7 +2474,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
     Interpreter::RunStateEventHost run_state_event_host;
     /// The requests a foreign interface made that change the plan of the run
     /// or its time-zero state (watches, an opened boundary, foreign writes
-    /// that revive or dissolve logic, a late net-delay graft), in order. A
+    /// that revive or dissolve logic, a late net-delay graft, the driver
+    /// owners and drivers vhpi_create made), in order. A
     /// reset builds its twin from the artifact and replays them
     /// (Interpreter::replay_plan_onto), so the twin has the plan the run has
     /// and the restore of its image fits (IEEE 1800-2023 D.8; #128). Nothing
@@ -2456,6 +2491,14 @@ struct Interpreter::Impl : SchedulerBatchTask {
             /// (Interpreter::split_gate_delay; IEEE 1800-2023 28.16, 38.32):
             /// the driver and its program as it runs from then on.
             split_gate_delay,
+            /// A driver owner process a foreign interface created
+            /// (Interpreter::add_foreign_driver_owner; IEEE 1076-2019 23.6):
+            /// the placeholder it copies and the id the run gave it.
+            foreign_driver_owner,
+            /// A driver a foreign interface created
+            /// (Interpreter::add_host_driver; IEEE 1076-2019 23.6): its owner
+            /// process and, in `signals`, its signal.
+            foreign_driver,
         };
         Kind kind { Kind::watch_changes };
         /// Made after start(), so a replay applies it to a started twin.
@@ -2467,6 +2510,11 @@ struct Interpreter::Impl : SchedulerBatchTask {
         /// gate driver is a process of the design.
         ProcessId gate_process { };
         std::optional<Process> gate_program;
+        /// foreign_driver_owner: the placeholder process the owner copies.
+        ProcessId foreign_model { };
+        /// foreign_driver_owner: the owner's id in the run; foreign_driver:
+        /// the process that owns the driver.
+        ProcessId foreign_owner { };
     };
     std::vector<PlanStep> plan_journal;
     std::set<SignalId> plan_watched;
@@ -3286,6 +3334,23 @@ struct Interpreter::Impl : SchedulerBatchTask {
     /// the tick produced (cbAssertionStart, cbAssertionStep*; 39.4.2).
     void sva_tick_reports(AssertionStorage& storage, sva::Monitor& monitor);
     void run_sampled_read(AssertionStorage&, const ReadSignal&);
+    /// run_sampled_read of a signal whose sampled state the static kernel
+    /// holds (sampled_value_in_kernel): its Preponed value and rings.
+    void run_kernel_sampled_read(AssertionStorage&, const ReadSignal&);
+    /// A history read's value from its ring once the ring holds this time
+    /// step's sample, if any (IEEE 1800-2023 16.9.3).
+    [[nodiscard]] static PackedLogic4 sampled_history_result(
+        const ReadSignal& operation, const std::uint64_t* ring,
+        const PackedLogic4& slot_value, const PackedLogic4& default_value,
+        bool current_time_step_has_sample, bool systemverilog);
+    /// The static kernel's sampled state for the host's sampled-read
+    /// service: a kernel signal's Preponed value, its current value, the
+    /// ring of a key (null without one) and the kernel's time step.
+    [[nodiscard]] PackedLogic4 kernel_sampled_value(SignalId signal) const;
+    [[nodiscard]] PackedLogic4 kernel_current_value(SignalId signal) const;
+    [[nodiscard]] const std::uint64_t* kernel_sampled_ring(
+        const SampledHistoryKey& key) const;
+    [[nodiscard]] SimulationTick kernel_sampled_now() const;
     void execute_sva(ProcessState&, const SvaOperation&);
     void execute_pla(ProcessState&, const PlaEvaluate&);
     void execute_random_distribution(ProcessState&, const RandomDistribution&);
@@ -3397,6 +3462,11 @@ struct Interpreter::Impl : SchedulerBatchTask {
         std::uint64_t offset { };
     };
     [[nodiscard]] std::vector<SampledRingPlanEntry> sampled_ring_plan() const;
+    /// The samples a history read needs its key's ring to hold: $past of
+    /// depth n the n prior ones and this step's, a value change function
+    /// two, $sampled one (IEEE 1800-2023 16.9.3).
+    [[nodiscard]] static std::size_t sampled_history_capacity(
+        const ReadSignal& operation);
     [[nodiscard]] std::optional<std::uint64_t> planned_sampled_ring_offset(
         const SampledHistoryKey& key) const;
     /// Lays out sampled_value_words for the masked signals (once; later calls

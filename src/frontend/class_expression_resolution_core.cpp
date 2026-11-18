@@ -1426,7 +1426,6 @@ void Resolver::resolve_class_scope_constants(
   if (expression.kind == ExpressionKind::Call
       && !expression.text.starts_with('$')
       && expression.marker == support::ExpressionMarker::none
-      && !expression.text.starts_with('@')
       && expression.text.find('.') == std::string::npos) {
     const auto at = expression.text.rfind("::");
     if (at != std::string::npos && at != 0U

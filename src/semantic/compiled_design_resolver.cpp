@@ -1640,7 +1640,7 @@ CompiledVhdlStandardScalarIdentity builtin_standard_scalar_type_identity(
 {
     constexpr auto standard_profile
         = std::string_view { "ieee-1076-standard:" };
-    if (spelling.empty() || spelling.find('@') != std::string_view::npos
+    if (spelling.empty()
         || !environment.identity.starts_with(standard_profile)) {
         return CompiledVhdlStandardScalarIdentity::none;
     }
@@ -2148,8 +2148,7 @@ CompiledDesignResolver::actual_declaration(
                     && expression->systemverilog->kind
                         == sv::ExpressionKind::call
                     && expression->systemverilog->marker
-                        == support::ExpressionMarker::none
-                    && !expression->systemverilog->text.starts_with('@');
+                        == support::ExpressionMarker::none;
                 if (!next && actual->actual_expression
                     && !actual->systemverilog_type && !call_value) {
                     const auto resolved = resolve_expression_name(
@@ -5297,7 +5296,6 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
             if (candidate.kind != vhdl::ExpressionKind::call
                 || candidate.operands.empty() || candidate.text.starts_with('\'')
                 || candidate.marker != support::ExpressionMarker::none
-                || candidate.text.starts_with('@')
                 || !candidate.referenced_name) {
                 return false;
             }

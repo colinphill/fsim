@@ -804,8 +804,7 @@ namespace {
                 || input.task_name.empty()
                 || systemverilog_hir_detail::systemverilog_call_kind(
                        input.task_name)
-                    == sv::CallKind::system
-                || input.task_name.front() == '@') {
+                    == sv::CallKind::system) {
                 return std::nullopt;
             }
             const auto access = implicit_class_member(

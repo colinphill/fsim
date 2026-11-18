@@ -1,0 +1,19 @@
+#c elab phase=elaboration
+#c elab processes=11 drivers=1111
+#c exec life=1 phase=initialization at 0 ns w=30 y=0
+#c exec life=1 schedule=0
+#c life 1 1 ns w=103 y=1
+#c life 1 5 ns late driver=1 schedule=0
+#c life 1 6 ns w=113 y=1
+#c life 1 8 ns w=1103 y=1
+#c life 1 9 ns pending schedule=0
+#c life 1 10 ns reset
+#c life 1 reset rc=0 error=0
+#c start of reset phase=reset at 10 ns
+#c end of reset phase=reset at 0 ns w=40 y=0 late foreign=1
+#c exec life=2 phase=initialization at 0 ns w=40 y=0
+#c exec second driver of w again=0
+#c exec life=2 schedule=0
+#c life 2 1 ns w=22 y=0
+#c life 2 3 ns w=18 y=0
+#c life 2 15 ns w=18 y=0

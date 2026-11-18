@@ -621,7 +621,6 @@ void convert_to_two_state(Value& value)
             || builtin_type
             || std::ranges::find(inline_type, std::string_view { spelling })
                 != inline_type.end()
-            || spelling.starts_with('@')
             || spelling.find(' ') != std::string::npos
             || (bound_target
                 && !visiting.insert(type.target.target.value()).second)) {
@@ -5152,7 +5151,7 @@ private:
         // Inside a function body its name also denotes the result
         // variable; a call names the function itself (IEEE 1800-2017
         // 13.4.1), so a recursive call resolves to the function.
-        if (record.call_kind != semantic::sv::CallKind::system && !record.text.starts_with("@")
+        if (record.call_kind != semantic::sv::CallKind::system
             && record.marker == support::ExpressionMarker::none) {
             const semantic::CompiledDeclarationPredicate function
                 = [](const semantic::CompiledDeclarationView& candidate) {
@@ -5773,8 +5772,7 @@ private:
         }
         if (record.kind == ExpressionKind::call
             && record.call_kind != semantic::sv::CallKind::system
-            && record.marker == support::ExpressionMarker::none
-            && !record.text.starts_with("@")) {
+            && record.marker == support::ExpressionMarker::none) {
             std::optional<semantic::DeclarationId> selected;
             if (record.referenced_name && record.referenced_name->selected) {
                 selected = *record.referenced_name->selected;
@@ -9779,8 +9777,7 @@ private:
         const semantic::sv::Expression& record)
     {
         if (record.call_kind == semantic::sv::CallKind::system
-            || record.marker != support::ExpressionMarker::none
-            || record.text.starts_with('@')) {
+            || record.marker != support::ExpressionMarker::none) {
             return false;
         }
         std::optional<semantic::DeclarationId> selected;

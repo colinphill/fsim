@@ -2885,6 +2885,21 @@ target_include_directories(
 fsim_add_foreign_conformance_test(
   vhpi-foreign-dormant vhpi foreign_vhpi_dormant.vhd
   foreign_vhpi_dormant.expected "" fsim_foreign_vhpi_dormant_plugin 0 OFF v4)
+# Processes and drivers vhpi_create made survive a reset, each driver back
+# at its initial contents; the elaboration function does not run again and
+# the execution function does (IEEE 1076-2019 20.5, 20.9, 23.6).
+add_library(fsim_foreign_vhpi_create_reset_plugin SHARED
+  foreign_vhpi_create_reset_plugin.c)
+fsim_configure_library(fsim_foreign_vhpi_create_reset_plugin)
+target_link_libraries(
+  fsim_foreign_vhpi_create_reset_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vhpi_create_reset_plugin
+  PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vhpi-create-reset vhpi foreign_vhpi_create_reset.vhd
+  foreign_vhpi_create_reset.expected ""
+  fsim_foreign_vhpi_create_reset_plugin)
 fsim_add_foreign_conformance_test(
   vhpi-foreign-arch-missing vhpi foreign_vhpi_arch.vhd
   foreign_vhpi_arch_missing.expected ""

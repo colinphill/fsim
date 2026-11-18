@@ -9367,6 +9367,36 @@ add_test(
     -P
     "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
 )
+# `%p` of queues, dynamic, associative, fixed and bounded arrays of an
+# automatic task and of the module (IEEE 1800-2023 21.2.1.6): the display
+# and $sformatf stay host calls that format the kernel's own containers;
+# no member stays off the compiled kernel.
+add_test(
+  NAME fsim.application.inline-ops-container-pattern
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=container_pattern
+    -DFSIM_LANGUAGE=sv
+    "-DFSIM_FORBID_NOT_COMPILED=[A-Za-z_0-9:]+"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# Fixed-size arrays of strings of an automatic task (IEEE 1800-2023 6.16,
+# 7.4, 7.6): the kernel holds them as its own containers, a string element
+# per text slot, indexed by their declared ranges; no member stays off the
+# compiled kernel.
+add_test(
+  NAME fsim.application.inline-ops-fixed-strings
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=fixed_strings
+    -DFSIM_LANGUAGE=sv
+    "-DFSIM_FORBID_NOT_COMPILED=[A-Za-z_0-9:]+"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
 # A reduction whose with clause reduces each row of a two-dimensional
 # array (IEEE 1800-2023 7.12.3): the row copies' checked index arithmetic
 # (IntegerBinary) is generated code in a SystemVerilog member.
@@ -9379,6 +9409,24 @@ add_test(
     -DFSIM_LANGUAGE=sv
     "-DFSIM_FORBID_REASON=tier:not_compiled:[a-z_0-9:]+"
     "-DFSIM_FORBID_GENERIC=IntegerBinary"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# Procedural sampled value functions (IEEE 1800-2023 16.5.1, 16.9.3): the
+# kernel holds the Preponed values and histories of the signals it samples,
+# snapshots them in generated code, and FSIM_KERNEL_SVA_CHECK compares them
+# with the host's rule at every snapshot and append.
+add_test(
+  NAME fsim.application.inline-ops-sampled-kernel-state
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=sampled_kernel_state
+    -DFSIM_LANGUAGE=sv
+    "-DFSIM_KERNEL_ENV=FSIM_KERNEL_SVA_CHECK=1"
+    -DFSIM_FORBID_NOT_COMPILED=assertion
+    "-DFSIM_FORBID_GENERIC=ReadSignal"
+    -DFSIM_MIN_OWNED=5
     -P
     "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
 )
@@ -9700,6 +9748,9 @@ set_tests_properties(
   fsim.application.inline-ops-fixed-containers
   fsim.application.inline-ops-class-properties
   fsim.application.inline-ops-nested-reduction
+  fsim.application.inline-ops-container-pattern
+  fsim.application.inline-ops-fixed-strings
+  fsim.application.inline-ops-sampled-kernel-state
   fsim.application.inline-ops-automatic-arrays
   fsim.application.inline-ops-synchronization-objects
   fsim.application.inline-ops-automatic-structures

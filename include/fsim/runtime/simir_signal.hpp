@@ -133,6 +133,24 @@ struct VhdlConversionDriver {
       const VhdlConversionDriver&, const VhdlConversionDriver&) = default;
 };
 
+/// The expression a `$sampled` of a class object's property samples (IEEE
+/// 1800-2023 16.5.1): at the start of each time slot after 0 the runtime
+/// reads the handle in `receiver` (or, without one, the static property
+/// `properties[0]`), follows each property but the last, and reads the last
+/// one, `width` bits, as the property read does. The signal's value then is
+/// that value in its low `width` bits and, in bit `width`, 1 when every
+/// handle of the chain held an object (0 and the default value otherwise).
+/// At time 0 the signal samples its declared value, the default sampled
+/// value. Nothing else writes the signal.
+struct SampledPropertyChain {
+  std::optional<SignalId> receiver{};
+  std::vector<std::string> properties{};
+  std::uint32_t width{};
+
+  friend bool operator==(
+      const SampledPropertyChain&, const SampledPropertyChain&) = default;
+};
+
 struct Signal {
   std::string name;
   PackedLogic4 initial_value;
@@ -152,6 +170,8 @@ struct Signal {
   // transactions are kept or rejected together (IEEE 1076-2008 10.5.2.2).
   std::uint32_t vhdl_scalar_width { };
   std::vector<VhdlConversionDriver> vhdl_conversion_drivers;
+  // A generated signal that samples an object's property (16.5.1).
+  std::optional<SampledPropertyChain> sampled_property;
 
   Signal() = default;
   Signal(
