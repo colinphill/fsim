@@ -1941,6 +1941,7 @@ struct CovergroupOptionAssignment {
     std::vector<SourceToken> value_tokens;
     std::optional<std::uint64_t> evaluated_value;
     std::optional<std::uint64_t> evaluated_real_bits;
+    std::optional<std::string> evaluated_text;
     bool inherited { };
     SourceSpanId source;
 };

@@ -212,8 +212,7 @@ bool initialize_systemverilog_cross_inventory(
             state.weight = bin.weight;
             state.goal = bin.goal;
             state.at_least = bin.at_least;
-            state.excluded = bin.kind != SystemVerilogCoverageBinKind::Regular
-                || bin.weight == 0U;
+            state.excluded = bin.kind != SystemVerilogCoverageBinKind::Regular;
             states.push_back(std::move(state));
         }
         std::vector<std::vector<FactorBin>> factors;
@@ -237,8 +236,7 @@ bool initialize_systemverilog_cross_inventory(
                 }
                 bins.push_back({ operand.name, &bin,
                     factor_identity(declaration, coverpoint, bin),
-                    bin.kind != SystemVerilogCoverageBinKind::Regular
-                        || bin.weight == 0U });
+                    bin.kind != SystemVerilogCoverageBinKind::Regular });
             }
             if (!finite || bins.empty()) {
                 finite = false;
@@ -284,7 +282,6 @@ bool initialize_systemverilog_cross_inventory(
             state.weight = cross.effective_weight;
             state.goal = cross.effective_goal;
             state.at_least = cross.effective_at_least;
-            state.excluded = state.excluded || state.weight == 0U;
             states.push_back(std::move(state));
             return states.size() <= kSystemVerilogCoverageMaximumStateRecords;
         };

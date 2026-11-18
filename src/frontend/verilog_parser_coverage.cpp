@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "verilog_parser_coverage_internal.hpp"
+#include "fsim/frontend/coverage_options.hpp"
 #include "fsim/frontend/design.hpp"
 #include "fsim/frontend/design_core.hpp"
 #include "fsim/frontend/diagnostic.hpp"
@@ -1542,9 +1543,47 @@ void VerilogParser::structure_covergroup_options(
     bool saw_cross_retain_auto_bins { };
     bool saw_real_interval { };
     for (auto& option : declaration.option_assignments) {
+        // An instance option is a member of Table 19-1 (IEEE 1800-2023
+        // 19.7), a type option one of Table 19-3 (19.7.1).
+        using Instance = SystemVerilogCoverageOption;
+        using TypeOption = SystemVerilogCoverageTypeOption;
+        const bool type_scope
+            = option.scope == SystemVerilogCovergroupOptionScope::Type;
+        const auto instance_option = type_scope
+            ? std::nullopt
+            : systemverilog_coverage_option(option.name);
+        const auto type_option = type_scope
+            ? systemverilog_coverage_type_option(option.name)
+            : std::nullopt;
+        if (!instance_option && !type_option) {
+            error(
+                *option.name_token,
+                "FSIM-SV-SEM-269",
+                "'" + option.name + "' is not a covergroup "
+                    + (type_scope ? "type option" : "instance option"));
+            continue;
+        }
+        if ((instance_option
+                && systemverilog_coverage_option_string(*instance_option))
+            || type_option == TypeOption::comment) {
+            // A string option; one that is not a string literal is
+            // evaluated at instantiation (19.7).
+            if (option.value_tokens.size() == 1U
+                && option.value_tokens.front().kind
+                    == TokenKind::StringLiteral) {
+                option.evaluated_text
+                    = decoded_string_literal_text(option.value_tokens.front());
+            } else if (type_scope) {
+                error(
+                    *option.name_token,
+                    "FSIM-SV-SEM-269",
+                    "type_option.comment requires a constant string");
+            }
+            continue;
+        }
         const bool retain_cross_bins
-            = option.name == "cross_retain_auto_bins";
-        const bool real_interval = option.name == "real_interval";
+            = instance_option == Instance::cross_retain_auto_bins;
+        const bool real_interval = type_option == TypeOption::real_interval;
         if (real_interval) {
             if (!require_standard(
                     "type_option.real_interval",
@@ -1602,10 +1641,18 @@ void VerilogParser::structure_covergroup_options(
             continue;
         }
         const auto value = *literal->exact;
-        const bool weight = option.name == "weight";
-        const bool goal = option.name == "goal";
-        const bool flag = option.name == "per_instance"
-            || option.name == "merge_instances";
+        const bool weight = instance_option == Instance::weight
+            || type_option == TypeOption::weight;
+        const bool goal = instance_option == Instance::goal
+            || type_option == TypeOption::goal;
+        const bool flag = (instance_option
+                              && support::coverage_option_bit(*instance_option))
+            || type_option == TypeOption::merge_instances
+            || type_option == TypeOption::strobe
+            || type_option == TypeOption::distribute_first;
+        const bool positive = instance_option == Instance::at_least
+            || instance_option == Instance::auto_bin_max;
+        const bool count = instance_option == Instance::cross_num_print_missing;
         if (retain_cross_bins
             && (value != 0 && value != 1)) {
             error(
@@ -1616,10 +1663,14 @@ void VerilogParser::structure_covergroup_options(
         }
         saw_cross_retain_auto_bins
             = saw_cross_retain_auto_bins || retain_cross_bins;
+        constexpr std::int64_t int_max
+            = std::numeric_limits<std::int32_t>::max();
         const bool valid = weight
             ? value >= 0 && value <= 65'536
             : goal                        ? value >= 0 && value <= 100
             : (flag || retain_cross_bins) ? value == 0 || value == 1
+            : positive                    ? value >= 1 && value <= int_max
+            : count                       ? value >= 0 && value <= int_max
                                           : true;
         if (!valid) {
             diagnostics_.push_back(Diagnostic {
@@ -1642,9 +1693,9 @@ void VerilogParser::structure_covergroup_options(
                 ? declaration.effective_type_goal
                 : declaration.effective_instance_goal;
             target = static_cast<std::uint32_t>(value);
-        } else if (option.name == "per_instance") {
+        } else if (instance_option == Instance::per_instance) {
             declaration.effective_per_instance = value != 0;
-        } else if (option.name == "merge_instances") {
+        } else if (type_option == TypeOption::merge_instances) {
             declaration.effective_merge_instances = value != 0;
         } else if (retain_cross_bins) {
             declaration.effective_cross_retain_auto_bins = value != 0;
@@ -2006,22 +2057,54 @@ void VerilogParser::structure_coverage_options(
                 = std::bit_cast<std::uint64_t>(*value);
             continue;
         }
-        const bool valid_name = name == "weight" || name == "goal"
-            || name == "at_least";
-        const bool valid_value = literal && !literal->wildcard && literal->exact
-            && *literal->exact >= 0
-            && (name != "at_least" || *literal->exact >= 1)
-            && (name != "goal" || *literal->exact <= 100)
-            && (name != "weight" || *literal->exact <= 65'536);
-        if (!valid_name || !valid_value) {
+        // A coverpoint or cross instance option is one Table 19-2 allows at
+        // its level; a type option is weight, goal or comment (Table 19-4).
+        using Instance = SystemVerilogCoverageOption;
+        using TypeOption = SystemVerilogCoverageTypeOption;
+        const bool type_scope = statement.front().text == "type_option";
+        const auto option_kind = type_scope
+            ? std::nullopt
+            : systemverilog_coverage_option(name);
+        const auto type_kind = type_scope
+            ? systemverilog_coverage_type_option(name)
+            : std::nullopt;
+        const auto level = declaration.kind
+                == SystemVerilogCoverageDeclarationKind::Coverpoint
+            ? SystemVerilogCoverageOptionLevel::coverpoint
+            : SystemVerilogCoverageOptionLevel::cross;
+        // real_interval of a coverpoint is taken above.
+        const bool valid_name = type_scope
+            ? type_kind && *type_kind != TypeOption::real_interval
+                && systemverilog_coverage_type_option_allowed(*type_kind, level)
+            : option_kind
+                && systemverilog_coverage_option_allowed(*option_kind, level);
+        if (!valid_name) {
+            error(
+                statement[2],
+                "FSIM-SV-SEM-269",
+                "'" + name + "' is not a "
+                    + (level == SystemVerilogCoverageOptionLevel::coverpoint
+                            ? std::string { "coverpoint " }
+                            : std::string { "cross " })
+                    + (type_scope ? "type option" : "instance option"));
+            continue;
+        }
+        // These options of a coverpoint or cross are not applied by fsim
+        // yet (automatic bin count, cross retention, overlap warnings,
+        // missing-cross reports); they stay errors until they are.
+        if (option_kind == Instance::auto_bin_max
+            || option_kind == Instance::cross_retain_auto_bins
+            || option_kind == Instance::detect_overlap
+            || option_kind == Instance::cross_num_print_missing) {
             error(
                 statement[2],
                 "FSIM-SV-SEM-217",
-                "coverage weight, goal, and at_least require bounded legal values");
+                "coverage option '" + name
+                    + "' of a coverpoint or cross is not applied by fsim");
             continue;
         }
         SystemVerilogCovergroupOptionAssignment option;
-        option.scope = statement.front().text == "type_option"
+        option.scope = type_scope
             ? SystemVerilogCovergroupOptionScope::Type
             : SystemVerilogCovergroupOptionScope::Instance;
         option.name = name;
@@ -2029,26 +2112,74 @@ void VerilogParser::structure_coverage_options(
         option.name_span = statement[2].span;
         option.value_tokens.assign(value_tokens.begin(), value_tokens.end());
         option.span = span_from(statement.front(), statement.back());
+        if (option_kind == Instance::comment
+            || type_kind == TypeOption::comment) {
+            if (value_tokens.size() == 1U
+                && value_tokens.front().kind == TokenKind::StringLiteral) {
+                option.evaluated_text
+                    = decoded_string_literal_text(value_tokens.front());
+            } else if (type_scope) {
+                error(
+                    statement[2],
+                    "FSIM-SV-SEM-269",
+                    "type_option.comment requires a constant string");
+                continue;
+            }
+            declaration.option_assignments.push_back(std::move(option));
+            continue;
+        }
+        // A non-constant instance option is evaluated at instantiation
+        // (19.7); a type option is a constant expression (19.7.1).
+        if (!literal && !type_scope) {
+            declaration.option_assignments.push_back(std::move(option));
+            continue;
+        }
+        constexpr std::int64_t int_max
+            = std::numeric_limits<std::int32_t>::max();
+        const bool flag
+            = option_kind && support::coverage_option_bit(*option_kind);
+        const bool positive = option_kind == Instance::at_least
+            || option_kind == Instance::auto_bin_max;
+        const bool goal = option_kind == Instance::goal
+            || type_kind == TypeOption::goal;
+        const bool weight = option_kind == Instance::weight
+            || type_kind == TypeOption::weight;
+        const bool valid_value = literal && !literal->wildcard && literal->exact
+            && *literal->exact >= 0 && *literal->exact <= int_max
+            && (!positive || *literal->exact >= 1)
+            && (!goal || *literal->exact <= 100)
+            && (!weight || *literal->exact <= 65'536)
+            && (!flag || *literal->exact <= 1);
+        if (!valid_value) {
+            error(
+                statement[2],
+                "FSIM-SV-SEM-217",
+                "coverage option '" + name
+                    + "' requires a bounded legal value");
+            continue;
+        }
+        option.evaluated_value = static_cast<std::uint64_t>(*literal->exact);
         declaration.option_assignments.push_back(std::move(option));
     }
-    const auto apply_scope = [&](const SystemVerilogCovergroupOptionScope scope) {
-        for (const auto& option : declaration.option_assignments) {
-            if (option.scope != scope)
-                continue;
-            const auto literal = coverage_literal(option.value_tokens);
-            if (!literal || !literal->exact)
-                continue;
-            if (option.name == "weight") {
-                declaration.effective_weight = static_cast<std::uint32_t>(*literal->exact);
-            } else if (option.name == "goal") {
-                declaration.effective_goal = static_cast<std::uint32_t>(*literal->exact);
-            } else {
-                declaration.effective_at_least = static_cast<std::uint64_t>(*literal->exact);
-            }
+    // The coverpoint's or cross's own constant instance options; the
+    // instance's run-time options (coverage_options.hpp) are what coverage
+    // is computed from.
+    for (const auto& option : declaration.option_assignments) {
+        if (option.scope != SystemVerilogCovergroupOptionScope::Instance
+            || !option.evaluated_value) {
+            continue;
         }
-    };
-    apply_scope(SystemVerilogCovergroupOptionScope::Type);
-    apply_scope(SystemVerilogCovergroupOptionScope::Instance);
+        const auto kind = systemverilog_coverage_option(option.name);
+        if (kind == SystemVerilogCoverageOption::weight) {
+            declaration.effective_weight
+                = static_cast<std::uint32_t>(*option.evaluated_value);
+        } else if (kind == SystemVerilogCoverageOption::goal) {
+            declaration.effective_goal
+                = static_cast<std::uint32_t>(*option.evaluated_value);
+        } else if (kind == SystemVerilogCoverageOption::at_least) {
+            declaration.effective_at_least = *option.evaluated_value;
+        }
+    }
 }
 
 } // namespace fsim::frontend

@@ -64,6 +64,9 @@ struct SystemVerilogCovergroupOptionAssignment {
     std::vector<Token> value_tokens;
     std::optional<std::uint64_t> evaluated_value;
     std::optional<std::uint64_t> evaluated_real_bits;
+    // The value of a string option (name, comment) given as a string
+    // literal.
+    std::optional<std::string> evaluated_text;
     bool inherited { };
     SourceSpan span;
 };
@@ -347,6 +350,30 @@ struct SystemVerilogCoverageIllegalBinReport {
     SourceSpan span;
 };
 
+/// The instance option values of a covergroup, or of one of its coverpoints
+/// or crosses, in one instance (IEEE 1800-2023 19.7, Table 19-1).
+struct SystemVerilogCoverageOptionValues {
+    std::uint32_t weight { 1U };
+    std::uint32_t goal { 100U };
+    std::uint64_t at_least { 1U };
+    std::uint32_t auto_bin_max { 64U };
+    std::uint32_t cross_num_print_missing { };
+    bool cross_retain_auto_bins { true };
+    bool detect_overlap { };
+    std::string comment;
+};
+
+/// The instance options of one covergroup instance as its construction and
+/// later procedural assignments left them (19.7): the covergroup's own, then
+/// one entry per coverage declaration, in declaration order.
+struct SystemVerilogCovergroupInstanceOptions {
+    std::string name;
+    bool per_instance { };
+    bool get_inst_coverage { };
+    SystemVerilogCoverageOptionValues covergroup;
+    std::vector<SystemVerilogCoverageOptionValues> items;
+};
+
 struct SystemVerilogCovergroupInstance {
     std::string name;
     std::string owner_identity;
@@ -354,6 +381,9 @@ struct SystemVerilogCovergroupInstance {
     std::string specialization_identity;
     std::string runtime_identity;
     std::vector<SystemVerilogCovergroupOptionAssignment> initial_option_state;
+    // The instance's option values; none before the run records them, when
+    // they are the definition's (systemverilog_covergroup_initial_options).
+    std::optional<SystemVerilogCovergroupInstanceOptions> options;
     std::vector<SystemVerilogCoverageBinHit> bin_hits;
     std::vector<SystemVerilogCoverageTransitionProgress> transition_progress;
     std::vector<SystemVerilogCoveragePreviousSample> previous_samples;

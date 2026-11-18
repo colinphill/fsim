@@ -1053,6 +1053,21 @@ struct CoverageQuery {
     std::string identity { };
 };
 
+/// A read (`write` false) or procedural assignment of one instance option
+/// (IEEE 1800-2023 19.7) of the covergroup instance whose runtime identity
+/// is `identity`: its own option (item 0) or that of its coverage
+/// declaration item - 1. An integral option's value is the 32-bit `value`
+/// register, a signed `int` (a `bit` option is its low bit); a string
+/// option's (name, comment) is the `text` register.
+struct CoverageOption {
+    bool write { };
+    support::CoverageOption option { support::CoverageOption::weight };
+    std::uint32_t item { };
+    std::string identity { };
+    RegisterId value { };
+    StringRegisterId text { };
+};
+
 /// One VHDL-2019 STD.ENV PSL query or control request. Queries own a
 /// destination, SET_PSL_COVER_ASSERT owns an enable operand, and
 /// CLEAR_PSL_STATE owns neither. The scheduler-owned PSL engine remains the

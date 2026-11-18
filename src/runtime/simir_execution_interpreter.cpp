@@ -2236,6 +2236,28 @@ bool Interpreter::Impl::execute_operation(ProcessState& process,
             }
             get_register(process, op.destination) = std::move(value);
             ++process.pc;
+        } else if constexpr (std::is_same_v<OperationType, CoverageOption>) {
+            if (!coverage_option_hook) {
+                fail(process, "coverage option service is unavailable");
+            }
+            const bool text = support::coverage_option_string(op.option);
+            PackedLogic4 value;
+            std::string string;
+            if (op.write && text) {
+                string = get_string_register(process, op.text);
+            } else if (op.write) {
+                value = get_register(process, op.value);
+            }
+            coverage_option_hook(op, value, string);
+            if (!op.write && text) {
+                get_string_register(process, op.text) = std::move(string);
+            } else if (!op.write) {
+                if (value.width() != 32U || value.is_logic9()) {
+                    fail(process, "coverage option service returned an invalid value");
+                }
+                get_register(process, op.value) = std::move(value);
+            }
+            ++process.pc;
         } else if constexpr (std::is_same_v<OperationType, VhdlPslApi>) {
             const bool query = op.kind == VhdlPslApiKind::assert_failed
                 || op.kind == VhdlPslApiKind::is_covered

@@ -1687,8 +1687,9 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SV-SEM-266` | error | A real-valued coverpoint or bin has an unsupported, implicit, wildcard, transition, or type-incompatible bin form. |
 | `FSIM-SV-SEM-267` | error | An anonymous program repeats a compilation-unit task or function name. |
 | `FSIM-SV-SEM-268` | error | An anonymous program supplies a forbidden end label. |
+| `FSIM-SV-SEM-269` | error | A covergroup option reference or assignment names no option of its level (IEEE 1800-2023 Tables 19-2 and 19-4), assigns an option the LRM sets only in the definition, is a nonblocking assignment, or has a value fsim cannot build. |
 | `FSIM-SV-SEM-270` | error | Source attempts to redeclare the compiler-owned SystemVerilog `std` package. |
-| `FSIM-SV-SEM-217` | error | A coverpoint or cross `weight`, `goal`, or `at_least` option is not a bounded integer in its permitted range. |
+| `FSIM-SV-SEM-217` | error | A constant covergroup, coverpoint or cross `weight`, `goal`, `at_least`, `auto_bin_max` or `cross_num_print_missing` option is not an integer in its permitted range (IEEE 1800-2023 Table 19-1), or a coverpoint or cross sets `auto_bin_max`, `cross_retain_auto_bins`, `detect_overlap` or `cross_num_print_missing`, which fsim does not apply yet. |
 | `FSIM-SV-SEM-218` | error | A covergroup-level weight, goal, `per_instance`, or `merge_instances` literal is outside its permitted bounded range. |
 | `FSIM-SV-SEM-219` | error | A covergroup constructor or sample formal uses a real, string, chandle, event, void, or other type outside the bounded integral coverage model. |
 | `FSIM-SV-SEM-221` | error | A covergroup exceeds the bounded declaration, bin, transition-work, or cross-product resource budget. |

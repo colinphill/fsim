@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_compiled_environment.hpp"
+#include "fsim/frontend/coverage_options.hpp"
 #include "application_internal.hpp"
 
 namespace fsim::app::application_detail {
@@ -225,6 +226,10 @@ public:
         state.instances.reserve(runtime_state.instances.size());
         for (const auto& instance : runtime_state.instances) {
             state.instances.push_back(project_instance(instance));
+            if (const auto* options = systemverilog_covergroup_option_state(
+                    runtime_state, instance.runtime_identity)) {
+                state.instances.back().options = *options;
+            }
         }
         std::ranges::sort(
             state.instances, { },
@@ -318,6 +323,7 @@ public:
         output.value_tokens = tokens(input.value_tokens);
         output.evaluated_value = input.evaluated_value;
         output.evaluated_real_bits = input.evaluated_real_bits;
+        output.evaluated_text = input.evaluated_text;
         output.inherited = input.inherited;
         output.span = span(input.source);
         return output;
@@ -687,8 +693,42 @@ runtime::SystemVerilogCoverageState make_systemverilog_coverage_state(
     std::ranges::sort(
         state.instances, { },
         &semantic::sv::CovergroupInstance::runtime_identity);
+    // Each instance starts with its definition's constant options (IEEE
+    // 1800-2023 19.7); its construction makes the others.
+    state.options.reserve(state.instances.size());
+    for (const auto& instance : state.instances) {
+        runtime::SystemVerilogCovergroupOptionState options;
+        options.runtime_identity = instance.runtime_identity;
+        if (const auto* declaration = find_systemverilog_covergroup_declaration(
+                hir, instance.declaration_identity)) {
+            options.options = frontend::systemverilog_covergroup_initial_options(
+                project_systemverilog_covergroup_declaration(
+                    *declaration, semantics),
+                instance.owner_identity + "." + instance.name);
+        }
+        state.options.push_back(std::move(options));
+    }
     refresh_systemverilog_coverage_reports(state, hir, semantics);
     return state;
+}
+
+frontend::SystemVerilogCovergroupInstanceOptions*
+systemverilog_covergroup_option_state(
+    runtime::SystemVerilogCoverageState& state, const std::string_view identity)
+{
+    const auto found = std::ranges::find(state.options, identity,
+        &runtime::SystemVerilogCovergroupOptionState::runtime_identity);
+    return found == state.options.end() ? nullptr : &found->options;
+}
+
+const frontend::SystemVerilogCovergroupInstanceOptions*
+systemverilog_covergroup_option_state(
+    const runtime::SystemVerilogCoverageState& state,
+    const std::string_view identity)
+{
+    const auto found = std::ranges::find(state.options, identity,
+        &runtime::SystemVerilogCovergroupOptionState::runtime_identity);
+    return found == state.options.end() ? nullptr : &found->options;
 }
 
 frontend::SystemVerilogCovergroupDeclaration
@@ -800,6 +840,21 @@ bool restore_systemverilog_coverage_state(
             = source_instance.illegal_bin_reports;
         destination_instance->cross_inventory_initialized
             = source_instance.cross_inventory_initialized;
+    }
+    // The instance options, one per instance (19.7).
+    if (source.options.size() != restored.options.size()) {
+        error = "coverage state describes a different option model";
+        return false;
+    }
+    for (const auto& source_options : source.options) {
+        auto* options = systemverilog_covergroup_option_state(
+            restored, source_options.runtime_identity);
+        if (options == nullptr
+            || options->items.size() != source_options.options.items.size()) {
+            error = "coverage state describes a different option model";
+            return false;
+        }
+        *options = source_options.options;
     }
     restored.callback_events = source.callback_events;
     restored.trace_events = source.trace_events;

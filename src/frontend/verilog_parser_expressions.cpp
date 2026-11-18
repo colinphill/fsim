@@ -379,6 +379,14 @@ Expression VerilogParser::parse_lvalue()
                 || expression.kind != ExpressionKind::Identifier;
             const auto separator = advance();
             const auto selected = expect_identifier("selected name");
+            if (expression.kind == ExpressionKind::Identifier) {
+                if (expression.name_components.empty()) {
+                    expression.name_components.push_back(
+                        { expression.text, false });
+                }
+                expression.name_components.push_back({ selected.text,
+                    separator.kind == TokenKind::Scope });
+            }
             expression.text += separator.kind == TokenKind::Scope ? "::" : ".";
             expression.text += selected.text;
             expression.span = cover(expression.span, selected.span);
@@ -1057,6 +1065,7 @@ Expression VerilogParser::parse_primary_impl()
         || (keyword("void") && at(TokenKind::Apostrophe, 1))) {
         const auto name = advance();
         std::string canonical = name.text;
+        std::vector<NameComponent> components { { name.text, false } };
         // `C#(args)` names a class specialization, also inside a scope
         // chain (`P::C#(args)::member`, IEEE 1800-2017 8.25.1).
         // The parsed actuals of the last `#(...)` in the chain.
@@ -1156,9 +1165,11 @@ Expression VerilogParser::parse_primary_impl()
                 typed.systemverilog_class_selection = selection;
                 return typed;
             }
-            canonical += (standard_member
+            const auto& member = standard_member
                 ? advance()
-                : expect_identifier("package-scoped name")).text;
+                : expect_identifier("package-scoped name");
+            canonical += member.text;
+            components.push_back({ member.text, true });
             if (at(TokenKind::Hash) && at(TokenKind::LeftParen, 1)) {
                 append_specialization();
             }
@@ -1245,6 +1256,10 @@ Expression VerilogParser::parse_primary_impl()
             cover(name.span, previous().span)
         };
         expression.systemverilog_class_selection = std::move(selection);
+        if (components.size() > 1U) {
+            expression.name_components.assign(
+                components.begin(), components.end());
+        }
         // `std::randomize(...)`: the std package's one function, the scope
         // randomize function (IEEE 1800-2023 18.12), resolved here against
         // the std declaration.
@@ -1485,10 +1500,12 @@ Expression VerilogParser::parse_primary_impl()
             }
             auto class_selection
                 = std::move(expression.systemverilog_class_selection);
+            auto name_components = std::move(expression.name_components);
             expression = Expression { ExpressionKind::Call, canonical,
                 std::move(arguments),
                 cover(name.span, previous().span) };
             expression.call_argument_names = std::move(argument_names);
+            expression.name_components = std::move(name_components);
             if (name.marker != support::ExpressionMarker::none) {
                 // A generated name token: the node's kind is the token's.
                 expression.text.clear();

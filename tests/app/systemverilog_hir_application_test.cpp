@@ -1850,8 +1850,11 @@ endmodule
     assert(alternative_generate.nested.front().scope
         == alternative_generate.scope);
     assert(top->concurrent_assertions.size() == 5);
+    // The initial block, the assertions' processes and the initialization
+    // of coverage_monitor's options from its constructor actual
+    // (`option.weight = seed`, IEEE 1800-2023 19.7).
     assert(top->processes.size()
-        == 1U + top->concurrent_assertions.size());
+        == 2U + top->concurrent_assertions.size());
     const auto& ready_assertion = top->concurrent_assertions[0];
     const auto& assumption = top->concurrent_assertions[1];
     const auto& cover = top->concurrent_assertions[2];
@@ -1909,7 +1912,7 @@ endmodule
     assert(!restriction.observers.callback_on_failure);
     assert(restriction.coverage_slot == 4);
     assert(checked->systemverilog_hir.processes().size()
-        == 3U + top->concurrent_assertions.size());
+        == 4U + top->concurrent_assertions.size());
     const auto& process = checked->systemverilog_hir.processes()[top->processes.front().value()];
     assert(process.kind == fsim::semantic::sv::ProcessKind::initial);
     assert(process.statements.size() == 1);

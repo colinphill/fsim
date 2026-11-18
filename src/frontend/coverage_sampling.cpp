@@ -1668,10 +1668,6 @@ SystemVerilogCoverageSampleResult sample_systemverilog_coverpoint(
     if (!selected->transitions.empty()) {
         reset_transition_bin(instance, coverpoint, *selected);
     }
-    if (selected->weight == 0U) {
-        result.zero_weight_excluded = true;
-        return result;
-    }
     if (selected->kind == SystemVerilogCoverageBinKind::Ignore) {
         result.ignored = true;
         return result;
@@ -1865,7 +1861,6 @@ SystemVerilogCovergroupSampleResult sample_systemverilog_covergroup(
             ? selected_cross_bin->at_least
             : cross.effective_at_least;
         excluded = excluded || (selected_cross_bin && selected_cross_bin->kind != SystemVerilogCoverageBinKind::Regular);
-        excluded = excluded || weight == 0U;
         const auto& origin = cross.origin_covergroup_identity.empty()
             ? declaration.canonical_identity
             : cross.origin_covergroup_identity;

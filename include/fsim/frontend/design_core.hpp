@@ -110,6 +110,14 @@ enum class ExpressionKind {
 // source order for language-independent lowering.
 struct Type;
 
+// One identifier of a selected or scoped name as the parser read it
+// (`a.b.c`, `p::c::f`; IEEE 1800-2023 8.23, 23.6, 23.7): `scoped` when `::`
+// precedes it, rather than `.`.
+struct NameComponent {
+    std::string name;
+    bool scoped { };
+};
+
 struct Expression {
     ExpressionKind kind { ExpressionKind::Invalid };
     std::string text;
@@ -145,6 +153,9 @@ struct Expression {
         support::UnbasedUnsizedLiteral::none };
     support::RareVector<std::string> call_argument_names;
     support::RareVector<PortDirection> call_argument_directions;
+    // The identifiers of a selected or scoped name, in source order; empty
+    // for a simple name and for any other node.
+    support::RareVector<NameComponent> name_components;
     std::uint64_t call_result_width { };
     ValueDomain call_result_domain { ValueDomain::Unknown };
     bool call_result_signed { };

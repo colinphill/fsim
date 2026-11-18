@@ -3282,6 +3282,9 @@ private:
     /// to the compiled run, which made it.
     void check_assert(std::uint32_t member, std::uint32_t pc, const Assert& op,
         const PackedLogic4& condition);
+    /// A WriteAfter*, WriteDelayed or WriteInertial* operation of a member
+    /// on the member's registers: the host's delayed update of a host signal.
+    void delayed_host_write(std::uint32_t member, std::uint32_t pc);
     [[nodiscard]] Boundary behavioral_boundary(std::uint32_t thread,
         std::uint32_t pc);
     /// behavioral_boundary for one operation kind (Boundary::none for kinds

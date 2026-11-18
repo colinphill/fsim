@@ -735,6 +735,20 @@ private:
     inconsistent("FST declaration type is unsupported", 0U);
 }
 
+// Whether a variable's FST var type is one its declaration can carry: a
+// SystemVerilog packed object's is its VCD kind (IEEE 1800-2023 21.7.2.1:
+// integer, reg, time or a net keyword, as the writer's fst_var_kind gives
+// it); every other declaration has the one type of its type kind.
+[[nodiscard]] bool fst_type_matches(const FstReaderDeclaration& value)
+{
+    if (value.type_kind == TraceTypeKind::Packed
+        && value.source.language != TraceLanguage::Vhdl) {
+        return value.fst_type == 1U
+            || (value.fst_type >= 5U && value.fst_type <= 17U);
+    }
+    return value.fst_type == expected_fst_type(value);
+}
+
 [[nodiscard]] FstReaderDeclaration parse_declaration_record(
     const std::string_view record,
     const FstReaderLimits& limits,
@@ -966,7 +980,7 @@ private:
         const auto alias_handle = cursor_.varint();
         if (declaration.reference.empty() || !path_matches(declaration)
             || declaration.storage_width != found_width
-            || declaration.fst_type != expected_fst_type(declaration)
+            || !fst_type_matches(declaration)
             || !signal_ids_.insert(declaration.signal.value).second) {
             inconsistent(
                 "FST variable disagrees with its declaration metadata", offset);

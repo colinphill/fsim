@@ -188,6 +188,27 @@ inline void operation_registers_of(const T& op, std::vector<RegisterId>& reads,
             reads.push_back(op.condition);
         } else if constexpr (std::is_same_v<T, FormatDisplay>) {
             reads.push_back(op.source);
+        } else if constexpr (std::is_same_v<T, WriteAfter>
+            || std::is_same_v<T, WriteAfterSlice>
+            || std::is_same_v<T, WriteInertial>
+            || std::is_same_v<T, WriteInertialSlice>) {
+            reads.push_back(op.source);
+        } else if constexpr (std::is_same_v<T, WriteAfterDynamicSlice>) {
+            reads.push_back(op.source);
+            reads.push_back(op.selection.index);
+        } else if constexpr (std::is_same_v<T, WriteAfterDynamicPartSlice>) {
+            reads.push_back(op.source);
+            reads.push_back(op.selection.base);
+        } else if constexpr (std::is_same_v<T, WriteDelayed>) {
+            // The value and the rise, fall and turn-off delay registers
+            // (28.16).
+            reads.push_back(op.source);
+            for (const auto* wait : { &op.delay, op.fall ? &*op.fall : nullptr,
+                     op.turnoff ? &*op.turnoff : nullptr }) {
+                if (wait != nullptr && wait->source) {
+                    reads.push_back(*wait->source);
+                }
+            }
         } else if constexpr (std::is_same_v<T, ForceSignalSlice>
             || std::is_same_v<T, ReleaseSignalSlice>) {
             if constexpr (std::is_same_v<T, ForceSignalSlice>) {
@@ -206,6 +227,18 @@ inline void operation_registers_of(const T& op, std::vector<RegisterId>& reads,
         } else if constexpr (std::is_same_v<T, HostRequest>) {
             for (const auto& argument : op.arguments) {
                 reads.push_back(argument.source);
+            }
+        } else if constexpr (std::is_same_v<T, CoverageQuery>) {
+            write = op.destination;
+        } else if constexpr (std::is_same_v<T, CoverageOption>) {
+            // An integral option's register; a string option's is a string
+            // register.
+            if (!support::coverage_option_string(op.option)) {
+                if (op.write) {
+                    reads.push_back(op.value);
+                } else {
+                    write = op.value;
+                }
             }
         } else if constexpr (std::is_same_v<T, SvaOperation>) {
             // A concurrent assertion's monitor (IEEE 1800-2023 16.14): a tick

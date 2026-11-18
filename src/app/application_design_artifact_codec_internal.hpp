@@ -899,6 +899,9 @@ namespace codec_detail {
         } else if constexpr (std::same_as<T, fsim::runtime::simir::ContainerTraversal>) {
             return value >= fsim::runtime::simir::ContainerTraversal::first
                 && value <= fsim::runtime::simir::ContainerTraversal::previous;
+        } else if constexpr (std::same_as<T, fsim::support::CoverageOption>) {
+            return value >= fsim::support::CoverageOption::name
+                && value <= fsim::support::last_coverage_option;
         } else if constexpr (std::same_as<T, fsim::runtime::simir::CoverageQueryKind>) {
             return value >= fsim::runtime::simir::CoverageQueryKind::overall_type
                 && value <= fsim::runtime::simir::CoverageQueryKind::covergroup_instance;

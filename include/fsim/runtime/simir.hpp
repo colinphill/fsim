@@ -11,6 +11,7 @@
 #include "fsim/runtime/simir_shared_vector.hpp"
 #include "fsim/runtime/sva_storage.hpp"
 #include "fsim/runtime/systemverilog_scalar.hpp"
+#include "fsim/support/coverage_option.hpp"
 #include "fsim/support/dpi_identity.hpp"
 #include "fsim/support/gate_driver.hpp"
 #include "fsim/support/generated_object_origin.hpp"

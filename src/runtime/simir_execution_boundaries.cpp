@@ -1955,6 +1955,32 @@ void Interpreter::Impl::handle_boundary(
         process.executor->write_register(query->destination, value);
         return;
     }
+    if (const auto* option
+        = fsim::runtime::simir::operation_get_if<CoverageOption>(&operation)) {
+        if (!coverage_option_hook || !process.executor) {
+            process.pc = instruction;
+            fail(process, "coverage option service is unavailable");
+        }
+        const bool text = support::coverage_option_string(option->option);
+        PackedLogic4 value;
+        std::string string;
+        if (option->write && text) {
+            string = process.executor->read_string_register(option->text);
+        } else if (option->write) {
+            value = process.executor->read_register(option->value, 32U);
+        }
+        coverage_option_hook(*option, value, string);
+        if (!option->write && text) {
+            process.executor->write_string_register(option->text, string);
+        } else if (!option->write) {
+            if (value.width() != 32U || value.is_logic9()) {
+                process.pc = instruction;
+                fail(process, "coverage option service returned an invalid value");
+            }
+            process.executor->write_register(option->value, value);
+        }
+        return;
+    }
     if (const auto* api
         = fsim::runtime::simir::operation_get_if<VhdlPslApi>(&operation)) {
         const bool query = api->kind == VhdlPslApiKind::assert_failed

@@ -7,6 +7,7 @@
 #include "virtual_interface_definition.hpp"
 #include "systemverilog_template_bindings.hpp"
 #include "vhdl_lowering_index.hpp"
+#include "fsim/support/coverage_option.hpp"
 #include "fsim/support/process_method.hpp"
 #include "fsim/support/dpi_identity.hpp"
 #include "fsim/support/active_set.hpp"
@@ -3527,6 +3528,20 @@ private:
         semantic::ExpressionId expression,
         std::size_t expected_width);
     [[nodiscard]] bool is_hir_systemverilog_coverage_call(
+        semantic::ExpressionId expression) const;
+    // A covergroup instance option read or assignment (IEEE 1800-2023
+    // 19.7): the instance's runtime identity (the marker payload), the item
+    // and the option (its two literal operands).
+    struct HirCoverageOption {
+        std::string identity;
+        std::uint32_t item { };
+        support::CoverageOption option { support::CoverageOption::weight };
+    };
+    [[nodiscard]] std::optional<HirCoverageOption> hir_coverage_option(
+        const std::string& identity,
+        std::span<const semantic::ExpressionId> operands) const;
+    // The option an sv_coverage_option read `expression` is of.
+    [[nodiscard]] std::optional<HirCoverageOption> hir_coverage_option_read(
         semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<RegisterId>
     lower_hir_systemverilog_coverage_call(

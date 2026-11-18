@@ -1126,6 +1126,7 @@ template <typename OperationAt, typename Types, typename NineValued = std::nullp
                 // 19.8) and $system: the host's services, on registers.
                 || std::is_same_v<T, CoverageSample>
                 || std::is_same_v<T, CoverageQuery>
+                || std::is_same_v<T, CoverageOption>
                 || std::is_same_v<T, CoverageControl>
                 // Assertion outcomes and controls, Annex D tasks (16.14,
                 // 20.11, D.8-D.13): the host's services, on registers.

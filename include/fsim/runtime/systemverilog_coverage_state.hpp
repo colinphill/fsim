@@ -20,9 +20,18 @@ struct SystemVerilogCoverageDeclarationReference {
 /// declarations remain single-owned by semantic::sv::Hir; this record owns
 /// only declaration identities, HIR-native instance state, and syntax-free
 /// report/observation leaves.
+/// The instance options of one covergroup instance (IEEE 1800-2023 19.7)
+/// as its construction and procedural assignments left them.
+struct SystemVerilogCovergroupOptionState {
+    std::string runtime_identity;
+    frontend::SystemVerilogCovergroupInstanceOptions options;
+};
+
 struct SystemVerilogCoverageState {
     std::vector<SystemVerilogCoverageDeclarationReference> declarations;
     std::vector<semantic::sv::CovergroupInstance> instances;
+    // One entry per instance, in the order of `instances`.
+    std::vector<SystemVerilogCovergroupOptionState> options;
     std::vector<frontend::SystemVerilogCoverageTypeReport> reports;
     std::vector<frontend::SystemVerilogCoverageCallbackEvent> callback_events;
     std::vector<frontend::SystemVerilogCoverageTraceEvent> trace_events;

@@ -171,6 +171,11 @@ void Interpreter::set_coverage_query_hook(CoverageQueryHook hook)
     impl_->coverage_query_hook = std::move(hook);
 }
 
+void Interpreter::set_coverage_option_hook(CoverageOptionHook hook)
+{
+    impl_->coverage_option_hook = std::move(hook);
+}
+
 void Interpreter::set_vhdl_psl_api_hook(VhdlPslApiHook hook)
 {
     impl_->vhdl_psl_api_hook = std::move(hook);

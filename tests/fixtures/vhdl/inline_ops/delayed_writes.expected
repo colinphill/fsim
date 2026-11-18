@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+inl t=11 y=0 g=1 v=00 w=00000000
+inl t=12 y=1 g=1 v=00 w=00000001
+inl t=14 y=1 g=1 v=5a w=00001001
+inl t=16 y=1 g=0 q=0
+inl t=19 y=0 g=0 q=0

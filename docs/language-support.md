@@ -2234,7 +2234,9 @@ with its net type (`wire`, `tri`, `wand`, `supply0`, ...; a `uwire` as
 `wire`), an input or inout port as a net, a `time`, `real`, `shortreal` or
 `realtime` variable as `time`, `real` or `realtime`, an `integer`, `int`,
 `shortint`, `longint` or `byte` variable as `integer`, and any other variable
-as `reg`.
+as `reg`. A `--trace` FST file declares each object with the FST var type of
+the same kind; VHDL objects stay `wire` in both formats (IEEE 1076-2019 gives
+no VCD mapping).
 The companion extended-VCD family is also executable: `$dumpports`,
 `$dumpportsoff`, `$dumpportson`, `$dumpportsall`, `$dumpportslimit`, and
 `$dumpportsflush`. Each `$dumpports` call owns one unique file and one or more

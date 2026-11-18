@@ -1779,12 +1779,8 @@ private:
             }
             // A parameterized class type names the specialization its
             // actuals select in this environment (IEEE 1800-2017 8.25).
-            // A spelling with actuals but no actual records does not fall
-            // back to the default specialization.
-            const bool recorded = !input.interface_parameter_actuals.empty()
-                || input.target.spelling.find('#') == std::string::npos;
             if (parameterized(*target)
-                && input.class_specialization.empty() && recorded) {
+                && input.class_specialization.empty()) {
                 const auto errors = result_.errors.size();
                 if (auto nested = nested_specialization(
                         *target, input, environment, owner, source)) {
@@ -1794,9 +1790,10 @@ private:
             }
             // A parameterized class named without actuals is its default
             // specialization (IEEE 1800-2017 8.25) when every parameter
-            // has a default.
+            // has a default; one whose actuals select no specialization
+            // is an error.
             const bool defaults
-                = input.target.spelling.find('#') == std::string::npos
+                = input.interface_parameter_actuals.empty()
                 && std::ranges::all_of(class_formals(*target),
                 [](const ClassParameter* parameter) {
                     return parameter->type_parameter

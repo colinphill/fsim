@@ -382,6 +382,7 @@ interp.impl	report_hook	Cfg	hook or callback installed by the embedder
 interp.impl	timing_violation_hook	Cfg	hook or callback installed by the embedder
 interp.impl	coverage_sample_hook	Cfg	hook or callback installed by the embedder
 interp.impl	coverage_query_hook	Cfg	hook or callback installed by the embedder
+interp.impl	coverage_option_hook	Cfg	hook or callback installed by the embedder
 interp.impl	vhdl_psl_api_hook	Cfg	hook or callback installed by the embedder
 interp.impl	vhdl_assert_counts	P	plain run state
 interp.impl	vhdl_assert_enabled	P	plain run state

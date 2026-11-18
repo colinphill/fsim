@@ -536,29 +536,6 @@ void test_rejections()
                 == sv::ClassSpecializationErrorKind::unresolved_member;
         }));
     }
-    {
-        auto fixture = make_fixture();
-        auto& derived = fixture.design.mutable_systemverilog()
-            .mutable_classes().back();
-        sv::TypeReference handle;
-        handle.target.spelling = "Base#(8)";
-        handle.value_form = sv::TypeForm::class_handle;
-        handle.class_identity = "work::pkg::Base";
-        auto& declaration = fixture.design.mutable_systemverilog()
-            .mutable_declarations();
-        const auto property = std::ranges::find(
-            declaration, derived.properties.front().declaration,
-            &sv::Declaration::id);
-        assert(property != declaration.end());
-        property->type = handle;
-        derived.properties.front().type = handle;
-        const auto result = sv::specialize_classes(fixture.design);
-        assert(!result.ok());
-        assert(std::ranges::any_of(result.errors, [](const auto& error) {
-            return error.kind == sv::ClassSpecializationErrorKind::
-                unsupported_parameterized_class_handle;
-        }));
-    }
 }
 
 } // namespace

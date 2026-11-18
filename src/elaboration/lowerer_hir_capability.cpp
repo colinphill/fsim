@@ -5469,6 +5469,11 @@ bool Lowerer::hir_expression_signed(
             && expression->systemverilog->signed_value) {
             return true;
         }
+        // An `int` covergroup option (IEEE 1800-2023 19.10).
+        if (const auto option = hir_coverage_option_read(candidate)) {
+            return !support::coverage_option_string(option->option)
+                && !support::coverage_option_bit(option->option);
+        }
         if (expression->systemverilog != nullptr
             && expression->systemverilog->kind
                 == semantic::sv::ExpressionKind::integer_literal
@@ -13210,6 +13215,11 @@ bool Lowerer::hir_expression_is_string(
     if (const auto profile = hir_dpi_function_profile(
             expression_id, process_scope);
         profile && profile->result_string) {
+        return true;
+    }
+    // The name and comment covergroup options (19.10).
+    if (const auto option = hir_coverage_option_read(expression_id);
+        option && support::coverage_option_string(option->option)) {
         return true;
     }
     // A cast to STRING or an alias of it has string type (6.24.1).
@@ -22477,6 +22487,12 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
         if (source.kind == semantic::sv::ExpressionKind::call
             && is_hir_systemverilog_file_call(expression_id)) {
             return 32U;
+        }
+        // A covergroup option is an `int` or a `bit` (IEEE 1800-2023
+        // 19.10).
+        if (const auto option = hir_coverage_option_read(expression_id);
+            option && !support::coverage_option_string(option->option)) {
+            return support::coverage_option_bit(option->option) ? 1U : 32U;
         }
         // The coverage queries return a real percentage (IEEE 1800-2023
         // 19.8, 20.14).

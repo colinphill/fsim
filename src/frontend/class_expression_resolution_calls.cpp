@@ -48,12 +48,12 @@ void mark_task(Statement& statement, const support::ExpressionMarker marker,
 
 // A synthesized SystemVerilog expression the class resolution has already
 // bound: every marker of the expression family from a member selection to a
-// coverage query, and the built-in methods of a class object.
+// coverage query or option read, and the built-in methods of a class object.
 [[nodiscard]] bool synthesized_expression(
     const support::ExpressionMarker marker) noexcept
 {
   return (marker >= support::ExpressionMarker::sv_select
-          && marker <= support::ExpressionMarker::sv_coverage_query_type)
+          && marker <= support::ExpressionMarker::sv_coverage_option)
       || (marker >= support::ExpressionMarker::builtin_randomize
           && marker <= support::ExpressionMarker::builtin_get_randstate);
 }

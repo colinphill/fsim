@@ -658,6 +658,7 @@ set(
   "${PROJECT_SOURCE_DIR}/src/frontend/coverage_execution.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/coverage_limits.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/coverage_observation.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/coverage_options.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/coverage_persistence.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/coverage_resolution.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/coverage_percentage.cpp"

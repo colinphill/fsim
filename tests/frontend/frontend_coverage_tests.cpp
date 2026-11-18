@@ -1156,8 +1156,10 @@ endmodule
             && !cross_group.coverage_declarations[2].bins[0].cross_selection_tokens.empty()
             && cross_group.coverage_declarations[2].bins[1].kind
                 == SystemVerilogCoverageBinKind::Ignore
-            && cross_group.coverage_declarations[2].bins[0].weight == 2
-            && cross_group.coverage_declarations[2].bins[0].goal == 80
+            // type_option weight and goal are the type coverage's
+            // (19.7.1); the instance's bins keep option defaults.
+            && cross_group.coverage_declarations[2].bins[0].weight == 1
+            && cross_group.coverage_declarations[2].bins[0].goal == 100
             && cross_group.coverage_declarations[2].bins[0].at_least == 2,
         "explicit cross bins retain named, Boolean, complement, and intersect source");
     SystemVerilogCovergroupInstance cross_instance;
@@ -1206,8 +1208,8 @@ endmodule
             && cross_instance.cross_bin_state.size() == 2
             && selected_state != cross_instance.cross_bin_state.end()
             && selected_state->hit_count == 2
-            && selected_state->weight == 2
-            && selected_state->goal == 80
+            && selected_state->weight == 1
+            && selected_state->goal == 100
             && selected_state->at_least == 2
             && selected_state->covered
             && !selected_state->excluded
@@ -1415,7 +1417,6 @@ endmodule
     excluded_point: coverpoint value {
       type_option.weight = 4;
       type_option.goal = 80;
-      type_option.at_least = 3;
       option.weight = 0;
       option.goal = 90;
       option.at_least = 2;
@@ -1424,7 +1425,6 @@ endmodule
     threshold_point: coverpoint value {
       type_option.weight = 2;
       type_option.goal = 80;
-      type_option.at_least = 3;
       option.at_least = 2;
     }
   endgroup
@@ -1447,23 +1447,23 @@ endmodule
             && option_group.effective_instance_goal == 50
             && option_group.effective_merge_instances
             && option_group.effective_per_instance
-            && excluded_point.option_assignments.size() == 6
+            && excluded_point.option_assignments.size() == 5
             && excluded_point.effective_weight == 0
             && excluded_point.effective_goal == 90
             && excluded_point.effective_at_least == 2
             && excluded_point.bins.front().weight == 0
             && excluded_point.bins.front().goal == 90
             && excluded_point.bins.front().at_least == 2
-            && threshold_point.effective_weight == 2
-            && threshold_point.effective_goal == 80
+            && threshold_point.effective_weight == 1
+            && threshold_point.effective_goal == 100
             && threshold_point.effective_at_least == 2
             && threshold_point.bins.size() == 1
             && threshold_point.bins.front().selection
                 == SystemVerilogCoverageBinSelection::Automatic
-            && threshold_point.bins.front().weight == 2
-            && threshold_point.bins.front().goal == 80
+            && threshold_point.bins.front().weight == 1
+            && threshold_point.bins.front().goal == 100
             && threshold_point.bins.front().at_least == 2,
-        "instance options override type options and propagate to every bin");
+        "instance options propagate to every bin; type options stay with the type (19.7.1)");
     SystemVerilogCovergroupInstance option_instance;
     option_instance.declaration_identity = option_group.canonical_identity;
     std::vector<Diagnostic> option_sample_diagnostics;
@@ -1473,25 +1473,36 @@ endmodule
         option_instance, option_group, 1U, 2, option_sample_diagnostics);
     const auto threshold_second = sample_systemverilog_coverpoint(
         option_instance, option_group, 1U, 2, option_sample_diagnostics);
+    // option.weight 0 only removes the coverpoint from the instance's
+    // coverage (19.7): its bins are still sampled.
+    const auto threshold_hit = std::ranges::find(option_instance.bin_hits,
+        threshold_point.declaration_index,
+        &SystemVerilogCoverageBinHit::coverage_declaration_index);
+    const auto zero_weight_hit = std::ranges::find(option_instance.bin_hits,
+        excluded_point.declaration_index,
+        &SystemVerilogCoverageBinHit::coverage_declaration_index);
     require(
         zero_weight.selected_bin_identity
-            && zero_weight.zero_weight_excluded
-            && zero_weight.hit_bin_identities.empty()
+            && zero_weight.hit_bin_identities.size() == 1
             && !threshold_first.threshold_reached
             && threshold_second.threshold_reached
-            && option_instance.bin_hits.size() == 1
-            && option_instance.bin_hits.front().hit_count == 2
-            && option_instance.bin_hits.front().at_least == 2
-            && option_instance.bin_hits.front().covered
+            && option_instance.bin_hits.size() == 2
+            && zero_weight_hit != option_instance.bin_hits.end()
+            && zero_weight_hit->hit_count == 1
+            && !zero_weight_hit->covered
+            && threshold_hit != option_instance.bin_hits.end()
+            && threshold_hit->hit_count == 2
+            && threshold_hit->at_least == 2
+            && threshold_hit->covered
             && option_sample_diagnostics.empty(),
-        "zero-weight bins are excluded and at_least changes coverage at the exact hit");
-    option_instance.bin_hits.front().hit_count = std::numeric_limits<std::uint64_t>::max();
+        "zero-weight bins are sampled and at_least changes coverage at the exact hit");
+    threshold_hit->hit_count = std::numeric_limits<std::uint64_t>::max();
     const auto option_overflow = sample_systemverilog_coverpoint(
         option_instance, option_group, 1U, 2, option_sample_diagnostics);
     require(
         option_overflow.hit_count_overflow
             && option_overflow.hit_bin_identities.empty()
-            && option_instance.bin_hits.front().hit_count
+            && threshold_hit->hit_count
                 == std::numeric_limits<std::uint64_t>::max()
             && option_sample_diagnostics.size() == 1
             && option_sample_diagnostics.front().code == "FSIM-SV-COV-002",
@@ -1503,8 +1514,8 @@ endmodule
         cross_percentage.declarations.size() == 3
             && cross_percentage.declarations[2].kind
                 == SystemVerilogCoverageDeclarationKind::Cross
-            && cross_percentage.declarations[2].eligible_weight == 2
-            && cross_percentage.declarations[2].covered_weight == 2
+            && cross_percentage.declarations[2].eligible_weight == 1
+            && cross_percentage.declarations[2].covered_weight == 1
             && cross_percentage.declarations[2].coverage.basis_points == 10'000,
         "explicit cross percentages use logical regular bins and ignore exclusions");
 
@@ -1563,7 +1574,9 @@ endmodule
                 == 3'333
             && instance_percentage.declarations[0].coverage.basis_points
                 == 3'333
-            && instance_percentage.declarations[1].coverage.empty
+            // option.weight 0 keeps the coverpoint's bins (19.7): 0 of 1
+            // covered; the instance's average leaves it out.
+            && !instance_percentage.declarations[1].coverage.empty
             && instance_percentage.declarations[1].coverage.basis_points == 0
             && instance_percentage.coverage.raw_basis_points == 3'333
             && instance_percentage.coverage.basis_points == 4'166
@@ -1572,8 +1585,10 @@ endmodule
             && unmerged_percentage.instances.size() == 2
             && unmerged_percentage.instances[0].runtime_identity == "a-instance"
             && unmerged_percentage.instances[1].runtime_identity == "z-instance"
-            && unmerged_percentage.coverage.raw_basis_points == 2'083
-            && unmerged_percentage.coverage.basis_points == 4'166
+            // sum(Wi * Ii) / sum(Wi) of the instances' own coverage (19.11.3):
+            // (33.33 + 0) / 2, then the type goal 50.
+            && unmerged_percentage.coverage.raw_basis_points == 1'667
+            && unmerged_percentage.coverage.basis_points == 3'334
             && empty_percentage.coverage.empty
             && empty_percentage.coverage.basis_points == 0
             && percentage_sample_diagnostics.empty(),
@@ -1588,9 +1603,12 @@ endmodule
         percentage_group, merged_instances);
     require(
         merged_percentage.merge_instances
-            && merged_percentage.coverage.raw_basis_points == 8'334
-            && merged_percentage.coverage.basis_points == 10'000
-            && merged_percentage.coverage.goal_reached,
+            // The union with the type options (19.11.3, Table 19-4): thirds
+            // 2 of 3 bins and excluded 0 of 1 at type_option.weight 1, then
+            // the type goal 50.
+            && merged_percentage.coverage.raw_basis_points == 3'334
+            && merged_percentage.coverage.basis_points == 6'668
+            && !merged_percentage.coverage.goal_reached,
         "merge_instances unions instance hit state before instance/type goals");
     auto complete_group = percentage_group;
     complete_group.canonical_identity += "::complete";
@@ -1620,8 +1638,11 @@ endmodule
             overall_declarations, overall_instances);
     require(
         !overall_percentage.empty
-            && overall_percentage.raw_basis_points == 5'000
-            && overall_percentage.basis_points == 5'000,
+            // Merged types with excluded at type_option.weight 1 (19.7.1):
+            // complete (3/3 + 0) / 2 = 50, partial (1/3 + 0) / 2 = 16.67,
+            // overall (1 * 50 + 3 * 16.67) / 4 = 25.
+            && overall_percentage.raw_basis_points == 2'500
+            && overall_percentage.basis_points == 2'500,
         "overall coverage weights covergroup types");
     const auto percentage_report = build_systemverilog_coverage_report(
         percentage_group, merged_instances);
@@ -1656,7 +1677,8 @@ endmodule
                    percentage_report, "missing")
                 == nullptr
             && percentage_text == reversed_percentage_text
-            && percentage_text.find("coverage=100.00%")
+            // The merged type line (raw 33.34% at type goal 50).
+            && percentage_text.find("coverage=66.68%")
                 != std::string::npos
             && percentage_text.find("hits=1 exclusions=0")
                 != std::string::npos
@@ -1673,8 +1695,8 @@ endmodule
         cross_report.instances.size() == 1
             && cross_report.instances[0].items.size() == 3
             && cross_report.instances[0].items[2].bins.size() == 2
-            && cross_report.instances[0].items[2].bins[0].weight == 2
-            && cross_report.instances[0].items[2].bins[0].goal == 80
+            && cross_report.instances[0].items[2].bins[0].weight == 1
+            && cross_report.instances[0].items[2].bins[0].goal == 100
             && cross_report.instances[0].items[2].bins[0].at_least == 2
             && cross_report.instances[0].items[2].bins[0].covered
             && cross_report.instances[0].items[2].bins[1].excluded

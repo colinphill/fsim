@@ -32,8 +32,7 @@ SystemVerilogCoverageBinReport coverpoint_bin_report(
   report.at_least = bin.at_least;
   report.hit_count = hit ? hit->hit_count : 0U;
   report.covered = hit && hit->covered;
-  report.excluded =
-      bin.kind != SystemVerilogCoverageBinKind::Regular || bin.weight == 0U;
+  report.excluded = bin.kind != SystemVerilogCoverageBinKind::Regular;
   report.span = bin.span;
   return report;
 }
@@ -57,8 +56,7 @@ SystemVerilogCoverageBinReport cross_bin_report(
   report.exclusion_count = state ? state->exclusion_count : 0U;
   report.covered = state && state->covered;
   report.excluded = state ? state->excluded
-      : bin->kind != SystemVerilogCoverageBinKind::Regular
-          || bin->weight == 0U;
+      : bin->kind != SystemVerilogCoverageBinKind::Regular;
   report.span = bin ? bin->span : item.span;
   return report;
 }

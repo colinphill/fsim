@@ -58,8 +58,19 @@ namespace {
     constexpr std::uint8_t fst_direction_implicit = 0;
     constexpr std::uint8_t fst_var_integer = 1;
     constexpr std::uint8_t fst_var_real = 3;
+    constexpr std::uint8_t fst_var_reg = 5;
+    constexpr std::uint8_t fst_var_supply0 = 6;
+    constexpr std::uint8_t fst_var_supply1 = 7;
     constexpr std::uint8_t fst_var_time = 8;
+    constexpr std::uint8_t fst_var_tri = 9;
+    constexpr std::uint8_t fst_var_triand = 10;
+    constexpr std::uint8_t fst_var_trior = 11;
+    constexpr std::uint8_t fst_var_trireg = 12;
+    constexpr std::uint8_t fst_var_tri0 = 13;
+    constexpr std::uint8_t fst_var_tri1 = 14;
+    constexpr std::uint8_t fst_var_wand = 15;
     constexpr std::uint8_t fst_var_wire = 16;
+    constexpr std::uint8_t fst_var_wor = 17;
     constexpr std::uint8_t fst_var_realtime = 20;
     constexpr std::uint8_t fst_var_string = 21;
     constexpr std::uint8_t fst_var_enum = 28;
@@ -262,12 +273,54 @@ namespace {
             : fst_scope_vhdl_block;
     }
 
+    // The FST var type of a declaration's VCD kind (IEEE 1800-2023
+    // 21.7.2.1; the producer sets it for SystemVerilog objects, a VHDL
+    // object keeps `wire`), so both formats declare an object alike.
+    [[nodiscard]] std::uint8_t fst_var_kind(const TraceVarKind kind)
+    {
+        switch (kind) {
+        case TraceVarKind::Wire:
+            return fst_var_wire;
+        case TraceVarKind::Tri:
+            return fst_var_tri;
+        case TraceVarKind::Triand:
+            return fst_var_triand;
+        case TraceVarKind::Trior:
+            return fst_var_trior;
+        case TraceVarKind::Trireg:
+            return fst_var_trireg;
+        case TraceVarKind::Tri0:
+            return fst_var_tri0;
+        case TraceVarKind::Tri1:
+            return fst_var_tri1;
+        case TraceVarKind::Wand:
+            return fst_var_wand;
+        case TraceVarKind::Wor:
+            return fst_var_wor;
+        case TraceVarKind::Supply0:
+            return fst_var_supply0;
+        case TraceVarKind::Supply1:
+            return fst_var_supply1;
+        case TraceVarKind::Reg:
+            return fst_var_reg;
+        case TraceVarKind::Integer:
+            return fst_var_integer;
+        case TraceVarKind::Real:
+            return fst_var_real;
+        case TraceVarKind::Realtime:
+            return fst_var_realtime;
+        case TraceVarKind::Time:
+            return fst_var_time;
+        }
+        throw std::invalid_argument("unsupported FST var kind");
+    }
+
     [[nodiscard]] std::uint8_t fst_variable_type(
-        const TraceTypeDeclaration& type)
+        const TraceTypeDeclaration& type, const TraceVarKind var_kind)
     {
         switch (type.kind) {
         case TraceTypeKind::Packed:
-            return fst_var_wire;
+            return fst_var_kind(var_kind);
         case TraceTypeKind::SystemVerilogString:
             return fst_var_string;
         case TraceTypeKind::Enumeration:
@@ -1468,6 +1521,7 @@ struct FstWriter::Impl {
                 for (const auto& entry : found->second) {
                     const TraceVariableDeclaration* variable = nullptr;
                     const TraceSourceDeclaration* source = nullptr;
+                    TraceVarKind var_kind { TraceVarKind::Wire };
                     TraceSignalId variable_id;
                     std::string_view reference;
                     std::string_view path;
@@ -1478,6 +1532,7 @@ struct FstWriter::Impl {
                         reference = variable->reference;
                         path = variable->hierarchical_name;
                         source = &declarations->source(variable->source);
+                        var_kind = variable->var_kind;
                     } else {
                         const auto& alias = declarations->alias(entry.id);
                         variable = &declarations->variable(alias.target);
@@ -1485,6 +1540,7 @@ struct FstWriter::Impl {
                         reference = alias.reference;
                         path = alias.hierarchical_name;
                         source = &declarations->source(alias.source);
+                        var_kind = alias.var_kind;
                     }
                     require_bounded_name(reference, limits);
                     const auto& type = declarations->type(variable->type);
@@ -1514,7 +1570,7 @@ struct FstWriter::Impl {
                             ? variable_id
                             : TraceSignalId { },
                         limits);
-                    append_u8(result, fst_variable_type(type));
+                    append_u8(result, fst_variable_type(type, var_kind));
                     append_u8(result, fst_direction_implicit);
                     append_c_string(result, reference);
                     append_varint(result, fst_storage_width(type));

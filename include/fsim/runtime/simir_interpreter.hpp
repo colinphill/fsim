@@ -64,6 +64,11 @@ public:
         std::uint64_t)>;
     using CoverageQueryHook = std::function<PackedLogic4(
         CoverageQueryKind, const std::string&)>;
+    /// Reads or assigns the option `CoverageOption` names: an assignment
+    /// takes `value` (an integral option) or `text` (a string option), a
+    /// read sets the one the option has.
+    using CoverageOptionHook = std::function<void(
+        const CoverageOption&, PackedLogic4& value, std::string& text)>;
     using VhdlPslApiHook = std::function<bool(
         VhdlPslApiKind, std::optional<bool>)>;
     using CoverageControlHook
@@ -1006,6 +1011,7 @@ public:
     void drain_host_requests();
     void set_coverage_sample_hook(CoverageSampleHook hook);
     void set_coverage_query_hook(CoverageQueryHook hook);
+    void set_coverage_option_hook(CoverageOptionHook hook);
     void set_vhdl_psl_api_hook(VhdlPslApiHook hook);
     void set_coverage_control_hook(CoverageControlHook hook);
     void set_coverage_access_hook(CoverageAccessHook hook);

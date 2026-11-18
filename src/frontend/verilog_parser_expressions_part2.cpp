@@ -805,6 +805,11 @@ Expression VerilogParser::parse_postfix(Expression expression)
             }
             const auto selected_span = cover(expression.span, member.span);
             if (expression.kind == ExpressionKind::Identifier) {
+                if (expression.name_components.empty()) {
+                    expression.name_components.push_back(
+                        { expression.text, false });
+                }
+                expression.name_components.push_back({ member.text, false });
                 expression.text += '.';
                 expression.text += member.text;
                 expression.span = selected_span;

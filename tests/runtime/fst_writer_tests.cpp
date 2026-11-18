@@ -607,6 +607,42 @@ void test_container_and_hierarchy()
     assert(write_container(model) == bytes);
 }
 
+void test_var_kinds()
+{
+    // A SystemVerilog object's FST var type is its VCD kind (IEEE 1800-2023
+    // 21.7.2.1), as in a VCD file: reg, integer, time and the net keywords;
+    // an alias takes its own object's kind. The reader accepts them back.
+    using namespace fsim::runtime;
+    TraceDeclarationBuilder builder;
+    const auto reg = builder.add_variable("top.r", 4U);
+    const auto count = builder.add_variable("top.i", 32U);
+    const auto stamp = builder.add_variable("top.t", 64U);
+    const auto bus = builder.add_variable("top.bus", 8U);
+    const auto port = builder.add_alias("top.sub.p", reg);
+    const auto plain = builder.add_variable("top.w", 1U);
+    builder.set_var_kind(reg, TraceVarKind::Reg);
+    builder.set_var_kind(count, TraceVarKind::Integer);
+    builder.set_var_kind(stamp, TraceVarKind::Time);
+    builder.set_var_kind(bus, TraceVarKind::Tri1);
+    builder.set_var_kind(port, TraceVarKind::Wire);
+    static_cast<void>(plain);
+    const auto bytes = write_container(std::move(builder).freeze());
+    const auto parsed = read_fst(bytes);
+    assert(parsed.ok());
+    const auto type_of = [&](const std::string_view path) {
+        const auto found = std::ranges::find(parsed.trace->declarations, path,
+            &FstReaderDeclaration::path);
+        assert(found != parsed.trace->declarations.end());
+        return found->fst_type;
+    };
+    assert(type_of("top.r") == 5U);
+    assert(type_of("top.i") == 1U);
+    assert(type_of("top.t") == 8U);
+    assert(type_of("top.bus") == 14U);
+    assert(type_of("top.sub.p") == 16U);
+    assert(type_of("top.w") == 16U);
+}
+
 void test_transactional_failures()
 {
     using namespace fsim::runtime;
@@ -1723,6 +1759,7 @@ void test_compression_profiles()
 int main(const int argc, const char* const argv[])
 {
     test_container_and_hierarchy();
+    test_var_kinds();
     test_mixed_root_provenance_records();
     test_transactional_failures();
     test_bounded_terminal_lifecycle();

@@ -2210,6 +2210,87 @@ Interpreter::Impl::StaticKernel::behavioral_operation_steps()
     return steps;
 }
 
+void Interpreter::Impl::StaticKernel::delayed_host_write(
+    const std::uint32_t member_index, const std::uint32_t pc)
+{
+    // Delayed, gate-delay and inertial updates of a host signal (IEEE
+    // 1800-2023 10.3.3, 28.16; static_kernel_host_signal): the host
+    // schedules and matures them for the member's driver, as for the
+    // reference process. The reference evaluator and the generic bridge of
+    // generated code both make them here.
+    auto& member = members_[member_index];
+    const auto packed_register = [&](const RegisterId id) -> PackedLogic4& {
+        if (id >= member.registers.size()) {
+            fail(member_index, pc, "invalid register ID");
+        }
+        return member.registers[id];
+    };
+    visit_operation([&](const auto& op) {
+        using T = std::decay_t<decltype(op)>;
+        if constexpr (std::is_same_v<T, WriteAfter>
+            || std::is_same_v<T, WriteAfterSlice>) {
+            // A delayed update of a host signal (IEEE 1800-2023 10.3.3,
+            // static_kernel_host_signal): the host schedules and matures it
+            // for the member's driver, as for the reference process.
+            std::optional<std::uint32_t> offset;
+            if constexpr (std::is_same_v<T, WriteAfterSlice>) {
+                offset = op.offset;
+            }
+            schedule_host_after(member_index, op.signal,
+                packed_register(op.source), offset, op.domain, op.delay);
+        } else if constexpr (std::is_same_v<T, WriteAfterDynamicSlice>) {
+            // A write outside the declared range has no effect (IEEE
+            // 1800-2017 11.5.1).
+            std::optional<std::uint32_t> offset;
+            try {
+                offset = dynamic_index_offset(
+                    packed_register(op.selection.index), op.selection);
+            } catch (const std::invalid_argument& error) {
+                if (op.selection.strict) {
+                    fail(member_index, pc, error.what());
+                }
+            }
+            if (offset) {
+                schedule_host_after(member_index, op.signal,
+                    packed_register(op.source), *offset, op.domain, op.delay);
+            }
+        } else if constexpr (std::is_same_v<T, WriteAfterDynamicPartSlice>) {
+            std::optional<DynamicPartWrite> write;
+            try {
+                write = dynamic_part_write_value(packed_register(op.source),
+                    packed_register(op.selection.base), op.selection);
+            } catch (const std::invalid_argument& error) {
+                fail(member_index, pc, error.what());
+            }
+            if (write) {
+                schedule_host_after(member_index, op.signal,
+                    std::move(write->value),
+                    static_cast<std::uint32_t>(write->offset), op.domain,
+                    op.delay);
+            }
+        } else if constexpr (std::is_same_v<T, WriteDelayed>) {
+            // A gate or net delay (28.16): the transition's delay from the
+            // operation's rise/fall/turn-off registers.
+            const auto delays = Impl::write_delayed_delays(op,
+                [&](const RegisterId id) -> const PackedLogic4& {
+                    return packed_register(id);
+                });
+            impl_.schedule_write_delayed(member.process, op,
+                packed_register(op.source), delays);
+        } else if constexpr (std::is_same_v<T, WriteInertial>
+            || std::is_same_v<T, WriteInertialSlice>) {
+            std::optional<std::uint32_t> offset;
+            if constexpr (std::is_same_v<T, WriteInertialSlice>) {
+                offset = op.offset;
+            }
+            impl_.schedule_inertial(member.process, op.signal,
+                packed_register(op.source), offset, op.delays, op.domain);
+        } else {
+            fail(member_index, pc, "operation is not a delayed write");
+        }
+    }, member.operations()[pc]);
+}
+
 void Interpreter::Impl::StaticKernel::check_assert(const std::uint32_t member_index,
     const std::uint32_t pc, const Assert& op, const PackedLogic4& condition)
 {
@@ -3845,63 +3926,13 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                 fail(member_index, pc, error.what());
             }
         } else if constexpr (std::is_same_v<T, WriteAfter>
-            || std::is_same_v<T, WriteAfterSlice>) {
-            // A delayed update of a host signal (IEEE 1800-2023 10.3.3,
-            // static_kernel_host_signal): the host schedules and matures it
-            // for the member's driver, as for the reference process.
-            std::optional<std::uint32_t> offset;
-            if constexpr (std::is_same_v<T, WriteAfterSlice>) {
-                offset = op.offset;
-            }
-            schedule_host_after(member_index, op.signal,
-                packed_register(op.source), offset, op.domain, op.delay);
-        } else if constexpr (std::is_same_v<T, WriteAfterDynamicSlice>) {
-            // A write outside the declared range has no effect (IEEE
-            // 1800-2017 11.5.1).
-            std::optional<std::uint32_t> offset;
-            try {
-                offset = dynamic_index_offset(
-                    packed_register(op.selection.index), op.selection);
-            } catch (const std::invalid_argument& error) {
-                if (op.selection.strict) {
-                    fail(member_index, pc, error.what());
-                }
-            }
-            if (offset) {
-                schedule_host_after(member_index, op.signal,
-                    packed_register(op.source), *offset, op.domain, op.delay);
-            }
-        } else if constexpr (std::is_same_v<T, WriteAfterDynamicPartSlice>) {
-            std::optional<DynamicPartWrite> write;
-            try {
-                write = dynamic_part_write_value(packed_register(op.source),
-                    packed_register(op.selection.base), op.selection);
-            } catch (const std::invalid_argument& error) {
-                fail(member_index, pc, error.what());
-            }
-            if (write) {
-                schedule_host_after(member_index, op.signal,
-                    std::move(write->value),
-                    static_cast<std::uint32_t>(write->offset), op.domain,
-                    op.delay);
-            }
-        } else if constexpr (std::is_same_v<T, WriteDelayed>) {
-            // A gate or net delay (28.16): the transition's delay from the
-            // operation's rise/fall/turn-off registers.
-            const auto delays = Impl::write_delayed_delays(op,
-                [&](const RegisterId id) -> const PackedLogic4& {
-                    return packed_register(id);
-                });
-            impl_.schedule_write_delayed(member.process, op,
-                packed_register(op.source), delays);
-        } else if constexpr (std::is_same_v<T, WriteInertial>
+            || std::is_same_v<T, WriteAfterSlice>
+            || std::is_same_v<T, WriteAfterDynamicSlice>
+            || std::is_same_v<T, WriteAfterDynamicPartSlice>
+            || std::is_same_v<T, WriteDelayed>
+            || std::is_same_v<T, WriteInertial>
             || std::is_same_v<T, WriteInertialSlice>) {
-            std::optional<std::uint32_t> offset;
-            if constexpr (std::is_same_v<T, WriteInertialSlice>) {
-                offset = op.offset;
-            }
-            impl_.schedule_inertial(member.process, op.signal,
-                packed_register(op.source), offset, op.delays, op.domain);
+            delayed_host_write(member_index, pc);
         } else if constexpr (std::is_same_v<T, WriteNetDelay>) {
             // An interconnect delay (IEEE 1364-2005 16.2.4): the kernel
             // holds the pending changes per bit and matures them with its
@@ -3940,6 +3971,28 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                     "coverage query service returned an invalid real payload");
             }
             packed_register(op.destination) = std::move(value);
+        } else if constexpr (std::is_same_v<T, CoverageOption>) {
+            if (!impl_.coverage_option_hook) {
+                fail(member_index, pc, "coverage option service is unavailable");
+            }
+            const bool text = support::coverage_option_string(op.option);
+            PackedLogic4 value;
+            std::string string;
+            if (op.write && text) {
+                string = string_register(op.text);
+            } else if (op.write) {
+                value = packed_register(op.value);
+            }
+            impl_.coverage_option_hook(op, value, string);
+            if (!op.write && text) {
+                string_register(op.text) = std::move(string);
+            } else if (!op.write) {
+                if (value.width() != 32U || value.is_logic9()) {
+                    fail(member_index, pc,
+                        "coverage option service returned an invalid value");
+                }
+                packed_register(op.value) = std::move(value);
+            }
         } else if constexpr (std::is_same_v<T, CoverageControl>
             || std::is_same_v<T, CoverageAccess>) {
             // The coverage system tasks (IEEE 1800-2023 20.14), the host's.

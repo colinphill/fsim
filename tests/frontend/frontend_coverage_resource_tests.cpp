@@ -200,7 +200,8 @@ endmodule
         StandardRevision::SystemVerilog2023);
     require(
         !legacy_option.ok() && has_code(legacy_option, "FSIM-SV-SEM-257")
-            && !wrong_scope.ok() && has_code(wrong_scope, "FSIM-SV-SEM-258")
+            // cross_retain_auto_bins is not a type option (Table 19-3).
+            && !wrong_scope.ok() && has_code(wrong_scope, "FSIM-SV-SEM-269")
             && !invalid_value.ok()
             && has_code(invalid_value, "FSIM-SV-SEM-258")
             && !duplicate.ok() && has_code(duplicate, "FSIM-SV-SEM-258"),
@@ -439,8 +440,9 @@ endmodule
         StandardRevision::SystemVerilog2023);
     require(
         !legacy.ok() && has_code(legacy, "FSIM-SV-SEM-264")
+            // real_interval is a type option only (Tables 19-1, 19-3).
             && !invalid_interval.ok()
-            && has_code(invalid_interval, "FSIM-SV-SEM-265"),
+            && has_code(invalid_interval, "FSIM-SV-SEM-269"),
         "real coverage remains profile-isolated and rejects invalid interval options");
 }
 

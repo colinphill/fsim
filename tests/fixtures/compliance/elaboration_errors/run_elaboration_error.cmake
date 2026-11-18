@@ -4,8 +4,12 @@
 # `fsim elaborate` of its top to fail with the diagnostic code, and the
 # text, named on the fixture's first two lines:
 #
-#   // fsim-expect: <code> top=<module>
+#   // fsim-expect: <code> top=<module> [stage=compile]
 #   // fsim-expect-text: <text the diagnostic must contain>
+#
+# With stage=compile the error belongs to `fsim compile` (a check the
+# compile's own class specialization or analysis makes), which must fail
+# with it instead.
 
 if(NOT DEFINED FSIM_EXECUTABLE OR NOT EXISTS "${FSIM_EXECUTABLE}")
   message(FATAL_ERROR "FSIM_EXECUTABLE must name the built fsim command")
@@ -21,6 +25,10 @@ if(NOT first MATCHES "fsim-expect: ([A-Z0-9-]+) top=([A-Za-z_][A-Za-z0-9_]*)")
 endif()
 set(expected "${CMAKE_MATCH_1}")
 set(top "${CMAKE_MATCH_2}")
+set(compile_stage FALSE)
+if(first MATCHES " stage=compile")
+  set(compile_stage TRUE)
+endif()
 set(expected_text "")
 list(LENGTH header header_lines)
 if(header_lines GREATER 1)
@@ -44,20 +52,28 @@ execute_process(
   RESULT_VARIABLE result
   OUTPUT_VARIABLE output
   ERROR_VARIABLE output)
-if(NOT result STREQUAL "0")
-  message(FATAL_ERROR
-    "${fixture_name} failed to compile:\n${output}\nworkspace: ${workspace}")
-endif()
-execute_process(
-  COMMAND "${FSIM_EXECUTABLE}" elaborate "${top}"
-  WORKING_DIRECTORY "${workspace}"
-  RESULT_VARIABLE result
-  OUTPUT_VARIABLE output
-  ERROR_VARIABLE output)
-if(result STREQUAL "0")
-  message(FATAL_ERROR
-    "${fixture_name} was accepted at elaboration; expected ${expected}\n"
-    "workspace: ${workspace}")
+if(compile_stage)
+  if(result STREQUAL "0")
+    message(FATAL_ERROR
+      "${fixture_name} was accepted at compile; expected ${expected}\n"
+      "workspace: ${workspace}")
+  endif()
+else()
+  if(NOT result STREQUAL "0")
+    message(FATAL_ERROR
+      "${fixture_name} failed to compile:\n${output}\nworkspace: ${workspace}")
+  endif()
+  execute_process(
+    COMMAND "${FSIM_EXECUTABLE}" elaborate "${top}"
+    WORKING_DIRECTORY "${workspace}"
+    RESULT_VARIABLE result
+    OUTPUT_VARIABLE output
+    ERROR_VARIABLE output)
+  if(result STREQUAL "0")
+    message(FATAL_ERROR
+      "${fixture_name} was accepted at elaboration; expected ${expected}\n"
+      "workspace: ${workspace}")
+  endif()
 endif()
 if(NOT output MATCHES "error\\[${expected}\\]")
   message(FATAL_ERROR

@@ -2,6 +2,7 @@
 #include "fsim/frontend/coverage_resolution.hpp"
 #include "fsim/frontend/coverage_cross_inventory.hpp"
 #include "fsim/frontend/coverage_limits.hpp"
+#include "fsim/frontend/coverage_options.hpp"
 #include "fsim/support/stack_growth.hpp"
 
 #include <algorithm>
@@ -1330,6 +1331,388 @@ namespace {
         }
     }
 
+    [[nodiscard]] const SystemVerilogCovergroupDeclaration* entry_declaration(
+        const std::vector<CovergroupEntry>& entries,
+        const std::string_view identity)
+    {
+        const auto found = std::ranges::find_if(
+            entries, [&](const CovergroupEntry& candidate) {
+                return candidate.declaration->canonical_identity == identity;
+            });
+        return found == entries.end() ? nullptr : found->declaration;
+    }
+
+    // An instance option `v.option.m` or `v.c.option.m` of covergroup
+    // variable `v`, or of its coverpoint or cross `c` (IEEE 1800-2023 19.7):
+    // the instance, its item (0 is the covergroup, n its coverage
+    // declaration n - 1) and the option.
+    struct CoverageOptionReference {
+        const SystemVerilogCovergroupInstance* instance { };
+        std::uint32_t item { };
+        SystemVerilogCoverageOption option { };
+    };
+
+    // The option reference `expression` is; none for an expression that is
+    // not the `option` member of a covergroup variable of `owner` or of one
+    // of its coverage items. A member Table 19-1 does not list, or one the
+    // item's level does not have (Table 19-2), is diagnosed.
+    [[nodiscard]] std::optional<CoverageOptionReference>
+    coverage_option_reference(
+        const ParsedDesign& design,
+        const std::string& owner,
+        const std::vector<CovergroupEntry>& entries,
+        const Expression& expression,
+        std::vector<Diagnostic>& diagnostics)
+    {
+        if (expression.kind != ExpressionKind::Identifier
+            || expression.marker != support::ExpressionMarker::none) {
+            return std::nullopt;
+        }
+        // `v.option.m` or `v.c.option.m`: the selected names the parser
+        // read, the option member of a covergroup or coverage item (19.7).
+        std::vector<std::string_view> parts;
+        for (const auto& component : expression.name_components) {
+            if (component.scoped) {
+                return std::nullopt;
+            }
+            parts.push_back(component.name);
+        }
+        const auto count = parts.size();
+        if (count < 3U || count > 4U || parts[count - 2U] != "option")
+            return std::nullopt;
+        const auto member = parts[count - 1U];
+        CoverageOptionReference result;
+        const SystemVerilogCovergroupDeclaration* declaration { };
+        if (count >= 4U) {
+            if (const auto* instance = find_covergroup_instance(
+                    design, owner, parts[count - 4U])) {
+                if (const auto* candidate = entry_declaration(
+                        entries, instance->declaration_identity)) {
+                    const auto& items = candidate->coverage_declarations;
+                    const auto item = std::ranges::find(
+                        items, parts[count - 3U],
+                        &SystemVerilogCoverageDeclaration::name);
+                    if (item != items.end()) {
+                        result.instance = instance;
+                        result.item = static_cast<std::uint32_t>(
+                            std::distance(items.begin(), item) + 1);
+                        declaration = candidate;
+                    }
+                }
+            }
+        }
+        if (result.instance == nullptr) {
+            result.instance
+                = find_covergroup_instance(design, owner, parts[count - 3U]);
+            if (result.instance == nullptr)
+                return std::nullopt;
+            declaration = entry_declaration(
+                entries, result.instance->declaration_identity);
+            if (declaration == nullptr)
+                return std::nullopt;
+        }
+        const auto option = systemverilog_coverage_option(member);
+        const auto level
+            = systemverilog_coverage_option_level(*declaration, result.item);
+        if (!option || !level
+            || !systemverilog_coverage_option_allowed(*option, *level)) {
+            diagnose(
+                diagnostics,
+                "FSIM-SV-SEM-269",
+                "'" + std::string { member } + "' is not an instance option of "
+                    + (result.item == 0U ? std::string { "covergroup" }
+                                         : std::string { "coverage item" })
+                    + " '" + std::string { parts[count - 3U] } + "'",
+                expression.span);
+            return std::nullopt;
+        }
+        result.option = *option;
+        return result;
+    }
+
+    [[nodiscard]] Expression coverage_option_literal(
+        const std::uint64_t value, const SourceSpan& span)
+    {
+        return Expression {
+            ExpressionKind::IntegerLiteral, std::to_string(value), { }, span
+        };
+    }
+
+    // The read of an option: a call marked sv_coverage_option whose operands
+    // are the item and the option, of the option's type (19.10: `int`,
+    // `bit` or `string`).
+    [[nodiscard]] Expression coverage_option_read(
+        const CoverageOptionReference& reference, const SourceSpan& span)
+    {
+        auto read = marked_expression(
+            support::ExpressionMarker::sv_coverage_option,
+            reference.instance->runtime_identity,
+            { coverage_option_literal(reference.item, span),
+                coverage_option_literal(
+                    static_cast<std::uint64_t>(reference.option), span) },
+            span);
+        if (systemverilog_coverage_option_string(reference.option)) {
+            read.call_result_domain = ValueDomain::String;
+            return read;
+        }
+        const bool bit = support::coverage_option_bit(reference.option);
+        read.call_result_width = bit ? 1U : 32U;
+        read.call_result_domain = bit ? ValueDomain::Bit2 : ValueDomain::Integer;
+        read.call_result_signed = !bit;
+        return read;
+    }
+
+    // The assignment of `value` to an option: a task call marked
+    // sv_coverage_option_assign whose arguments are the item, the option and
+    // the value.
+    [[nodiscard]] Statement coverage_option_assignment(
+        const SystemVerilogCovergroupInstance& instance,
+        const std::uint32_t item,
+        const SystemVerilogCoverageOption option,
+        Expression value,
+        const SourceSpan& span)
+    {
+        Statement assignment;
+        assignment.kind = StatementKind::TaskCall;
+        assignment.task_marker
+            = support::ExpressionMarker::sv_coverage_option_assign;
+        assignment.task_marker_argument = instance.runtime_identity;
+        assignment.task_arguments.push_back(coverage_option_literal(item, span));
+        assignment.task_arguments.push_back(coverage_option_literal(
+            static_cast<std::uint64_t>(option), span));
+        assignment.task_arguments.push_back(std::move(value));
+        assignment.span = span;
+        return assignment;
+    }
+
+    // Replaces each identifier of `expression` that names a constructor
+    // formal by the formal's actual.
+    void bind_constructor_formals(
+        Expression& expression,
+        const std::map<std::string, const Expression*, std::less<>>& formals)
+    {
+        if (expression.kind == ExpressionKind::Identifier) {
+            if (const auto found = formals.find(expression.text);
+                found != formals.end()) {
+                expression = *found->second;
+            }
+            return;
+        }
+        for (auto& operand : expression.operands)
+            bind_constructor_formals(operand, formals);
+    }
+
+    // The assignments that make, at the construction of `instance` by
+    // `construction` (the `new` call, none for a construction without
+    // actuals), the instance options its definition assigns from
+    // non-constant expressions: these are evaluated when the covergroup is
+    // instantiated (19.7), the constructor formals bound to the actuals.
+    [[nodiscard]] std::vector<Statement> construction_option_assignments(
+        const SystemVerilogCovergroupInstance& instance,
+        const SystemVerilogCovergroupDeclaration& declaration,
+        const Expression* construction,
+        const SourceSpan& span,
+        std::vector<Diagnostic>& diagnostics)
+    {
+        std::vector<std::optional<Expression>> defaults(
+            declaration.formals.size());
+        std::map<std::string, const Expression*, std::less<>> formals;
+        for (std::size_t index = 0U; index < declaration.formals.size();
+            ++index) {
+            const auto& formal = declaration.formals[index];
+            if (!formal.default_tokens.empty()) {
+                defaults[index]
+                    = coverage_scalar_expression(formal.default_tokens);
+                if (defaults[index])
+                    formals[formal.name] = &*defaults[index];
+            }
+        }
+        if (construction != nullptr) {
+            const auto& actuals = construction->operands;
+            for (std::size_t index = 0U; index < actuals.size(); ++index) {
+                std::size_t formal_index = index;
+                if (index < construction->call_argument_names.size()
+                    && !construction->call_argument_names[index].empty()) {
+                    const auto found = std::ranges::find(
+                        declaration.formals,
+                        construction->call_argument_names[index],
+                        &SystemVerilogCovergroupFormal::name);
+                    if (found == declaration.formals.end())
+                        continue;
+                    formal_index = static_cast<std::size_t>(
+                        std::distance(declaration.formals.begin(), found));
+                }
+                if (formal_index < declaration.formals.size()
+                    && actuals[index].valid()) {
+                    formals[declaration.formals[formal_index].name]
+                        = &actuals[index];
+                }
+            }
+        }
+        std::vector<Statement> result;
+        const auto assign = [&](
+                                const std::uint32_t item,
+                                const SystemVerilogCovergroupOptionAssignment&
+                                    assignment) {
+            if (assignment.scope != SystemVerilogCovergroupOptionScope::Instance
+                || assignment.evaluated_value || assignment.evaluated_text
+                || assignment.evaluated_real_bits) {
+                return;
+            }
+            const auto option = systemverilog_coverage_option(assignment.name);
+            if (!option)
+                return;
+            auto value = coverage_scalar_expression(assignment.value_tokens);
+            if (!value) {
+                diagnose(
+                    diagnostics,
+                    "FSIM-SV-SEM-269",
+                    "covergroup option '" + assignment.name
+                        + "' needs a value of literals, constructor formals, "
+                          "owner objects and operators",
+                    assignment.span);
+                return;
+            }
+            bind_constructor_formals(*value, formals);
+            result.push_back(coverage_option_assignment(
+                instance, item, *option, std::move(*value), span));
+        };
+        for (const auto& assignment : declaration.option_assignments)
+            assign(0U, assignment);
+        for (std::size_t index = 0U;
+            index < declaration.coverage_declarations.size(); ++index) {
+            for (const auto& assignment :
+                declaration.coverage_declarations[index].option_assignments) {
+                assign(static_cast<std::uint32_t>(index + 1U), assignment);
+            }
+        }
+        return result;
+    }
+
+    // Binds the option reads of `expression`, and the static `cg::
+    // get_coverage()` of a covergroup type (19.8, 19.11).
+    void bind_coverage_option_reads(
+        const ParsedDesign& design,
+        const std::string& owner,
+        const std::vector<CovergroupEntry>& entries,
+        Expression& expression,
+        std::vector<Diagnostic>& diagnostics)
+    {
+        if (!fsim::support::stack_growth_detail::has_room()) {
+            return fsim::support::with_stack([&] {
+                return bind_coverage_option_reads(
+                    design, owner, entries, expression, diagnostics);
+            });
+        }
+        if (const auto reference = coverage_option_reference(
+                design, owner, entries, expression, diagnostics)) {
+            expression = coverage_option_read(*reference, expression.span);
+            return;
+        }
+        // `cg::get_coverage()` is the coverage of covergroup type `cg`
+        // declared in this scope: the method is static (19.8, 19.11).
+        if (const auto& components = expression.name_components;
+            expression.kind == ExpressionKind::Call
+            && expression.marker == support::ExpressionMarker::none
+            && expression.operands.empty() && components.size() == 2U
+            && !components[0].scoped && components[1].scoped
+            && components[1].name == "get_coverage") {
+            const CovergroupEntry* found { };
+            std::size_t matches { };
+            for (const auto& entry : entries) {
+                if (entry.owner_identity == owner
+                    && entry.declaration->name == components[0].name) {
+                    found = &entry;
+                    ++matches;
+                }
+            }
+            if (matches == 1U) {
+                auto query = marked_expression(
+                    support::ExpressionMarker::sv_coverage_query_type,
+                    found->declaration->canonical_identity, { },
+                    expression.span);
+                query.systemverilog_source_order
+                    = expression.systemverilog_source_order;
+                query.call_result_width = 64;
+                query.call_result_domain = ValueDomain::Bit2;
+                query.call_result_signed = false;
+                query.systemverilog_scalar_kind = SystemVerilogScalarKind::Real;
+                expression = std::move(query);
+                return;
+            }
+        }
+        for (auto& operand : expression.operands) {
+            bind_coverage_option_reads(
+                design, owner, entries, operand, diagnostics);
+        }
+    }
+
+    // Binds the option reads and writes of `statement` (19.7: instance
+    // options other than per_instance, get_inst_coverage, auto_bin_max,
+    // detect_overlap and cross_retain_auto_bins can be assigned
+    // procedurally after the covergroup is instantiated).
+    void bind_coverage_options(
+        const ParsedDesign& design,
+        const std::string& owner,
+        const std::vector<CovergroupEntry>& entries,
+        Statement& statement,
+        std::vector<Diagnostic>& diagnostics)
+    {
+        const auto bind = [&](Expression& expression) {
+            bind_coverage_option_reads(
+                design, owner, entries, expression, diagnostics);
+        };
+        if (statement.kind == StatementKind::Assignment) {
+            if (const auto reference = coverage_option_reference(
+                    design, owner, entries, statement.target, diagnostics)) {
+                if (!systemverilog_coverage_option_procedural(
+                        reference->option)) {
+                    diagnose(
+                        diagnostics,
+                        "FSIM-SV-SEM-269",
+                        "covergroup option '"
+                            + std::string { systemverilog_coverage_option_name(
+                                reference->option) }
+                            + "' can only be set in the covergroup "
+                              "definition",
+                        statement.span);
+                    return;
+                }
+                if (statement.assignment_kind != AssignmentKind::Blocking) {
+                    diagnose(
+                        diagnostics,
+                        "FSIM-SV-SEM-269",
+                        "fsim assigns a covergroup option only by a "
+                        "blocking assignment",
+                        statement.span);
+                    return;
+                }
+                auto value = std::move(statement.value);
+                bind(value);
+                statement = coverage_option_assignment(*reference->instance,
+                    reference->item, reference->option, std::move(value),
+                    statement.span);
+                return;
+            }
+        }
+        bind(statement.target);
+        bind(statement.value);
+        bind(statement.condition);
+        bind(statement.loop_initial);
+        bind(statement.loop_limit);
+        bind(statement.loop_update_target);
+        for (auto& argument : statement.task_arguments)
+            bind(argument);
+        for (auto& output : statement.output_values)
+            bind(output.value);
+        for (auto& argument : statement.output_arguments)
+            bind(argument);
+        for (auto& alternative : statement.case_alternatives) {
+            for (auto& choice : alternative.choices)
+                bind(choice);
+        }
+    }
+
     void collect_sample_calls(
         ParsedDesign& design,
         const std::string& owner,
@@ -1355,18 +1738,30 @@ namespace {
             }
             // `v = new(...)` of a covergroup variable constructs the
             // instance its declaration already names (IEEE 1800-2023 19.4);
-            // its actuals were taken when the instance was resolved.
+            // its actuals were taken when the instance was resolved. The
+            // construction makes the definition's non-constant option
+            // assignments (19.7).
             if (statement.kind == StatementKind::Assignment
-                && is_new_expression(statement.value)
-                && find_covergroup_instance(
-                       design, owner, covergroup_handle_name(statement.target))
-                    != nullptr) {
-                Statement construction;
-                construction.kind = StatementKind::Null;
-                construction.span = statement.span;
-                statement = std::move(construction);
-                continue;
+                && is_new_expression(statement.value)) {
+                if (const auto* instance = find_covergroup_instance(design,
+                        owner, covergroup_handle_name(statement.target))) {
+                    Statement construction;
+                    construction.span = statement.span;
+                    if (const auto* declaration = entry_declaration(
+                            entries, instance->declaration_identity)) {
+                        construction.statements
+                            = construction_option_assignments(*instance,
+                                *declaration, &statement.value,
+                                statement.span, diagnostics);
+                    }
+                    construction.kind = construction.statements.empty()
+                        ? StatementKind::Null
+                        : StatementKind::Block;
+                    statement = std::move(construction);
+                    continue;
+                }
             }
+            bind_coverage_options(design, owner, entries, statement, diagnostics);
             bind_coverage_methods(design, owner, statement);
             const auto sample_call = statement.task_name.ends_with(".sample");
             const auto start_call = statement.task_name.ends_with(".start");
@@ -1575,6 +1970,35 @@ bool resolve_systemverilog_covergroups(
                 add_event_sample_process(
                     unit, instance, *entry->declaration, diagnostics);
             }
+        }
+        // A covergroup variable constructed by its declaration makes the
+        // definition's non-constant option assignments before any procedure
+        // runs (19.7, 6.21).
+        for (const auto& variable : unit.variables) {
+            if (!variable.initializer
+                || !is_new_expression(*variable.initializer)) {
+                continue;
+            }
+            const auto* instance
+                = find_covergroup_instance(design, owner, variable.name);
+            const auto* declaration = instance == nullptr
+                ? nullptr
+                : entry_declaration(entries, instance->declaration_identity);
+            if (declaration == nullptr)
+                continue;
+            auto assignments = construction_option_assignments(*instance,
+                *declaration, &*variable.initializer, variable.span,
+                diagnostics);
+            if (assignments.empty())
+                continue;
+            Process process;
+            process.kind = ProcessKind::Initial;
+            process.name = "$covergroup_options_" + variable.name;
+            process.declaration_initializer = true;
+            process.synthesized = true;
+            process.span = variable.span;
+            process.statements = std::move(assignments);
+            unit.processes.push_back(std::move(process));
         }
         for (auto& process : unit.processes) {
             collect_sample_calls(

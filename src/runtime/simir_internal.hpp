@@ -2313,6 +2313,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::function<void(std::uint32_t)> timing_violation_hook;
     CoverageSampleHook coverage_sample_hook;
     CoverageQueryHook coverage_query_hook;
+    CoverageOptionHook coverage_option_hook;
     VhdlPslApiHook vhdl_psl_api_hook;
     std::array<std::uint64_t, 4> vhdl_assert_counts { };
     std::array<bool, 4> vhdl_assert_enabled { true, true, true, true };

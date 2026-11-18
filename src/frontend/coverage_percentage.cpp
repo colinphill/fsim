@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/frontend/coverage_percentage.hpp"
+#include "fsim/frontend/coverage_options.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -82,17 +83,20 @@ namespace {
     SystemVerilogCoverageDeclarationPercentage declaration_percentage(
         const SystemVerilogCovergroupDeclaration& declaration,
         const SystemVerilogCovergroupInstance& instance,
-        const SystemVerilogCoverageDeclaration& item)
+        const SystemVerilogCoverageDeclaration& item,
+        const SystemVerilogCoverageOptionValues& options)
     {
         SystemVerilogCoverageDeclarationPercentage result;
         result.coverage_declaration_index = item.declaration_index;
         result.kind = item.kind;
         result.identity = declaration.canonical_identity + "::" + item.name;
 
+        // An item's coverage is the share of its bins covered (19.11.1,
+        // 19.11.2): each bin counts once; the item's weight applies only in
+        // the covergroup's average (19.11).
         if (item.kind == SystemVerilogCoverageDeclarationKind::Coverpoint) {
             for (const auto& bin : item.bins) {
-                if (bin.kind != SystemVerilogCoverageBinKind::Regular
-                    || bin.weight == 0U) {
+                if (bin.kind != SystemVerilogCoverageBinKind::Regular) {
                     continue;
                 }
                 if (bin.selection
@@ -102,36 +106,35 @@ namespace {
                             || hit.bin_declaration_index != bin.declaration_index) {
                             continue;
                         }
-                        result.eligible_weight = saturating_add(result.eligible_weight, bin.weight);
+                        result.eligible_weight = saturating_add(result.eligible_weight, 1U);
                         if (hit.covered) {
-                            result.covered_weight = saturating_add(result.covered_weight, bin.weight);
+                            result.covered_weight = saturating_add(result.covered_weight, 1U);
                         }
                     }
                 } else {
-                    result.eligible_weight = saturating_add(result.eligible_weight, bin.weight);
+                    result.eligible_weight = saturating_add(result.eligible_weight, 1U);
                     if (coverpoint_bin_covered(instance, item, bin)) {
-                        result.covered_weight = saturating_add(result.covered_weight, bin.weight);
+                        result.covered_weight = saturating_add(result.covered_weight, 1U);
                     }
                 }
             }
         } else if (item.bins.empty()) {
             for (const auto& state : instance.cross_bin_state) {
                 if (state.coverage_declaration_index != item.declaration_index
-                    || state.excluded || state.weight == 0U) {
+                    || state.excluded) {
                     continue;
                 }
-                result.eligible_weight = saturating_add(result.eligible_weight, state.weight);
+                result.eligible_weight = saturating_add(result.eligible_weight, 1U);
                 if (state.covered) {
-                    result.covered_weight = saturating_add(result.covered_weight, state.weight);
+                    result.covered_weight = saturating_add(result.covered_weight, 1U);
                 }
             }
         } else {
             for (const auto& bin : item.bins) {
-                if (bin.kind != SystemVerilogCoverageBinKind::Regular
-                    || bin.weight == 0U) {
+                if (bin.kind != SystemVerilogCoverageBinKind::Regular) {
                     continue;
                 }
-                result.eligible_weight = saturating_add(result.eligible_weight, bin.weight);
+                result.eligible_weight = saturating_add(result.eligible_weight, 1U);
                 const auto covered = std::ranges::any_of(
                     instance.cross_bin_state,
                     [&](const SystemVerilogCoverageCrossBinState& state) {
@@ -141,28 +144,25 @@ namespace {
                             && !state.excluded && state.covered;
                     });
                 if (covered) {
-                    result.covered_weight = saturating_add(result.covered_weight, bin.weight);
+                    result.covered_weight = saturating_add(result.covered_weight, 1U);
                 }
             }
             if (declaration.effective_cross_retain_auto_bins) {
                 for (const auto& state : instance.cross_bin_state) {
                     if (state.coverage_declaration_index
                             != item.declaration_index
-                        || state.bin_declaration_index || state.excluded
-                        || state.weight == 0U) {
+                        || state.bin_declaration_index || state.excluded) {
                         continue;
                     }
-                    result.eligible_weight = saturating_add(
-                        result.eligible_weight, state.weight);
+                    result.eligible_weight = saturating_add(result.eligible_weight, 1U);
                     if (state.covered) {
-                        result.covered_weight = saturating_add(
-                            result.covered_weight, state.weight);
+                        result.covered_weight = saturating_add(result.covered_weight, 1U);
                     }
                 }
             }
         }
         result.coverage = percentage(
-            result.covered_weight, result.eligible_weight, item.effective_goal);
+            result.covered_weight, result.eligible_weight, options.goal);
         return result;
     }
 
@@ -196,6 +196,55 @@ namespace {
         }
     }
 
+    // The coverage of `instance` with options `options`: the weighted
+    // average of its coverpoints and crosses, by each one's weight (19.11).
+    SystemVerilogCovergroupInstancePercentage instance_percentage(
+        const SystemVerilogCovergroupDeclaration& declaration,
+        const SystemVerilogCovergroupInstance& instance,
+        const SystemVerilogCovergroupInstanceOptions& options)
+    {
+        SystemVerilogCovergroupInstancePercentage result;
+        result.runtime_identity = instance.runtime_identity;
+        std::uint64_t weighted_coverage { };
+        double exact_weighted_coverage { };
+        std::uint64_t total_weight { };
+        result.declarations.reserve(declaration.coverage_declarations.size());
+        for (std::size_t index = 0U;
+            index < declaration.coverage_declarations.size(); ++index) {
+            const auto& item = declaration.coverage_declarations[index];
+            const auto& item_options = options.items[index];
+            auto item_result = declaration_percentage(
+                declaration, instance, item, item_options);
+            if (item_options.weight != 0U) {
+                total_weight = saturating_add(total_weight, item_options.weight);
+                weighted_coverage = saturating_add(
+                    weighted_coverage,
+                    static_cast<std::uint64_t>(item_result.coverage.basis_points)
+                        * item_options.weight);
+                exact_weighted_coverage += item_result.coverage.percent() * 100.0
+                    * static_cast<double>(item_options.weight);
+            }
+            result.declarations.push_back(std::move(item_result));
+        }
+        result.coverage = percentage(
+            weighted_coverage,
+            total_weight * full_coverage_basis_points,
+            options.covergroup.goal,
+            exact_weighted_coverage);
+        return result;
+    }
+
+    // The coverage Ii of `instance` that type coverage averages or the
+    // merged union's coverage (19.11.3): its own, before its covergroup goal.
+    SystemVerilogCovergroupInstancePercentage type_input_percentage(
+        const SystemVerilogCovergroupDeclaration& declaration,
+        const SystemVerilogCovergroupInstance& instance,
+        SystemVerilogCovergroupInstanceOptions options)
+    {
+        options.covergroup.goal = 100U;
+        return instance_percentage(declaration, instance, options);
+    }
+
 } // namespace
 
 SystemVerilogCovergroupInstancePercentage
@@ -203,34 +252,13 @@ calculate_systemverilog_covergroup_instance_percentage(
     const SystemVerilogCovergroupDeclaration& declaration,
     const SystemVerilogCovergroupInstance& instance)
 {
-    SystemVerilogCovergroupInstancePercentage result;
-    result.runtime_identity = instance.runtime_identity;
     if (instance.declaration_identity != declaration.canonical_identity) {
+        SystemVerilogCovergroupInstancePercentage result;
+        result.runtime_identity = instance.runtime_identity;
         return result;
     }
-    std::uint64_t weighted_coverage { };
-    double exact_weighted_coverage { };
-    std::uint64_t total_weight { };
-    result.declarations.reserve(declaration.coverage_declarations.size());
-    for (const auto& item : declaration.coverage_declarations) {
-        auto item_result = declaration_percentage(declaration, instance, item);
-        if (item.effective_weight != 0U) {
-            total_weight = saturating_add(total_weight, item.effective_weight);
-            weighted_coverage = saturating_add(
-                weighted_coverage,
-                static_cast<std::uint64_t>(item_result.coverage.basis_points)
-                    * item.effective_weight);
-            exact_weighted_coverage += item_result.coverage.percent() * 100.0
-                * static_cast<double>(item.effective_weight);
-        }
-        result.declarations.push_back(std::move(item_result));
-    }
-    result.coverage = percentage(
-        weighted_coverage,
-        total_weight * full_coverage_basis_points,
-        declaration.effective_instance_goal,
-        exact_weighted_coverage);
-    return result;
+    return instance_percentage(declaration, instance,
+        systemverilog_covergroup_options(declaration, instance));
 }
 
 SystemVerilogCovergroupTypePercentage
@@ -269,22 +297,38 @@ calculate_systemverilog_covergroup_type_percentage(
         for (const auto* instance : ordered) {
             merge_instance_state(merged, *instance);
         }
-        const auto merged_result = calculate_systemverilog_covergroup_instance_percentage(
-            declaration, merged);
+        const auto merged_result = type_input_percentage(declaration, merged,
+            systemverilog_covergroup_type_options(declaration));
         type_raw = merged_result.coverage.basis_points;
         exact_type_raw = merged_result.coverage.percent() * 100.0;
         empty = merged_result.coverage.empty;
     } else {
+        // The weighted average of the instances' coverage, by each
+        // instance's option.weight (19.11.3): sum(Wi * Ii) / sum(Wi).
         std::uint64_t sum { };
+        std::uint64_t total_weight { };
         double exact_sum { };
-        for (const auto& instance : result.instances) {
-            sum = saturating_add(sum, instance.coverage.basis_points);
-            exact_sum += instance.coverage.percent() * 100.0;
+        for (std::size_t index = 0U; index < ordered.size(); ++index) {
+            const auto options
+                = systemverilog_covergroup_options(declaration, *ordered[index]);
+            const auto weight = options.covergroup.weight;
+            const auto instance
+                = type_input_percentage(declaration, *ordered[index], options);
             empty = empty && instance.coverage.empty;
+            if (weight == 0U) {
+                continue;
+            }
+            total_weight = saturating_add(total_weight, weight);
+            sum = saturating_add(sum,
+                static_cast<std::uint64_t>(instance.coverage.basis_points)
+                    * weight);
+            exact_sum += instance.coverage.percent() * 100.0
+                * static_cast<double>(weight);
         }
-        type_raw = rounded_ratio(sum, result.instances.size(), 1U);
-        exact_type_raw
-            = exact_sum / static_cast<double>(result.instances.size());
+        if (total_weight == 0U)
+            return result;
+        type_raw = rounded_ratio(sum, total_weight, 1U);
+        exact_type_raw = exact_sum / static_cast<double>(total_weight);
     }
     if (empty)
         return result;

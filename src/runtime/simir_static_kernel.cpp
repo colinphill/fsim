@@ -10150,6 +10150,14 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_operation(
                 } else {
                     write_element(pending);
                 }
+            } else if constexpr (std::is_same_v<T, WriteAfter>
+                || std::is_same_v<T, WriteAfterSlice>
+                || std::is_same_v<T, WriteAfterDynamicSlice>
+                || std::is_same_v<T, WriteAfterDynamicPartSlice>
+                || std::is_same_v<T, WriteDelayed>
+                || std::is_same_v<T, WriteInertial>
+                || std::is_same_v<T, WriteInertialSlice>) {
+                delayed_host_write(member_index, pc);
             } else if constexpr (std::is_same_v<T, WriteNetDelay>) {
                 // An interconnect delay (IEEE 1364-2005 16.2.4), as the
                 // compiled body makes it.

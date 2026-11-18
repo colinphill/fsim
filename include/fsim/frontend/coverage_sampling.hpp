@@ -56,7 +56,6 @@ struct SystemVerilogCoverageSampleResult {
     std::optional<std::string> selected_bin_identity;
     bool ignored { };
     bool illegal { };
-    bool zero_weight_excluded { };
     bool threshold_reached { };
     bool hit_count_overflow { };
 };

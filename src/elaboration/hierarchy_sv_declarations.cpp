@@ -1319,9 +1319,7 @@ HierarchyBuilder::specialized_class_typespec(
     if (!typespec
         || typespec->kind != runtime::SystemVerilogVpiTypespecKind::Class
         || !declaration.type
-        || (declaration.type->interface_parameter_actuals.empty()
-            && declaration.type->target.spelling.find('#')
-                == std::string::npos)) {
+        || declaration.type->interface_parameter_actuals.empty()) {
         return typespec;
     }
     auto& classes = design_.class_specializations_;

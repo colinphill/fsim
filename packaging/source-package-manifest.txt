@@ -375,6 +375,7 @@ include/fsim/frontend/coverage_database_systemverilog.hpp
 include/fsim/frontend/coverage_execution.hpp
 include/fsim/frontend/coverage_limits.hpp
 include/fsim/frontend/coverage_observation.hpp
+include/fsim/frontend/coverage_options.hpp
 include/fsim/frontend/coverage_percentage.hpp
 include/fsim/frontend/coverage_persistence.hpp
 include/fsim/frontend/coverage_point_identity.hpp
@@ -568,6 +569,7 @@ include/fsim/support/allocation_hooks.hpp
 include/fsim/support/atomic_shared_ptr.hpp
 include/fsim/support/bounded_bytes.hpp
 include/fsim/support/builtin_method.hpp
+include/fsim/support/coverage_option.hpp
 include/fsim/support/ctype_whitespace.hpp
 include/fsim/support/design_library.hpp
 include/fsim/support/dpi_identity.hpp
@@ -1047,6 +1049,7 @@ src/frontend/coverage_database_systemverilog.cpp
 src/frontend/coverage_execution.cpp
 src/frontend/coverage_limits.cpp
 src/frontend/coverage_observation.cpp
+src/frontend/coverage_options.cpp
 src/frontend/coverage_percentage.cpp
 src/frontend/coverage_persistence.cpp
 src/frontend/coverage_point_identity.cpp
@@ -1942,6 +1945,7 @@ tests/fixtures/compliance/elaboration_errors/child_cast_size.sv
 tests/fixtures/compliance/elaboration_errors/child_enum_literal_overflow.sv
 tests/fixtures/compliance/elaboration_errors/child_part_select_direction.sv
 tests/fixtures/compliance/elaboration_errors/child_replication_count.sv
+tests/fixtures/compliance/elaboration_errors/class_handle_no_default_specialization.sv
 tests/fixtures/compliance/elaboration_errors/defparam_early_resolution.sv
 tests/fixtures/compliance/elaboration_errors/defparam_generate_outside.sv
 tests/fixtures/compliance/elaboration_errors/defparam_loop_other_iteration.sv
@@ -2023,6 +2027,7 @@ tests/fixtures/compliance/sv_constant_unsigned_shift_count_batch57.sv
 tests/fixtures/compliance/sv_constraint_shadowed_members.sv
 tests/fixtures/compliance/sv_container_declaration_initializers.sv
 tests/fixtures/compliance/sv_copies_and_constructors.sv
+tests/fixtures/compliance/sv_covergroup_instance_weight.sv
 tests/fixtures/compliance/sv_declarations_and_calls.sv
 tests/fixtures/compliance/sv_deep_statement_nesting.sv
 tests/fixtures/compliance/sv_deferred_assertion_capture.sv
@@ -3938,6 +3943,9 @@ tests/fixtures/vhdl/inline_ops/deep_call.vhd
 tests/fixtures/vhdl/inline_ops/deep_frames.expected
 tests/fixtures/vhdl/inline_ops/deep_frames.expected.license
 tests/fixtures/vhdl/inline_ops/deep_frames.vhd
+tests/fixtures/vhdl/inline_ops/delayed_writes.expected
+tests/fixtures/vhdl/inline_ops/delayed_writes.expected.license
+tests/fixtures/vhdl/inline_ops/delayed_writes.sv
 tests/fixtures/vhdl/inline_ops/design_containers.expected
 tests/fixtures/vhdl/inline_ops/design_containers.expected.license
 tests/fixtures/vhdl/inline_ops/design_containers.sv

@@ -121,10 +121,6 @@ void append_type_reference(const ReferenceLookup& lookup,
         const auto separator = spelling.rfind("::");
         if (separator != std::string::npos) {
             auto scope = spelling.substr(0, separator);
-            if (const auto parameters = scope.find('#');
-                parameters != std::string::npos) {
-                scope.resize(parameters);
-            }
             while (!scope.empty() && scope.back() == ' ')
                 scope.pop_back();
             if (const auto* selected

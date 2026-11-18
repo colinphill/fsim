@@ -848,6 +848,7 @@ bool visit_known_region_accesses(
             return true;
         } else if constexpr (std::is_same_v<T, CoverageSample>
             || std::is_same_v<T, CoverageQuery>
+            || std::is_same_v<T, CoverageOption>
             || std::is_same_v<T, CoverageControl>
             || std::is_same_v<T, CoverageAccess>
             || std::is_same_v<T, CoverageDatabaseControl>

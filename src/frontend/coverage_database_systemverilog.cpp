@@ -325,8 +325,7 @@ SystemVerilogCoverageDatabaseResult project_systemverilog_coverage_namespace(
                     }
                     ++bin_count;
                     const auto excluded
-                        = bin.kind != SystemVerilogCoverageBinKind::Regular
-                        || bin.weight == 0U;
+                        = bin.kind != SystemVerilogCoverageBinKind::Regular;
                     if (auto error = append_metric(identity,
                             item.declaration_index,
                             CoverageDatabaseMetricFamily::SystemVerilogCoverpoint,

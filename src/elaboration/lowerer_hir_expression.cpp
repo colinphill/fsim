@@ -9068,6 +9068,41 @@ Lowerer::lower_hir_systemverilog_packed_array_pattern(
     return destination;
 }
 
+std::optional<Lowerer::HirCoverageOption> Lowerer::hir_coverage_option(
+    const std::string& identity,
+    const std::span<const semantic::ExpressionId> operands) const
+{
+    if (operands.size() < 2U || identity.empty()) {
+        return std::nullopt;
+    }
+    const auto item = hir_constant_integer(operands[0]);
+    const auto option = hir_constant_integer(operands[1]);
+    if (!item || !option || *item < 0
+        || *item > std::numeric_limits<std::uint32_t>::max() || *option < 0
+        || *option > static_cast<std::int64_t>(support::last_coverage_option)) {
+        return std::nullopt;
+    }
+    return HirCoverageOption { identity, static_cast<std::uint32_t>(*item),
+        static_cast<support::CoverageOption>(*option) };
+}
+
+std::optional<Lowerer::HirCoverageOption> Lowerer::hir_coverage_option_read(
+    const semantic::ExpressionId expression_id) const
+{
+    const auto expression = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_expression(expression_id)
+        : std::nullopt;
+    if (!expression || expression->systemverilog == nullptr
+        || expression->systemverilog->kind != semantic::sv::ExpressionKind::call
+        || expression->systemverilog->marker
+            != support::ExpressionMarker::sv_coverage_option
+        || expression->systemverilog->operands.size() != 2U) {
+        return std::nullopt;
+    }
+    return hir_coverage_option(expression->systemverilog->marker_argument,
+        expression->systemverilog->operands);
+}
+
 bool Lowerer::is_hir_systemverilog_coverage_call(
     const semantic::ExpressionId expression_id) const
 {
@@ -9081,6 +9116,11 @@ bool Lowerer::is_hir_systemverilog_coverage_call(
     }
     using Routine = support::SystemTf;
     const auto routine = expression->systemverilog->system_tf;
+    if (expression->systemverilog->marker
+        == support::ExpressionMarker::sv_coverage_option) {
+        const auto read = hir_coverage_option_read(expression_id);
+        return read && !support::coverage_option_string(read->option);
+    }
     return routine == Routine::get_coverage
         || frontend::is_coverage_query(expression->systemverilog->marker)
         || routine == Routine::coverage_control
@@ -9114,6 +9154,22 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_coverage_call(
             unsigned_value(0U, 32U), frontend::ValueDomain::Integer);
         return result(destination);
     };
+    // An integral covergroup option (IEEE 1800-2023 19.7, 19.10): an `int`,
+    // or a `bit` as the low bit of the int the host returns.
+    if (source.marker == support::ExpressionMarker::sv_coverage_option) {
+        const auto read = hir_coverage_option_read(expression_id);
+        if (!read || support::coverage_option_string(read->option)) {
+            return std::nullopt;
+        }
+        const auto value = allocate_register(32U, frontend::ValueDomain::Integer);
+        process_.operations.emplace_back(CoverageOption {
+            false, read->option, read->item, read->identity, value, { } });
+        const bool bit = support::coverage_option_bit(read->option);
+        const auto typed = bit ? resize_register(value, 1U, false) : value;
+        return expected_width != 0U && expected_width != register_width(typed)
+            ? resize_register(typed, expected_width, !bit)
+            : typed;
+    }
     const auto named = std::ranges::any_of(
         source.argument_names,
         [](const std::string& name) { return !name.empty(); });
@@ -30717,6 +30773,14 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
             expression_id, hir_process_scope_);
         profile && profile->result_string) {
         return lower_hir_dpi_string_call(expression_id);
+    }
+    // A string covergroup option, name or comment (IEEE 1800-2023 19.7).
+    if (const auto read = hir_coverage_option_read(expression_id);
+        read && support::coverage_option_string(read->option)) {
+        const auto destination = allocate_string_register();
+        process_.operations.emplace_back(CoverageOption {
+            false, read->option, read->item, read->identity, { }, destination });
+        return destination;
     }
     // `p.get_randstate()` of a process (IEEE 1800-2017 9.7, 18.13.4).
     if (const auto call = specialized_hir_unit_->find_expression(expression_id);

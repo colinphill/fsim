@@ -425,6 +425,16 @@ make_systemverilog_coverage_state(
     const semantic::sv::Hir& hir,
     const semantic::Model& semantics);
 
+/// The instance options `state` holds for the covergroup instance whose
+/// runtime identity is `identity`; none for an instance it does not have.
+[[nodiscard]] frontend::SystemVerilogCovergroupInstanceOptions*
+systemverilog_covergroup_option_state(
+    runtime::SystemVerilogCoverageState& state, std::string_view identity);
+[[nodiscard]] const frontend::SystemVerilogCovergroupInstanceOptions*
+systemverilog_covergroup_option_state(
+    const runtime::SystemVerilogCoverageState& state,
+    std::string_view identity);
+
 [[nodiscard]] frontend::SystemVerilogCovergroupDeclaration
 project_systemverilog_covergroup_declaration(
     const semantic::sv::CovergroupDeclaration& declaration,

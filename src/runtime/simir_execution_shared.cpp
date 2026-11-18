@@ -127,6 +127,7 @@ namespace fsim::runtime::simir {
         || operation_holds<ClassStaticMethodCall>(operation)
         || operation_holds<CoverageSample>(operation)
         || operation_holds<CoverageQuery>(operation)
+        || operation_holds<CoverageOption>(operation)
         || operation_holds<VhdlPslApi>(operation)
         || operation_holds<VhdlAssertApi>(operation)
         || operation_holds<VhdlReflectionApi>(operation)

@@ -9507,6 +9507,19 @@ add_test(
     -P
     "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
 )
+# Delayed, gate-delay and inertial updates of host signals (IEEE 1800-2023
+# 9.4.5, 10.3.3, 28.16) in generated code.
+add_test(
+  NAME fsim.application.inline-ops-delayed-writes
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=delayed_writes
+    -DFSIM_LANGUAGE=sv
+    "-DFSIM_FORBID_REASON=tier:not_compiled:[a-z_0-9:]+"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
 add_test(
   NAME fsim.application.inline-ops-wide-thread
   COMMAND "${CMAKE_COMMAND}"
@@ -9696,6 +9709,7 @@ set_tests_properties(
   fsim.application.inline-ops-dist-and-tags
   fsim.application.inline-ops-runtime-format
   fsim.application.inline-ops-force-release
+  fsim.application.inline-ops-delayed-writes
   fsim.application.inline-ops-systemverilog
   fsim.application.inline-ops-part-select-wide
   fsim.application.inline-ops-wide-move

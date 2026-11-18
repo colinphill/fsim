@@ -24593,6 +24593,50 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 });
                 return true;
             }
+            // A covergroup instance option assignment (IEEE 1800-2023
+            // 19.7): an `int` or `bit` option takes the value as an int,
+            // name and comment a string.
+            if (input.task_marker
+                == support::ExpressionMarker::sv_coverage_option_assign) {
+                const auto& arguments = input.task_arguments;
+                if (arguments.size() != 3U
+                    || !std::ranges::all_of(arguments,
+                        [](const semantic::sv::TaskAssociation& argument) {
+                            return argument.actual.has_value();
+                        })) {
+                    return false;
+                }
+                const std::array<semantic::ExpressionId, 2U> operands {
+                    *arguments[0].actual, *arguments[1].actual };
+                const auto option = hir_coverage_option(
+                    input.task_marker_argument, operands);
+                if (!option) {
+                    return false;
+                }
+                const auto value_id = *arguments[2].actual;
+                if (support::coverage_option_string(option->option)) {
+                    const auto text = lower_hir_text_value(value_id);
+                    if (!text) {
+                        return false;
+                    }
+                    process_.operations.emplace_back(CoverageOption {
+                        true, option->option, option->item, option->identity,
+                        { }, *text });
+                    return true;
+                }
+                auto assigned = lower_hir_expression(value_id, 32U);
+                if (!assigned) {
+                    return false;
+                }
+                if (register_width(*assigned) != 32U) {
+                    assigned = resize_register(
+                        *assigned, 32U, hir_expression_signed(value_id));
+                }
+                process_.operations.emplace_back(CoverageOption {
+                    true, option->option, option->item, option->identity,
+                    *assigned, { } });
+                return true;
+            }
             if (input.task_marker
                     == support::ExpressionMarker::sv_coverage_control_start
                 || input.task_marker

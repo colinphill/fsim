@@ -1322,6 +1322,7 @@ template <typename Input>
     output.value_tokens = source_tokens(input.value_tokens);
     output.evaluated_value = input.evaluated_value;
     output.evaluated_real_bits = input.evaluated_real_bits;
+    output.evaluated_text = input.evaluated_text;
     output.inherited = input.inherited;
     output.source = source(input.span);
     return output;

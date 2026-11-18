@@ -2260,6 +2260,14 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                     // A status ordinal (9.7) of a 64-bit handle.
                     define(op.destination, 32U);
                     define(op.source, 64U);
+                } else if constexpr (std::is_same_v<T, CoverageQuery>) {
+                    // A coverage percentage is a real (19.8).
+                    define(op.destination, 64U);
+                } else if constexpr (std::is_same_v<T, CoverageOption>) {
+                    // An integral covergroup option is an int (19.10).
+                    if (!support::coverage_option_string(op.option)) {
+                        define(op.value, 32U);
+                    }
                 } else if constexpr (std::is_same_v<T, ProcessGetRandState>
                     || std::is_same_v<T, ProcessSetRandState>) {
                     define(op.source, 64U);
@@ -5058,7 +5066,22 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                     // target on the host, static_kernel_host_signal): the
                     // host's force layers, then the input mirror refreshed.
                     || std::is_same_v<T, ForceSignalSlice>
-                    || std::is_same_v<T, ReleaseSignalSlice>) {
+                    || std::is_same_v<T, ReleaseSignalSlice>
+                    // Delayed, gate-delay and inertial updates of a host
+                    // signal (10.3.3, 28.16): the host schedules them for
+                    // the member's driver (delayed_host_write).
+                    || std::is_same_v<T, WriteAfter>
+                    || std::is_same_v<T, WriteAfterSlice>
+                    || std::is_same_v<T, WriteAfterDynamicSlice>
+                    || std::is_same_v<T, WriteAfterDynamicPartSlice>
+                    || std::is_same_v<T, WriteDelayed>
+                    || std::is_same_v<T, WriteInertial>
+                    || std::is_same_v<T, WriteInertialSlice>
+                    // Covergroup coverage queries and instance options
+                    // (IEEE 1800-2023 19.7, 19.8): the host's coverage
+                    // state, on registers.
+                    || std::is_same_v<T, CoverageQuery>
+                    || std::is_same_v<T, CoverageOption>) {
                     inst.op = KOp::generic;
                     inst.x = pc;
                     inst.y = 0U;
@@ -5121,6 +5144,25 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                                 || width[op.selection->index] == 0U
                                 || width[op.selection->index] > 64U)) {
                             throw reject("force_selection");
+                        }
+                    }
+                    if constexpr (std::is_same_v<T, WriteAfter>
+                        || std::is_same_v<T, WriteAfterSlice>
+                        || std::is_same_v<T, WriteAfterDynamicSlice>
+                        || std::is_same_v<T, WriteAfterDynamicPartSlice>
+                        || std::is_same_v<T, WriteDelayed>
+                        || std::is_same_v<T, WriteInertial>
+                        || std::is_same_v<T, WriteInertialSlice>) {
+                        std::vector<RegisterId> operands;
+                        std::optional<RegisterId> unused;
+                        static_kernel_compiled_detail::operation_registers_of(
+                            op, operands, unused);
+                        for (const auto operand : operands) {
+                            if (operand >= register_count || width[operand] == 0U
+                                || width[operand] == polymorphic) {
+                                throw reject("delayed_write_operand");
+                            }
+                            has_wide = has_wide || width[operand] > 64U;
                         }
                     }
                     if constexpr (std::is_same_v<T, RuntimeStringFormat>) {
