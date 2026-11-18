@@ -129,6 +129,7 @@ int main()
     FSIM_RUN_TEST(test_systemverilog_case_qualifiers);
     FSIM_RUN_TEST(test_systemverilog_case_matches);
     FSIM_RUN_TEST(test_systemverilog_case_inside_lowering);
+    FSIM_RUN_TEST(test_systemverilog_deep_conditional_chain);
     FSIM_RUN_TEST(test_systemverilog_membership_lowering);
     FSIM_RUN_TEST(test_numeric_and_system_function_lowering);
     FSIM_RUN_TEST(test_selection_and_assignment_lowering);

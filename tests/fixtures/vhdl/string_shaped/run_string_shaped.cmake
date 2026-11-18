@@ -6,7 +6,8 @@
 # the interpreter report the same values; on v4 a process that is not
 # kernel code names only the existing run-time-shaped reason
 # (dynamic_containers:vhdl), and the LINE process stays kernel code. A
-# STRING aggregate range with a bound below 1 fails the run.
+# STRING aggregate range with a bound below 1 fails the run, as does a
+# value of another length than its designated target (10.6.2.1).
 
 if(NOT DEFINED FSIM_EXECUTABLE OR NOT EXISTS "${FSIM_EXECUTABLE}")
   message(FATAL_ERROR "FSIM_EXECUTABLE must name the built fsim command")
@@ -64,9 +65,12 @@ set(formal_expected "p1 3 4 cd" "p2 3" "p1 7 8 xy")
 set(formal_native OFF)
 set(line_expected "l1 1 3 abc" "l2 1 5 abc42" "l3 1 5 abc42" "l4 1 2 xy")
 set(line_native ON)
+set(text_expected "t1 1 0 0" "t2 true false" "t3 0" "t4 shishir" "t5 2 his"
+  "t6 true false" "t7 1 7 shishir" "t8 1 3 abc")
+set(text_native OFF)
 
 run_fsim_step(compile 0 compile -q string_shaped.vhd)
-foreach(group IN ITEMS heap result formal line)
+foreach(group IN ITEMS heap result formal line text)
   set(expected ${${group}_expected})
   run_fsim_step(elaborate_${group} 0 elaborate -q --top string_shaped_${group})
   set(ENV{FSIM_PROFILE_PHASES} 1)
@@ -90,6 +94,15 @@ foreach(engine IN ITEMS v4 interpreter)
   if(NOT output MATCHES "VHDL STRING index range is outside its POSITIVE index subtype"
       OR output MATCHES "not reached")
     message(FATAL_ERROR "${engine}: a range bound below 1 did not fail the run\n"
+      "${output}\nworkspace: ${case_dir}")
+  endif()
+endforeach()
+run_fsim_step(elaborate_text_length 0 elaborate -q --top string_shaped_text_length)
+foreach(engine IN ITEMS v4 interpreter)
+  run_fsim_step(simulate_text_length_${engine} 1 simulate --engine ${engine})
+  if(NOT output MATCHES "VHDL array value length does not match its target's length"
+      OR output MATCHES "not reached")
+    message(FATAL_ERROR "${engine}: a value of another length did not fail the run\n"
       "${output}\nworkspace: ${case_dir}")
   endif()
 endforeach()

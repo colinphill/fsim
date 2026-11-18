@@ -155,6 +155,76 @@ begin
   end process;
 end architecture;
 
+-- STRING values held as text and null STRING literals given to objects an
+-- access-to-STRING value designates.
+entity string_shaped_text is
+end entity;
+
+architecture test of string_shaped_text is
+  constant c10 : string := "shishir";
+begin
+  process
+    type string_ptr is access string;
+    variable s, v, w, c : string_ptr;
+    variable vari10 : string(1 to 7) := c10;
+    constant k : string := "abc";
+  begin
+    -- A null string literal: 1 to 0, ascending from POSITIVE'LEFT, 0 being
+    -- to the left of 1 in INTEGER (9.3.2, 9.3.3.3); it equals only a null
+    -- array (9.2.3).
+    s := new string'("");
+    report "t1 " & integer'image(s'left) & " " & integer'image(s'right)
+      & " " & integer'image(s'length);
+    report "t2 " & boolean'image(s.all = "") & " "
+      & boolean'image(s.all = "a");
+    s.all := "";
+    report "t3 " & integer'image(s'length);
+    -- The target keeps its bounds and takes a value of its length
+    -- (10.6.2.1), here a variable of static range and a slice of it (8.5).
+    v := new string(1 to 7);
+    v.all := vari10;
+    report "t4 " & v.all;
+    w := new string(2 to 4);
+    w.all := vari10(2 to 4);
+    report "t5 " & integer'image(w'left) & " " & w.all;
+    report "t6 " & boolean'image(v.all = vari10) & " "
+      & boolean'image(w.all = vari10);
+    -- A constant of the unconstrained STRING has the bounds of its value
+    -- (6.4.2.2): the allocated object takes them (9.3.7).
+    c := new string'(c10);
+    report "t7 " & integer'image(c'left) & " " & integer'image(c'right)
+      & " " & c.all;
+    deallocate(c);
+    c := new string'(k);
+    report "t8 " & integer'image(c'left) & " " & integer'image(c'right)
+      & " " & c.all;
+    deallocate(c);
+    deallocate(s);
+    deallocate(v);
+    deallocate(w);
+    wait;
+  end process;
+end architecture;
+
+-- A value of another length than the designated object's fails the run
+-- (10.6.2.1).
+entity string_shaped_text_length is
+end entity;
+
+architecture test of string_shaped_text_length is
+begin
+  process
+    type string_ptr is access string;
+    variable w : string_ptr;
+    variable vari10 : string(1 to 7) := "shishir";
+  begin
+    w := new string(2 to 4);
+    w.all := vari10;
+    report "not reached";
+    wait;
+  end process;
+end architecture;
+
 -- STD.TEXTIO.LINE values are 1 to their length.
 library std;
 use std.textio.all;

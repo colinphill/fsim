@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "hierarchy_sv_constant_evaluator.hpp"
+#include "fsim/support/stack_growth.hpp"
 #include "fsim/frontend/systemverilog_standard_package.hpp"
 #include "lowerer_internal.hpp"
 #include "fsim/semantic/systemverilog_structure_image.hpp"
@@ -2285,6 +2286,12 @@ Lowerer::hir_systemverilog_value_type(
     const semantic::ExpressionId expression_id,
     const std::size_t trailing_segments) const
 {
+    // A deep expression (a long ?: chain) continues on a fresh stack
+    // segment: each operand is a nested call.
+    if (!support::stack_growth_detail::has_room()) {
+        return support::with_stack(
+            [&] { return hir_systemverilog_value_type(expression_id, trailing_segments); });
+    }
     // The declared type of a variable, of a member of a structure variable
     // (`s.a.b`), or of an element of an unpacked array (`a[i]`).
     const auto expression = specialized_hir_unit_ != nullptr

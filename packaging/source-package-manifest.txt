@@ -1995,6 +1995,7 @@ tests/fixtures/compliance/sv_class_named_four_state_defaults.sv
 tests/fixtures/compliance/sv_class_package_receiver_identity_batch58_20261013.sv
 tests/fixtures/compliance/sv_class_property_assignment_extension.sv
 tests/fixtures/compliance/sv_class_qualified_module_enum_batch58.sv
+tests/fixtures/compliance/sv_class_scoped_own_type_parameter.sv
 tests/fixtures/compliance/sv_class_specialization_registry.sv
 tests/fixtures/compliance/sv_class_specialization_selection.sv
 tests/fixtures/compliance/sv_class_statements.sv
@@ -2004,6 +2005,7 @@ tests/fixtures/compliance/sv_class_static_initializers.sv
 tests/fixtures/compliance/sv_class_static_method_specialization.sv
 tests/fixtures/compliance/sv_class_static_task_specialization.sv
 tests/fixtures/compliance/sv_class_static_unreferenced.sv
+tests/fixtures/compliance/sv_class_static_vif_member_specialization.sv
 tests/fixtures/compliance/sv_class_two_state_property_write.sv
 tests/fixtures/compliance/sv_class_type_parameter_base_virtual.sv
 tests/fixtures/compliance/sv_class_typedef_scope_import.sv

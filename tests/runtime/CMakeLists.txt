@@ -1893,6 +1893,19 @@ target_include_directories(
 fsim_add_foreign_conformance_test(
   vpi-gate-split vpi foreign_vpi_gate_split.sv
   foreign_vpi_gate_split.expected "" fsim_foreign_vpi_gate_split_plugin)
+# The same split on the kernel's parallel shapes: domains with no forced
+# batch (a delayed write a lane logs reaches the leader's merge; a split
+# partition stays on the leader after the re-plan), and batches without
+# domains.
+fsim_add_foreign_conformance_test(
+  vpi-gate-split-mt vpi foreign_vpi_gate_split.sv
+  foreign_vpi_gate_split.expected "" fsim_foreign_vpi_gate_split_plugin "" ""
+  v4 ENVIRONMENT FSIM_KERNEL_THREADS=4 FSIM_KERNEL_MT_MIN=0)
+fsim_add_foreign_conformance_test(
+  vpi-gate-split-batches vpi foreign_vpi_gate_split.sv
+  foreign_vpi_gate_split.expected "" fsim_foreign_vpi_gate_split_plugin "" ""
+  v4 ENVIRONMENT FSIM_KERNEL_THREADS=4 FSIM_KERNEL_MT_FORCE=1
+  FSIM_KERNEL_MT_DOMAINS=0)
 # The same put on a gate whose output net has a weak driver (a nine-valued
 # slot) and on gates that drive bits of a net alias family (IEEE 1800-2023
 # 28.12, 10.11, 38.32).

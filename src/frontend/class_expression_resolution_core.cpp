@@ -3366,6 +3366,11 @@ void Resolver::retain_result_type(
         expression.text.substr(0, dot),
         {},
         expression.span};
+    // The receiver keeps the specialization the parser read in its scope
+    // chain (`C#(virtual I)::vif.m`, IEEE 1800-2023 8.25.1); a member
+    // selected with `.` follows the chain and carries none of its own.
+    receiver.systemverilog_class_selection
+        = expression.systemverilog_class_selection;
     auto receiver_type = resolve_expression(receiver, scope);
     // A class handle declared in a package (`P::c.x`, 26.3).
     if (!receiver_type) {
@@ -3422,8 +3427,11 @@ void Resolver::retain_result_type(
         Expression call{ExpressionKind::Call, "." + member, {},
             expression.span};
         call.builtin_method = support::builtin_method_named(member);
-        call.operands.push_back(Expression{ExpressionKind::Identifier,
-            expression.text.substr(0, dot), {}, expression.span});
+        Expression handle{ExpressionKind::Identifier,
+            expression.text.substr(0, dot), {}, expression.span};
+        handle.systemverilog_class_selection
+            = expression.systemverilog_class_selection;
+        call.operands.push_back(std::move(handle));
         expression = std::move(call);
         return resolve_expression(expression, scope);
       }

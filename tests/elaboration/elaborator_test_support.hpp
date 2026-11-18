@@ -190,6 +190,7 @@ void test_case_and_expression_lowering();
 void test_systemverilog_case_qualifiers();
 void test_systemverilog_case_matches();
 void test_systemverilog_case_inside_lowering();
+void test_systemverilog_deep_conditional_chain();
 void test_systemverilog_membership_lowering();
 void test_numeric_and_system_function_lowering();
 void test_selection_and_assignment_lowering();

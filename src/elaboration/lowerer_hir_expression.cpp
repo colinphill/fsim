@@ -12466,6 +12466,14 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
     const frontend::SystemVerilogScalarKind scalar_context,
     const semantic::vhdl::SubtypeIndication* vhdl_array_context)
 {
+    // An operand is lowered by a nested call: a deep expression (a long
+    // ?: chain) continues on a fresh stack segment.
+    if (!support::stack_growth_detail::has_room()) {
+        return support::with_stack([&] {
+            return lower_hir_expression(expression_id, expected_width,
+                scalar_context, vhdl_array_context);
+        });
+    }
     if (auto shaped = lower_hir_vhdl_shaped_range_use(
             expression_id, expected_width)) {
         return *shaped;
@@ -30862,6 +30870,12 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
     const semantic::ExpressionId expression_id,
     const semantic::vhdl::SubtypeIndication* const contextual_subtype)
 {
+    // A deep expression (a long ?: chain) continues on a fresh stack
+    // segment: each operand is a nested call.
+    if (!support::stack_growth_detail::has_room()) {
+        return support::with_stack(
+            [&] { return lower_hir_string_expression(expression_id, contextual_subtype); });
+    }
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
     }

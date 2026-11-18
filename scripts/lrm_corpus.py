@@ -518,7 +518,7 @@ def verilator_library_files(top_file: Path, tdir: Path,
 
 # Icarus system tasks that are not in IEEE 1364/1800.
 ICARUS_EXTENSION_TASKS = re.compile(
-    r"\$(abstime|is_signed|countdrivers|simparam|fopenr|sizeof|deposit|finish_and_return|ivlh_\w+)\b")
+    r"\$(abstime|simtime|is_signed|countdrivers|simparam|fopenr|sizeof|deposit|finish_and_return|ivlh_\w+)\b")
 # Icarus syntax extensions: the `bool` variable type, the binary `~&`
 # and `~|` operators (the IEEE LRMs define them only as unary reductions),
 # and real-valued built-in nets (`wire real`; IEEE 1800-2017 6.7.1 allows

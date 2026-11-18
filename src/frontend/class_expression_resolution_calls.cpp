@@ -1699,6 +1699,14 @@ std::optional<Type> Resolver::resolve_expression(
     const Scope& scope,
     const std::optional<std::string>& expected_class,
     const SystemVerilogScalarKind expected_scalar) {
+  // An operand is resolved by a nested call: a deep expression (a long ?:
+  // chain) continues on a fresh stack segment.
+  if (!fsim::support::stack_growth_detail::has_room()) {
+      return fsim::support::with_stack([&] {
+          return resolve_expression(expression, scope, expected_class,
+              expected_scalar);
+      });
+  }
   if (!expression.valid()) return std::nullopt;
   release_hidden_process_member(expression, scope);
   if (expression.kind == ExpressionKind::Identifier) {

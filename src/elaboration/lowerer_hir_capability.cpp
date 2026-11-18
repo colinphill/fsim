@@ -2349,6 +2349,12 @@ bool Lowerer::hir_calls_user_function(
 std::optional<std::int64_t> Lowerer::hir_constant_integer(
     const semantic::ExpressionId expression_id) const
 {
+    // A deep expression (a long ?: chain) continues on a fresh stack
+    // segment: each operand is a nested call.
+    if (!support::stack_growth_detail::has_room()) {
+        return support::with_stack(
+            [&] { return hir_constant_integer(expression_id); });
+    }
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
     }
@@ -5241,6 +5247,12 @@ bool Lowerer::hir_vhdl_runtime_string_bound(
 bool Lowerer::hir_expression_signed(
     const semantic::ExpressionId expression_id) const
 {
+    // A deep expression (a long ?: chain) continues on a fresh stack
+    // segment: each operand is a nested call.
+    if (!support::stack_growth_detail::has_room()) {
+        return support::with_stack(
+            [&] { return hir_expression_signed(expression_id); });
+    }
     if (specialized_hir_unit_ == nullptr) {
         return false;
     }
@@ -13195,6 +13207,12 @@ bool Lowerer::hir_expression_is_string(
     const semantic::ExpressionId expression_id,
     const semantic::ScopeId process_scope) const
 {
+    // A deep expression (a long ?: chain) continues on a fresh stack
+    // segment: each operand is a nested call.
+    if (!support::stack_growth_detail::has_room()) {
+        return support::with_stack(
+            [&] { return hir_expression_is_string(expression_id, process_scope); });
+    }
     if (specialized_hir_unit_ == nullptr) {
         return false;
     }
@@ -13940,6 +13958,12 @@ bool Lowerer::can_lower_hir_string_expression(
     const semantic::ScopeId process_scope,
     const semantic::vhdl::SubtypeIndication* const contextual_subtype) const
 {
+    // A deep expression (a long ?: chain) continues on a fresh stack
+    // segment: each operand is a nested call.
+    if (!support::stack_growth_detail::has_room()) {
+        return support::with_stack(
+            [&] { return can_lower_hir_string_expression(expression, process_scope, contextual_subtype); });
+    }
     if (hir_vhdl_access_string_whole_slice(expression)) {
         return true;
     }
@@ -17581,6 +17605,12 @@ std::optional<frontend::ValueDomain> Lowerer::hir_expression_domain(
     const semantic::ExpressionId expression_id,
     const semantic::ScopeId process_scope) const
 {
+    // An operand's domain is found by a nested call: a deep expression (a
+    // long ?: chain) continues on a fresh stack segment.
+    if (!support::stack_growth_detail::has_room()) {
+        return support::with_stack(
+            [&] { return hir_expression_domain(expression_id, process_scope); });
+    }
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
     }
@@ -18760,6 +18790,12 @@ frontend::SystemVerilogScalarKind Lowerer::hir_systemverilog_scalar_kind(
     const semantic::ExpressionId expression_id,
     const frontend::SystemVerilogScalarKind contextual_kind) const
 {
+    // A deep expression (a long ?: chain) continues on a fresh stack
+    // segment: each operand is a nested call.
+    if (!support::stack_growth_detail::has_room()) {
+        return support::with_stack(
+            [&] { return hir_systemverilog_scalar_kind(expression_id, contextual_kind); });
+    }
     using Kind = frontend::SystemVerilogScalarKind;
     if (specialized_hir_unit_ == nullptr) {
         return Kind::None;
@@ -21351,6 +21387,14 @@ std::optional<std::size_t> Lowerer::hir_expression_width(
     const semantic::ScopeId process_scope,
     const semantic::vhdl::SubtypeIndication* vhdl_array_context) const
 {
+    // An operand's width is computed by a nested call: a deep expression (a
+    // long ?: chain) continues on a fresh stack segment.
+    if (!support::stack_growth_detail::has_room()) {
+        return support::with_stack([&] {
+            return hir_expression_width(expression_id, process_scope,
+                vhdl_array_context);
+        });
+    }
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
     }
@@ -29867,6 +29911,12 @@ bool Lowerer::can_lower_hir_expression(
     const semantic::ScopeId process_scope,
     std::unordered_set<std::uint32_t>& visiting) const
 {
+    // A deep expression (a long ?: chain) continues on a fresh stack
+    // segment: each operand is a nested call.
+    if (!support::stack_growth_detail::has_room()) {
+        return support::with_stack(
+            [&] { return can_lower_hir_expression(expression_id, process_scope, visiting); });
+    }
     if (hir_vhdl_shaped_width(expression_id)
         || hir_vhdl_shaped_value_profile(expression_id)) {
         return true;

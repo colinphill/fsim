@@ -2179,7 +2179,7 @@ bool Interpreter::Impl::StaticKernel::behavioral_step(
     const bool handled = visit_operation([&](const auto& op) {
         return behavioral_operation(member_index, pc, op);
     }, members_[member_index].operations()[pc]);
-    if (handled && variable_hooks_active_) [[unlikely]] {
+    if (handled && reference_stores_reported()) [[unlikely]] {
         note_reference_store(member_index, pc);
     }
     return handled;
@@ -2191,7 +2191,7 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation_at(
 {
     const bool handled = behavioral_operation(member_index, pc,
         operation_get<Op>(members_[member_index].operations()[pc]));
-    if (handled && variable_hooks_active_) [[unlikely]] {
+    if (handled && reference_stores_reported()) [[unlikely]] {
         note_reference_store(member_index, pc);
     }
     return handled;

@@ -331,7 +331,13 @@ void Interpreter::Impl::StaticKernel::build_parallel_plan()
             continue;
         }
         unit_cost_[unit] = static_cast<std::uint32_t>(body[unit]->code.size());
-        bool ok = true;
+        // A partition with gated members (dissolve_member) runs on the
+        // leader: its gate reads kernel state through the running
+        // partition, and it schedules the members split_gate_delay moved
+        // out of its pass, which are units of their own that no domain
+        // joins to it. A re-plan keeps it there.
+        bool ok = unit < member_count || unit - member_count >= dissolved_.size()
+            || !dissolved_[unit - member_count];
         const auto touch_slot = [&](const std::uint32_t slot, const bool write) {
             if (slot >= slot_count) {
                 return;
@@ -1784,8 +1790,11 @@ void Interpreter::Impl::StaticKernel::summarize_domain(Domain& domain) noexcept
     for (std::size_t record = 0U; record < domain.records.size(); ++record) {
         domain.evaluated += domain.records[record].continued ? 0U : 1U;
         const auto& run = domain.runs[record];
+        // A logged output (a display, a delayed write for the kernel's
+        // timers) is the leader's to deliver in the merge, as a change is.
         domain.effects = domain.effects || run.changes_begin != run.changes_end
-            || run.writes_begin != run.writes_end;
+            || run.writes_begin != run.writes_end
+            || run.outputs_begin != run.outputs_end;
     }
 }
 
@@ -1881,6 +1890,7 @@ void Interpreter::Impl::StaticKernel::resume_domain(const std::uint32_t index,
         auto& record = add_domain_record(domain, entry, finish);
         record.changes_begin = static_cast<std::uint32_t>(lane.changes.size());
         record.writes_begin = lane.writes.count;
+        record.outputs_begin = static_cast<std::uint32_t>(lane.outputs.size());
         const bool partition = (entry & partition_tag) != 0U;
         try {
             if (finish) {
@@ -1921,6 +1931,7 @@ void Interpreter::Impl::StaticKernel::resume_domain(const std::uint32_t index,
         scratch.native_exception = nullptr;
         record.changes_end = static_cast<std::uint32_t>(lane.changes.size());
         record.writes_end = lane.writes.count;
+        record.outputs_end = static_cast<std::uint32_t>(lane.outputs.size());
         if (domain.stop == domain_error) {
             break;
         }

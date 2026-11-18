@@ -631,6 +631,27 @@ namespace systemverilog_hir_detail {
             output.referenced_name = name(
                 input.text, input.span, scope,
                 input.systemverilog_source_order);
+            // `C::T` in C: T itself (IEEE 1800-2023 8.25.1).
+            if (!output.referenced_name->selected) {
+                if (const auto scoped = systemverilog_hir_detail::
+                        systemverilog_unadorned_class_scoped_name(input);
+                    const auto parameter = scoped
+                        ? systemverilog_hir_detail::
+                              systemverilog_own_class_type_parameter(
+                            scoped->first, scoped->second, scope, model_, hir_,
+                            [&](const semantic::ScopeId candidate) {
+                                // Recorded when the class's body opens,
+                                // before its members are built.
+                                return std::ranges::any_of(class_scopes_,
+                                    [&](const auto& item) {
+                                        return item.second == candidate;
+                                    });
+                            })
+                        : std::nullopt) {
+                    output.referenced_name->overloads.assign(1U, *parameter);
+                    output.referenced_name->selected = *parameter;
+                }
+            }
         }
         output.argument_names = input.call_argument_names;
         const auto omitted = omit_systemverilog_call_arguments(

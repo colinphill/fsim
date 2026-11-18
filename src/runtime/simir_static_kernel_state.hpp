@@ -3714,6 +3714,17 @@ private:
         std::vector<std::string> operands;
         PackedLogic4 result;
     };
+    /// A store of a VHDL variable the compiled run reported while the
+    /// debug interface hooked a variable of the member (note_variable_store):
+    /// the member, the stored register and the registers the store left
+    /// changed, the forced elements put back and every variable of the
+    /// member the interface's callbacks deposited or forced during it
+    /// (IEEE 1076-2019 22.5.2, 21.3.2.2), with their values after them.
+    struct VerifyVariableStore {
+        std::uint32_t member { };
+        RegisterId reg { };
+        std::vector<std::pair<RegisterId, PackedLogic4>> left;
+    };
     struct VerifyShadow {
         /// The reference replay is running: its effects are recorded, not
         /// made.
@@ -3751,11 +3762,12 @@ private:
         /// compiled run's blocking writes, then the replay's own.
         std::map<SignalId, PackedLogic4> host_values;
         std::vector<std::uint32_t> changed;
-        /// Each store of a hooked variable the compiled run reported
-        /// (note_variable_store): the register and the value the store
-        /// left, forced elements put back. The replay takes them in order
-        /// instead of running the interface's callbacks again.
-        std::vector<std::pair<RegisterId, PackedLogic4>> variable_stores;
+        /// Each variable store the compiled run reported while the
+        /// member's variables were hooked (note_variable_store), in order.
+        /// The replay reports the same stores (note_reference_store) and
+        /// takes their values instead of running the interface's callbacks
+        /// again (replay_variable_store).
+        std::vector<VerifyVariableStore> variable_stores;
         std::size_t variable_stores_consumed { };
     };
     VerifyShadow* shadow_ { };
@@ -5108,6 +5120,21 @@ private:
     /// The same after operation `pc` of the member ran on its reference
     /// registers (step_operation, behavioral_operation).
     void note_reference_store(std::uint32_t member_index, std::uint32_t pc);
+    /// The reference evaluator reports its stores: hooked variables, or the
+    /// FSIM_KERNEL_VERIFY replay has compiled-run stores left to take (the
+    /// compiled run's callbacks may have dropped the hooks).
+    [[nodiscard]] bool reference_stores_reported() const
+    {
+        return variable_hooks_active_
+            || (shadow_ != nullptr && shadow_->reference
+                && shadow_->variable_stores_consumed
+                    < shadow_->variable_stores.size());
+    }
+    /// FSIM_KERNEL_VERIFY's replay of a store the compiled run reported
+    /// (VerifyShadow::variable_stores): the registers take the values the
+    /// compiled run's store and callbacks left.
+    void replay_variable_store(std::uint32_t member_index, RegisterId reg,
+        Word* registers);
     /// Writes `value` to compiled register `reg` of `registers` (a register
     /// file of `body`) with its 'U' and weak masks.
     void write_exact_register(static_kernel_detail::CompiledBody& body,

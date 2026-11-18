@@ -1633,10 +1633,12 @@ bool Lowerer::hir_vhdl_shaped_sized_value(
     const auto value = specialized_hir_unit_->find_expression(value_id);
     if (value && value->vhdl != nullptr) {
         // A string literal has one element per character (9.3.2), a
-        // positional aggregate one per association (9.3.3.3).
+        // positional aggregate one per association (9.3.3.3). A literal of
+        // no characters is a null array, which has no packed value: it is
+        // read as its (empty) text.
         if (value->vhdl->kind == semantic::vhdl::ExpressionKind::string_literal
             && value->vhdl->decoded_string) {
-            return true;
+            return !value->vhdl->decoded_string->empty();
         }
         if (value->vhdl->kind == semantic::vhdl::ExpressionKind::aggregate
             && !value->vhdl->associations.empty()
@@ -1646,6 +1648,29 @@ bool Lowerer::hir_vhdl_shaped_sized_value(
                 })) {
             return true;
         }
+    }
+    // A STRING object held as text (a variable or constant of the process
+    // or subprogram), or a slice of one (8.5): its length may be static,
+    // but its characters are read as text.
+    auto object = value_id;
+    for (;;) {
+        const auto node = specialized_hir_unit_->find_expression(object);
+        if (!node || node->vhdl == nullptr) {
+            break;
+        }
+        if (node->vhdl->kind == semantic::vhdl::ExpressionKind::slice
+            && !node->vhdl->operands.empty()) {
+            object = node->vhdl->operands.front();
+            continue;
+        }
+        if (node->vhdl->kind == semantic::vhdl::ExpressionKind::name) {
+            if (const auto declaration = hir_referenced_declaration(object);
+                declaration
+                && hir_string_binding(*declaration, hir_process_scope_, true)) {
+                return false;
+            }
+        }
+        break;
     }
     const auto width = hir_expression_width(value_id, hir_process_scope_);
     return width && *width != 0U;
@@ -1804,6 +1829,25 @@ Lowerer::lower_hir_vhdl_shaped_string_value(
         return std::nullopt;
     }
     const auto& source = *value->vhdl;
+    // A null STRING of the given bounds: it has no characters.
+    const auto null_string = [&](const HirPackedRange& range) {
+        const auto container = allocate_container_register(profile.type);
+        process_.operations.emplace_back(VhdlShaped {
+            VhdlShapedOperation::create,
+            container,
+            { },
+            load_constant(profile.element_default, profile.element_domain),
+            { load_integer(range.left, 64U, ValueDomain::Integer),
+                load_integer(range.right, 64U, ValueDomain::Integer) },
+            { range.descending ? std::uint8_t { 1U } : std::uint8_t { 0U } },
+            profile.type,
+            0U,
+            VhdlShapedAttribute::length,
+            0U,
+            { },
+        });
+        return Result { container };
+    };
     const bool named_aggregate
         = source.kind == semantic::vhdl::ExpressionKind::aggregate
         && !source.associations.empty()
@@ -1819,22 +1863,7 @@ Lowerer::lower_hir_vhdl_shaped_string_value(
             && (bounds->descending ? bounds->left < bounds->right
                                    : bounds->left > bounds->right)) {
             // A null range choice: a null aggregate of that range.
-            const auto container = allocate_container_register(profile.type);
-            process_.operations.emplace_back(VhdlShaped {
-                VhdlShapedOperation::create,
-                container,
-                { },
-                load_constant(profile.element_default, profile.element_domain),
-                { load_integer(bounds->left, 64U, ValueDomain::Integer),
-                    load_integer(bounds->right, 64U, ValueDomain::Integer) },
-                { static_cast<std::uint8_t>(bounds->descending ? 1U : 0U) },
-                profile.type,
-                0U,
-                VhdlShapedAttribute::length,
-                0U,
-                { },
-            });
-            return Result { container };
+            return null_string(*bounds);
         } else if (bounds) {
             // Its characters as the STRING path gives them, from its
             // smallest choice, in the context of the base subtype.
@@ -1928,37 +1957,54 @@ Lowerer::lower_hir_vhdl_shaped_string_value(
     const bool literal_form
         = source.kind == semantic::vhdl::ExpressionKind::string_literal
         || source.kind == semantic::vhdl::ExpressionKind::aggregate;
+    // A string literal of no characters is a null array (9.3.2): its
+    // direction and nominal leftmost bound are those of a positional
+    // aggregate, ascending from POSITIVE'LEFT = 1 (9.3.3.3, 16.3), and
+    // INTEGER, the base type of POSITIVE, has the value 0 to the left of
+    // 1, so its index range is 1 to 0.
+    if (source.kind == semantic::vhdl::ExpressionKind::string_literal
+        && source.decoded_string && source.decoded_string->empty()) {
+        return null_string(HirPackedRange { 1, 0, false });
+    }
     if (!concatenation && !literal_form
         && !hir_vhdl_shaped_value_profile(value_id)
         && !hir_vhdl_shaped_call_profile(value_id)) {
+        std::optional<HirPackedRange> range;
         if (const auto shape = hir_vhdl_shape(value_id); shape
             && shape->ranges.size() == 1U && shape->ranges.front()) {
-            const auto& range = *shape->ranges.front();
-            const auto left = load_integer(range.left, 64U, ValueDomain::Integer);
-            // A null range keeps its own bounds; it has no characters.
-            if (shape->null()) {
-                const auto container = allocate_container_register(profile.type);
-                process_.operations.emplace_back(VhdlShaped {
-                    VhdlShapedOperation::create,
-                    container,
-                    { },
-                    load_constant(profile.element_default, profile.element_domain),
-                    { left, load_integer(range.right, 64U, ValueDomain::Integer) },
-                    { range.descending ? std::uint8_t { 1U } : std::uint8_t { 0U } },
-                    profile.type,
-                    0U,
-                    VhdlShapedAttribute::length,
-                    0U,
-                    { },
+            range = *shape->ranges.front();
+        } else if (source.kind == semantic::vhdl::ExpressionKind::name) {
+            // A constant whose subtype leaves the index range open has the
+            // bounds of its initial value (6.4.2.2, 5.3.2.2).
+            semantic::vhdl::Declaration inferred;
+            inferred.scope = source.scope;
+            inferred.form = semantic::vhdl::DeclarationForm::constant;
+            inferred.subtype = profile.subtype;
+            std::erase_if(inferred.subtype->constraints,
+                [](const semantic::vhdl::RangeConstraint& constraint) {
+                    return constraint.kind
+                        == semantic::vhdl::RangeKind::array_index;
                 });
-                return Result { container };
+            inferred.subtype->unconstrained = true;
+            inferred.initializer = value_id;
+            range = hir_vhdl_unconstrained_constant_range(inferred,
+                hir_expression_width(value_id, hir_process_scope_)
+                    .value_or(0U),
+                hir_process_scope_);
+        }
+        if (range) {
+            // A null range keeps its own bounds.
+            if (range->descending ? range->left < range->right
+                                  : range->left > range->right) {
+                return null_string(*range);
             }
             const auto text = lower_hir_string_expression(value_id);
             if (!text) {
                 return Result { std::optional<ContainerRegisterId> { } };
             }
-            return Result { lower_hir_vhdl_shaped_text(
-                profile, *text, left, range.descending) };
+            return Result { lower_hir_vhdl_shaped_text(profile, *text,
+                load_integer(range->left, 64U, ValueDomain::Integer),
+                range->descending) };
         }
     }
     // A literal or positional aggregate is packed with its own length; a

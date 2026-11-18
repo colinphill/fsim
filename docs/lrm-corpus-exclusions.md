@@ -12,7 +12,7 @@ Exclusions never count as closures.
 |---|---:|---:|
 | sv-tests | 0 | 2 |
 | verilator | 63 | 300 |
-| ivtest | 7 | 305 |
+| ivtest | 7 | 317 |
 | vests | 2 | 0 |
 | nvc | 225 | 0 |
 | vhdl-compliance | 7 | 0 |
@@ -412,6 +412,7 @@ Exclusions never count as closures.
 | `big_int` | out of scope | expects Icarus's width for unsized literals over 32 bits |
 | `binary_nand` | out of scope | Icarus syntax extension |
 | `binary_nor` | out of scope | Icarus syntax extension |
+| `blocking_repeat_ec` | out of scope | Icarus system task extension |
 | `bool1` | out of scope | Icarus syntax extension |
 | `br1000` | out of scope | depends on Icarus @* and replication side-effect behavior |
 | `br1007` | out of scope | Icarus diagnostic in gold output |
@@ -463,6 +464,7 @@ Exclusions never count as closures.
 | `br_ml20190806b` | out of scope | depends on Icarus's process order within a time step |
 | `br_ml20190814` | out of scope | Icarus diagnostic in gold output |
 | `ca_64delay` | out of scope | Icarus syntax extension |
+| `ca_time_smtm` | out of scope | Icarus system task extension |
 | `ca_var_delay` | out of scope | Icarus syntax extension |
 | `case_priority` | out of scope | Icarus diagnostic in gold output |
 | `case_unique` | out of scope | Icarus diagnostic in gold output |
@@ -516,9 +518,16 @@ Exclusions never count as closures.
 | `module_output_port_sv_var2` | out of scope | declares ports in a module without a port list |
 | `module_output_port_var2` | out of scope | declares ports in a module without a port list |
 | `module_port_shortreal` | out of scope | compares a shortreal with a double literal |
+| `nb_array_pv` | out of scope | Icarus system task extension |
+| `nb_ec_array` | out of scope | Icarus system task extension |
+| `nb_ec_array_pv` | out of scope | Icarus system task extension |
+| `nb_ec_array_pv2` | out of scope | Icarus system task extension |
 | `nb_ec_concat` | out of scope | uses `" or `__LINE__ in Verilog-2005 mode |
 | `nb_ec_multi_ev` | out of scope | depends on Icarus's process order within a time step |
+| `nb_ec_pv` | out of scope | Icarus system task extension |
+| `nb_ec_pv2` | out of scope | Icarus system task extension |
 | `nb_ec_real` | out of scope | depends on Icarus's process order within a time step |
+| `nb_ec_vector` | out of scope | Icarus system task extension |
 | `nested_impl_event2` | out of scope | Icarus diagnostic in gold output |
 | `param_string` | out of scope | expects an untyped string-valued parameter displayed without a format as text; it is integral and prints in decimal (IEEE 1800-2017 5.9, 6.20.2, 21.2.1.2) |
 | `param_string_compare` | out of scope | applies ==? to string operands (IEEE 1800-2017 11.4.6 is integral only) |
@@ -599,6 +608,7 @@ Exclusions never count as closures.
 | `pr3441576` | out of scope | Icarus diagnostic in gold output |
 | `pr377` | out of scope | depends on Icarus's process order within a time step |
 | `pr478` | out of scope | uses Icarus preprocessor behavior |
+| `pr534` | out of scope | Icarus system task extension |
 | `pr622` | out of scope | uses Icarus ``NAME macro stringification |
 | `pr639` | out of scope | uses Icarus ``NAME macro stringification |
 | `pr751` | out of scope | Icarus diagnostic in gold output |
@@ -633,6 +643,7 @@ Exclusions never count as closures.
 | `signed_a` | out of scope | expects an out-of-range index to be stripped |
 | `simparam` | out of scope | Icarus system task extension |
 | `specify_01` | out of scope | uses several sources in a parallel module path (IEEE 1800-2017 30.4.4.1) |
+| `stime` | out of scope | Icarus system task extension |
 | `string12` | out of scope | uses SystemVerilog constructs in Verilog-2005 mode |
 | `string13` | out of scope | uses `" or `__LINE__ in Verilog-2005 mode |
 | `string14` | out of scope | uses `" or `__LINE__ in Verilog-2005 mode |
@@ -665,10 +676,11 @@ Exclusions never count as closures.
 | `sv_string6` | out of scope | expects Icarus's hextoa of a negative value |
 | `sv_typedef_nested_array` | out of scope | expects nested typedef array dimensions in Icarus order instead of outermost-first order (IEEE 1800-2017 7.4.5, 20.7) |
 | `sv_unit1c` | out of scope | expects z from a buf gate whose input is an undriven implicit wire; a buf outputs x for a z input (IEEE 1800-2023 28.5, Table 28-4) |
-| `swrite` | out of scope | Icarus diagnostic in gold output |
+| `swrite` | out of scope | Icarus system task extension |
 | `sys_func_as_task` | out of scope | Icarus diagnostic in gold output |
 | `sysargs` | out of scope | Icarus system task extension |
 | `tern8` | out of scope | Icarus syntax extension |
+| `time6` | out of scope | Icarus system task extension |
 | `udp_dff` | out of scope | connects UDP terminals by name (udp_instance is positional, IEEE 1800-2017 29.7) |
 | `undef` | out of scope | Icarus diagnostic in gold output |
 | `urand` | out of scope | calls $urandom in Verilog-2005 mode |

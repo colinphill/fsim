@@ -975,6 +975,26 @@ namespace {
                 output.referenced_name = name(
                     input.text, input.span, scope,
                     input.systemverilog_source_order);
+                // `C::T` in C: T itself (IEEE 1800-2023 8.25.1); the
+                // final name resolution keeps it (resolve_expression_names).
+                if (const auto scoped = systemverilog_hir_detail::
+                        systemverilog_unadorned_class_scoped_name(input);
+                    scoped && !output.referenced_name->selected) {
+                    if (const auto parameter = systemverilog_hir_detail::
+                            systemverilog_own_class_type_parameter(
+                                scoped->first, scoped->second, scope, model_,
+                                hir_, [&](const semantic::ScopeId candidate) {
+                                    return std::ranges::any_of(hir_.classes(),
+                                        [&](const auto& declaration) {
+                                            return declaration.scope
+                                                == candidate;
+                                        });
+                                })) {
+                        output.referenced_name->overloads.assign(
+                            1U, *parameter);
+                        output.referenced_name->selected = *parameter;
+                    }
+                }
                 // `blk.v` bound to the block's own `v` is that variable,
                 // not a member select of it (IEEE 1800-2017 23.9).
                 if (input.kind == frontend::ExpressionKind::Identifier
@@ -3067,6 +3087,7 @@ namespace {
                 if (!item.referenced_name) {
                     continue;
                 }
+                const auto prior = item.referenced_name->selected;
                 item.referenced_name->selected.reset();
                 item.referenced_name->overloads.clear();
                 auto visible_scope = std::optional<semantic::ScopeId> { item.scope };
@@ -3096,6 +3117,28 @@ namespace {
                 }
                 if (genvar) {
                     continue;
+                }
+                // `C::T` in C, which names T itself (IEEE 1800-2023
+                // 8.25.1): the builder resolved it from the name's
+                // components, which the spelling does not carry. It is a
+                // type parameter of a class whose body encloses the name.
+                if (item.referenced_name->overloads.empty() && prior) {
+                    const auto* const parameter = hir_.find_declaration(*prior);
+                    bool enclosing { };
+                    for (auto visible = std::optional<semantic::ScopeId> {
+                             item.scope };
+                        parameter != nullptr && visible && !enclosing;
+                        visible = parent_scope(*visible)) {
+                        enclosing = *visible == parameter->scope;
+                    }
+                    if (enclosing
+                        && parameter->form == sv::DeclarationForm::type_parameter
+                        && std::ranges::any_of(hir_.classes(),
+                            [&](const auto& declaration) {
+                                return declaration.scope == parameter->scope;
+                            })) {
+                        item.referenced_name->overloads.push_back(*prior);
+                    }
                 }
                 if (item.referenced_name->overloads.size() == 1) {
                     item.referenced_name->selected = item.referenced_name->overloads.front();

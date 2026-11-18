@@ -9036,26 +9036,20 @@ void Interpreter::Impl::StaticKernel::verify_run(const std::uint32_t member_inde
     member.call_stack = stack;
     body.registers = registers;
     body.wide_registers = wide;
+    // The registers as the compiled run started: exact values, with the 'U'
+    // and weak masks of a VHDL body's tracked registers (a variable of a
+    // std_ulogic type starts at 'U', IEEE 1076-2019 6.4.2.4), as a thread's
+    // replay starts (verify_thread_activation).
     for (std::size_t reg = 0U; reg < member.registers.size(); ++reg) {
-        const auto width = body.register_widths[reg];
-        if (width == 0U) {
+        auto value = exact_register(body, member_index, static_cast<RegisterId>(reg));
+        if (!value) {
             continue;
         }
-        const auto kind = reg < member.register_kinds.size()
-            ? member.register_kinds[reg] : ValueKind::logic4;
-        if (width > 64U) {
-            if (reg < body.wide_base.size() && body.wide_base[reg] != 0U) {
-                member.registers[reg] = wide_value(body, body.registers.data(),
-                    static_cast<std::uint32_t>(reg), kind);
-            } else if (reg < body.wide_registers.size()) {
-                member.registers[reg] = body.wide_registers[reg];
-            }
-            continue;
-        }
-        member.registers[reg] = Impl::coerce_value_kind(
-            PackedLogic4::from_aval_bval(width, body.registers[reg].a,
-                body.registers[reg].b),
-            kind);
+        member.registers[reg] = body.register_widths[reg] > 64U
+            ? std::move(*value)
+            : Impl::coerce_value_kind(std::move(*value),
+                  reg < member.register_kinds.size() ? member.register_kinds[reg]
+                                                     : ValueKind::logic4);
     }
     const ReferenceContainerScope reference_containers { member, native_containers };
     std::string replay_mismatch;
@@ -9211,9 +9205,13 @@ void Interpreter::Impl::StaticKernel::verify_run(const std::uint32_t member_inde
         }
         for (std::size_t reg = 0U; reg < registers.size(); ++reg) {
             if (body.register_widths[reg] != 0U && body.register_widths[reg] <= 64U) {
+                // With the 'U' and weak masks, as the replay started.
+                const auto value = exact_register(body, member_index,
+                    static_cast<RegisterId>(reg), registers.data());
                 std::cerr << "  start r" << reg << '='
-                          << PackedLogic4::from_aval_bval(body.register_widths[reg],
-                                 registers[reg].a, registers[reg].b).to_msb_string()
+                          << (value ? Impl::coerce_value_kind(*value,
+                                          ValueKind::logic9).to_msb_string()
+                                    : std::string { })
                           << '\n';
             }
         }
@@ -9350,7 +9348,7 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_generic(
     const auto next = visit_operation([&](const auto& op) {
         return step_operation(member_index, pc, op);
     }, members_[member_index].operations()[pc]);
-    if (variable_hooks_active_) [[unlikely]] {
+    if (reference_stores_reported()) [[unlikely]] {
         note_reference_store(member_index, pc);
     }
     return next;
@@ -9366,7 +9364,7 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_operation_at(
     }
     const auto next = step_operation(member_index, pc,
         operation_get<Op>(members_[member_index].operations()[pc]));
-    if (variable_hooks_active_) [[unlikely]] {
+    if (reference_stores_reported()) [[unlikely]] {
         note_reference_store(member_index, pc);
     }
     return next;
@@ -11862,12 +11860,39 @@ void Interpreter::Impl::StaticKernel::write_exact_register(CompiledBody& body,
 bool Interpreter::Impl::StaticKernel::note_variable_store(
     const std::uint32_t member_index, const RegisterId reg, Word* registers)
 {
+    // FSIM_KERNEL_VERIFY's replay: the store leaves what it left in the
+    // compiled run, whose interface callbacks ran once and may have forced
+    // or deposited the variable or others of the member; they do not run
+    // again.
+    if (shadow_ != nullptr && shadow_->reference) {
+        replay_variable_store(member_index, reg, registers);
+        return false;
+    }
     if (member_index >= variable_hook_members_.size()
         || variable_hook_members_[member_index] == 0U) {
         return false;
     }
     auto& member = members_[member_index];
     const auto owner = member.process;
+    auto* const body = registers != nullptr && member.compiled
+        ? &*member.compiled : nullptr;
+    const auto read = [&](const RegisterId id) -> std::optional<PackedLogic4> {
+        if (body != nullptr) {
+            return exact_register(*body, member_index, id, registers);
+        }
+        if (id < member.registers.size()) {
+            return member.registers[id];
+        }
+        return std::nullopt;
+    };
+    // FSIM_KERNEL_VERIFY: every reported store has its journal entry, in
+    // order, also a store of a variable no hook names (the replay reports
+    // it too, and a callback may hook the variable later in the run).
+    std::optional<std::size_t> journal;
+    if (shadow_ != nullptr) {
+        journal = shadow_->variable_stores.size();
+        shadow_->variable_stores.push_back({ member_index, reg, { } });
+    }
     std::size_t width { };
     bool hooked { };
     for (const auto& hook : impl_.debug_local_hooks) {
@@ -11880,36 +11905,8 @@ bool Interpreter::Impl::StaticKernel::note_variable_store(
     if (!hooked) {
         return false;
     }
-    auto* const body = registers != nullptr && member.compiled
-        ? &*member.compiled : nullptr;
-    std::optional<PackedLogic4> value;
-    if (body != nullptr) {
-        value = exact_register(*body, member_index, reg, registers);
-    } else if (reg < member.registers.size()) {
-        value = member.registers[reg];
-    }
+    std::optional<PackedLogic4> value = read(reg);
     if (!value || value->width() != width) {
-        return false;
-    }
-    // FSIM_KERNEL_VERIFY's replay: the store leaves what it left in the
-    // compiled run, whose interface callbacks ran once and may have forced
-    // or deposited the variable; they do not run again.
-    if (shadow_ != nullptr && shadow_->reference) {
-        auto& journal = shadow_->variable_stores;
-        if (shadow_->variable_stores_consumed < journal.size()
-            && journal[shadow_->variable_stores_consumed].first == reg) {
-            const auto& stored
-                = journal[shadow_->variable_stores_consumed++].second;
-            if (body != nullptr) {
-                write_exact_register(*body, registers, reg, stored);
-                member.registers_known = false;
-            } else if (reg < member.registers.size()) {
-                member.registers[reg] = Impl::coerce_value_kind(stored,
-                    reg < member.register_kinds.size()
-                        ? member.register_kinds[reg]
-                        : ValueKind::logic4);
-            }
-        }
         return false;
     }
     // An assignment does not update the forced elements (22.5.2): the
@@ -11931,36 +11928,86 @@ bool Interpreter::Impl::StaticKernel::note_variable_store(
         const auto word = exact_uword(*value);
         unknown = word && (word->unknown | word->value.b) != 0U;
     }
-    impl_.report_debug_local_value(owner, reg, *value);
-    if (shadow_ != nullptr) {
-        // The value the store leaves after the interface's callbacks (they
-        // may force or deposit the variable).
-        std::optional<PackedLogic4> left;
-        if (body != nullptr) {
-            left = exact_register(*body, member_index, reg, registers);
-        } else if (reg < member.registers.size()) {
-            left = member.registers[reg];
+    // FSIM_KERNEL_VERIFY: the member's variables before the interface's
+    // callbacks, which may deposit or force any of them (21.3.2.2, 22.5.2,
+    // 23.28); the journal keeps those they changed.
+    std::vector<std::pair<RegisterId, std::optional<PackedLogic4>>> variables;
+    if (journal) {
+        const auto* const original = debug_program(owner);
+        const auto program = original != nullptr
+            ? ProcessProgramView { *original }
+            : impl_.processes.program_view(owner);
+        for (const auto& local : program.debug_locals()) {
+            if (local.storage == DebugLocalStorage::packed
+                && local.register_id != reg) {
+                variables.emplace_back(local.register_id, read(local.register_id));
+            }
         }
-        shadow_->variable_stores.emplace_back(reg, left.value_or(*value));
+    }
+    impl_.report_debug_local_value(owner, reg, *value);
+    if (journal) {
+        // The value the store leaves after the interface's callbacks, and
+        // the other variables they changed.
+        auto& left = shadow_->variable_stores[*journal].left;
+        left.emplace_back(reg, read(reg).value_or(*value));
+        for (const auto& [id, before] : variables) {
+            auto after = read(id);
+            if (after && !(before && *before == *after)) {
+                left.emplace_back(id, std::move(*after));
+            }
+        }
     }
     return unknown;
+}
+
+void Interpreter::Impl::StaticKernel::replay_variable_store(
+    const std::uint32_t member_index, const RegisterId reg, Word* registers)
+{
+    // The compiled run reported the same stores in the same order; one it
+    // did not report (its run ended its hooks) has no entry.
+    const auto& journal = shadow_->variable_stores;
+    if (shadow_->variable_stores_consumed >= journal.size()) {
+        return;
+    }
+    const auto& entry = journal[shadow_->variable_stores_consumed];
+    if (entry.member != member_index || entry.reg != reg) {
+        return;
+    }
+    ++shadow_->variable_stores_consumed;
+    auto& member = members_[member_index];
+    auto* const body = registers != nullptr && member.compiled
+        ? &*member.compiled : nullptr;
+    for (const auto& [id, value] : entry.left) {
+        if (body != nullptr) {
+            write_exact_register(*body, registers, id, value);
+            member.registers_known = false;
+        } else if (id < member.registers.size()) {
+            member.registers[id] = Impl::coerce_value_kind(value,
+                id < member.register_kinds.size() ? member.register_kinds[id]
+                                                  : ValueKind::logic4);
+        }
+    }
 }
 
 void Interpreter::Impl::StaticKernel::note_reference_store(
     const std::uint32_t member_index, const std::uint32_t pc)
 {
-    if (member_index >= variable_hook_members_.size()
-        || variable_hook_members_[member_index] == 0U) {
+    const bool replay = shadow_ != nullptr && shadow_->reference
+        && shadow_->variable_stores_consumed < shadow_->variable_stores.size();
+    if (!replay
+        && (member_index >= variable_hook_members_.size()
+            || variable_hook_members_[member_index] == 0U)) {
         return;
     }
-    // A compiled member's replay reports the stores its compiled body
-    // reports (FSIM_KERNEL_VERIFY's journal is in that order).
+    // A compiled member's reference reports the stores its compiled body
+    // reports (FSIM_KERNEL_VERIFY's journal is in that order). A VHDL body
+    // is compiled whole: its instruction `pc` is operation `pc`
+    // (CompiledBody::variable_stores).
     const auto& member = members_[member_index];
-    if (member.compiled && pc >= member.body_begin) {
-        const auto at = pc - member.body_begin;
+    if (member.compiled) {
         const auto& stores = member.compiled->variable_stores;
-        if (at < stores.size() && stores[at] != no_variable_store) {
-            (void)note_variable_store(member_index, stores[at], nullptr);
+        if (pc < stores.size() && stores[pc] != no_variable_store) {
+            (void)note_variable_store(member_index, stores[pc], nullptr);
         }
         return;
     }

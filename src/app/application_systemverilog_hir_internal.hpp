@@ -229,6 +229,52 @@ systemverilog_decimal_literal(
     };
 }
 
+// The class and member names of `C::m` written with the unadorned name of
+// class C (no parameter value assignment, IEEE 1800-2023 8.23, 8.25.1), as
+// the parser recorded its components; none for any other name.
+[[nodiscard]] inline std::optional<std::pair<std::string, std::string>>
+systemverilog_unadorned_class_scoped_name(const frontend::Expression& input)
+{
+    const auto& components = input.name_components;
+    if (input.systemverilog_class_selection != nullptr
+        || components.size() != 2U || components[0].scoped
+        || !components[1].scoped) {
+        return std::nullopt;
+    }
+    return std::pair { components[0].name, components[1].name };
+}
+
+// `C::T`, the unadorned name of parameterized class C and its type
+// parameter T, written in C or in a class nested in it (its members and
+// out-of-block declarations): T itself, as though named inside C (IEEE
+// 1800-2023 8.25.1). None when no enclosing class C declares a type
+// parameter T. `class_scope(scope)` tells whether a scope is the body of a
+// class.
+template <typename ClassScope>
+[[nodiscard]] std::optional<semantic::DeclarationId>
+systemverilog_own_class_type_parameter(const std::string_view class_name,
+    const std::string_view parameter_name, const semantic::ScopeId scope,
+    const semantic::Model& model, const sv::Hir& hir,
+    const ClassScope& class_scope)
+{
+    for (auto visible = std::optional<semantic::ScopeId> { scope }; visible;
+        visible = model.scopes()[visible->value()].parent) {
+        if (model.scopes()[visible->value()].name != class_name
+            || !class_scope(*visible)) {
+            continue;
+        }
+        for (const auto& declaration : hir.declarations()) {
+            if (declaration.scope == *visible
+                && declaration.form == sv::DeclarationForm::type_parameter
+                && declaration.name == parameter_name) {
+                return declaration.id;
+            }
+        }
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
 // The class parameter actuals of a type, projected with the builder's
 // `source(span)`, `type(type, span)` and `expression(expression)`.
 template <typename Source, typename Type, typename Expression>

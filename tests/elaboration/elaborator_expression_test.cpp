@@ -2464,4 +2464,57 @@ end architecture;
         "FSIM-ELAB-VHATTR-003"));
 }
 
+
+void test_systemverilog_deep_conditional_chain()
+{
+    // A conditional operator chain of 1000 levels, in a function body and
+    // in a procedural assignment (IEEE 1800-2023 11.4.11): each level is
+    // parsed and lowered by a nested call, so deep chains continue on
+    // fresh stack segments instead of overflowing the thread's stack.
+    constexpr int levels = 1000;
+    std::string chain;
+    for (int level = 0; level < levels; ++level) {
+        chain += "      sel == 16'd" + std::to_string(level) + " ? 16'd"
+            + std::to_string(level + 1) + " :\n";
+    }
+    chain += "      16'hffff";
+    const std::string source = "module deep_chain;\n"
+                               "  logic [15:0] sel;\n"
+                               "  logic [15:0] direct;\n"
+                               "  logic [15:0] called;\n"
+                               "  function automatic logic [15:0] pick("
+                               "input logic [15:0] sel);\n"
+                               "    return\n"
+        + chain
+        + ";\n"
+          "  endfunction\n"
+          "  initial begin\n"
+          "    sel = 16'd"
+        + std::to_string(levels - 1)
+        + ";\n"
+          "    called = pick(sel);\n"
+          "    direct =\n"
+        + chain
+        + ";\n"
+          "  end\n"
+          "endmodule\n";
+    const auto parsed = fsim::frontend::parse_text(
+        "deep_chain.sv", source, fsim::frontend::Language::SystemVerilog2017);
+    assert(parsed.ok());
+    const auto elaborated = compile_and_elaborate(parsed.design, "sv:work.deep_chain");
+    assert(elaborated.ok());
+    const auto direct = elaborated.design->find_signal("direct");
+    const auto called = elaborated.design->find_signal("called");
+    assert(direct && called);
+    auto interpreter = elaborated.design->create_interpreter();
+    (void)interpreter->run();
+    // sel is levels - 1, which the last level selects: levels.
+    std::string expected;
+    for (int bit = 15; bit >= 0; --bit) {
+        expected += ((levels >> bit) & 1) != 0 ? '1' : '0';
+    }
+    assert(interpreter->signal_value(*direct).to_msb_string() == expected);
+    assert(interpreter->signal_value(*called).to_msb_string() == expected);
+}
+
 } // namespace fsim::tests::elaboration

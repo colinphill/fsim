@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "verilog_parser_internal.hpp"
 #include "fsim/frontend/systemverilog_standard_package.hpp"
+#include "fsim/support/stack_growth.hpp"
 #include "fsim/support/system_tf.hpp"
 
 #include <algorithm>
@@ -497,6 +498,12 @@ std::optional<VerilogParser::BinaryOperation> VerilogParser::binary_operation() 
 
 Expression VerilogParser::parse_expression(int minimum_precedence)
 {
+    // An operand is parsed by a nested call: a deep expression (a long ?:
+    // chain) continues on a fresh stack segment.
+    if (!fsim::support::stack_growth_detail::has_room()) {
+        return fsim::support::with_stack(
+            [&] { return parse_expression(minimum_precedence); });
+    }
     Expression left = parse_unary();
     for (;;) {
         constexpr int membership_precedence = 6;
