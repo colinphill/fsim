@@ -44,7 +44,7 @@ RESTRACE-006	trace	tests/runtime/fst_value_encoder_tests.cpp	fsim.runtime.fst_va
 RESTRACE-007	trace	tests/runtime/fst_change_encoder_tests.cpp	fsim.runtime.fst_change_encoder
 RESTRACE-008	trace	tests/app/trace_hierarchy_application_test.cpp	fsim.application.trace_hierarchy
 RESTRACE-009	trace	tests/app/scoped_local_application_test.cpp	fsim.application.scoped_locals
-RESTRACE-010	trace	cmake/CheckFstInventory.cmake	fsim.fst-inventory
+RESTRACE-010	trace	cmake/CheckCurrentTraceTimingInventory.cmake	fsim.fst-inventory
 RESTRACE-011	trace	tests/app/trace_control_application_test.cpp	fsim.application.trace_control
 RESTRACE-012	trace	tests/app/trace_archive_application_test.cpp	fsim.application.trace_archive
 RESLANG-001	language	cmake/CheckVhdl2019Inventory.cmake	fsim.vhdl-2019-inventory

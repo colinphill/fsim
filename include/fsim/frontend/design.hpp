@@ -67,6 +67,10 @@ struct SystemVerilogCovergroupOptionAssignment {
     // The value of a string option (name, comment) given as a string
     // literal.
     std::optional<std::string> evaluated_text;
+    // The value of an instance option the definition assigns from a
+    // non-constant expression, evaluated when the covergroup is
+    // instantiated (IEEE 1800-2023 19.7).
+    Expression value_expression;
     bool inherited { };
     SourceSpan span;
 };

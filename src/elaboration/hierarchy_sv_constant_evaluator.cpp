@@ -2879,7 +2879,6 @@ private:
             || !record.referenced_name
             || !record.referenced_name->selected || record.text == "$"
             || record.marker != support::ExpressionMarker::none
-            || record.text.starts_with('@')
             || record.text.find('.') != std::string::npos) {
             return nullptr;
         }
@@ -8287,8 +8286,7 @@ private:
             || !record.referenced_name->selected
             || record.text.find('.') != std::string::npos
             || record.text == "$"
-            || record.marker != support::ExpressionMarker::none
-            || record.text.starts_with('@')) {
+            || record.marker != support::ExpressionMarker::none) {
             return nullptr;
         }
         const auto found = compilation_->slots.find(

@@ -9092,10 +9092,13 @@ std::optional<Lowerer::HirCoverageOption> Lowerer::hir_coverage_option_read(
     const auto expression = specialized_hir_unit_ != nullptr
         ? specialized_hir_unit_->find_expression(expression_id)
         : std::nullopt;
+    // An instance option (19.7) or a type option (19.7.1) read.
     if (!expression || expression->systemverilog == nullptr
         || expression->systemverilog->kind != semantic::sv::ExpressionKind::call
-        || expression->systemverilog->marker
-            != support::ExpressionMarker::sv_coverage_option
+        || (expression->systemverilog->marker
+                != support::ExpressionMarker::sv_coverage_option
+            && expression->systemverilog->marker
+                != support::ExpressionMarker::sv_coverage_type_option)
         || expression->systemverilog->operands.size() != 2U) {
         return std::nullopt;
     }
@@ -9117,7 +9120,9 @@ bool Lowerer::is_hir_systemverilog_coverage_call(
     using Routine = support::SystemTf;
     const auto routine = expression->systemverilog->system_tf;
     if (expression->systemverilog->marker
-        == support::ExpressionMarker::sv_coverage_option) {
+            == support::ExpressionMarker::sv_coverage_option
+        || expression->systemverilog->marker
+            == support::ExpressionMarker::sv_coverage_type_option) {
         const auto read = hir_coverage_option_read(expression_id);
         return read && !support::coverage_option_string(read->option);
     }
@@ -9154,16 +9159,19 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_coverage_call(
             unsigned_value(0U, 32U), frontend::ValueDomain::Integer);
         return result(destination);
     };
-    // An integral covergroup option (IEEE 1800-2023 19.7, 19.10): an `int`,
-    // or a `bit` as the low bit of the int the host returns.
-    if (source.marker == support::ExpressionMarker::sv_coverage_option) {
+    // An integral covergroup instance or type option (IEEE 1800-2023 19.7,
+    // 19.7.1, 19.10): an `int`, or a `bit` as the low bit of the int the
+    // host returns.
+    if (source.marker == support::ExpressionMarker::sv_coverage_option
+        || source.marker == support::ExpressionMarker::sv_coverage_type_option) {
         const auto read = hir_coverage_option_read(expression_id);
         if (!read || support::coverage_option_string(read->option)) {
             return std::nullopt;
         }
         const auto value = allocate_register(32U, frontend::ValueDomain::Integer);
         process_.operations.emplace_back(CoverageOption {
-            false, read->option, read->item, read->identity, value, { } });
+            false, read->option, read->item, read->identity, value, { }, false,
+            source.marker == support::ExpressionMarker::sv_coverage_type_option });
         const bool bit = support::coverage_option_bit(read->option);
         const auto typed = bit ? resize_register(value, 1U, false) : value;
         return expected_width != 0U && expected_width != register_width(typed)
@@ -9174,11 +9182,16 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_coverage_call(
         source.argument_names,
         [](const std::string& name) { return !name.empty(); });
     // `v.get_inst_coverage()` and `v.get_coverage()` of a covergroup
-    // variable (IEEE 1800-2023 19.8), bound to their instance or type by
-    // the frontend.
+    // variable or of one of its coverpoints or crosses (IEEE 1800-2023
+    // 19.8, 19.9), bound to their instance or type, and item, by the
+    // frontend: the one operand is the item.
     if (frontend::is_coverage_query(source.marker)) {
+        const auto item = source.operands.size() == 1U
+            ? hir_constant_integer(source.operands.front())
+            : std::nullopt;
         if (language_ != frontend::Language::SystemVerilog2017
-            || named || !source.operands.empty()) {
+            || named || !item || *item < 0
+            || *item > std::numeric_limits<std::uint32_t>::max()) {
             return invalid(
                 "FSIM-ELAB-SVCOV-001",
                 "a covergroup coverage method requires SystemVerilog and "
@@ -9193,6 +9206,7 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_coverage_call(
             instance ? CoverageQueryKind::covergroup_instance
                      : CoverageQueryKind::covergroup_type,
             source.marker_argument,
+            static_cast<std::uint32_t>(*item),
         });
         return expected_width != 0U && expected_width != 64U
             ? resize_register(destination, expected_width, false)
@@ -30774,12 +30788,18 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
         profile && profile->result_string) {
         return lower_hir_dpi_string_call(expression_id);
     }
-    // A string covergroup option, name or comment (IEEE 1800-2023 19.7).
+    // A string covergroup option, name or comment (IEEE 1800-2023 19.7),
+    // or type option comment (19.7.1).
     if (const auto read = hir_coverage_option_read(expression_id);
         read && support::coverage_option_string(read->option)) {
+        const auto call = specialized_hir_unit_->find_expression(expression_id);
+        const bool type_scope = call && call->systemverilog != nullptr
+            && call->systemverilog->marker
+                == support::ExpressionMarker::sv_coverage_type_option;
         const auto destination = allocate_string_register();
         process_.operations.emplace_back(CoverageOption {
-            false, read->option, read->item, read->identity, { }, destination });
+            false, read->option, read->item, read->identity, { }, destination,
+            false, type_scope });
         return destination;
     }
     // `p.get_randstate()` of a process (IEEE 1800-2017 9.7, 18.13.4).

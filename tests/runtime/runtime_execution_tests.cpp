@@ -1250,13 +1250,14 @@ void test_simir_postponed_process_ordering()
             ++coverage_samples;
         });
     coverage_runtime.set_coverage_query_hook([&](
-        const CoverageQueryKind kind, const std::string& identity) {
+        const fsim::runtime::simir::CoverageQuery& query) {
         ++coverage_queries;
-        require(kind == CoverageQueryKind::covergroup_instance
-                ? identity == "work.sample@wide#0"
-                : identity.empty(),
+        require(query.item == 0U
+                && (query.kind == CoverageQueryKind::covergroup_instance
+                        ? query.identity == "work.sample@wide#0"
+                        : query.identity.empty()),
             "coverage query boundary must preserve the queried identity");
-        return kind == CoverageQueryKind::covergroup_instance
+        return query.kind == CoverageQueryKind::covergroup_instance
             ? instance_coverage_query_payload.value
             : coverage_query_payload.value;
     });

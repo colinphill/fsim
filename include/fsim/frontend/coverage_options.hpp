@@ -8,11 +8,12 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace fsim::frontend {
 
-/// An instance option of a covergroup, coverpoint or cross (IEEE 1800-2023
-/// 19.7, Table 19-1).
+/// An option member of a covergroup, coverpoint or cross (IEEE 1800-2023
+/// 19.7, 19.7.1, 19.10): an instance option of Table 19-1 or a type option.
 using SystemVerilogCoverageOption = support::CoverageOption;
 
 /// The syntactic level an instance option belongs to (Table 19-2).
@@ -23,7 +24,7 @@ enum class SystemVerilogCoverageOptionLevel : std::uint8_t {
 };
 
 /// The instance option the member `option.member` names; none for a member
-/// Table 19-1 does not list.
+/// Table 19-1 does not list (a type-only member is not an instance option).
 [[nodiscard]] std::optional<SystemVerilogCoverageOption>
 systemverilog_coverage_option(std::string_view member) noexcept;
 
@@ -49,6 +50,74 @@ systemverilog_coverage_type_option(std::string_view member) noexcept;
 [[nodiscard]] bool systemverilog_coverage_type_option_allowed(
     SystemVerilogCoverageTypeOption option,
     SystemVerilogCoverageOptionLevel level) noexcept;
+
+/// The option member a type option is (support::CoverageOption); none for
+/// real_interval, which only the covergroup definition sets.
+[[nodiscard]] std::optional<SystemVerilogCoverageOption>
+systemverilog_coverage_type_option_member(
+    SystemVerilogCoverageTypeOption option) noexcept;
+
+/// Whether a procedural assignment may set type option `option` (19.7.1):
+/// strobe and real_interval are set only in the covergroup definition.
+[[nodiscard]] bool systemverilog_coverage_type_option_procedural(
+    SystemVerilogCoverageTypeOption option) noexcept;
+
+/// The values of the type options weight, goal and comment of a covergroup
+/// type, or of one of its coverpoints or crosses (19.7.1, Table 19-3).
+struct SystemVerilogCoverageTypeOptionValues {
+    std::uint32_t weight { 1U };
+    std::uint32_t goal { 100U };
+    std::string comment;
+};
+
+/// The type options of a covergroup type as its definition and later
+/// procedural assignments left them (19.7.1): the covergroup's own, then
+/// one entry per coverage declaration, in declaration order.
+struct SystemVerilogCovergroupTypeOptions {
+    SystemVerilogCoverageTypeOptionValues covergroup;
+    bool strobe { };
+    bool merge_instances { };
+    bool distribute_first { };
+    std::vector<SystemVerilogCoverageTypeOptionValues> items;
+};
+
+/// The type options `declaration` defines (19.7.1): its constant type
+/// option assignments, Table 19-3's defaults otherwise.
+[[nodiscard]] SystemVerilogCovergroupTypeOptions
+systemverilog_covergroup_initial_type_options(
+    const SystemVerilogCovergroupDeclaration& declaration);
+
+/// The value of integral type option `option` (weight, goal, strobe,
+/// merge_instances, distribute_first) of item `item` (as
+/// systemverilog_coverage_option_level numbers it).
+[[nodiscard]] std::int64_t systemverilog_coverage_type_option_value(
+    const SystemVerilogCovergroupTypeOptions& options,
+    std::uint32_t item,
+    SystemVerilogCoverageOption option);
+
+/// The value of type option comment of item `item`.
+[[nodiscard]] std::string systemverilog_coverage_type_option_text(
+    const SystemVerilogCovergroupTypeOptions& options,
+    std::uint32_t item,
+    SystemVerilogCoverageOption option);
+
+/// Sets integral type option `option` of item `item` to `value`; the
+/// message of the error when the value is outside the option's range or
+/// the option cannot be assigned procedurally, which leaves the options
+/// unchanged.
+[[nodiscard]] std::optional<std::string>
+assign_systemverilog_coverage_type_option(
+    SystemVerilogCovergroupTypeOptions& options,
+    std::uint32_t item,
+    SystemVerilogCoverageOption option,
+    std::int64_t value);
+
+/// Sets type option comment of item `item` to `text`.
+void assign_systemverilog_coverage_type_option_text(
+    SystemVerilogCovergroupTypeOptions& options,
+    std::uint32_t item,
+    SystemVerilogCoverageOption option,
+    std::string text);
 
 /// The member name of `option`.
 [[nodiscard]] std::string_view systemverilog_coverage_option_name(
@@ -88,11 +157,13 @@ systemverilog_covergroup_initial_options(
     const SystemVerilogCovergroupDeclaration& declaration, std::string name);
 
 /// The options of the merged instance that type coverage is computed from
-/// when type_option.merge_instances is set (19.11.3): each coverpoint and
-/// cross takes its type_option weight and goal (Table 19-4).
+/// when type_option.merge_instances is set (19.11.3): the covergroup and
+/// each coverpoint and cross take the type_option weight and goal of
+/// `type_options` (Table 19-4).
 [[nodiscard]] SystemVerilogCovergroupInstanceOptions
 systemverilog_covergroup_type_options(
-    const SystemVerilogCovergroupDeclaration& declaration);
+    const SystemVerilogCovergroupDeclaration& declaration,
+    const SystemVerilogCovergroupTypeOptions& type_options);
 
 /// The options of `instance`: those recorded for it, else the initial ones
 /// of `declaration`.

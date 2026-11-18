@@ -24594,10 +24594,18 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 return true;
             }
             // A covergroup instance option assignment (IEEE 1800-2023
-            // 19.7): an `int` or `bit` option takes the value as an int,
-            // name and comment a string.
+            // 19.7) or type option assignment (19.7.1): an `int` or `bit`
+            // option takes the value as an int, name and comment a string.
+            // A nonblocking one sets the option in the NBA region (10.4.2).
             if (input.task_marker
-                == support::ExpressionMarker::sv_coverage_option_assign) {
+                    == support::ExpressionMarker::sv_coverage_option_assign
+                || input.task_marker
+                    == support::ExpressionMarker::
+                        sv_coverage_type_option_assign) {
+                const bool type_scope = input.task_marker
+                    == support::ExpressionMarker::sv_coverage_type_option_assign;
+                const bool nonblocking = input.assignment_kind
+                    == semantic::sv::AssignmentKind::nonblocking;
                 const auto& arguments = input.task_arguments;
                 if (arguments.size() != 3U
                     || !std::ranges::all_of(arguments,
@@ -24621,7 +24629,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     }
                     process_.operations.emplace_back(CoverageOption {
                         true, option->option, option->item, option->identity,
-                        { }, *text });
+                        { }, *text, nonblocking, type_scope });
                     return true;
                 }
                 auto assigned = lower_hir_expression(value_id, 32U);
@@ -24634,7 +24642,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 }
                 process_.operations.emplace_back(CoverageOption {
                     true, option->option, option->item, option->identity,
-                    *assigned, { } });
+                    *assigned, { }, nonblocking, type_scope });
                 return true;
             }
             if (input.task_marker

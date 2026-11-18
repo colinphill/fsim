@@ -1046,19 +1046,27 @@ enum class CoverageQueryKind : std::uint8_t {
 /// Query the simulation-owned functional coverage. The destination
 /// receives the exact 64-bit SystemVerilog real payload for a percentage in
 /// the inclusive range 0 through 100. The covergroup kinds name their
-/// subject by `identity`; the overall kinds leave it empty.
+/// subject by `identity`; the overall kinds leave it empty. `item` selects,
+/// for a covergroup kind, the covergroup (0) or its coverage declaration
+/// item - 1, a coverpoint or cross whose get_coverage() or
+/// get_inst_coverage() it is (IEEE 1800-2023 19.9, Table 19-5).
 struct CoverageQuery {
     RegisterId destination { };
     CoverageQueryKind kind { CoverageQueryKind::overall_type };
     std::string identity { };
+    std::uint32_t item { };
 };
 
 /// A read (`write` false) or procedural assignment of one instance option
 /// (IEEE 1800-2023 19.7) of the covergroup instance whose runtime identity
-/// is `identity`: its own option (item 0) or that of its coverage
-/// declaration item - 1. An integral option's value is the 32-bit `value`
-/// register, a signed `int` (a `bit` option is its low bit); a string
-/// option's (name, comment) is the `text` register.
+/// is `identity`, or, when `type_scope`, of one type option (19.7.1) of the
+/// covergroup type whose declaration identity is `identity`: the
+/// covergroup's own option (item 0) or that of its coverage declaration
+/// item - 1. An integral option's value is the 32-bit `value` register, a
+/// signed `int` (a `bit` option is its low bit); a string option's (name,
+/// comment) is the `text` register. A `nonblocking` assignment (`<=`)
+/// takes the value it evaluates when it executes and sets the option in the
+/// NBA region (10.4.2).
 struct CoverageOption {
     bool write { };
     support::CoverageOption option { support::CoverageOption::weight };
@@ -1066,6 +1074,8 @@ struct CoverageOption {
     std::string identity { };
     RegisterId value { };
     StringRegisterId text { };
+    bool nonblocking { };
+    bool type_scope { };
 };
 
 /// One VHDL-2019 STD.ENV PSL query or control request. Queries own a

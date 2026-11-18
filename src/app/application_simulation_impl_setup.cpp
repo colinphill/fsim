@@ -2091,12 +2091,71 @@ Simulation::Impl::Impl(
             }
         });
     // A read or procedural assignment of a covergroup instance option
-    // (IEEE 1800-2023 19.7), on the instance's option state. A new at_least
-    // decides which bins are covered from then on.
+    // (IEEE 1800-2023 19.7), on the instance's option state, or of a type
+    // option (19.7.1), on the covergroup type's. A new at_least decides
+    // which bins are covered from then on.
     interpreter->set_coverage_option_hook(
         [this](const runtime::simir::CoverageOption& operation,
             runtime::PackedLogic4& value, std::string& text) {
             auto& coverage = built.systemverilog_coverage;
+            const bool string
+                = support::coverage_option_string(operation.option);
+            const auto known_value = [&]() {
+                const auto known = value.width() == 32U
+                    ? value.known_unsigned_value()
+                    : std::nullopt;
+                if (!known) {
+                    throw std::runtime_error {
+                        "covergroup option '"
+                        + std::string { frontend::systemverilog_coverage_option_name(
+                            operation.option) }
+                        + "' is assigned an unknown value"
+                    };
+                }
+                return static_cast<std::int32_t>(
+                    static_cast<std::uint32_t>(*known));
+            };
+            const auto read_value = [&](const std::int64_t option_value) {
+                value = runtime::PackedLogic4::from_aval_bval(32U,
+                    static_cast<std::uint32_t>(option_value), 0U);
+            };
+            if (operation.type_scope) {
+                const auto found = std::ranges::find(coverage.type_options,
+                    operation.identity,
+                    &runtime::SystemVerilogCovergroupTypeOptionState::
+                        declaration_identity);
+                if (found == coverage.type_options.end()
+                    || operation.item > found->options.items.size()) {
+                    throw std::runtime_error {
+                        "covergroup type option references unavailable "
+                        "covergroup '" + operation.identity + "'"
+                    };
+                }
+                auto& options = found->options;
+                if (!operation.write) {
+                    if (string) {
+                        text = frontend::systemverilog_coverage_type_option_text(
+                            options, operation.item, operation.option);
+                    } else {
+                        read_value(frontend::systemverilog_coverage_type_option_value(
+                            options, operation.item, operation.option));
+                    }
+                    return;
+                }
+                if (string) {
+                    frontend::assign_systemverilog_coverage_type_option_text(
+                        options, operation.item, operation.option,
+                        std::move(text));
+                } else if (const auto error
+                    = frontend::assign_systemverilog_coverage_type_option(
+                        options, operation.item, operation.option,
+                        known_value())) {
+                    throw std::runtime_error { *error };
+                }
+                refresh_systemverilog_coverage_reports(
+                    coverage, built.systemverilog_hir, built.semantics);
+                return;
+            }
             auto* const options = systemverilog_covergroup_option_state(
                 coverage, operation.identity);
             auto instance = std::ranges::find(coverage.instances,
@@ -2113,43 +2172,23 @@ Simulation::Impl::Impl(
                     + operation.identity + "'"
                 };
             }
-            const bool string
-                = support::coverage_option_string(operation.option);
             if (!operation.write) {
                 if (string) {
                     text = frontend::systemverilog_coverage_option_text(
                         *options, operation.item, operation.option);
                 } else {
-                    value = runtime::PackedLogic4::from_aval_bval(32U,
-                        static_cast<std::uint32_t>(
-                            frontend::systemverilog_coverage_option_value(
-                                *options, operation.item, operation.option)),
-                        0U);
+                    read_value(frontend::systemverilog_coverage_option_value(
+                        *options, operation.item, operation.option));
                 }
                 return;
             }
             if (string) {
                 frontend::assign_systemverilog_coverage_option_text(
                     *options, operation.item, operation.option, std::move(text));
-            } else {
-                const auto known = value.width() == 32U
-                    ? value.known_unsigned_value()
-                    : std::nullopt;
-                if (!known) {
-                    throw std::runtime_error {
-                        "covergroup option '"
-                        + std::string { frontend::systemverilog_coverage_option_name(
-                            operation.option) }
-                        + "' is assigned an unknown value"
-                    };
-                }
-                const auto assigned = static_cast<std::int32_t>(
-                    static_cast<std::uint32_t>(*known));
-                if (const auto error
-                    = frontend::assign_systemverilog_coverage_option(*options,
-                        operation.item, operation.option, assigned)) {
-                    throw std::runtime_error { *error };
-                }
+            } else if (const auto error
+                = frontend::assign_systemverilog_coverage_option(*options,
+                    operation.item, operation.option, known_value())) {
+                throw std::runtime_error { *error };
             }
             if (operation.option == support::CoverageOption::at_least) {
                 auto adapter = project_systemverilog_covergroup_instance(
@@ -2164,15 +2203,13 @@ Simulation::Impl::Impl(
             refresh_systemverilog_coverage_reports(
                 coverage, built.systemverilog_hir, built.semantics);
         });
-    interpreter->set_coverage_query_hook([this](
-                                             const auto kind,
-                                             const std::string& identity) {
+    interpreter->set_coverage_query_hook(
+        [this](const runtime::simir::CoverageQuery& query) {
         using runtime::simir::CoverageQueryKind;
         const auto& coverage = built.systemverilog_coverage;
         const auto adapter = project_systemverilog_coverage_state(
             coverage, built.systemverilog_hir, built.semantics);
-        const auto declaration_named = [&](const std::string& name)
-            -> const frontend::SystemVerilogCovergroupDeclaration& {
+        const auto declaration_index = [&](const std::string& name) {
             const auto found = std::ranges::find(
                 adapter.declarations, name,
                 &frontend::SystemVerilogCovergroupDeclaration::
@@ -2183,36 +2220,57 @@ Simulation::Impl::Impl(
                     + name + "'"
                 };
             }
-            return *found;
+            const auto index = static_cast<std::size_t>(
+                std::distance(adapter.declarations.begin(), found));
+            if (query.item > found->coverage_declarations.size()) {
+                throw std::runtime_error {
+                    "SystemVerilog coverage query names no coverage item "
+                    + std::to_string(query.item) + " of covergroup '" + name
+                    + "'"
+                };
+            }
+            return index;
         };
-        // IEEE 1800-2023 19.8: get_inst_coverage() is the coverage of one
-        // instance and get_coverage() that of the covergroup type; both,
-        // like the overall queries, are unrounded reals (19.11).
+        // IEEE 1800-2023 19.8, 19.9: get_inst_coverage() is the coverage of
+        // one instance, or of one of its coverpoints or crosses, and
+        // get_coverage() that of the covergroup type or of the type's
+        // coverpoint or cross; both, like the overall queries, are
+        // unrounded reals (19.11).
         frontend::SystemVerilogCoveragePercentage percentage;
-        if (kind == CoverageQueryKind::covergroup_instance) {
+        if (query.kind == CoverageQueryKind::covergroup_instance) {
             const auto instance = std::ranges::find(
-                adapter.instances, identity,
+                adapter.instances, query.identity,
                 &frontend::SystemVerilogCovergroupInstance::runtime_identity);
             if (instance == adapter.instances.end()) {
                 throw std::runtime_error {
                     "SystemVerilog coverage query names no covergroup "
-                    "instance '" + identity + "'"
+                    "instance '" + query.identity + "'"
                 };
             }
-            percentage = frontend::
+            const auto result = frontend::
                 calculate_systemverilog_covergroup_instance_percentage(
-                    declaration_named(instance->declaration_identity),
-                    *instance)
-                    .coverage;
-        } else if (kind == CoverageQueryKind::covergroup_type) {
-            percentage = frontend::
-                calculate_systemverilog_covergroup_type_percentage(
-                    declaration_named(identity), adapter.instances)
-                    .coverage;
+                    adapter.declarations[declaration_index(
+                        instance->declaration_identity)],
+                    *instance);
+            percentage = query.item == 0U
+                ? result.coverage
+                : result.declarations.at(query.item - 1U).coverage;
+        } else if (query.kind == CoverageQueryKind::covergroup_type) {
+            const auto index = declaration_index(query.identity);
+            const auto& declaration = adapter.declarations[index];
+            const auto* const type_options = &adapter.type_options.at(index);
+            percentage = query.item == 0U
+                ? frontend::calculate_systemverilog_covergroup_type_percentage(
+                      declaration, adapter.instances, type_options)
+                      .coverage
+                : frontend::calculate_systemverilog_coverage_item_type_percentage(
+                      declaration, adapter.instances, query.item - 1U,
+                      type_options);
         } else {
             percentage = frontend::
                 calculate_systemverilog_overall_coverage_percentage(
-                    adapter.declarations, adapter.instances);
+                    adapter.declarations, adapter.instances,
+                    adapter.type_options);
         }
         const auto encoded = runtime::encode_systemverilog_scalar_payload(
             runtime::SystemVerilogScalarValue::real(percentage.percent()));

@@ -2230,7 +2230,7 @@ bool Interpreter::Impl::execute_operation(ProcessState& process,
             if (!coverage_query_hook) {
                 fail(process, "coverage query service is unavailable");
             }
-            auto value = coverage_query_hook(op.kind, op.identity);
+            auto value = coverage_query_hook(op);
             if (value.width() != 64U || value.is_logic9()) {
                 fail(process, "coverage query service returned an invalid real payload");
             }
@@ -2247,6 +2247,19 @@ bool Interpreter::Impl::execute_operation(ProcessState& process,
                 string = get_string_register(process, op.text);
             } else if (op.write) {
                 value = get_register(process, op.value);
+            }
+            if (op.write && op.nonblocking) {
+                // `v.option.m <= e` (IEEE 1800-2023 10.4.2): the value
+                // evaluated now, set in the time slot's NBA region (4.4.2.6).
+                const auto origin = capture_signal_change_origin(
+                    process.id, SignalUpdateDomain::systemverilog_nba);
+                scheduler.schedule_systemverilog(origin.phase, process.id,
+                    [this, deferred = op, deferred_value = std::move(value),
+                        deferred_text = std::move(string)](Scheduler&) mutable {
+                        coverage_option_hook(deferred, deferred_value, deferred_text);
+                    });
+                ++process.pc;
+                return;
             }
             coverage_option_hook(op, value, string);
             if (!op.write && text) {

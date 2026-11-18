@@ -14,6 +14,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -1385,6 +1386,58 @@ void install_compiled_class_specializations(
             diagnostics.error("FSIM-SV-CLASS-033",
                 "class '" + identity + "' has no specialization: " + reason,
                 compiled_source_span(checked.semantics, declaration.source));
+        }
+    }
+    // A variable declared outside every class whose type names a
+    // parameterized class without actuals needs that class's default
+    // specialization (IEEE 1800-2023 8.25); a class property is checked by
+    // the specializer above.
+    if (report_dropped) {
+        const auto& hir = checked.systemverilog_hir;
+        std::set<std::uint32_t> class_scopes;
+        for (const auto& declaration : hir.classes()) {
+            class_scopes.insert(declaration.scope.value());
+        }
+        const auto inside_class = [&](const semantic::ScopeId scope) {
+            for (auto current = std::optional<semantic::ScopeId> { scope };
+                current && current->valid();
+                current = checked.semantics.scopes()
+                              .at(current->value()).parent) {
+                if (class_scopes.contains(current->value())) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        for (const auto& variable : hir.declarations()) {
+            if (variable.form != semantic::sv::DeclarationForm::variable
+                || !variable.type || variable.synthesized
+                || variable.pattern_variable
+                || support::uvm_library(variable.uvm_role)
+                || variable.type->class_identity.empty()
+                || variable.type->target.target.valid()
+                || !variable.type->interface_parameter_actuals.empty()
+                || inside_class(variable.scope)) {
+                continue;
+            }
+            const auto& identity = variable.type->class_identity;
+            const auto named = std::ranges::find_if(hir.classes(),
+                [&](const semantic::sv::ClassDeclaration& candidate) {
+                    return !candidate.forward_declaration
+                        && semantic::sv::class_declaration_identity(candidate)
+                            == identity;
+                });
+            if (named == hir.classes().end()
+                || semantic::sv::class_has_default_specialization(
+                    hir.classes(), *named)) {
+                continue;
+            }
+            diagnostics.error("FSIM-SV-CLASS-033",
+                "variable '" + variable.name
+                    + "' has the parameterized class-handle type '" + identity
+                    + "', which has no default specialization (IEEE "
+                      "1800-2023 8.25)",
+                compiled_source_span(checked.semantics, variable.source));
         }
     }
     // This inventory is the parser-independent migration seam, not yet the

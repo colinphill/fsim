@@ -1493,6 +1493,9 @@ Type VerilogParser::parse_named_type() {
       expect_identifier("SystemVerilog type name");
   std::string name = first.text;
   auto span = first.span;
+  // The identifier before the last `::` and the last identifier read.
+  std::string type_scope;
+  std::string last_component = first.text;
   while (match(TokenKind::Scope)) {
     const bool standard_member = name == "std"
         && at(TokenKind::Identifier)
@@ -1503,6 +1506,7 @@ Type VerilogParser::parse_named_type() {
         : expect_identifier("package type name");
     name += "::";
     name += selected.text;
+    type_scope = std::exchange(last_component, selected.text);
     span = cover(span, selected.span);
   }
   // `$unit::t` names a type of this file's compilation-unit package (IEEE
@@ -1534,6 +1538,7 @@ Type VerilogParser::parse_named_type() {
   type.named_type = name;
   type.named_type_span = span;
   type.systemverilog_source_order = source_order;
+  type.systemverilog_type_scope = type_scope;
   const auto standard_name = name.starts_with("std::")
       && name.find("::", 5U) == std::string::npos
       ? std::string_view { name }.substr(5U)
@@ -1588,6 +1593,8 @@ Type VerilogParser::parse_named_type() {
       (void)advance();
       const auto member = advance();
       type.named_type += "::" + member.text;
+      type.systemverilog_type_scope
+          = std::exchange(last_component, member.text);
       set_systemverilog_type_name(type, type.named_type);
       type.named_type_span = cover(type.named_type_span, member.span);
     }

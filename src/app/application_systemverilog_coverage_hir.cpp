@@ -222,6 +222,16 @@ public:
         for (const auto* declaration : inventory.declarations) {
             state.declarations.push_back(
                 project_declaration(*declaration));
+            // The live type options (IEEE 1800-2023 19.7.1).
+            const auto found = std::ranges::find(runtime_state.type_options,
+                declaration->canonical_identity,
+                &runtime::SystemVerilogCovergroupTypeOptionState::
+                    declaration_identity);
+            state.type_options.push_back(
+                found != runtime_state.type_options.end()
+                    ? found->options
+                    : frontend::systemverilog_covergroup_initial_type_options(
+                          state.declarations.back()));
         }
         state.instances.reserve(runtime_state.instances.size());
         for (const auto& instance : runtime_state.instances) {
@@ -687,6 +697,12 @@ runtime::SystemVerilogCoverageState make_systemverilog_coverage_state(
     state.declarations.reserve(inventory.declarations.size());
     for (const auto* declaration : inventory.declarations) {
         state.declarations.push_back({ declaration->canonical_identity });
+        // Each covergroup type starts with its definition's type options
+        // (IEEE 1800-2023 19.7.1).
+        state.type_options.push_back({ declaration->canonical_identity,
+            frontend::systemverilog_covergroup_initial_type_options(
+                project_systemverilog_covergroup_declaration(
+                    *declaration, semantics)) });
     }
     state.instances.assign(
         inventory.instances.begin(), inventory.instances.end());
@@ -855,6 +871,24 @@ bool restore_systemverilog_coverage_state(
             return false;
         }
         *options = source_options.options;
+    }
+    // The type options, one per declaration (19.7.1).
+    if (source.type_options.size() != restored.type_options.size()) {
+        error = "coverage state describes a different type option model";
+        return false;
+    }
+    for (const auto& source_options : source.type_options) {
+        const auto found = std::ranges::find(restored.type_options,
+            source_options.declaration_identity,
+            &runtime::SystemVerilogCovergroupTypeOptionState::
+                declaration_identity);
+        if (found == restored.type_options.end()
+            || found->options.items.size()
+                != source_options.options.items.size()) {
+            error = "coverage state describes a different type option model";
+            return false;
+        }
+        found->options = source_options.options;
     }
     restored.callback_events = source.callback_events;
     restored.trace_events = source.trace_events;

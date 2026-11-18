@@ -33,13 +33,22 @@ struct SystemVerilogCoverageItemReport {
       SystemVerilogCoverageDeclarationKind::Coverpoint};
   std::string identity;
   SystemVerilogCoveragePercentage coverage;
+  // The item's option.comment in its instance and its type_option.comment
+  // (IEEE 1800-2023 Table 19-1, Table 19-3).
+  std::string comment;
+  std::string type_comment;
   std::vector<SystemVerilogCoverageBinReport> bins;
+  // Of a cross: the identities of its first cross_num_print_missing bins
+  // that are not covered (Table 19-1), in bin order.
+  std::vector<std::string> missing_bins;
   SourceSpan span;
 };
 
 struct SystemVerilogCoverageInstanceReport {
   std::string runtime_identity;
   SystemVerilogCoveragePercentage coverage;
+  // The instance's option.comment (Table 19-1).
+  std::string comment;
   std::vector<SystemVerilogCoverageItemReport> items;
   std::vector<SystemVerilogCoverageIllegalBinReport> illegal_bins;
   SourceSpan span;
@@ -48,16 +57,21 @@ struct SystemVerilogCoverageInstanceReport {
 struct SystemVerilogCoverageTypeReport {
   std::string declaration_identity;
   SystemVerilogCoveragePercentage coverage;
+  // The covergroup's type_option.comment (Table 19-3).
+  std::string comment;
   bool per_instance{};
   bool merge_instances{};
   std::vector<SystemVerilogCoverageInstanceReport> instances;
   SourceSpan span;
 };
 
+/// The report of `declaration` over its instances among `instances`, with
+/// the type options `type_options` (the definition's when null).
 [[nodiscard]] SystemVerilogCoverageTypeReport
 build_systemverilog_coverage_report(
     const SystemVerilogCovergroupDeclaration& declaration,
-    std::span<const SystemVerilogCovergroupInstance> instances);
+    std::span<const SystemVerilogCovergroupInstance> instances,
+    const SystemVerilogCovergroupTypeOptions* type_options = nullptr);
 
 [[nodiscard]] const SystemVerilogCoverageInstanceReport*
 query_systemverilog_coverage_instance(

@@ -63,7 +63,7 @@ public:
         SimulationTick,
         std::uint64_t)>;
     using CoverageQueryHook = std::function<PackedLogic4(
-        CoverageQueryKind, const std::string&)>;
+        const CoverageQuery&)>;
     /// Reads or assigns the option `CoverageOption` names: an assignment
     /// takes `value` (an integral option) or `text` (a string option), a
     /// read sets the one the option has.

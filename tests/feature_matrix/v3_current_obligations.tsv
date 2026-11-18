@@ -90,7 +90,7 @@ RESABI-012	tests/runtime/acc_lifecycle_test.cpp	fsim.runtime.acc_lifecycle
 RESABI-013	tests/runtime/acc_lookup_test.cpp	fsim.runtime.acc_lookup
 RESABI-014	tests/runtime/acc_handle_test.cpp	fsim.runtime.acc_handle
 RESABI-015	tests/runtime/tf_containment_test.cpp	fsim.runtime.tf_containment
-RESTRACE-010	cmake/CheckFstInventory.cmake	fsim.fst-inventory
+RESTRACE-010	cmake/CheckCurrentTraceTimingInventory.cmake	fsim.fst-inventory
 RESTRACE-011	tests/app/trace_control_application_test.cpp	fsim.application.trace_control
 RESTRACE-012	tests/app/trace_archive_application_test.cpp	fsim.application.trace_archive
 RESLANG-008	cmake/CheckVhdlStandardModeInventory.cmake	fsim.vhdl-standard-mode-inventory

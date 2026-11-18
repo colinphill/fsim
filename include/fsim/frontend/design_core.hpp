@@ -754,6 +754,11 @@ struct Type {
     // The unpacked dimensions of an interface port array (`a_if p [N]`),
     // whose elements bind to the connected interface array's elements.
     std::vector<PackedRangeExpression> systemverilog_interface_array_dimensions;
+    // The identifier before the last `::` of a scoped type name (`A::q_t`,
+    // `A#(4)::q_t`, IEEE 1800-2023 8.23, 8.25.1) as the parser read it: the
+    // class or package the type is selected from. Empty for a type that is
+    // not scoped.
+    std::string systemverilog_type_scope;
     // Non-empty for a SystemVerilog user-defined type reference. Package
     // qualification is retained verbatim (for example `values::word_t`) until
     // elaboration resolves the alias in the owning specialization.

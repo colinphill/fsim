@@ -2,6 +2,7 @@
 #pragma once
 
 #include "fsim/frontend/coverage_execution.hpp"
+#include "fsim/frontend/coverage_options.hpp"
 #include "fsim/frontend/coverage_observation.hpp"
 #include "fsim/frontend/coverage_report.hpp"
 #include "fsim/frontend/design.hpp"
@@ -14,6 +15,9 @@ namespace fsim::frontend {
 /// Owning, host-independent coverage state used by save/restore and artifacts.
 struct SystemVerilogCoverageState {
     std::vector<SystemVerilogCovergroupDeclaration> declarations;
+    // The type options of each declaration, in the order of `declarations`
+    // (IEEE 1800-2023 19.7.1); empty when they are the definitions'.
+    std::vector<SystemVerilogCovergroupTypeOptions> type_options;
     std::vector<SystemVerilogCovergroupInstance> instances;
     std::vector<SystemVerilogCoverageTypeReport> reports;
     std::vector<SystemVerilogCoverageCallbackEvent> callback_events;

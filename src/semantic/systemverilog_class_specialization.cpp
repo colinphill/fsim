@@ -1796,9 +1796,7 @@ private:
                 = input.interface_parameter_actuals.empty()
                 && std::ranges::all_of(class_formals(*target),
                 [](const ClassParameter* parameter) {
-                    return parameter->type_parameter
-                        ? parameter->default_type.has_value()
-                        : parameter->default_value.has_value();
+                    return class_parameter_has_default(*parameter);
                 });
             if (parameterized(*target) && !defaults
                 && input.class_specialization.empty()) {

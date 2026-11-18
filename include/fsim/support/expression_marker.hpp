@@ -50,8 +50,14 @@ enum class ExpressionMarker : std::uint8_t {
     // ...; IEEE 1800-2023 7.5-7.12) of a container property: the node's
     // text is the method's name as written, the payload Owner::property.
     sv_container_method,
+    // `get_inst_coverage()` and `get_coverage()` of a covergroup or of one
+    // of its coverpoints or crosses (IEEE 1800-2023 19.8, 19.9); operand:
+    // the item (0 is the covergroup, n its coverage declaration n - 1).
     sv_coverage_query_instance,   // payload: runtime identity
     sv_coverage_query_type,       // payload: declaration identity
+    // A covergroup type option read (19.7.1); payload: declaration
+    // identity, operands: the item and the option (coverage_options).
+    sv_coverage_type_option,
     // A covergroup instance option read (IEEE 1800-2023 19.7); payload:
     // runtime identity, operands: the item and the option (coverage_options).
     sv_coverage_option,
@@ -76,8 +82,12 @@ enum class ExpressionMarker : std::uint8_t {
     sv_coverage_control_start,    // payload: covergroup identity
     sv_coverage_control_stop,     // payload: covergroup identity
     // A covergroup instance option assignment (19.7); payload: runtime
-    // identity, arguments: the item, the option and the value.
+    // identity, arguments: the item, the option and the value. A
+    // nonblocking assignment's statement is nonblocking (10.4.2).
     sv_coverage_option_assign,
+    // A covergroup type option assignment (19.7.1); payload: declaration
+    // identity, arguments as for sv_coverage_option_assign.
+    sv_coverage_type_option_assign,
     // Assignment-pattern and aggregate choices (choice marker).
     key,
     sv_inline_constraint,

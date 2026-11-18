@@ -3,6 +3,7 @@
 #include "fsim/frontend/class_resolution.hpp"
 #include "fsim/frontend/coverage_execution.hpp"
 #include "fsim/frontend/coverage_observation.hpp"
+#include "fsim/frontend/coverage_options.hpp"
 #include "fsim/frontend/coverage_percentage.hpp"
 #include "fsim/frontend/coverage_report.hpp"
 #include "fsim/frontend/coverage_resolution.hpp"
@@ -1570,25 +1571,23 @@ endmodule
         std::span<const SystemVerilogCovergroupInstance> { });
     require(
         instance_percentage.declarations.size() == 2
-            && instance_percentage.declarations[0].coverage.raw_basis_points
-                == 3'333
             && instance_percentage.declarations[0].coverage.basis_points
                 == 3'333
             // option.weight 0 keeps the coverpoint's bins (19.7): 0 of 1
             // covered; the instance's average leaves it out.
             && !instance_percentage.declarations[1].coverage.empty
             && instance_percentage.declarations[1].coverage.basis_points == 0
-            && instance_percentage.coverage.raw_basis_points == 3'333
-            && instance_percentage.coverage.basis_points == 4'166
+            // The goal 80 does not scale the coverage (19.11).
+            && instance_percentage.coverage.basis_points == 3'333
+            && !instance_percentage.coverage.goal_reached
             && unmerged_percentage.per_instance
             && !unmerged_percentage.merge_instances
             && unmerged_percentage.instances.size() == 2
             && unmerged_percentage.instances[0].runtime_identity == "a-instance"
             && unmerged_percentage.instances[1].runtime_identity == "z-instance"
             // sum(Wi * Ii) / sum(Wi) of the instances' own coverage (19.11.3):
-            // (33.33 + 0) / 2, then the type goal 50.
-            && unmerged_percentage.coverage.raw_basis_points == 1'667
-            && unmerged_percentage.coverage.basis_points == 3'334
+            // (33.33 + 0) / 2; the type goal 50 does not scale it.
+            && unmerged_percentage.coverage.basis_points == 1'667
             && empty_percentage.coverage.empty
             && empty_percentage.coverage.basis_points == 0
             && percentage_sample_diagnostics.empty(),
@@ -1604,12 +1603,11 @@ endmodule
     require(
         merged_percentage.merge_instances
             // The union with the type options (19.11.3, Table 19-4): thirds
-            // 2 of 3 bins and excluded 0 of 1 at type_option.weight 1, then
-            // the type goal 50.
-            && merged_percentage.coverage.raw_basis_points == 3'334
-            && merged_percentage.coverage.basis_points == 6'668
+            // 2 of 3 bins and excluded 0 of 1 at type_option.weight 1: the
+            // type goal 50 is not reached.
+            && merged_percentage.coverage.basis_points == 3'334
             && !merged_percentage.coverage.goal_reached,
-        "merge_instances unions instance hit state before instance/type goals");
+        "merge_instances unions instance hit state; goals do not scale coverage");
     auto complete_group = percentage_group;
     complete_group.canonical_identity += "::complete";
     complete_group.effective_instance_goal = 100;
@@ -1641,7 +1639,6 @@ endmodule
             // Merged types with excluded at type_option.weight 1 (19.7.1):
             // complete (3/3 + 0) / 2 = 50, partial (1/3 + 0) / 2 = 16.67,
             // overall (1 * 50 + 3 * 16.67) / 4 = 25.
-            && overall_percentage.raw_basis_points == 2'500
             && overall_percentage.basis_points == 2'500,
         "overall coverage weights covergroup types");
     const auto percentage_report = build_systemverilog_coverage_report(
@@ -1677,8 +1674,8 @@ endmodule
                    percentage_report, "missing")
                 == nullptr
             && percentage_text == reversed_percentage_text
-            // The merged type line (raw 33.34% at type goal 50).
-            && percentage_text.find("coverage=66.68%")
+            // The merged type line, 33.34% at type goal 50.
+            && percentage_text.find("coverage=33.34%")
                 != std::string::npos
             && percentage_text.find("hits=1 exclusions=0")
                 != std::string::npos
@@ -1702,6 +1699,181 @@ endmodule
             && cross_report.instances[0].items[2].bins[1].excluded
             && cross_report.instances[0].items[2].bins[1].exclusion_count == 1,
         "cross reports expose hit, exclusion, goal, threshold, and tuple identity");
+
+    // Coverage item type coverage (19.9, 19.11.3): merged, thirds' union
+    // {1, 2} is 2 of 3 bins; unmerged, its 1/3 in each instance at weight 1.
+    const auto merged_item = calculate_systemverilog_coverage_item_type_percentage(
+        percentage_group, merged_instances, 0U);
+    auto type_options = systemverilog_covergroup_initial_type_options(
+        percentage_group);
+    require(
+        merged_item.basis_points == 6'667
+            && type_options.merge_instances
+            && type_options.covergroup.goal == 50
+            && type_options.covergroup.weight == 1
+            && type_options.items.size() == 2
+            && type_options.items[1].weight == 1,
+        "merged item type coverage and the definition's type options");
+    // Live type options (19.7.1): excluded at type_option.weight 0 leaves
+    // thirds alone in the merged instance, 2/3, reaching the type goal 50.
+    require(
+        !assign_systemverilog_coverage_type_option(type_options, 2U,
+            SystemVerilogCoverageOption::weight, 0)
+            && assign_systemverilog_coverage_type_option(type_options, 2U,
+                SystemVerilogCoverageOption::weight, 65'537)
+            && assign_systemverilog_coverage_type_option(type_options, 0U,
+                SystemVerilogCoverageOption::goal, 101)
+            && assign_systemverilog_coverage_type_option(type_options, 0U,
+                SystemVerilogCoverageOption::strobe, 1)
+            && systemverilog_coverage_type_option_value(type_options, 2U,
+                   SystemVerilogCoverageOption::weight)
+                == 0,
+        "type option writes check their range and the definition-only strobe");
+    assign_systemverilog_coverage_type_option_text(type_options, 0U,
+        SystemVerilogCoverageOption::comment, "merged \"type\"");
+    const auto live_type = calculate_systemverilog_covergroup_type_percentage(
+        percentage_group, merged_instances, &type_options);
+    require(
+        live_type.coverage.basis_points == 6'667
+            && live_type.coverage.goal_reached
+            && systemverilog_coverage_type_option_text(type_options, 0U,
+                   SystemVerilogCoverageOption::comment)
+                == "merged \"type\"",
+        "type coverage reads the live type option values");
+    const auto live_report = build_systemverilog_coverage_report(
+        percentage_group, merged_instances, &type_options);
+    require(
+        live_report.comment == "merged \"type\""
+            && render_systemverilog_coverage_report(live_report).find(
+                   "comment=\"merged \\\"type\\\"\"")
+                != std::string::npos,
+        "the report carries type_option.comment, escaped");
+    require(
+        !assign_systemverilog_coverage_type_option(type_options, 0U,
+            SystemVerilogCoverageOption::merge_instances, 0)
+            && calculate_systemverilog_coverage_item_type_percentage(
+                   percentage_group, merged_instances, 0U, &type_options)
+                       .basis_points
+                == 3'333,
+        "unmerged item type coverage averages the instances' item coverage");
+
+    auto commented = parse_text(
+        "covergroup-report-options.sv",
+        R"(module report_owner;
+  covergroup report_group with function sample (input int left, input int right);
+    option.comment = "group";
+    left_point: coverpoint left {
+      option.comment = "left";
+      bins x = {1};
+      bins y = {2};
+    }
+    right_point: coverpoint right {
+      bins c = {3};
+      bins d = {4};
+    }
+    pair: cross left_point, right_point {
+      option.cross_num_print_missing = 1;
+      type_option.comment = "pairs";
+      bins s1 = binsof(left_point.x);
+      bins s2 = binsof(left_point.y);
+      bins s3 = binsof(right_point.d);
+    }
+  endgroup
+endmodule
+)",
+        Language::SystemVerilog2017);
+    std::vector<Diagnostic> commented_diagnostics;
+    require(
+        commented.ok()
+            && resolve_systemverilog_covergroups(
+                commented.design, commented_diagnostics)
+            && commented_diagnostics.empty(),
+        "report option source resolves");
+    const auto& commented_group = commented.design.units.front()
+                                      .systemverilog_covergroups.front();
+    SystemVerilogCovergroupInstance commented_instance;
+    commented_instance.declaration_identity
+        = commented_group.canonical_identity;
+    commented_instance.runtime_identity = "commented";
+    (void)sample_systemverilog_covergroup(commented_instance, commented_group,
+        std::vector<SystemVerilogCovergroupSampleInput> {
+            { 0U, { 1, 0U, 64U } }, { 1U, { 3, 0U, 64U } } },
+        commented_diagnostics);
+    const std::vector<SystemVerilogCovergroupInstance> commented_instances {
+        commented_instance
+    };
+    const auto commented_report = build_systemverilog_coverage_report(
+        commented_group, commented_instances);
+    const auto commented_text
+        = render_systemverilog_coverage_report(commented_report);
+    // (1, 3) covers s1 only; with cross_num_print_missing 1 the report
+    // names the first uncovered bin, s2 (Table 19-1).
+    require(
+        commented_diagnostics.empty()
+            && commented_report.instances.size() == 1
+            && commented_report.instances[0].comment == "group"
+            && commented_report.instances[0].items.size() == 3
+            && commented_report.instances[0].items[0].comment == "left"
+            && commented_report.instances[0].items[2].type_comment == "pairs"
+            && commented_report.instances[0].items[1].missing_bins.empty()
+            && commented_report.instances[0].items[2].missing_bins.size() == 1
+            && commented_report.instances[0].items[2].missing_bins[0].ends_with(
+                "pair.s2")
+            && commented_text.find("comment=\"left\"") != std::string::npos
+            && commented_text.find("type_comment=\"pairs\"")
+                != std::string::npos
+            && commented_text.find("      missing ") != std::string::npos,
+        "reports carry option comments and the first missing cross bins");
+
+    // option.detect_overlap (Table 19-1): a warning for each two bins of a
+    // coverpoint whose values or transitions overlap; none for disjoint
+    // bins or with the option off.
+    const auto overlaps = parse_text(
+        "covergroup-detect-overlap.sv",
+        R"(module overlap_owner;
+  covergroup overlap_group with function sample (input bit [3:0] value);
+    option.detect_overlap = 1;
+    ranges: coverpoint value {
+      bins low = {[0:5]};
+      bins high = {[5:9]};
+      bins top = {[10:$]};
+    }
+    wild: coverpoint value {
+      wildcard bins odd = {4'b???1};
+      bins even = {2, 4};
+      bins three = {3};
+    }
+    steps: coverpoint value {
+      bins one = (1 => 2 => 3);
+      bins two = (1 => 2[*2]);
+      bins three = (1 => 4);
+    }
+    quiet: coverpoint value {
+      option.detect_overlap = 0;
+      bins a = {[0:3]};
+      bins b = {[2:4]};
+    }
+  endgroup
+endmodule
+)",
+        Language::SystemVerilog2017);
+    std::vector<std::string> overlap_messages;
+    for (const auto& diagnostic : overlaps.diagnostics) {
+        if (diagnostic.code == "FSIM-SV-SEM-479") {
+            require(diagnostic.severity == DiagnosticSeverity::Warning,
+                "a bin overlap is a warning");
+            overlap_messages.push_back(diagnostic.message);
+        }
+    }
+    // low/high share 5; odd/three share 3; one (1, 2, 3) and two (1, 2, 2)
+    // differ at their last step, three is shorter.
+    require(
+        overlaps.ok() && overlap_messages.size() == 2
+            && overlap_messages[0].find("'low' and 'high'")
+                != std::string::npos
+            && overlap_messages[1].find("'odd' and 'three'")
+                != std::string::npos,
+        "detect_overlap warns exactly for overlapping bins");
     const std::vector<SystemVerilogCoverageRoot> observation_roots {
         { "top.coverage", percentage_report },
         { "secondary.coverage", cross_report }

@@ -5,6 +5,7 @@
 #include <iterator>
 #include <limits>
 #include <set>
+#include <stdexcept>
 
 namespace fsim::frontend {
 namespace {
@@ -25,9 +26,16 @@ namespace {
 void refresh_systemverilog_coverage_reports(
     SystemVerilogCoverageState& state)
 {
+    if (!state.type_options.empty()
+        && state.type_options.size() != state.declarations.size()) {
+        throw std::logic_error {
+            "coverage type options do not match the declarations"
+        };
+    }
     state.reports.clear();
     state.reports.reserve(state.declarations.size());
-    for (const auto& declaration : state.declarations) {
+    for (std::size_t index = 0U; index < state.declarations.size(); ++index) {
+        const auto& declaration = state.declarations[index];
         std::vector<SystemVerilogCovergroupInstance> instances;
         std::ranges::copy_if(
             state.instances,
@@ -37,7 +45,8 @@ void refresh_systemverilog_coverage_reports(
                     == declaration.canonical_identity;
             });
         state.reports.push_back(build_systemverilog_coverage_report(
-            declaration, instances));
+            declaration, instances,
+            state.type_options.empty() ? nullptr : &state.type_options[index]));
     }
 }
 

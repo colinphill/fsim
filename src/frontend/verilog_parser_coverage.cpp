@@ -1105,6 +1105,370 @@ namespace coverage_parser_detail {
         return result;
     }
 
+namespace {
+
+    // A bin value as the set of values it covers, for the detect_overlap
+    // check (IEEE 1800-2023 Table 19-1): an integral interval, a real
+    // interval, or a wildcard value; none for a value fsim does not compare
+    // (one wider than 64 bits).
+    struct OverlapValue {
+        enum class Kind : std::uint8_t { integral, real, wildcard };
+        Kind kind { Kind::integral };
+        std::int64_t low { };
+        std::int64_t high { };
+        double real_low { };
+        double real_high { };
+        bool real_low_inclusive { true };
+        bool real_high_inclusive { true };
+        std::uint64_t value { };
+        std::uint64_t mask { };
+    };
+
+    [[nodiscard]] std::optional<OverlapValue> overlap_value(
+        const SystemVerilogCoverageBinValue& value)
+    {
+        // Every value keeps its bit planes; the scalar fields compared here
+        // hold it exactly only up to 64 bits.
+        if (value.width > 64U) {
+            return std::nullopt;
+        }
+        OverlapValue result;
+        if (value.exact_real_bits || value.range_left_real_bits
+            || value.range_right_real_bits) {
+            result.kind = OverlapValue::Kind::real;
+            const auto as_real = [](const std::optional<std::uint64_t>& bits) {
+                return std::bit_cast<double>(bits.value_or(0U));
+            };
+            if (value.exact_real_bits) {
+                result.real_low = result.real_high = as_real(value.exact_real_bits);
+                return result;
+            }
+            result.real_low = value.range_left_open
+                ? -std::numeric_limits<double>::infinity()
+                : as_real(value.range_left_real_bits);
+            result.real_high = value.range_right_open
+                ? std::numeric_limits<double>::infinity()
+                : as_real(value.range_right_real_bits);
+            result.real_low_inclusive = value.range_left_inclusive;
+            result.real_high_inclusive = value.range_right_inclusive;
+            return result;
+        }
+        if (value.wildcard) {
+            result.kind = OverlapValue::Kind::wildcard;
+            result.value = value.wildcard_value;
+            result.mask = value.wildcard_mask;
+            return result;
+        }
+        if (value.exact_value) {
+            result.low = result.high = *value.exact_value;
+            return result;
+        }
+        if (value.range_left && value.range_right) {
+            result.low = value.range_left_open
+                ? std::numeric_limits<std::int64_t>::min()
+                : std::min(*value.range_left, *value.range_right);
+            result.high = value.range_right_open
+                ? std::numeric_limits<std::int64_t>::max()
+                : std::max(*value.range_left, *value.range_right);
+            return result;
+        }
+        return std::nullopt;
+    }
+
+    // The bits of `source`, low first, deposited at the set bits of `mask`.
+    [[nodiscard]] std::uint64_t deposit_bits(
+        std::uint64_t source, std::uint64_t mask) noexcept
+    {
+        std::uint64_t result { };
+        while (mask != 0U) {
+            const auto lowest = mask & (~mask + 1U);
+            if ((source & 1U) != 0U) {
+                result |= lowest;
+            }
+            source >>= 1U;
+            mask &= mask - 1U;
+        }
+        return result;
+    }
+
+    // Whether some value of the unsigned interval [first, last] matches
+    // wildcard `pattern` (19.5.1: a value matches when it equals the
+    // pattern at the mask's bits, as the sampled 64-bit value).
+    [[nodiscard]] bool wildcard_meets_unsigned(const OverlapValue& pattern,
+        const std::uint64_t first, const std::uint64_t last) noexcept
+    {
+        // The matching values, fixed | deposit(f, free_bits), increase with
+        // f: the least one at or above `first` decides.
+        const auto fixed = pattern.value & pattern.mask;
+        const auto free_bits = ~pattern.mask;
+        const auto free_count = std::popcount(free_bits);
+        std::uint64_t lower { };
+        std::uint64_t upper = free_count >= 64
+            ? std::numeric_limits<std::uint64_t>::max()
+            : (std::uint64_t { 1U } << free_count) - 1U;
+        if ((fixed | deposit_bits(upper, free_bits)) < first) {
+            return false;
+        }
+        while (lower < upper) {
+            const auto middle = lower + (upper - lower) / 2U;
+            if ((fixed | deposit_bits(middle, free_bits)) >= first) {
+                upper = middle;
+            } else {
+                lower = middle + 1U;
+            }
+        }
+        return (fixed | deposit_bits(lower, free_bits)) <= last;
+    }
+
+    // Whether some value of the signed interval [low, high] matches
+    // wildcard `pattern`: a negative value is sampled as its two's
+    // complement bits.
+    [[nodiscard]] bool wildcard_meets_interval(const OverlapValue& pattern,
+        const std::int64_t low, const std::int64_t high) noexcept
+    {
+        if (low < 0
+            && wildcard_meets_unsigned(pattern,
+                static_cast<std::uint64_t>(low),
+                static_cast<std::uint64_t>(std::min<std::int64_t>(high, -1)))) {
+            return true;
+        }
+        return high >= 0
+            && wildcard_meets_unsigned(pattern,
+                static_cast<std::uint64_t>(std::max<std::int64_t>(low, 0)),
+                static_cast<std::uint64_t>(high));
+    }
+
+    [[nodiscard]] bool values_overlap(
+        const OverlapValue& left, const OverlapValue& right) noexcept
+    {
+        using Kind = OverlapValue::Kind;
+        if (left.kind == Kind::real || right.kind == Kind::real) {
+            if (left.kind != right.kind) {
+                return false;
+            }
+            const auto below = [](const double a, const bool a_inclusive,
+                                   const double b, const bool b_inclusive) {
+                // Whether the upper end a lies below the lower end b.
+                return a < b || (a == b && !(a_inclusive && b_inclusive));
+            };
+            return !below(left.real_high, left.real_high_inclusive,
+                       right.real_low, right.real_low_inclusive)
+                && !below(right.real_high, right.real_high_inclusive,
+                    left.real_low, left.real_low_inclusive);
+        }
+        if (left.kind == Kind::wildcard && right.kind == Kind::wildcard) {
+            return ((left.value ^ right.value) & left.mask & right.mask) == 0U;
+        }
+        if (left.kind == Kind::wildcard) {
+            return wildcard_meets_interval(left, right.low, right.high);
+        }
+        if (right.kind == Kind::wildcard) {
+            return wildcard_meets_interval(right, left.low, left.high);
+        }
+        return left.low <= right.high && right.low <= left.high;
+    }
+
+    // Whether some value of `left` is one of `right`; none when a value
+    // cannot be compared.
+    [[nodiscard]] std::optional<bool> value_lists_overlap(
+        const std::vector<SystemVerilogCoverageBinValue>& left,
+        const std::vector<SystemVerilogCoverageBinValue>& right)
+    {
+        for (const auto& left_value : left) {
+            const auto a = overlap_value(left_value);
+            if (!a) {
+                return std::nullopt;
+            }
+            for (const auto& right_value : right) {
+                const auto b = overlap_value(right_value);
+                if (!b) {
+                    return std::nullopt;
+                }
+                if (values_overlap(*a, *b)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    // The value lists, one per step, of the transitions `sequence` covers
+    // (19.5.2), a consecutive repetition `[* n]` or `[* n:m]` expanded to
+    // its n to m copies; none for a sequence with another repetition or a
+    // delay, which the detect_overlap check does not compare, or one with
+    // more than `limit` transitions.
+    [[nodiscard]] std::optional<std::vector<
+        std::vector<const std::vector<SystemVerilogCoverageBinValue>*>>>
+    expanded_transitions(
+        const SystemVerilogCoverageTransitionSequence& sequence,
+        const std::size_t limit)
+    {
+        using Repetition = SystemVerilogCoverageTransitionRepetitionKind;
+        for (const auto& delay : sequence.delays) {
+            if (delay.minimum != 1U || delay.maximum != 1U) {
+                return std::nullopt;
+            }
+        }
+        std::vector<std::vector<const std::vector<SystemVerilogCoverageBinValue>*>>
+            result(1U);
+        for (const auto& step : sequence.steps) {
+            std::uint32_t minimum { 1U };
+            std::uint32_t maximum { 1U };
+            if (step.repetition.kind == Repetition::Consecutive) {
+                if (!step.repetition.maximum) {
+                    return std::nullopt;
+                }
+                minimum = step.repetition.minimum;
+                maximum = *step.repetition.maximum;
+            } else if (step.repetition.kind != Repetition::None) {
+                return std::nullopt;
+            }
+            std::vector<std::vector<const std::vector<SystemVerilogCoverageBinValue>*>>
+                next;
+            for (const auto& prefix : result) {
+                for (auto count = minimum; count <= maximum; ++count) {
+                    auto extended = prefix;
+                    extended.insert(extended.end(), count, &step.values);
+                    next.push_back(std::move(extended));
+                    if (next.size() > limit) {
+                        return std::nullopt;
+                    }
+                }
+            }
+            result = std::move(next);
+        }
+        return result;
+    }
+
+    // Whether the transition lists of two bins share a transition; none
+    // when a transition cannot be compared.
+    [[nodiscard]] std::optional<bool> transition_lists_overlap(
+        const std::vector<SystemVerilogCoverageTransitionSequence>& left,
+        const std::vector<SystemVerilogCoverageTransitionSequence>& right)
+    {
+        constexpr std::size_t limit { 256U };
+        for (const auto& left_sequence : left) {
+            const auto a = expanded_transitions(left_sequence, limit);
+            if (!a) {
+                return std::nullopt;
+            }
+            for (const auto& right_sequence : right) {
+                const auto b = expanded_transitions(right_sequence, limit);
+                if (!b) {
+                    return std::nullopt;
+                }
+                for (const auto& first : *a) {
+                    for (const auto& second : *b) {
+                        if (first.size() != second.size()) {
+                            continue;
+                        }
+                        bool shared { true };
+                        for (std::size_t index = 0U;
+                            shared && index < first.size(); ++index) {
+                            const auto overlap
+                                = value_lists_overlap(*first[index], *second[index]);
+                            if (!overlap) {
+                                return std::nullopt;
+                            }
+                            shared = *overlap;
+                        }
+                        if (shared) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    // The constant detect_overlap among `assignments`, if one is assigned.
+    [[nodiscard]] std::optional<bool> constant_detect_overlap(
+        const std::vector<SystemVerilogCovergroupOptionAssignment>& assignments)
+    {
+        std::optional<bool> result;
+        for (const auto& assignment : assignments) {
+            if (assignment.scope == SystemVerilogCovergroupOptionScope::Instance
+                && assignment.evaluated_value
+                && systemverilog_coverage_option(assignment.name)
+                    == SystemVerilogCoverageOption::detect_overlap) {
+                result = *assignment.evaluated_value != 0U;
+            }
+        }
+        return result;
+    }
+
+// With option.detect_overlap set for a coverpoint (its own, or the
+// covergroup's as its default, Table 19-2), a warning for each two of its
+// bins whose range lists or transition lists overlap (Table 19-1). The
+// bins compared are those the `bins` keyword declares; ignore_bins and
+// illegal_bins exclude values rather than cover them, and a default bin has
+// no list. A list fsim does not compare is an error.
+void diagnose_coverpoint_bin_overlaps(
+    const SystemVerilogCovergroupDeclaration& declaration,
+    std::vector<Diagnostic>& diagnostics)
+{
+    const auto covergroup_default
+        = constant_detect_overlap(declaration.option_assignments);
+    for (const auto& item : declaration.coverage_declarations) {
+        if (item.kind != SystemVerilogCoverageDeclarationKind::Coverpoint) {
+            continue;
+        }
+        const auto own = constant_detect_overlap(item.option_assignments);
+        if (!own.value_or(covergroup_default.value_or(false))) {
+            continue;
+        }
+        std::vector<const SystemVerilogCoverageBin*> bins;
+        for (const auto& bin : item.bins) {
+            if (bin.kind == SystemVerilogCoverageBinKind::Regular
+                && bin.selection == SystemVerilogCoverageBinSelection::Explicit) {
+                bins.push_back(&bin);
+            }
+        }
+        for (std::size_t first = 0U; first < bins.size(); ++first) {
+            for (std::size_t second = first + 1U; second < bins.size();
+                ++second) {
+                const auto& a = *bins[first];
+                const auto& b = *bins[second];
+                const bool transitions
+                    = !a.transitions.empty() || !b.transitions.empty();
+                if (transitions
+                    && (a.transitions.empty() || b.transitions.empty())) {
+                    // A value list and a transition list do not overlap.
+                    continue;
+                }
+                const auto overlap = transitions
+                    ? transition_lists_overlap(a.transitions, b.transitions)
+                    : value_lists_overlap(a.values, b.values);
+                if (!overlap) {
+                    diagnostics.push_back(Diagnostic {
+                        DiagnosticSeverity::Error,
+                        "FSIM-SV-SEM-217",
+                        "fsim checks option.detect_overlap of coverpoint '"
+                            + item.name + "' only for values of at most 64 "
+                              "bits and transitions without goto, "
+                              "nonconsecutive or unbounded repetitions",
+                        b.span,
+                        { } });
+                    return;
+                }
+                if (*overlap) {
+                    diagnostics.push_back(Diagnostic {
+                        DiagnosticSeverity::Warning,
+                        "FSIM-SV-SEM-479",
+                        "bins '" + a.source_name + "' and '" + b.source_name
+                            + "' of coverpoint '" + item.name
+                            + "' overlap (option.detect_overlap)",
+                        b.span,
+                        { } });
+                }
+            }
+        }
+    }
+}
+
+} // namespace
+
 } // namespace coverage_parser_detail
 
 using namespace coverage_parser_detail;
@@ -1259,6 +1623,67 @@ VerilogParser::parse_covergroup_declaration(
         const coverage_parser_detail::CoverageConstantScope scope { &folder };
         structure_covergroup_declarations(declaration);
     }
+    {
+        // An instance option the definition assigns from a non-constant
+        // expression is evaluated when the covergroup is instantiated (IEEE
+        // 1800-2023 19.7): its value is the expression its tokens spell.
+        const auto read_value
+            = [this, &declaration](SystemVerilogCovergroupOptionAssignment& option) {
+                  if (option.scope != SystemVerilogCovergroupOptionScope::Instance
+                      || option.evaluated_value || option.evaluated_text
+                      || option.evaluated_real_bits
+                      || option.value_tokens.empty()) {
+                      return;
+                  }
+                  auto saved_tokens = std::move(tokens_);
+                  const auto saved_index = index_;
+                  const auto saved_diagnostics = diagnostics_.size();
+                  tokens_.assign(
+                      option.value_tokens.begin(), option.value_tokens.end());
+                  Token end;
+                  end.kind = TokenKind::EndOfFile;
+                  end.span = option.value_tokens.back().span;
+                  tokens_.push_back(std::move(end));
+                  index_ = 0;
+                  const auto first_reference = implicit_net_references_.size();
+                  auto expression = parse_expression();
+                  const bool whole = at_end();
+                  // A covergroup formal is visible in the definition (19.3);
+                  // the module's undeclared-name check does not see it.
+                  std::erase_if(implicit_net_references_,
+                      [&, position = std::size_t { }](
+                          const ImplicitNetReference& reference) mutable {
+                          const bool added = position++ >= first_reference;
+                          return added && !reference.declares
+                              && std::ranges::any_of(declaration.formals,
+                                  [&](const SystemVerilogCovergroupFormal& formal) {
+                                      return formal.name == reference.name;
+                                  });
+                      });
+                  tokens_ = std::move(saved_tokens);
+                  index_ = saved_index;
+                  if (diagnostics_.size() != saved_diagnostics) {
+                      return;
+                  }
+                  if (!whole || !expression.valid()) {
+                      error(option.value_tokens.front(), "FSIM-SV-SEM-269",
+                          "covergroup option '" + option.name
+                              + "' requires one expression");
+                      return;
+                  }
+                  option.value_expression = std::move(expression);
+              };
+        for (auto& option : declaration.option_assignments) {
+            read_value(option);
+        }
+        for (auto& item : declaration.coverage_declarations) {
+            for (auto& option : item.option_assignments) {
+                read_value(option);
+            }
+        }
+    }
+    coverage_parser_detail::diagnose_coverpoint_bin_overlaps(
+        declaration, diagnostics_);
     expect_keyword("endgroup", false, "FSIM-SV-PARSE-311");
     if (match(TokenKind::Colon)) {
         if (!at(TokenKind::Identifier)
@@ -1637,6 +2062,12 @@ void VerilogParser::structure_covergroup_options(
                     *option.name_token,
                     "FSIM-SV-SEM-258",
                     "option.cross_retain_auto_bins requires a constant zero or one");
+            } else if (instance_option == Instance::detect_overlap) {
+                // The overlap check (Table 19-1) is made on the definition.
+                error(
+                    *option.name_token,
+                    "FSIM-SV-SEM-217",
+                    "fsim applies option.detect_overlap only with a constant value");
             }
             continue;
         }
@@ -2090,12 +2521,10 @@ void VerilogParser::structure_coverage_options(
             continue;
         }
         // These options of a coverpoint or cross are not applied by fsim
-        // yet (automatic bin count, cross retention, overlap warnings,
-        // missing-cross reports); they stay errors until they are.
+        // yet (automatic bin count, cross retention); they stay errors
+        // until they are.
         if (option_kind == Instance::auto_bin_max
-            || option_kind == Instance::cross_retain_auto_bins
-            || option_kind == Instance::detect_overlap
-            || option_kind == Instance::cross_num_print_missing) {
+            || option_kind == Instance::cross_retain_auto_bins) {
             error(
                 statement[2],
                 "FSIM-SV-SEM-217",
@@ -2129,7 +2558,15 @@ void VerilogParser::structure_coverage_options(
             continue;
         }
         // A non-constant instance option is evaluated at instantiation
-        // (19.7); a type option is a constant expression (19.7.1).
+        // (19.7); a type option is a constant expression (19.7.1). The
+        // overlap check (Table 19-1) is made on the definition.
+        if (!literal && option_kind == Instance::detect_overlap) {
+            error(
+                statement[2],
+                "FSIM-SV-SEM-217",
+                "fsim applies option.detect_overlap only with a constant value");
+            continue;
+        }
         if (!literal && !type_scope) {
             declaration.option_assignments.push_back(std::move(option));
             continue;

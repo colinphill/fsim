@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/frontend/coverage_report.hpp"
+#include "fsim/frontend/coverage_options.hpp"
 
 #include <algorithm>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace fsim::frontend {
@@ -150,6 +152,25 @@ std::vector<SystemVerilogCoverageBinReport> item_bins(
   return result;
 }
 
+// ` comment="text"` for a nonempty comment, the text with its backslashes,
+// quotes and newlines escaped; empty for none.
+std::string formatted_comment(
+    const std::string_view label, const std::string& comment) {
+  if (comment.empty()) return {};
+  std::string result = " " + std::string{label} + "=\"";
+  for (const char character : comment) {
+    if (character == '\\' || character == '"') {
+      result += '\\';
+      result += character;
+    } else if (character == '\n') {
+      result += "\\n";
+    } else {
+      result += character;
+    }
+  }
+  return result + "\"";
+}
+
 std::string formatted_percentage(
     const SystemVerilogCoveragePercentage& percentage) {
   const auto whole = percentage.basis_points / 100U;
@@ -163,13 +184,18 @@ std::string formatted_percentage(
 
 SystemVerilogCoverageTypeReport build_systemverilog_coverage_report(
     const SystemVerilogCovergroupDeclaration& declaration,
-    const std::span<const SystemVerilogCovergroupInstance> instances) {
+    const std::span<const SystemVerilogCovergroupInstance> instances,
+    const SystemVerilogCovergroupTypeOptions* const type_options) {
   SystemVerilogCoverageTypeReport report;
+  const auto options = type_options != nullptr
+      ? *type_options
+      : systemverilog_covergroup_initial_type_options(declaration);
   const auto percentages =
       calculate_systemverilog_covergroup_type_percentage(
-          declaration, instances);
+          declaration, instances, &options);
   report.declaration_identity = declaration.canonical_identity;
   report.coverage = percentages.coverage;
+  report.comment = options.covergroup.comment;
   report.per_instance = percentages.per_instance;
   report.merge_instances = percentages.merge_instances;
   report.span = declaration.span;
@@ -179,9 +205,12 @@ SystemVerilogCoverageTypeReport build_systemverilog_coverage_report(
         instance_percentage.runtime_identity,
         &SystemVerilogCovergroupInstance::runtime_identity);
     if (instance == instances.end()) continue;
+    const auto instance_options =
+        systemverilog_covergroup_options(declaration, *instance);
     SystemVerilogCoverageInstanceReport instance_report;
     instance_report.runtime_identity = instance->runtime_identity;
     instance_report.coverage = instance_percentage.coverage;
+    instance_report.comment = instance_options.covergroup.comment;
     instance_report.illegal_bins = instance->illegal_bin_reports;
     instance_report.span = instance->span;
     for (const auto& item_percentage :
@@ -194,7 +223,22 @@ SystemVerilogCoverageTypeReport build_systemverilog_coverage_report(
       item_report.identity = instance->runtime_identity + "::"
           + item_percentage.identity;
       item_report.coverage = item_percentage.coverage;
+      const auto item_index = item_percentage.coverage_declaration_index;
+      item_report.comment = instance_options.items[item_index].comment;
+      item_report.type_comment = options.items[item_index].comment;
       item_report.bins = item_bins(declaration, item, *instance);
+      // A cross's first cross_num_print_missing bins that are not covered
+      // are printed in the report (Table 19-1).
+      if (item.kind == SystemVerilogCoverageDeclarationKind::Cross) {
+        const auto limit =
+            instance_options.items[item_index].cross_num_print_missing;
+        for (const auto& bin : item_report.bins) {
+          if (item_report.missing_bins.size() >= limit) break;
+          if (!bin.covered && !bin.excluded) {
+            item_report.missing_bins.push_back(bin.identity);
+          }
+        }
+      }
       item_report.span = item.span;
       instance_report.items.push_back(std::move(item_report));
     }
@@ -245,15 +289,19 @@ std::string render_systemverilog_coverage_report(
       + " coverage=" + formatted_percentage(report.coverage)
       + " per_instance=" + (report.per_instance ? "true" : "false")
       + " merge_instances=" + (report.merge_instances ? "true" : "false")
+      + formatted_comment("comment", report.comment)
       + " source=" + report.span.source_name + "\n";
   for (const auto& instance : report.instances) {
     text += "  instance " + instance.runtime_identity
         + " coverage=" + formatted_percentage(instance.coverage)
+        + formatted_comment("comment", instance.comment)
         + " source=" + instance.span.source_name + "\n";
     for (const auto& item : instance.items) {
       text += "    item " + item.identity
           + " coverage=" + formatted_percentage(item.coverage)
           + " goal=" + std::to_string(item.coverage.goal)
+          + formatted_comment("comment", item.comment)
+          + formatted_comment("type_comment", item.type_comment)
           + " source=" + item.span.source_name + "\n";
       for (const auto& bin : item.bins) {
         text += "      bin " + bin.identity
@@ -265,6 +313,9 @@ std::string render_systemverilog_coverage_report(
             + " covered=" + (bin.covered ? "true" : "false")
             + " excluded=" + (bin.excluded ? "true" : "false")
             + " source=" + bin.span.source_name + "\n";
+      }
+      for (const auto& missing : item.missing_bins) {
+        text += "      missing " + missing + "\n";
       }
     }
   }

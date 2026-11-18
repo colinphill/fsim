@@ -902,6 +902,11 @@ struct TypeReference {
     // bare `logic`/`bit` vector, and this keeps the name for VPI typespecs
     // (37.25). Unset when nothing was composed or the target stayed.
     semantic::TypeReference composed_over;
+    // The identifier before the last `::` of a scoped type name (`A::q_t`,
+    // IEEE 1800-2023 8.23, 8.25.1) as the parser read it: the class or
+    // package the type is selected from; empty for a type that is not
+    // scoped.
+    std::string class_scope;
 
     friend bool operator==(
         const TypeReference&, const TypeReference&) = default;
@@ -3005,6 +3010,18 @@ struct TopLevelHirView {
 [[nodiscard]] std::string class_declaration_identity(
     std::string_view canonical_identity,
     std::string_view alternative_discriminator);
+
+/// Whether class parameter `parameter` has a default (IEEE 1800-2023 8.25):
+/// a default type for a type parameter, a default value otherwise.
+[[nodiscard]] bool class_parameter_has_default(
+    const ClassParameter& parameter) noexcept;
+
+/// Whether the unadorned name of `declaration` is its default specialization
+/// (IEEE 1800-2023 8.25): every parameter of the class and of the classes
+/// enclosing it has a default. A class without parameters qualifies.
+[[nodiscard]] bool class_has_default_specialization(
+    std::span<const ClassDeclaration> classes,
+    const ClassDeclaration& declaration);
 
 /// Returns an empty string for a structurally consistent class graph. This is
 /// shared by decoded-bundle validation and compiled-design linking so neither

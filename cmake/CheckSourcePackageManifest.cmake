@@ -151,13 +151,8 @@ foreach(FSIM_REQUIRED IN ITEMS
     cmake/CheckWindowsPackageDefinitions.cmake
     cmake/RunCleanMachineInstallClosure.cmake
     cmake/RunCompatibilitySmokeClosure.cmake
-    cmake/CheckReleaseCandidateLogAudit.cmake
-    cmake/CheckV2ReleaseRecords.cmake
-    cmake/CheckV2SupplyChain.cmake
     packaging/source-package-exclusions.txt
     packaging/source-package-manifest.txt
-    packaging/v2-release-record.txt
-    packaging/v2-support-matrix.tsv
     packaging/example-output-freeze.tsv
     packaging/targets/linux-clang22-llvm22.txt
     packaging/targets/linux-gcc13-llvm22.txt

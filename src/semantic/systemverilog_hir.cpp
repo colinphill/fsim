@@ -345,6 +345,45 @@ std::string class_declaration_identity(
         declaration.alternative_discriminator);
 }
 
+bool class_parameter_has_default(const ClassParameter& parameter) noexcept
+{
+    return parameter.type_parameter ? parameter.default_type.has_value()
+                                    : parameter.default_value.has_value();
+}
+
+bool class_has_default_specialization(
+    const std::span<const ClassDeclaration> classes,
+    const ClassDeclaration& declaration)
+{
+    const auto defaulted = [](const ClassDeclaration& owner) {
+        return std::ranges::all_of(owner.parameters,
+            [](const ClassParameter& parameter) {
+                return class_parameter_has_default(parameter);
+            });
+    };
+    if (!defaulted(declaration)) {
+        return false;
+    }
+    // A nested class takes the parameters of its enclosing classes (8.23).
+    const auto* current = &declaration;
+    for (std::size_t depth = 0U;
+        !current->enclosing_identity.empty() && depth < 32U; ++depth) {
+        const auto enclosing = std::ranges::find_if(classes,
+            [&](const ClassDeclaration& candidate) {
+                return class_declaration_identity(candidate)
+                    == current->enclosing_identity;
+            });
+        if (enclosing == classes.end()) {
+            break;
+        }
+        if (!defaulted(*enclosing)) {
+            return false;
+        }
+        current = &*enclosing;
+    }
+    return true;
+}
+
 namespace {
 
 const Declaration* declaration_for(

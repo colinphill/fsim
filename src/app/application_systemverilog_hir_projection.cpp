@@ -222,6 +222,7 @@ void SystemVerilogHirBuilder::apply_named_type_dimensions(
     output.virtual_interface = input.systemverilog_virtual_interface;
     output.interface_type = input.systemverilog_interface_type;
     output.interface_modport = input.systemverilog_interface_modport;
+    output.class_scope = input.systemverilog_type_scope;
     output.interface_parameter_actuals
         = systemverilog_class_parameter_actuals(input,
             [&](const auto& span) { return source(span); },

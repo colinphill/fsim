@@ -97,6 +97,9 @@ namespace {
             case SystemVerilogCoverageOption::comment:
             case SystemVerilogCoverageOption::per_instance:
             case SystemVerilogCoverageOption::get_inst_coverage:
+            case SystemVerilogCoverageOption::strobe:
+            case SystemVerilogCoverageOption::merge_instances:
+            case SystemVerilogCoverageOption::distribute_first:
                 break;
             }
         }
@@ -175,6 +178,48 @@ bool systemverilog_coverage_type_option_allowed(
     return false;
 }
 
+std::optional<SystemVerilogCoverageOption>
+systemverilog_coverage_type_option_member(
+    const SystemVerilogCoverageTypeOption option) noexcept
+{
+    using Option = SystemVerilogCoverageTypeOption;
+    switch (option) {
+    case Option::weight:
+        return SystemVerilogCoverageOption::weight;
+    case Option::goal:
+        return SystemVerilogCoverageOption::goal;
+    case Option::comment:
+        return SystemVerilogCoverageOption::comment;
+    case Option::strobe:
+        return SystemVerilogCoverageOption::strobe;
+    case Option::merge_instances:
+        return SystemVerilogCoverageOption::merge_instances;
+    case Option::distribute_first:
+        return SystemVerilogCoverageOption::distribute_first;
+    case Option::real_interval:
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
+bool systemverilog_coverage_type_option_procedural(
+    const SystemVerilogCoverageTypeOption option) noexcept
+{
+    using Option = SystemVerilogCoverageTypeOption;
+    switch (option) {
+    case Option::strobe:
+    case Option::real_interval:
+        return false;
+    case Option::weight:
+    case Option::goal:
+    case Option::comment:
+    case Option::merge_instances:
+    case Option::distribute_first:
+        return true;
+    }
+    return false;
+}
+
 std::string_view systemverilog_coverage_option_name(
     const SystemVerilogCoverageOption option) noexcept
 {
@@ -182,6 +227,27 @@ std::string_view systemverilog_coverage_option_name(
         if (entry.option == option) {
             return entry.name;
         }
+    }
+    // The type-only members (Table 19-3).
+    switch (option) {
+    case SystemVerilogCoverageOption::strobe:
+        return "strobe";
+    case SystemVerilogCoverageOption::merge_instances:
+        return "merge_instances";
+    case SystemVerilogCoverageOption::distribute_first:
+        return "distribute_first";
+    case SystemVerilogCoverageOption::name:
+    case SystemVerilogCoverageOption::weight:
+    case SystemVerilogCoverageOption::goal:
+    case SystemVerilogCoverageOption::comment:
+    case SystemVerilogCoverageOption::at_least:
+    case SystemVerilogCoverageOption::auto_bin_max:
+    case SystemVerilogCoverageOption::cross_num_print_missing:
+    case SystemVerilogCoverageOption::cross_retain_auto_bins:
+    case SystemVerilogCoverageOption::detect_overlap:
+    case SystemVerilogCoverageOption::per_instance:
+    case SystemVerilogCoverageOption::get_inst_coverage:
+        break;
     }
     return { };
 }
@@ -207,6 +273,11 @@ bool systemverilog_coverage_option_allowed(
     case SystemVerilogCoverageOption::per_instance:
     case SystemVerilogCoverageOption::get_inst_coverage:
         return level == Level::covergroup;
+    case SystemVerilogCoverageOption::strobe:
+    case SystemVerilogCoverageOption::merge_instances:
+    case SystemVerilogCoverageOption::distribute_first:
+        // Type options only (Table 19-3).
+        return false;
     }
     return false;
 }
@@ -220,6 +291,9 @@ bool systemverilog_coverage_option_procedural(
     case SystemVerilogCoverageOption::auto_bin_max:
     case SystemVerilogCoverageOption::detect_overlap:
     case SystemVerilogCoverageOption::cross_retain_auto_bins:
+    case SystemVerilogCoverageOption::strobe:
+    case SystemVerilogCoverageOption::merge_instances:
+    case SystemVerilogCoverageOption::distribute_first:
         return false;
     case SystemVerilogCoverageOption::name:
     case SystemVerilogCoverageOption::weight:
@@ -297,31 +371,88 @@ SystemVerilogCovergroupInstanceOptions systemverilog_covergroup_initial_options(
     return result;
 }
 
-SystemVerilogCovergroupInstanceOptions systemverilog_covergroup_type_options(
+SystemVerilogCovergroupTypeOptions systemverilog_covergroup_initial_type_options(
     const SystemVerilogCovergroupDeclaration& declaration)
 {
-    auto result = systemverilog_covergroup_initial_options(declaration, { });
-    result.covergroup.goal = declaration.effective_type_goal;
+    SystemVerilogCovergroupTypeOptions result;
     result.covergroup.weight = declaration.effective_type_weight;
-    for (std::size_t index = 0U; index < result.items.size(); ++index) {
-        auto& values = result.items[index];
-        values.weight = 1U;
-        values.goal = 100U;
-        for (const auto& assignment :
-            declaration.coverage_declarations[index].option_assignments) {
-            if (assignment.scope != SystemVerilogCovergroupOptionScope::Type
-                || !assignment.evaluated_value) {
+    result.covergroup.goal = declaration.effective_type_goal;
+    result.merge_instances = declaration.effective_merge_instances;
+    const auto apply = [](SystemVerilogCoverageTypeOptionValues& values,
+                           bool* strobe, bool* distribute_first,
+                           const std::vector<
+                               SystemVerilogCovergroupOptionAssignment>&
+                               assignments,
+                           const bool coverage_item) {
+        for (const auto& assignment : assignments) {
+            if (assignment.scope != SystemVerilogCovergroupOptionScope::Type) {
                 continue;
             }
-            const auto option = systemverilog_coverage_option(assignment.name);
-            if (option == SystemVerilogCoverageOption::weight) {
-                values.weight
-                    = static_cast<std::uint32_t>(*assignment.evaluated_value);
-            } else if (option == SystemVerilogCoverageOption::goal) {
-                values.goal
-                    = static_cast<std::uint32_t>(*assignment.evaluated_value);
+            const auto option = systemverilog_coverage_type_option(assignment.name);
+            if (option == SystemVerilogCoverageTypeOption::comment
+                && assignment.evaluated_text) {
+                values.comment = *assignment.evaluated_text;
+            }
+            if (!option || !assignment.evaluated_value) {
+                continue;
+            }
+            const auto value = *assignment.evaluated_value;
+            switch (*option) {
+            case SystemVerilogCoverageTypeOption::weight:
+                // The covergroup's own weight and goal are the
+                // declaration's effective type values.
+                if (coverage_item) {
+                    values.weight = static_cast<std::uint32_t>(value);
+                }
+                break;
+            case SystemVerilogCoverageTypeOption::goal:
+                if (coverage_item) {
+                    values.goal = static_cast<std::uint32_t>(value);
+                }
+                break;
+            case SystemVerilogCoverageTypeOption::strobe:
+                if (strobe != nullptr) {
+                    *strobe = value != 0U;
+                }
+                break;
+            case SystemVerilogCoverageTypeOption::distribute_first:
+                if (distribute_first != nullptr) {
+                    *distribute_first = value != 0U;
+                }
+                break;
+            case SystemVerilogCoverageTypeOption::comment:
+            case SystemVerilogCoverageTypeOption::merge_instances:
+            case SystemVerilogCoverageTypeOption::real_interval:
+                break;
             }
         }
+    };
+    apply(result.covergroup, &result.strobe, &result.distribute_first,
+        declaration.option_assignments, false);
+    result.items.reserve(declaration.coverage_declarations.size());
+    for (const auto& item : declaration.coverage_declarations) {
+        SystemVerilogCoverageTypeOptionValues values;
+        apply(values, nullptr, nullptr, item.option_assignments, true);
+        result.items.push_back(std::move(values));
+    }
+    return result;
+}
+
+SystemVerilogCovergroupInstanceOptions systemverilog_covergroup_type_options(
+    const SystemVerilogCovergroupDeclaration& declaration,
+    const SystemVerilogCovergroupTypeOptions& type_options)
+{
+    if (type_options.items.size() != declaration.coverage_declarations.size()) {
+        throw std::logic_error {
+            "covergroup type options do not match its declaration"
+        };
+    }
+    auto result = systemverilog_covergroup_initial_options(declaration, { });
+    result.covergroup.goal = type_options.covergroup.goal;
+    result.covergroup.weight = type_options.covergroup.weight;
+    for (std::size_t index = 0U; index < result.items.size(); ++index) {
+        result.items[index].weight = type_options.items[index].weight;
+        result.items[index].goal = type_options.items[index].goal;
     }
     return result;
 }
@@ -371,9 +502,12 @@ std::int64_t systemverilog_coverage_option_value(
         return options.get_inst_coverage ? 1 : 0;
     case SystemVerilogCoverageOption::name:
     case SystemVerilogCoverageOption::comment:
+    case SystemVerilogCoverageOption::strobe:
+    case SystemVerilogCoverageOption::merge_instances:
+    case SystemVerilogCoverageOption::distribute_first:
         break;
     }
-    throw std::invalid_argument { "covergroup option is not integral" };
+    throw std::invalid_argument { "covergroup option is not an integral instance option" };
 }
 
 std::string systemverilog_coverage_option_text(
@@ -454,9 +588,12 @@ std::optional<std::string> assign_systemverilog_coverage_option(
         return std::nullopt;
     case SystemVerilogCoverageOption::name:
     case SystemVerilogCoverageOption::comment:
+    case SystemVerilogCoverageOption::strobe:
+    case SystemVerilogCoverageOption::merge_instances:
+    case SystemVerilogCoverageOption::distribute_first:
         break;
     }
-    throw std::invalid_argument { "covergroup option is not integral" };
+    throw std::invalid_argument { "covergroup option is not an integral instance option" };
 }
 
 void assign_systemverilog_coverage_option_text(
@@ -474,6 +611,116 @@ void assign_systemverilog_coverage_option_text(
         return;
     }
     throw std::invalid_argument { "covergroup option is not a string" };
+}
+
+std::int64_t systemverilog_coverage_type_option_value(
+    const SystemVerilogCovergroupTypeOptions& options,
+    const std::uint32_t item,
+    const SystemVerilogCoverageOption option)
+{
+    const auto& values = values_of(options, item);
+    switch (option) {
+    case SystemVerilogCoverageOption::weight:
+        return values.weight;
+    case SystemVerilogCoverageOption::goal:
+        return values.goal;
+    case SystemVerilogCoverageOption::strobe:
+        return options.strobe ? 1 : 0;
+    case SystemVerilogCoverageOption::merge_instances:
+        return options.merge_instances ? 1 : 0;
+    case SystemVerilogCoverageOption::distribute_first:
+        return options.distribute_first ? 1 : 0;
+    case SystemVerilogCoverageOption::name:
+    case SystemVerilogCoverageOption::comment:
+    case SystemVerilogCoverageOption::at_least:
+    case SystemVerilogCoverageOption::auto_bin_max:
+    case SystemVerilogCoverageOption::cross_num_print_missing:
+    case SystemVerilogCoverageOption::cross_retain_auto_bins:
+    case SystemVerilogCoverageOption::detect_overlap:
+    case SystemVerilogCoverageOption::per_instance:
+    case SystemVerilogCoverageOption::get_inst_coverage:
+        break;
+    }
+    throw std::invalid_argument { "covergroup option is not an integral type option" };
+}
+
+std::string systemverilog_coverage_type_option_text(
+    const SystemVerilogCovergroupTypeOptions& options,
+    const std::uint32_t item,
+    const SystemVerilogCoverageOption option)
+{
+    if (option == SystemVerilogCoverageOption::comment) {
+        return values_of(options, item).comment;
+    }
+    throw std::invalid_argument { "covergroup option is not a string type option" };
+}
+
+std::optional<std::string> assign_systemverilog_coverage_type_option(
+    SystemVerilogCovergroupTypeOptions& options,
+    const std::uint32_t item,
+    const SystemVerilogCoverageOption option,
+    const std::int64_t value)
+{
+    auto& values = values_of(options, item);
+    const auto outside = [&](const std::int64_t low, const std::int64_t high)
+        -> std::optional<std::string> {
+        if (value >= low && value <= high) {
+            return std::nullopt;
+        }
+        return "covergroup type option '"
+            + std::string { systemverilog_coverage_option_name(option) }
+            + "' value " + std::to_string(value)
+            + " is outside its range " + std::to_string(low) + " to "
+            + std::to_string(high);
+    };
+    switch (option) {
+    case SystemVerilogCoverageOption::weight:
+        if (auto error = outside(0, 65'536)) {
+            return error;
+        }
+        values.weight = static_cast<std::uint32_t>(value);
+        return std::nullopt;
+    case SystemVerilogCoverageOption::goal:
+        if (auto error = outside(0, 100)) {
+            return error;
+        }
+        values.goal = static_cast<std::uint32_t>(value);
+        return std::nullopt;
+    case SystemVerilogCoverageOption::merge_instances:
+        options.merge_instances = value != 0;
+        return std::nullopt;
+    case SystemVerilogCoverageOption::distribute_first:
+        options.distribute_first = value != 0;
+        return std::nullopt;
+    case SystemVerilogCoverageOption::strobe:
+        // Set only in the covergroup definition (19.7.1).
+        return std::string { "covergroup type option 'strobe' can only be "
+                             "set in the covergroup definition" };
+    case SystemVerilogCoverageOption::name:
+    case SystemVerilogCoverageOption::comment:
+    case SystemVerilogCoverageOption::at_least:
+    case SystemVerilogCoverageOption::auto_bin_max:
+    case SystemVerilogCoverageOption::cross_num_print_missing:
+    case SystemVerilogCoverageOption::cross_retain_auto_bins:
+    case SystemVerilogCoverageOption::detect_overlap:
+    case SystemVerilogCoverageOption::per_instance:
+    case SystemVerilogCoverageOption::get_inst_coverage:
+        break;
+    }
+    throw std::invalid_argument { "covergroup option is not an integral type option" };
+}
+
+void assign_systemverilog_coverage_type_option_text(
+    SystemVerilogCovergroupTypeOptions& options,
+    const std::uint32_t item,
+    const SystemVerilogCoverageOption option,
+    std::string text)
+{
+    if (option == SystemVerilogCoverageOption::comment) {
+        values_of(options, item).comment = std::move(text);
+        return;
+    }
+    throw std::invalid_argument { "covergroup option is not a string type option" };
 }
 
 void apply_systemverilog_coverage_at_least(

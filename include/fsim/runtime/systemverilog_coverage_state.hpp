@@ -2,6 +2,7 @@
 #pragma once
 
 #include "fsim/frontend/coverage_observation.hpp"
+#include "fsim/frontend/coverage_options.hpp"
 #include "fsim/semantic/systemverilog_hir.hpp"
 
 #include <string>
@@ -27,8 +28,17 @@ struct SystemVerilogCovergroupOptionState {
     frontend::SystemVerilogCovergroupInstanceOptions options;
 };
 
+/// The type options of one covergroup type (IEEE 1800-2023 19.7.1) as its
+/// definition and procedural assignments left them.
+struct SystemVerilogCovergroupTypeOptionState {
+    std::string declaration_identity;
+    frontend::SystemVerilogCovergroupTypeOptions options;
+};
+
 struct SystemVerilogCoverageState {
     std::vector<SystemVerilogCoverageDeclarationReference> declarations;
+    // One entry per declaration, in the order of `declarations`.
+    std::vector<SystemVerilogCovergroupTypeOptionState> type_options;
     std::vector<semantic::sv::CovergroupInstance> instances;
     // One entry per instance, in the order of `instances`.
     std::vector<SystemVerilogCovergroupOptionState> options;

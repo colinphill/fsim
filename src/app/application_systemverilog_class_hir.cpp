@@ -511,6 +511,14 @@ sv::ConstraintExpression SystemVerilogHirBuilder::constraint_expression(
     output.marker = input.marker;
     output.marker_argument = input.marker_argument;
     output.builtin_method = input.builtin_method;
+    // A selected name `a.m` keeps the built-in method its member names (the
+    // call `a.m` without parentheses, IEEE 1800-2023 13.4.5, 7.5.2).
+    if (output.kind == sv::ConstraintExpressionKind::name
+        && input.name_components.size() > 1U
+        && !input.name_components.back().scoped) {
+        output.builtin_method
+            = support::builtin_method_named(input.name_components.back().name);
+    }
     output.call_kind = systemverilog_call_kind(input);
     output.system_tf = systemverilog_hir_detail::systemverilog_system_tf(input);
     output.cast_target = input.systemverilog_cast_target;
@@ -543,6 +551,7 @@ sv::TypeReference SystemVerilogHirBuilder::class_property_type(
         output.builtin = input.systemverilog_builtin;
         output.net_kind = input.systemverilog_net_kind;
     }
+    output.class_scope = input.systemverilog_type_scope;
     output.signed_value = input.is_signed;
     output.executable_width = input.width();
     output.four_state = input.domain == frontend::ValueDomain::Logic4
@@ -1039,11 +1048,10 @@ void SystemVerilogHirBuilder::resolve_constraint_expression(
 {
     // `a.size` without parentheses calls the size method of array `a`
     // (IEEE 1800-2017 13.4.5).
-    // ITEM46-LEFT: a dotted name spelling `array.size`; no call node exists
-    // yet, so the spelling is the only form the parser leaves for it.
+    // The parser resolved the member of the selected name `array.size`
+    // against the built-in method lists (constraint_expression).
     if (expression.kind == sv::ConstraintExpressionKind::name
-        && expression.text.ends_with(".size")
-        && expression.text.size() > 5U) {
+        && expression.builtin_method == support::BuiltinMethod::size) {
         const auto array = expression.text.substr(
             0, expression.text.size() - 5U);
         const bool container = std::ranges::any_of(class_specializations_,

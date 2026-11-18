@@ -116,20 +116,13 @@ void append_type_reference(const ReferenceLookup& lookup,
     // A class-scoped type (`A::q_t`, IEEE 1800-2017 8.23) is declared in
     // its class, so the design links that class even when nothing else
     // names it.
-    if (type.class_identity.empty() && !type.target.resolved()) {
-        const auto& spelling = type.target.spelling;
-        const auto separator = spelling.rfind("::");
-        if (separator != std::string::npos) {
-            auto scope = spelling.substr(0, separator);
-            while (!scope.empty() && scope.back() == ' ')
-                scope.pop_back();
-            if (const auto* selected
-                = lookup.unique_class(reference_name(scope))) {
-                append_reference(references, owner,
-                    sv::class_declaration_identity(*selected),
-                    type.target.source.valid() ? type.target.source
-                                               : fallback_source);
-            }
+    if (type.class_identity.empty() && !type.target.resolved()
+        && !type.class_scope.empty()) {
+        if (const auto* selected = lookup.unique_class(type.class_scope)) {
+            append_reference(references, owner,
+                sv::class_declaration_identity(*selected),
+                type.target.source.valid() ? type.target.source
+                                           : fallback_source);
         }
     }
     // A virtual interface names an interface that need not be instantiated

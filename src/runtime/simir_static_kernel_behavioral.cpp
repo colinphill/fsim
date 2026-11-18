@@ -3965,7 +3965,7 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             if (!impl_.coverage_query_hook) {
                 fail(member_index, pc, "coverage query service is unavailable");
             }
-            auto value = impl_.coverage_query_hook(op.kind, op.identity);
+            auto value = impl_.coverage_query_hook(op);
             if (value.width() != 64U || value.is_logic9()) {
                 fail(member_index, pc,
                     "coverage query service returned an invalid real payload");
@@ -3983,7 +3983,18 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             } else if (op.write) {
                 value = packed_register(op.value);
             }
-            impl_.coverage_option_hook(op, value, string);
+            if (op.write && op.nonblocking) {
+                // `v.option.m <= e` (IEEE 1800-2023 10.4.2): the value
+                // evaluated now, set in the time slot's NBA region (4.4.2.6).
+                host_object_sink(member_index)(
+                    [this, deferred = op, deferred_value = std::move(value),
+                        deferred_text = std::move(string)](Scheduler&) mutable {
+                        impl_.coverage_option_hook(
+                            deferred, deferred_value, deferred_text);
+                    });
+            } else {
+                impl_.coverage_option_hook(op, value, string);
+            }
             if (!op.write && text) {
                 string_register(op.text) = std::move(string);
             } else if (!op.write) {
