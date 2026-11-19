@@ -14,6 +14,7 @@
 #include <array>
 #include <cstdint>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace fsim::runtime::simir {
@@ -225,16 +226,36 @@ struct StaticKernelCoverageTable {
     std::uint64_t all_enabled { };
 };
 
-/// The std::string layout generated code reads and writes in place (string
-/// registers, string variables, plusargs): the data pointer, the length,
-/// then a 16-byte local buffer (data pointing at it, capacity 15) or the
-/// allocated capacity, 32 bytes in all. Not every standard library lays a
-/// string out so (libc++'s is 24 bytes); StaticKernel::hold_string_file
-/// gives a member's strings to generated code only when the host's
-/// std::string has this layout, and a member with string operations is not
-/// compiled otherwise, so the code generator builds on any host.
+/// The std::string layouts generated code reads and writes in place (string
+/// registers, string variables, plusargs), fixed by the standard library
+/// fsim is built with:
+/// - libstdcxx (libstdc++): the data pointer, the length, then a 16-byte
+///   local buffer (data pointing at it, capacity 15) or the allocated
+///   capacity; 32 bytes.
+/// - libcxx (libc++, little-endian, standard layout): bit 0 of the first
+///   byte tells the long form. Short: that byte holds the length times 2,
+///   the bytes follow from offset 1 (capacity 22). Long: the first word is
+///   the allocation size with bit 0 set (capacity: that size minus 1), then
+///   the length, then the data pointer; 24 bytes.
+/// Any other standard library or layout does not build.
+/// StaticKernel::hold_string_file checks at run time that the host's
+/// std::string has the selected layout.
+enum class StaticKernelStringLayout : std::uint8_t { libstdcxx, libcxx };
+#if defined(_LIBCPP_VERSION)
+#    if defined(_LIBCPP_ABI_ALTERNATE_STRING_LAYOUT) || defined(_LIBCPP_BIG_ENDIAN)
+#        error "fsim's compiled kernel supports the standard little-endian libc++ string layout only"
+#    endif
+inline constexpr auto static_kernel_string_layout = StaticKernelStringLayout::libcxx;
+inline constexpr std::uint64_t static_kernel_string_object_bytes = 24U;
+inline constexpr std::uint64_t static_kernel_string_local_capacity = 22U;
+#elif defined(__GLIBCXX__)
+inline constexpr auto static_kernel_string_layout = StaticKernelStringLayout::libstdcxx;
 inline constexpr std::uint64_t static_kernel_string_object_bytes = 32U;
 inline constexpr std::uint64_t static_kernel_string_local_capacity = 15U;
+#else
+#    error "fsim's compiled kernel knows the std::string layout of libstdc++ and libc++ only"
+#endif
+static_assert(sizeof(std::string) == static_kernel_string_object_bytes);
 
 struct StaticKernelNativeFrame {
     /// Kernel word arena (aval words at a slot's offset, bval after them).

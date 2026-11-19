@@ -24,6 +24,7 @@
 #include <limits>
 #include <map>
 #include <set>
+#include <stdexcept>
 #include <typeinfo>
 #include <array>
 #include <cstring>
@@ -586,9 +587,7 @@ void Interpreter::Impl::StaticKernel::commit_dynamic_containers(const std::uint3
 namespace {
 
 // Whether std::string has the layout generated code assumes for string
-// registers (KOp::str, static_kernel_codegen): the data pointer, the
-// length, then the local buffer of 15 bytes (data pointing at it) or the
-// allocated capacity.
+// registers (KOp::str, static_kernel_codegen; static_kernel_string_layout).
 [[nodiscard]] bool string_layout_matches()
 {
     static const bool matches = [] {
@@ -598,7 +597,7 @@ namespace {
         const std::string local(3U, 'a');
         const std::string allocated(100U, 'b');
         const auto fields = [](const std::string& text) {
-            std::array<std::uint64_t, 3U> words { };
+            std::array<std::uint64_t, static_kernel_string_object_bytes / 8U> words { };
             std::memcpy(words.data(), static_cast<const void*>(&text), sizeof(words));
             return words;
         };
@@ -607,12 +606,22 @@ namespace {
         const auto address = [](const void* pointer) {
             return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(pointer));
         };
-        return local_words[0] == address(local.data()) && local_words[1] == local.size()
-            && local_words[0] == address(&local) + 16U
-            && local.capacity() == static_kernel_string_local_capacity
-            && allocated_words[0] == address(allocated.data())
-            && allocated_words[1] == allocated.size()
-            && allocated_words[2] == allocated.capacity();
+        if constexpr (static_kernel_string_layout == StaticKernelStringLayout::libcxx) {
+            return (local_words[0] & 0xffU) == local.size() * 2U
+                && address(local.data()) == address(&local) + 1U
+                && local.capacity() == static_kernel_string_local_capacity
+                && (allocated_words[0] & 1U) == 1U
+                && (allocated_words[0] & ~std::uint64_t { 1U }) - 1U == allocated.capacity()
+                && allocated_words[1] == allocated.size()
+                && allocated_words[2] == address(allocated.data());
+        } else {
+            return local_words[0] == address(local.data()) && local_words[1] == local.size()
+                && local_words[0] == address(&local) + 16U
+                && local.capacity() == static_kernel_string_local_capacity
+                && allocated_words[0] == address(allocated.data())
+                && allocated_words[1] == allocated.size()
+                && allocated_words[2] == allocated.capacity();
+        }
     }();
     return matches;
 }
@@ -637,8 +646,12 @@ namespace {
 bool Interpreter::Impl::StaticKernel::hold_string_file(const std::uint32_t index)
 {
     auto& member = members_[index];
-    if (member.strings.empty() || !string_layout_matches()) {
+    if (member.strings.empty()) {
         return false;
+    }
+    if (!string_layout_matches()) {
+        throw std::logic_error(
+            "the host std::string does not have the layout static_kernel_string_layout selects");
     }
     if (member.string_scratch == no_slot) {
         member.string_scratch = static_cast<std::uint32_t>(member.strings.size());

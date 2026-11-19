@@ -8333,13 +8333,15 @@ private:
 
     // A member's string registers (KOp::str) are its Member::strings, which
     // generated code reads and writes in the layout
-    // static_kernel_string_object_bytes describes; the bytes end with a
-    // zero. StaticKernel::hold_string_file admits a member only after
-    // checking at run time that the host's std::string has that layout.
+    // static_kernel_string_layout selects (the standard library fsim is
+    // built with); the bytes end with a zero. StaticKernel::hold_string_file
+    // checks at run time that the host's std::string has that layout.
     static constexpr std::uint64_t str_object_bytes
         = runtime::simir::static_kernel_string_object_bytes;
     static constexpr std::uint64_t str_local_capacity
         = runtime::simir::static_kernel_string_local_capacity;
+    static constexpr bool str_libcxx = runtime::simir::static_kernel_string_layout
+        == runtime::simir::StaticKernelStringLayout::libcxx;
 
     /// String register `id` (a constant) of the member's string file.
     [[nodiscard]] llvm::Value* str_object(llvm::Value* file, const std::uint64_t id)
@@ -8347,31 +8349,80 @@ private:
         return builder_.CreateConstInBoundsGEP1_64(i8_, file, id * str_object_bytes);
     }
 
+    /// libc++: whether the string is in the long form (bit 0 of its first
+    /// byte).
+    [[nodiscard]] llvm::Value* str_is_long(llvm::Value* object)
+    {
+        return builder_.CreateICmpNE(
+            builder_.CreateAnd(builder_.CreateLoad(i8_, object), llvm::ConstantInt::get(i8_, 1U)),
+            llvm::ConstantInt::get(i8_, 0U));
+    }
+
     [[nodiscard]] llvm::Value* str_data(llvm::Value* object)
     {
-        return builder_.CreateLoad(ptr_, object);
+        if constexpr (str_libcxx) {
+            return builder_.CreateSelect(str_is_long(object),
+                builder_.CreateLoad(ptr_, builder_.CreateConstInBoundsGEP1_64(i8_, object, 16U)),
+                builder_.CreateConstInBoundsGEP1_64(i8_, object, 1U));
+        } else {
+            return builder_.CreateLoad(ptr_, object);
+        }
     }
 
     [[nodiscard]] llvm::Value* str_size(llvm::Value* object)
     {
-        return builder_.CreateLoad(i64_, builder_.CreateConstInBoundsGEP1_64(i8_, object, 8U));
+        auto* stored
+            = builder_.CreateLoad(i64_, builder_.CreateConstInBoundsGEP1_64(i8_, object, 8U));
+        if constexpr (str_libcxx) {
+            auto* short_size = builder_.CreateLShr(
+                builder_.CreateZExt(builder_.CreateLoad(i8_, object), i64_), constant(1U));
+            return builder_.CreateSelect(str_is_long(object), stored, short_size);
+        } else {
+            return stored;
+        }
     }
 
-    /// The new length `size`, with the terminating zero after it.
+    /// The new length `size` (within the capacity), with the terminating
+    /// zero after it.
     void str_set_size(llvm::Value* object, llvm::Value* size)
     {
-        builder_.CreateStore(size, builder_.CreateConstInBoundsGEP1_64(i8_, object, 8U));
+        if constexpr (str_libcxx) {
+            auto* is_long = str_is_long(object);
+            auto* stored_long = dyn_when(is_long);
+            builder_.CreateStore(size, builder_.CreateConstInBoundsGEP1_64(i8_, object, 8U));
+            dyn_end(stored_long);
+            auto* stored_short = dyn_when(builder_.CreateNot(is_long));
+            builder_.CreateStore(
+                builder_.CreateShl(builder_.CreateTrunc(size, i8_), llvm::ConstantInt::get(i8_, 1U)),
+                object);
+            dyn_end(stored_short);
+        } else {
+            builder_.CreateStore(size, builder_.CreateConstInBoundsGEP1_64(i8_, object, 8U));
+        }
         builder_.CreateStore(llvm::ConstantInt::get(i8_, 0U),
             builder_.CreateInBoundsGEP(i8_, str_data(object), size));
+    }
+
+    /// The string's capacity.
+    [[nodiscard]] llvm::Value* str_capacity(llvm::Value* object)
+    {
+        if constexpr (str_libcxx) {
+            auto* allocation = builder_.CreateAnd(builder_.CreateLoad(i64_, object),
+                llvm::ConstantInt::get(i64_, ~std::uint64_t { 1U }));
+            return builder_.CreateSelect(str_is_long(object),
+                builder_.CreateSub(allocation, constant(1U)), constant(str_local_capacity));
+        } else {
+            auto* local = builder_.CreateICmpEQ(str_data(object),
+                builder_.CreateConstInBoundsGEP1_64(i8_, object, 16U));
+            return builder_.CreateSelect(local, constant(str_local_capacity),
+                builder_.CreateLoad(i64_, builder_.CreateConstInBoundsGEP1_64(i8_, object, 16U)));
+        }
     }
 
     /// Room for `needed` bytes (the only runtime call of KOp::str).
     void str_reserve(llvm::Value* object, llvm::Value* needed, const std::uint32_t at)
     {
-        auto* local = builder_.CreateICmpEQ(str_data(object),
-            builder_.CreateConstInBoundsGEP1_64(i8_, object, 16U));
-        auto* capacity = builder_.CreateSelect(local, constant(str_local_capacity),
-            builder_.CreateLoad(i64_, builder_.CreateConstInBoundsGEP1_64(i8_, object, 16U)));
+        auto* capacity = str_capacity(object);
         auto* grow = dyn_when(builder_.CreateICmpUGT(needed, capacity));
         auto* type = llvm::FunctionType::get(i32_, { ptr_, i32_, ptr_, i64_ }, false);
         builder_.CreateCall(type, helper_symbol("fsim_sk_str_reserve", type),
