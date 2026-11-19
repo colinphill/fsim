@@ -584,74 +584,11 @@ void Interpreter::Impl::StaticKernel::commit_dynamic_containers(const std::uint3
     member.dynamic_containers.clear();
 }
 
-namespace {
-
-// Whether std::string has the layout generated code assumes for string
-// registers (KOp::str, static_kernel_codegen; static_kernel_string_layout).
-[[nodiscard]] bool string_layout_matches()
-{
-    static const bool matches = [] {
-        if (sizeof(std::string) != static_kernel_string_object_bytes) {
-            return false;
-        }
-        const std::string local(3U, 'a');
-        const std::string allocated(100U, 'b');
-        const auto fields = [](const std::string& text) {
-            std::array<std::uint64_t, static_kernel_string_object_bytes / 8U> words { };
-            std::memcpy(words.data(), static_cast<const void*>(&text), sizeof(words));
-            return words;
-        };
-        const auto local_words = fields(local);
-        const auto allocated_words = fields(allocated);
-        const auto address = [](const void* pointer) {
-            return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(pointer));
-        };
-        if constexpr (static_kernel_string_layout == StaticKernelStringLayout::libcxx) {
-            return (local_words[0] & 0xffU) == local.size() * 2U
-                && address(local.data()) == address(&local) + 1U
-                && local.capacity() == static_kernel_string_local_capacity
-                && (allocated_words[0] & 1U) == 1U
-                && (allocated_words[0] & ~std::uint64_t { 1U }) - 1U == allocated.capacity()
-                && allocated_words[1] == allocated.size()
-                && allocated_words[2] == address(allocated.data());
-        } else {
-            return local_words[0] == address(local.data()) && local_words[1] == local.size()
-                && local_words[0] == address(&local) + 16U
-                && local.capacity() == static_kernel_string_local_capacity
-                && allocated_words[0] == address(allocated.data())
-                && allocated_words[1] == allocated.size()
-                && allocated_words[2] == allocated.capacity();
-        }
-    }();
-    return matches;
-}
-
-// Whether a std::vector of strings starts with its data pointer: generated
-// code reaches an element alias of a fixed string array through it
-// (StaticKernelStringCell).
-[[nodiscard]] bool string_vector_layout_matches()
-{
-    static const bool matches = [] {
-        const std::vector<std::string> elements(3U);
-        std::uint64_t first { };
-        std::memcpy(&first, static_cast<const void*>(&elements), sizeof(first));
-        return first
-            == static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(elements.data()));
-    }();
-    return matches;
-}
-
-} // namespace
-
 bool Interpreter::Impl::StaticKernel::hold_string_file(const std::uint32_t index)
 {
     auto& member = members_[index];
     if (member.strings.empty()) {
         return false;
-    }
-    if (!string_layout_matches()) {
-        throw std::logic_error(
-            "the host std::string does not have the layout static_kernel_string_layout selects");
     }
     if (member.string_scratch == no_slot) {
         member.string_scratch = static_cast<std::uint32_t>(member.strings.size());
@@ -3696,16 +3633,17 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             return true;
         } else if constexpr (std::is_same_v<T, ReadStringObject>
             || std::is_same_v<T, WriteStringObject>) {
-            // A string variable (IEEE 1800-2023 6.16), read or written in
-            // place: a variable, or a valid element alias of a fixed string
-            // array. A nonblocking write joins the kernel's NBA queue.
+            // A string variable (IEEE 1800-2023 6.16), read or written by
+            // the kernel's helpers (fsim_sk_string_object_load and _store:
+            // the variable is interpreter storage): a variable, or a valid
+            // element alias of a fixed string array. A nonblocking write
+            // joins the kernel's NBA queue.
             if (op.object >= impl_.string_objects.size()) {
                 return false;
             }
             const auto& object = impl_.string_objects[op.object];
             if (object.element_alias
-                && (!string_vector_layout_matches()
-                    || object.element_alias->object >= impl_.container_objects.size()
+                && (object.element_alias->object >= impl_.container_objects.size()
                     || object.element_alias->ordinal
                         >= impl_.container_objects[object.element_alias->object]
                                .initial_value.string_elements.size())) {
@@ -3936,6 +3874,10 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                 inst.z = op.source;
                 inst.imm_a = static_cast<std::uint64_t>(op.operation);
                 std::uint8_t flags = argument ? str_method_argument : 0U;
+                if (op.operation == M::vhdl_physical_value
+                    && op.time_unit_femtoseconds != 0U) {
+                    flags |= str_method_ticks;
+                }
                 if (argument) {
                     inst.imm_b = op.argument;
                 }

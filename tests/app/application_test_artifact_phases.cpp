@@ -46,7 +46,7 @@ void ApplicationTestFixture::test_artifact_phase_semantics()
     static_assert(app::kSystemVerilogConstraintHirStateSchema == 46);
     static_assert(app::kSystemVerilogCoverageStateSchema == 10);
     static_assert(app::kSystemVerilogUvmStateSchema == 3);
-    static_assert(app::kVhdlHirStateSchema == 20);
+    static_assert(app::kVhdlHirStateSchema == 21);
     const auto copy_artifact_tree = [](
                                         const std::filesystem::path& source_root,
                                         const std::filesystem::path& destination) {

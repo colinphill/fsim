@@ -1526,7 +1526,7 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
             // observable (never silent), host signals become inputs.
             behavioral_ = true;
             vhdl_threads_ = vhdl_threads_ || member.vhdl;
-            member.strings.assign(program.string_register_count(), std::string { });
+            member.strings.assign(program.string_register_count(), KernelString { });
             member.wait_sensitivity = member_spec.sensitivity;
             const auto waitable = [&](const SignalId signal, const EdgeKind edge) {
                 if (signal >= signal_count) {
@@ -2211,7 +2211,8 @@ void Interpreter::Impl::StaticKernel::build_container_info()
         }
         if (container.storage == StaticKernelContainerStorage::strings) {
             // Member::strings keeps its elements in place from the member's
-            // build on (strings are assigned, never added or removed).
+            // build on (strings are assigned, never added or removed); each
+            // is a StaticKernelString header (KernelString).
             if (container.string_member >= members_.size()) {
                 throw std::logic_error { "static kernel string file has no member" };
             }
@@ -8912,7 +8913,7 @@ Interpreter::Impl::StaticKernel::ReferenceContainerScope::~ReferenceContainerSco
 }
 
 Interpreter::Impl::StaticKernel::ReferenceStringScope::ReferenceStringScope(
-    Member& owner, const std::vector<std::string>& values)
+    Member& owner, const std::vector<KernelString>& values)
     : member { owner }
     , compiled { owner.strings }
 {
@@ -8934,7 +8935,7 @@ std::string Interpreter::Impl::StaticKernel::ReferenceStringScope::mismatch() co
     for (std::size_t id = 0U; id < member.strings.size() && id < compiled.size(); ++id) {
         if (member.strings[id] != compiled[id]) {
             return "string register " + std::to_string(id) + " compiled \""
-                + compiled[id] + "\" reference \"" + member.strings[id] + "\"";
+                + compiled[id].str() + "\" reference \"" + member.strings[id].str() + "\"";
         }
     }
     return { };

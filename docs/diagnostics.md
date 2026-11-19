@@ -209,6 +209,7 @@ are no longer emitted.
 | `FSIM-SEM-0001` | error | Source analysis or build normalization produced an internally invalid owning semantic projection. |
 | `FSIM-SEM-0002` | error | Compiled-HIR normalization found invalid dependency, ownership, or residual-expression metadata. |
 | `FSIM-SEM-0003` | error | Compiled-HIR exclusion or cross-input linking failed before elaboration. |
+| `FSIM-SEM-0004` | error | With FSIM_VERIFY_VHDL_ANALYSIS=1, a link found that the stored compile-time analysis of a VHDL unit differs from a fresh resolution (test-only verifier). |
 | `FSIM-FE-CU-0001` | warning | A VHDL source set requested Verilog-style compilation-unit grouping; VHDL files remain independent analysis units. |
 | `FSIM-FE-STANDARD-001` | error | One physical root or included dependency is consumed under incompatible Verilog/SystemVerilog standard revisions. |
 | `FSIM-FE-STANDARD-002` | error | A Verilog/SystemVerilog design-unit identity is reanalyzed under a different standard revision. |

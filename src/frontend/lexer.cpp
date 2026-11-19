@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/frontend/token.hpp"
+#include "fsim/support/symbol.hpp"
 #include "string_case.hpp"
 
 #include <algorithm>
@@ -154,6 +155,11 @@ class Lexer {
         span(begin, end),
         {},
     });
+    if (kind == TokenKind::Identifier) {
+      auto& token = result_.tokens.back();
+      token.symbol = is_vhdl() ? support::vhdl_symbol(token.text)
+                               : support::systemverilog_symbol(token.text);
+    }
   }
 
   void diagnose(std::string code, std::string message, SourceLocation begin) {

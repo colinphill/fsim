@@ -1,12 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/semantic/vhdl_hir.hpp"
+#include "fsim/support/symbol.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
+
+#include <boost/pfr/core.hpp>
 
 #include <algorithm>
 #include <cctype>
+#include <concepts>
+#include <filesystem>
 #include <limits>
 #include <map>
+#include <memory>
+#include <ranges>
 #include <set>
+#include <string>
+#include <type_traits>
 
 namespace fsim::semantic::vhdl {
 
@@ -457,6 +466,66 @@ bool top_level_hir_collections_well_formed(
         }
     }
     return true;
+}
+
+
+namespace {
+
+// Sets the symbol of every Name reachable from `value`.
+template <typename Value>
+void intern_names_in(Value& value)
+{
+    using Type = std::remove_cvref_t<Value>;
+    if constexpr (std::same_as<Type, Name>) {
+        if (!value.symbol.valid() && !value.text().empty()) {
+            value.symbol = support::vhdl_symbol(value.text());
+        }
+    } else if constexpr (std::is_arithmetic_v<Type> || std::is_enum_v<Type>
+        || std::same_as<Type, std::string>
+        || std::same_as<Type, std::filesystem::path>
+        || std::same_as<Type, support::SymbolId>) {
+        return;
+    } else if constexpr (requires {
+        typename Type::element_type;
+        value.get();
+    }) {
+        // A shared pointee may be const and shared with other holders:
+        // intern a private copy.
+        if (value) {
+            auto copy = std::make_shared<
+                std::remove_const_t<typename Type::element_type>>(*value);
+            intern_names_in(*copy);
+            value = std::move(copy);
+        }
+    } else if constexpr (std::ranges::range<Type>) {
+        for (auto& item : value) {
+            intern_names_in(item);
+        }
+    } else if constexpr (requires {
+        value.has_value();
+        *value;
+    }) {
+        if (value.has_value()) {
+            intern_names_in(*value);
+        }
+    } else if constexpr (std::is_aggregate_v<Type>) {
+        boost::pfr::for_each_field(
+            value, [](auto& field) { intern_names_in(field); });
+    }
+}
+
+} // namespace
+
+void intern_names(Hir& hir)
+{
+    intern_names_in(hir.mutable_units());
+    intern_names_in(hir.mutable_declarations());
+    intern_names_in(hir.mutable_types());
+    intern_names_in(hir.mutable_overload_sets());
+    intern_names_in(hir.mutable_expressions());
+    intern_names_in(hir.mutable_statements());
+    intern_names_in(hir.mutable_processes());
+    intern_names_in(hir.mutable_instances());
 }
 
 } // namespace fsim::semantic::vhdl

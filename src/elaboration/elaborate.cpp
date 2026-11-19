@@ -10,6 +10,7 @@
 #include "fsim/frontend/diagnostic.hpp"
 #include "fsim/semantic/compiled_design.hpp"
 #include "fsim/semantic/compiled_design_specialization.hpp"
+#include "fsim/semantic/compiled_design_vhdl_analysis_stamp.hpp"
 #include "fsim/semantic/model.hpp"
 #include "fsim/semantic/systemverilog_hir.hpp"
 #include "fsim/semantic/vhdl_hir.hpp"
@@ -663,6 +664,16 @@ ElaborationResult elaborate(
         std::ranges::sort(result);
         return result;
     };
+    // Every reference analysis stored into another library unit has its
+    // target here: a link of one object may leave it unbound, an
+    // elaborated design may not (IEEE 1076-2019 13.5).
+    if (auto unbound = semantic::unbound_vhdl_anchor_error(compiled);
+        !unbound.empty()) {
+        ElaborationResult result;
+        result.diagnostics.push_back(
+            { "FSIM-SEM-0003", std::move(unbound), { } });
+        return result;
+    }
     constexpr std::size_t maximum_passes = 8U;
     std::vector<External> applied;
     for (std::size_t pass = 1U;; ++pass) {

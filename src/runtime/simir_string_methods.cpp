@@ -528,7 +528,8 @@ StringMethodResult execute_string_method(
     const std::string_view argument,
     const std::optional<std::int32_t> first,
     const std::optional<std::int32_t> second,
-    const std::optional<std::uint64_t> first_bits)
+    const std::optional<std::uint64_t> first_bits,
+    const std::uint64_t resolution_femtoseconds)
 {
     if (operation == StringMethodOperator::getc) {
         return { { string_getc(source, first) }, std::nullopt, std::nullopt };
@@ -621,8 +622,14 @@ StringMethodResult execute_string_method(
         };
     }
     if (operation == StringMethodOperator::vhdl_physical_value) {
+        const auto value = vhdl_physical_value(source, argument);
+        // TIME: a count of femtoseconds becomes simulation ticks; a value
+        // smaller than the resolution truncates to zero (5.2.4.2).
         return { std::nullopt,
-            static_cast<std::uint64_t>(vhdl_physical_value(source, argument)),
+            static_cast<std::uint64_t>(resolution_femtoseconds != 0U
+                    ? value
+                        / static_cast<std::int64_t>(resolution_femtoseconds)
+                    : value),
             std::nullopt };
     }
     if (operation == StringMethodOperator::vhdl_logic9_hstring
@@ -919,7 +926,11 @@ void Interpreter::Impl::execute_string(
         operation.operation == StringMethodOperator::realtoa
                 && first_word && first_word->bval == 0
             ? std::optional<std::uint64_t> { first_word->aval }
-            : std::nullopt);
+            : std::nullopt,
+        operation.operation == StringMethodOperator::vhdl_physical_value
+                && operation.time_unit_femtoseconds != 0U
+            ? time_format.resolution_femtoseconds
+            : 0U);
     if (result.integer) {
         get_register(process, operation.destination) = PackedLogic4::from_aval_bval(
             32,

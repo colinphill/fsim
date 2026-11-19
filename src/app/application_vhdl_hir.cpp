@@ -72,6 +72,7 @@ semantic::vhdl::Hir build_vhdl_hir(
     VhdlHirBuilder builder { semantics, result };
     builder.add_design(parsed);
     complete_vhdl_executable_hir(parsed, semantics, result);
+    vh::intern_names(result);
     return result;
 }
 

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "verilog_parser_internal.hpp"
+#include "fsim/support/symbol.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1071,6 +1072,7 @@ void VerilogParser::hoist_nested_units()
                 && (tokens_[index + 1U].kind == TokenKind::Identifier
                     || tokens_[index + 1U].kind == TokenKind::Hash)) {
                 tokens_[index].text = hoisted;
+                tokens_[index].symbol = support::systemverilog_symbol(hoisted);
                 instantiated = true;
             }
         }
@@ -1080,6 +1082,9 @@ void VerilogParser::hoist_nested_units()
                 auto token = name_token;
                 token.kind = token_kind;
                 token.text = std::move(text);
+                token.symbol = token_kind == TokenKind::Identifier
+                    ? support::systemverilog_symbol(token.text)
+                    : support::SymbolId { };
                 return token;
             };
             implicit = { make(TokenKind::Identifier, hoisted),

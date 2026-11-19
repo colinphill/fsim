@@ -4168,3 +4168,20 @@ foreach(FSIM_ENGINE IN ITEMS v4 interpreter)
       PROPERTIES LABELS "fast;systemverilog")
   endforeach()
 endforeach()
+
+# The kernel's own string registers (StaticKernelString / KernelString): an
+# fsim-defined layout generated code reads in place, never a std::string.
+add_executable(
+  fsim_static_kernel_string_tests static_kernel_string_test.cpp)
+target_link_libraries(fsim_static_kernel_string_tests PRIVATE fsim_runtime)
+target_include_directories(
+  fsim_static_kernel_string_tests PRIVATE ${PROJECT_SOURCE_DIR}/src/runtime)
+fsim_configure_test(fsim_static_kernel_string_tests)
+add_test(
+  NAME fsim.runtime.static_kernel_string
+  COMMAND fsim_static_kernel_string_tests
+)
+set_tests_properties(
+  fsim.runtime.static_kernel_string
+  PROPERTIES LABELS "fast;runtime;static-kernel;string;positive"
+)

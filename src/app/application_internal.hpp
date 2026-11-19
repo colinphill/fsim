@@ -1756,11 +1756,6 @@ std::string effective_resolution(
     const semantic::CompiledDesign& compiled);
 
 bool normalize_delays(
-    frontend::ParsedDesign& parsed,
-    const std::string_view resolution,
-    diagnostic::Engine& diagnostics);
-
-bool normalize_delays(
     semantic::CompiledDesign& compiled,
     std::string_view resolution,
     diagnostic::Engine& diagnostics);

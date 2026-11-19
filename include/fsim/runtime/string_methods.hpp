@@ -59,7 +59,11 @@ vhdl_composite_value_elements(std::string_view text, bool character_string);
     std::string_view argument,
     std::optional<std::int32_t> first,
     std::optional<std::int32_t> second,
-    std::optional<std::uint64_t> first_bits = std::nullopt);
+    std::optional<std::uint64_t> first_bits = std::nullopt,
+    // Nonzero for T'VALUE of TIME (vhdl_physical_value over a table of
+    // femtosecond unit scales): the value is returned in simulation ticks of
+    // this many femtoseconds, truncated toward zero (IEEE 1076-2019 5.2.4.2).
+    std::uint64_t resolution_femtoseconds = 0U);
 void execute_string_format(
     const StringMethod& operation,
     std::string& destination,

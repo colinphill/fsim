@@ -15,6 +15,7 @@
 #include "fsim/support/generated_object_origin.hpp"
 #include "fsim/support/sha256.hpp"
 #include "fsim/support/stack_growth.hpp"
+#include "fsim/support/symbol.hpp"
 
 #include "../diagnostic/artifact_identity.hpp"
 #include "../elaboration/elaborated_design_process_access.hpp"
@@ -681,6 +682,12 @@ namespace codec_detail {
                 && value
                 <= runtime::SystemVerilogConstraintDistributionWeight::
                     AcrossRange;
+        } else if constexpr (std::same_as<T, semantic::vhdl::AnchoredSlot>) {
+            return value >= semantic::vhdl::AnchoredSlot::expression_resolved_declaration
+                && value <= semantic::vhdl::AnchoredSlot::statement_resolved_procedure;
+        } else if constexpr (std::same_as<T, semantic::vhdl::AnchorSpace>) {
+            return value >= semantic::vhdl::AnchorSpace::declarations
+                && value <= semantic::vhdl::AnchorSpace::types;
         } else if constexpr (std::same_as<T, semantic::vhdl::UnitKind>) {
             return value >= semantic::vhdl::UnitKind::entity
                 && value <= semantic::vhdl::UnitKind::psl_verification_unit;
@@ -1944,6 +1951,11 @@ namespace codec_detail {
             || std::same_as<Value, frontend::SourceName>) {
             return add_serialization_capacity(sizeof(std::uint64_t),
                 std::min(value.str().size(), kMaximumSerializationReserve));
+        } else if constexpr (std::same_as<Value, support::SymbolId>) {
+            // Written as its text (ids are process-local).
+            return add_serialization_capacity(sizeof(std::uint64_t),
+                std::min(support::SymbolTable::global().text(value).size(),
+                    kMaximumSerializationReserve));
         } else if constexpr (std::same_as<Value, std::string>) {
             return add_serialization_capacity(sizeof(std::uint64_t),
                 std::min(value.size(), kMaximumSerializationReserve));
@@ -2187,6 +2199,12 @@ namespace codec_detail {
             } else if constexpr (
                 std::same_as<Value, frontend::SourceName>) {
                 write(value.str());
+            } else if constexpr (std::same_as<Value, support::SymbolId>) {
+                // A symbol is written as its text: ids are process-local and
+                // never reach an artifact.
+                const std::string text {
+                    support::SymbolTable::global().text(value) };
+                write(text);
             } else if constexpr (std::same_as<Value, std::string>) {
                 // Plain strings (source names, type spellings, value
                 // spellings) repeat across signals and processes: with the
@@ -2836,6 +2854,16 @@ namespace codec_detail {
                         return false;
                     }
                     value = std::move(decoded);
+                    return true;
+                } else if constexpr (std::same_as<Value, support::SymbolId>) {
+                    // Re-interned from its text; an empty text is no symbol.
+                    std::string text;
+                    if (!read(text)) {
+                        return false;
+                    }
+                    value = text.empty()
+                        ? support::SymbolId { }
+                        : support::SymbolTable::global().intern(text);
                     return true;
                 } else if constexpr (std::same_as<Value, std::string>) {
                     if (runtime_string_table_) {

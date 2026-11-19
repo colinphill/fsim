@@ -15,6 +15,7 @@
 #include <optional>
 #include <set>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -197,24 +198,38 @@ public:
                 "FSIM_VHDL_RESOLVE pass expressions=%zu statements=%zu\n",
                 expressions.size(), design_.vhdl_hir.statements().size());
         }
+        freeze_stamped_units();
         for (std::size_t index = 0; index < statements_->size(); ++index) {
-            (*statements_)[index].resolved_procedure.reset();
+            if (!frozen_statement(index)) {
+                (*statements_)[index].resolved_procedure.reset();
+            }
             statement_index_.emplace(
                 (*statements_)[index].id.value(), index);
         }
         for (std::size_t index = 0; index < expressions.size(); ++index) {
-            expressions[index].resolved_declaration.reset();
-            expressions[index].resolved_type.reset();
-            expressions[index].resolved_builtin_type.clear();
-            expressions[index].ambiguous_literal = false;
-            expressions[index].qualified_type_mark.reset();
+            const auto frozen = frozen_expression(index);
+            if ((frozen & frozen_declaration) == 0) {
+                expressions[index].resolved_declaration.reset();
+            }
+            if ((frozen & frozen_type) == 0) {
+                expressions[index].resolved_type.reset();
+                expressions[index].resolved_builtin_type.clear();
+                expressions[index].ambiguous_literal = false;
+            }
+            if ((frozen & frozen_qualified) == 0) {
+                expressions[index].qualified_type_mark.reset();
+            }
+            if ((frozen & frozen_denoted) == 0) {
+                expressions[index].denoted_provided_type.reset();
+            }
             expression_index_.emplace(expressions[index].id.value(), index);
         }
         // The type mark of a qualified expression (9.3.5) and of an external
         // name's subtype indication (8.7) is a name that denotes a type or
         // subtype where it is written (6.3, 12.3, 12.4): record what it
         // denotes, so that no later phase resolves its spelling again.
-        for (auto& expression : expressions) {
+        for (std::size_t index = 0; index < expressions.size(); ++index) {
+            auto& expression = expressions[index];
             const bool is_qualified = expression.kind == ExpressionKind::call
                 && expression.marker
                     == support::ExpressionMarker::vhdl_qualified;
@@ -224,6 +239,15 @@ public:
                 continue;
             }
             const auto mark = std::string_view { expression.marker_argument };
+            const auto frozen = frozen_expression(index);
+            // The provided type the mark denotes (`time'(x)` is TIME), on
+            // the qualified expression itself.
+            if ((frozen & frozen_denoted) == 0) {
+                stamp_denoted_type(expression, mark);
+            }
+            if ((frozen & frozen_qualified) != 0) {
+                continue;
+            }
             vhdl::Name name;
             name.spelling = std::string { mark };
             name.canonical = name.spelling;
@@ -242,6 +266,7 @@ public:
             }
             expression.qualified_type_mark = std::move(name);
         }
+        stamp_denoted_names();
         for (const auto& type : design_.vhdl_hir.types()) {
             for (const auto& literal : type.enumeration_literals) {
                 literal_types_.emplace(literal.declaration.value(), type.id);
@@ -480,6 +505,177 @@ public:
     }
 
 private:
+    // ---- Stamped units -----------------------------------------------------
+
+    // The fields of an expression of a stamped unit that keep their stored
+    // result (stamp_vhdl_analysis): the type bit covers resolved_type,
+    // resolved_builtin_type and ambiguous_literal together, which one
+    // annotation writes.
+    static constexpr std::uint8_t frozen_declaration = 1U;
+    static constexpr std::uint8_t frozen_type = 2U;
+    static constexpr std::uint8_t frozen_qualified = 4U;
+    static constexpr std::uint8_t frozen_denoted = 8U;
+    static constexpr std::uint8_t frozen_all = static_cast<std::uint8_t>(
+        frozen_declaration | frozen_type | frozen_qualified | frozen_denoted);
+
+    [[nodiscard]] bool stamped_scope(const ScopeId scope) const
+    {
+        if (stamped_units_.empty()) {
+            return false;
+        }
+        const auto* record = design_.find_scope(scope);
+        return record != nullptr && record->unit.valid()
+            && record->unit.value() < stamped_units_.size()
+            && stamped_units_[record->unit.value()] != 0;
+    }
+
+    [[nodiscard]] std::uint8_t frozen_expression(
+        const std::size_t index) const noexcept
+    {
+        return index < frozen_expressions_.size()
+            ? frozen_expressions_[index]
+            : std::uint8_t { };
+    }
+
+    [[nodiscard]] bool frozen_statement(const std::size_t index) const noexcept
+    {
+        return index < frozen_statements_.size()
+            && frozen_statements_[index] != 0;
+    }
+
+    // Every field of an item of a stamped unit keeps the result compile-time
+    // analysis stored, set or not, but the slots the stamp lists as
+    // recomputed (a target in a compiler-served package): links rebind the
+    // anchored ones before this pass, and nothing here writes them again.
+    void freeze_stamped_units()
+    {
+        for (const auto& unit : design_.vhdl_hir.units()) {
+            if (!unit.analyzed || !unit.id.valid()) {
+                continue;
+            }
+            if (stamped_units_.size() <= unit.id.value()) {
+                stamped_units_.resize(unit.id.value() + 1U);
+            }
+            stamped_units_[unit.id.value()] = 1U;
+        }
+        if (stamped_units_.empty()) {
+            return;
+        }
+        const auto& expressions = *expressions_;
+        frozen_expressions_.assign(expressions.size(), 0U);
+        for (std::size_t index { }; index < expressions.size(); ++index) {
+            if (stamped_scope(expressions[index].scope)) {
+                frozen_expressions_[index] = frozen_all;
+            }
+        }
+        const auto& statements = *statements_;
+        frozen_statements_.assign(statements.size(), 0U);
+        for (std::size_t index { }; index < statements.size(); ++index) {
+            if (stamped_scope(statements[index].scope)) {
+                frozen_statements_[index] = 1U;
+            }
+        }
+        for (const auto& unit : design_.vhdl_hir.units()) {
+            if (!unit.analyzed) {
+                continue;
+            }
+            const auto* items = design_.vhdl_unit_items(unit.id);
+            if (items == nullptr) {
+                throw std::logic_error {
+                    "VHDL resolution: stale lookup indexes for a stamped unit"
+                };
+            }
+            for (const auto& reference : unit.recomputed) {
+                using Slot = vhdl::AnchoredSlot;
+                if (reference.slot == Slot::statement_resolved_procedure) {
+                    frozen_statements_.at(
+                        items->statements.at(reference.item)) = 0U;
+                    continue;
+                }
+                const auto bit = reference.slot
+                        == Slot::expression_resolved_declaration
+                    ? frozen_declaration
+                    : reference.slot == Slot::expression_resolved_type
+                    ? frozen_type
+                    : frozen_qualified;
+                auto& frozen = frozen_expressions_.at(
+                    items->expressions.at(reference.item));
+                frozen = static_cast<std::uint8_t>(frozen & ~bit);
+            }
+        }
+    }
+
+    // The provided type a type mark denotes where it is written (12.3,
+    // 12.4), through the visibility service.
+    [[nodiscard]] vhdl::ProvidedType denoted_provided_type(
+        const std::string_view spelling, const ScopeId scope)
+    {
+        if (spelling.empty()) {
+            return vhdl::ProvidedType::none;
+        }
+        auto key = std::to_string(scope.value());
+        key.push_back(':');
+        key += spelling;
+        if (const auto found = denoted_types_.find(key);
+            found != denoted_types_.end()) {
+            return found->second;
+        }
+        const auto* lookup = resolver(scope);
+        const auto result = lookup == nullptr
+            ? vhdl::ProvidedType::none
+            : lookup->resolve_vhdl_provided_type(spelling, scope);
+        denoted_types_.emplace(std::move(key), result);
+        return result;
+    }
+
+    void stamp_denoted_type(
+        vhdl::Expression& expression, const std::string_view spelling)
+    {
+        const auto provided = denoted_provided_type(spelling, expression.scope);
+        if (provided != vhdl::ProvidedType::none) {
+            expression.denoted_provided_type = provided;
+        }
+    }
+
+    // A name expression that denotes a provided type (the prefix TIME of
+    // TIME'VALUE) records it (12.3, 12.4): from the type declaration it
+    // selects, or, when it selects none, from what the name denotes where
+    // it is written.
+    void stamp_denoted_names()
+    {
+        auto& expressions = *expressions_;
+        for (std::size_t index { }; index < expressions.size(); ++index) {
+            auto& expression = expressions[index];
+            if ((frozen_expression(index) & frozen_denoted) != 0
+                || expression.kind != ExpressionKind::name
+                || expression.marker != support::ExpressionMarker::none) {
+                continue;
+            }
+            const auto& name = expression.referenced_name;
+            if (name && name->selected) {
+                const auto* declared = declaration(*name->selected);
+                if (declared == nullptr || !declared->declared_type
+                    || (declared->form != vhdl::DeclarationForm::type
+                        && declared->form != vhdl::DeclarationForm::subtype)) {
+                    continue;
+                }
+                if (const auto* lookup = resolver(expression.scope)) {
+                    const auto provided
+                        = lookup->vhdl_provided_type_of(*declared->declared_type);
+                    if (provided != vhdl::ProvidedType::none) {
+                        expression.denoted_provided_type = provided;
+                    }
+                }
+                continue;
+            }
+            if (name && !name->overloads.empty()) {
+                continue;
+            }
+            stamp_denoted_type(expression,
+                name ? name->text() : std::string_view { expression.text });
+        }
+    }
+
     void resolve_generate(const vhdl::GenerateRegion& region)
     {
         if (region.kind == vhdl::GenerateKind::conditional
@@ -535,6 +731,10 @@ private:
     void stamp_provided_type(
         vhdl::SubtypeIndication& subtype, const ScopeId scope)
     {
+        // A stamped unit keeps what compile-time analysis stored.
+        if (stamped_scope(scope)) {
+            return;
+        }
         const auto* lookup = resolver(scope);
         if (lookup == nullptr) {
             subtype.provided_type = vhdl::ProvidedType::none;
@@ -675,6 +875,9 @@ private:
         if (found == expression_index_.end()) {
             return;
         }
+        if ((frozen_expression(found->second) & frozen_declaration) != 0) {
+            return;
+        }
         auto& target = (*expressions_)[found->second];
         target.resolved_declaration = selected;
         if (trace_) {
@@ -690,7 +893,8 @@ private:
     void annotate_type(const ExpressionId id, const TypeKey& key)
     {
         const auto found = expression_index_.find(id.value());
-        if (found == expression_index_.end() || !key.known()) {
+        if (found == expression_index_.end() || !key.known()
+            || (frozen_expression(found->second) & frozen_type) != 0) {
             return;
         }
         auto& target = (*expressions_)[found->second];
@@ -2738,7 +2942,8 @@ private:
             return;
         }
         if (const auto found = statement_index_.find(statement.id.value());
-            found != statement_index_.end()) {
+            found != statement_index_.end()
+            && !frozen_statement(found->second)) {
             (*statements_)[found->second].resolved_procedure
                 = chosen.front()->key;
             if (trace_) {
@@ -2852,6 +3057,13 @@ private:
     std::unordered_map<std::string, TypeId> physical_units_;
     std::map<std::uint32_t, CompiledDesignResolver> resolvers_;
     std::unordered_map<std::string, vhdl::ProvidedType> provided_types_;
+    std::unordered_map<std::string, vhdl::ProvidedType> denoted_types_;
+    // By unit identity: whether compile-time analysis stamped the unit.
+    std::vector<std::uint8_t> stamped_units_;
+    // By position: the frozen_* fields of each expression, and whether a
+    // statement's resolved_procedure is frozen.
+    std::vector<std::uint8_t> frozen_expressions_;
+    std::vector<std::uint8_t> frozen_statements_;
     std::unordered_map<std::uint32_t, std::vector<TypeKey>> candidates_;
     std::unordered_map<std::uint64_t, std::vector<Callable>> functions_;
     std::deque<std::vector<Callable>> uncached_functions_;
@@ -2862,7 +3074,9 @@ private:
 
 bool resolve_vhdl_expression_types(CompiledDesign& design)
 {
-    if (design.vhdl_hir.expressions().empty()) {
+    // A unit without expressions (a package of deferred constants) still
+    // has subtype indications to stamp.
+    if (design.vhdl_hir.units().empty()) {
         return true;
     }
     // Mutable access advances the HIR revision, so the lookup indexes the

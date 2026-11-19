@@ -722,9 +722,10 @@ void Interpreter::Impl::StaticKernel::execute_body(
                     break;
                 }
                 auto& strings = members_[containers_[inst.aux].string_member].strings;
-                const auto selected = select_plusarg(impl_.plusargs, strings[inst.z], false);
+                const auto selected
+                    = select_plusarg(impl_.plusargs, strings[inst.z].view(), false);
                 if (inst.imm_a == 1U) {
-                    strings[inst.offset].assign(selected.value_or(std::string_view { }));
+                    strings[inst.offset] = selected.value_or(std::string_view { });
                 }
                 registers[inst.d] = { selected ? 1U : 0U, 0U };
                 break;
@@ -739,13 +740,13 @@ void Interpreter::Impl::StaticKernel::execute_body(
             if (static_cast<static_kernel_detail::StrOp>(inst.sub)
                 == static_kernel_detail::StrOp::write_object) {
                 impl_.string_object_storage(static_cast<StringObjectId>(inst.imm_a))
-                    = strings[inst.z];
+                    = strings[inst.z].view();
                 break;
             }
             if (static_cast<static_kernel_detail::StrOp>(inst.sub)
                 == static_kernel_detail::StrOp::write_object_nba) {
                 queue_string_update(member_index,
-                    static_cast<StringObjectId>(inst.imm_a), strings[inst.z]);
+                    static_cast<StringObjectId>(inst.imm_a), strings[inst.z].str());
                 break;
             }
             if (static_cast<static_kernel_detail::StrOp>(inst.sub)
@@ -770,7 +771,7 @@ void Interpreter::Impl::StaticKernel::execute_body(
                               static_kernel_detail::string_format_width_kind(record),
                               weak(inst.y));
                     static_kernel_detail::append_str_format(record, strings[inst.offset], value,
-                        strings[inst.z], field_width, kernel_now(), impl_.time_format);
+                        strings[inst.z].view(), field_width, kernel_now(), impl_.time_format);
                 } catch (const std::exception& error) {
                     fail_at(at, error.what());
                 }
@@ -783,14 +784,16 @@ void Interpreter::Impl::StaticKernel::execute_body(
                     const auto value = static_kernel_detail::execute_str_method(inst.imm_a, flags,
                         strings[inst.z],
                         (flags & static_kernel_detail::str_method_argument) != 0U
-                            ? std::string_view { strings[static_cast<std::size_t>(inst.imm_b)] }
+                            ? strings[static_cast<std::size_t>(inst.imm_b)].view()
                             : std::string_view { },
                         (flags & static_kernel_detail::str_method_first) != 0U
                             ? registers[inst.x] : Word { },
                         (flags & static_kernel_detail::str_method_second) != 0U
                             ? registers[inst.y] : Word { },
                         (flags & static_kernel_detail::str_method_string) != 0U
-                            ? &strings[inst.offset] : nullptr);
+                            ? &strings[inst.offset] : nullptr,
+                        time_resolution_ != 0U
+                            ? time_resolution_ : impl_.time_format.resolution_femtoseconds);
                     if ((flags & static_kernel_detail::str_method_scalar) != 0U) {
                         registers[inst.d] = { value, 0U };
                     }
@@ -3162,11 +3165,10 @@ void Interpreter::Impl::StaticKernel::set_instruction_helpers(
     helpers.dyn_warn = &StaticKernel::native_dyn_warn;
     helpers.dyn_reshape = &StaticKernel::native_dyn_reshape;
     helpers.str_nba = &StaticKernel::native_str_nba;
-    helpers.str_reserve = [](StaticKernelNativeFrame* frame, const std::uint32_t at,
-                              void* target, const std::uint64_t needed) {
-        return StaticKernel::native_str_reserve(frame, at, static_cast<std::string*>(target),
-            needed);
-    };
+    helpers.str_reserve = &StaticKernel::native_str_reserve;
+    helpers.string_object_load = &StaticKernel::native_string_object_load;
+    helpers.string_object_store = &StaticKernel::native_string_object_store;
+    helpers.plusarg = &StaticKernel::native_plusarg;
     helpers.dyn_text_reserve = &StaticKernel::native_dyn_text_reserve;
     helpers.dyn_scratch = &StaticKernel::native_dyn_scratch;
     helpers.dyn_stream_wide = &StaticKernel::native_dyn_stream_wide;

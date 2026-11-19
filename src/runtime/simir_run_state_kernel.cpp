@@ -30,6 +30,27 @@
 
 #include <algorithm>
 
+namespace fsim::runtime {
+
+/// A kernel string register (KernelString) is saved as its bytes, the form
+/// a std::string has in a run-state file.
+template <> struct RunStateCodec<simir::KernelString> {
+    using is_codec = void;
+    static void io(RunStateArchive& archive, simir::KernelString& value)
+    {
+        std::string text;
+        if (archive.saving()) {
+            text = value.str();
+        }
+        archive.io(text);
+        if (archive.loading() && archive.ok()) {
+            value = text;
+        }
+    }
+};
+
+} // namespace fsim::runtime
+
 namespace fsim::runtime::simir {
 
 namespace {
@@ -345,7 +366,7 @@ void Kernel::run_state_io(RunStateArchive& ar)
         // String registers keep their elements in place: compiled code
         // reaches them through the string file (KOp::str).
         FSIM_RS_TABLE("kernel.member", strings, ar, member,
-            [&](std::string& text) { ar.io(text); });
+            [&](KernelString& text) { ar.io(text); });
         FSIM_RS_IO("kernel.member", dynamic_containers, ar, member);
         FSIM_RS_IO("kernel.member", call_stack, ar, member);
         FSIM_RS_IO("kernel.member", frames, ar, member);

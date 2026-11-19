@@ -5,6 +5,7 @@
 #include "fsim/support/vhdl_entity_class.hpp"
 #include "fsim/support/expression_marker.hpp"
 #include "fsim/support/rare_vector.hpp"
+#include "fsim/support/symbol.hpp"
 #include "fsim/support/vhdl_formal_conversion.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
 
@@ -289,6 +290,11 @@ struct Name {
     SourceSpanId source;
     std::optional<DeclarationId> selected;
     std::vector<DeclarationId> overloads;
+    /// The interned canonical identifier (owner 11-19; support/symbol.hpp),
+    /// set when the HIR is built (intern_names): symbol == the symbol of
+    /// text(). Lookup compares symbols, never text. Left out of equality:
+    /// a Name built by the compiler may not carry one yet.
+    support::SymbolId symbol { };
 
     /// The canonical text, or the source spelling when there is none.
     [[nodiscard]] std::string_view text() const noexcept
@@ -297,7 +303,12 @@ struct Name {
                                  : std::string_view { canonical };
     }
 
-    bool operator==(const Name&) const = default;
+    [[nodiscard]] bool operator==(const Name& other) const
+    {
+        return spelling == other.spelling && canonical == other.canonical
+            && source == other.source && selected == other.selected
+            && overloads == other.overloads;
+    }
 };
 
 /// Compiler-owned predefined vector identities whose package declarations
@@ -531,6 +542,11 @@ struct Expression {
     // where the design retains one; set when analysis resolves it (12.3,
     // 12.4). A subtype declaration keeps its own constraint.
     std::optional<Name> qualified_type_mark;
+    // The provided type (STANDARD, TEXTIO, STD_LOGIC_1164, NUMERIC_*, ...)
+    // a name expression denotes when the design keeps no declaration for it,
+    // e.g. the prefix TIME of TIME'VALUE; set by analysis through
+    // visibility (12.3, 12.4), never from the spelling.
+    std::optional<ProvidedType> denoted_provided_type;
 };
 
 struct DelayValue {
@@ -1192,6 +1208,54 @@ standard_array_builtin_type_identity(
     return BuiltinTypeIdentity::none;
 }
 
+/// Which table of the target unit's items an anchor indexes.
+enum class AnchorSpace : std::uint8_t { declarations, types };
+
+/// A reference from an analyzed unit into another library unit (owner
+/// 11-19): the unit named as 13.1/13.2 name it (logical library, primary
+/// unit, secondary unit for an architecture or package body), checked by
+/// the digest of the unit it was analyzed against, and the ordinal of the
+/// target in that unit's items (CompiledVhdlUnitItems). Links rebind it by
+/// position; nothing inside the unit is found by name.
+struct DeclarationAnchor {
+    std::string library;
+    std::string primary;
+    bool extended_primary { };
+    std::string secondary;
+    bool extended_secondary { };
+    UnitKind kind { UnitKind::entity };
+    AnchorSpace space { AnchorSpace::declarations };
+    std::uint32_t ordinal { };
+    std::string target_digest;
+    bool operator==(const DeclarationAnchor&) const = default;
+};
+
+/// The field of an item of the owning unit an anchor fills.
+enum class AnchoredSlot : std::uint8_t {
+    expression_resolved_declaration,
+    expression_resolved_type,
+    expression_qualified_mark_selected,
+    statement_resolved_procedure,
+};
+
+/// Slot `slot` of the owning unit's item `item` (its ordinal in the unit's
+/// items), resolved again at every link instead of kept: its target is in
+/// a compiler-served standard package or in no library unit.
+struct RecomputedSlot {
+    AnchoredSlot slot { AnchoredSlot::expression_resolved_declaration };
+    std::uint32_t item { };
+    bool operator==(const RecomputedSlot&) const = default;
+};
+
+/// Slot `slot` of the owning unit's item `item` (its ordinal in the unit's
+/// items) takes the declaration anchors[anchor] denotes.
+struct AnchoredReference {
+    AnchoredSlot slot { AnchoredSlot::expression_resolved_declaration };
+    std::uint32_t item { };
+    std::uint32_t anchor { };
+    bool operator==(const AnchoredReference&) const = default;
+};
+
 struct Unit {
     UnitId id;
     ScopeId scope;
@@ -1227,6 +1291,15 @@ struct Unit {
     // this unit's selected VHDL revision. Such HIR is inspectable and
     // serializable, but elaboration must not make it executable.
     bool profile_compatible { true };
+    // Set when compile-time analysis resolved this unit
+    // (stamp_vhdl_analysis): its stored references are authoritative, and
+    // links keep them instead of resolving the unit again.
+    bool analyzed { };
+    // This unit's references into other library units, rebound at link.
+    std::vector<DeclarationAnchor> anchors;
+    std::vector<AnchoredReference> anchored;
+    // Its slots that every link resolves again (RecomputedSlot).
+    std::vector<RecomputedSlot> recomputed;
 };
 
 /// Whether an aggregate has element associations that are all positional.
@@ -1458,6 +1531,10 @@ struct TopLevelHirView {
     std::span<const OverloadSet> overload_sets;
     std::span<const Instance> instances;
 };
+
+/// Sets the symbol of every Name in `hir` that has none (support::vhdl_symbol
+/// of its text()). Run when the HIR is built and before analysis.
+void intern_names(Hir& hir);
 
 /// Validate instance occurrence IDs and overload-set identities and members.
 /// This is shared by CompiledDesign and the standalone HIR codec.

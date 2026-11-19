@@ -4,6 +4,7 @@
 #include "fsim/frontend/diagnostic.hpp"
 #include "fsim/support/expression_marker.hpp"
 #include "fsim/support/systemverilog_builtin_type.hpp"
+#include "fsim/support/symbol.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -256,8 +257,22 @@ struct Token {
   // token's text is then only a display name.
   support::ExpressionMarker marker { support::ExpressionMarker::none };
   std::string marker_argument { };
+  // The interned canonical form of an Identifier token (support/symbol.hpp),
+  // set by the lexer and by whatever rewrites an identifier's text; invalid on
+  // other tokens. Left out of equality: it is derived from `text`.
+  support::SymbolId symbol { };
 
-  friend bool operator==(const Token&, const Token&) = default;
+  [[nodiscard]] friend bool operator==(const Token& left, const Token& right)
+  {
+    return left.kind == right.kind && left.text == right.text
+        && left.span == right.span
+        && left.expansion_stack == right.expansion_stack
+        && left.generated_text == right.generated_text
+        && left.systemverilog_builtin == right.systemverilog_builtin
+        && left.systemverilog_type_word == right.systemverilog_type_word
+        && left.marker == right.marker
+        && left.marker_argument == right.marker_argument;
+  }
 };
 
 [[nodiscard]] std::string systemverilog_string_literal_spelling(

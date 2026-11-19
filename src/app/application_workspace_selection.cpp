@@ -526,6 +526,52 @@ namespace {
             }
         }
 
+        // The library units that analysis stored references into (anchors)
+        // are part of the design (IEEE 1076-2019 13.5), whether or not a use
+        // clause or an instance names them: an expanded name
+        // (`work.pkg.byte`) is enough.
+        void select_anchors(const semantic::CompiledDesign& design)
+        {
+            using semantic::vhdl::UnitKind;
+            for (const auto& unit : design.vhdl_units()) {
+                for (const auto& anchor : unit.anchors) {
+                    const auto form = vhdl_identifier_form(anchor.extended_primary);
+                    if (anchor.kind == UnitKind::entity
+                        || anchor.kind == UnitKind::architecture) {
+                        Target target { "vhdl", anchor.library, anchor.primary, { } };
+                        target.name_form = form;
+                        (void)select_target(target, anchor.library, "entity", false);
+                        if (anchor.kind == UnitKind::architecture) {
+                            select_architectures(anchor.library, anchor.primary,
+                                anchor.secondary, form,
+                                vhdl_identifier_form(anchor.extended_secondary));
+                        }
+                        continue;
+                    }
+                    if (anchor.kind != UnitKind::package) {
+                        continue;
+                    }
+                    for (std::size_t index = 0; index < records_.size(); ++index) {
+                        if (!workspace_name_equal(
+                                location(index).name, anchor.library, "vhdl")) {
+                            continue;
+                        }
+                        for (const auto& owned : artifact(index).units) {
+                            const auto& candidate = owned.unit;
+                            if (candidate.language == "vhdl"
+                                && candidate.kind == "package"
+                                && candidate.primary_name.empty()
+                                && vhdl_identifier_matches(candidate.name,
+                                    candidate.name_form, anchor.primary, form)) {
+                                select_record(index);
+                                select_package_body(location(index).name, candidate);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         void select_reference(const semantic::CompiledDesign& design,
             const semantic::CompiledReference& reference)
         {
@@ -795,6 +841,7 @@ namespace {
             for (const auto& reference : design->references()) {
                 select_reference(*design, reference);
             }
+            select_anchors(*design);
             // A compilation unit that holds part of the design brings every
             // class of its $unit scope: their static properties are
             // initialized whether or not the design names the class (IEEE

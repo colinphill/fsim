@@ -3,11 +3,27 @@
 
 #include <chrono>
 #include <filesystem>
+#include <random>
+#include <string>
 #include <utility>
+
+#if defined(_WIN32)
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace fsim::test {
 
 namespace {
+
+long long fsim_test_process_id() {
+#if defined(_WIN32)
+  return static_cast<long long>(_getpid());
+#else
+  return static_cast<long long>(::getpid());
+#endif
+}
 
 void make_tree_writable(const std::filesystem::path& root) noexcept {
   std::error_code error;
@@ -27,17 +43,27 @@ void make_tree_writable(const std::filesystem::path& root) noexcept {
       std::filesystem::perm_options::add, error);
 }
 
+// A directory no other test process uses: concurrent ctest processes may
+// start in the same clock tick, so the name also carries the process id and
+// a random word, and create_directory must create it anew.
+std::filesystem::path unique_test_directory() {
+  std::random_device entropy;
+  const auto root = std::filesystem::temp_directory_path();
+  for (;;) {
+    const auto candidate =
+        root / ("fsim-application-test-" + std::to_string(fsim_test_process_id()) + "-"
+                + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())
+                + "-" + std::to_string(entropy()));
+    if (std::filesystem::create_directory(candidate)) {
+      return candidate;
+    }
+  }
+}
+
 }  // namespace
 
 ApplicationTestFixture::ApplicationTestFixture()
-    : directory(
-          std::filesystem::temp_directory_path()
-          / ("fsim-application-test-"
-             + std::to_string(
-                 std::chrono::steady_clock::now()
-                     .time_since_epoch()
-                     .count()))) {
-  std::filesystem::create_directories(directory);
+    : directory(unique_test_directory()) {
   create_common_sources();
   create_mixed_language_sources();
   create_systemc_sources();

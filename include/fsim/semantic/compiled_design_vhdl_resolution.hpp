@@ -10,8 +10,10 @@ namespace fsim::semantic {
 /// return value, an object initializer) types its expression tree once, and
 /// the function overloads and enumeration literals it selects are recorded
 /// in `vhdl::Expression::resolved_declaration`. An expression the pass
-/// cannot decide is left unset. Returns false only when the design's lookup
-/// indexes cannot be refreshed.
+/// cannot decide is left unset. The results of a unit compile-time analysis
+/// stamped (vhdl::Unit::analyzed) are kept: the pass neither resets nor
+/// writes them, except the slots it lists in vhdl::Unit::recomputed.
+/// Returns false only when the design's lookup indexes cannot be refreshed.
 [[nodiscard]] bool resolve_vhdl_expression_types(CompiledDesign& design);
 
 } // namespace fsim::semantic

@@ -7,6 +7,7 @@
 #include "fsim/frontend/parser.hpp"
 #include "fsim/frontend/source.hpp"
 #include "fsim/frontend/token.hpp"
+#include "fsim/support/symbol.hpp"
 #include "parser_support.hpp"
 #include <algorithm>
 #include <cctype>
@@ -204,6 +205,7 @@ ParseResult VerilogParser::run() {
             // hierarchical name stays outside it (`top.\w.b .l2`).
             token.text.push_back(' ');
         }
+        token.symbol = support::systemverilog_symbol(token.text);
     }
     // `this.super` names the base class object as `super` does (IEEE
     // 1800-2017 8.15).

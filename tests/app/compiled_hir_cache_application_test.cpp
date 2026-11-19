@@ -3184,7 +3184,7 @@ int main()
 
     static_assert(
         fsim::app::application_detail::compiled_hir_cache_producer_revision
-        == 15U);
+        == 16U);
     fsim::compiler::CacheKeyBuilder current_producer;
     fsim::app::application_detail::add_compiled_hir_cache_key_identity(
         current_producer);

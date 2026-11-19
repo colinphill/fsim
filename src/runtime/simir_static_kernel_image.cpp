@@ -169,6 +169,9 @@ public:
             out_.put(static_cast<std::uint64_t>(value));
         } else if constexpr (std::is_same_v<T, std::string>) {
             out_.text(value);
+        } else if constexpr (std::is_same_v<T, KernelString>) {
+            // A string register: its bytes, as a std::string's.
+            out_.text(value.view());
         } else if constexpr (std::is_same_v<T, PackedLogic4>) {
             out_.packed(value);
         } else if constexpr (std::is_same_v<T, CompiledBody>) {
@@ -263,6 +266,13 @@ public:
             return in_.get(value);
         } else if constexpr (std::is_same_v<T, std::string>) {
             return in_.text(value);
+        } else if constexpr (std::is_same_v<T, KernelString>) {
+            std::string text;
+            if (!in_.text(text)) {
+                return false;
+            }
+            value = text;
+            return true;
         } else if constexpr (std::is_same_v<T, PackedLogic4>) {
             return in_.packed(value);
         } else if constexpr (std::is_same_v<T, CompiledBody>) {

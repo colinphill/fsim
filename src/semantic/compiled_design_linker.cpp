@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "fsim/semantic/compiled_design_vhdl_analysis_stamp.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
 
 #include "fsim/semantic/compiled_design_normalization.hpp"
@@ -1134,6 +1135,11 @@ CompiledLinkResult project_compiled_design(
         output.mutable_references().push_back(std::move(reference));
     }
     refresh_compiled_design_metadata(output);
+    if (auto error
+        = rebind_vhdl_declaration_anchors(output, AnchorRebind::projection);
+        !error.empty()) {
+        return { std::nullopt, std::string { invalid_projection } + ": " + error };
+    }
     if (!normalize_compiled_design(output)) {
         return { std::nullopt, std::string { invalid_projection } };
     }
@@ -4602,6 +4608,10 @@ static CompiledLinkResult finalize_linked_design(CompiledDesign output)
         !error.empty()) {
         return { std::nullopt, error, "FSIM-FE-VHORDER-011" };
     }
+    if (auto error = rebind_vhdl_declaration_anchors(output, AnchorRebind::link);
+        !error.empty()) {
+        return { std::nullopt, std::move(error), "FSIM-SEM-0003" };
+    }
     resolve_linked_systemverilog_types(output);
     resolve_linked_vhdl_architecture_names(output);
     resolve_linked_vhdl_type_marks(output);
@@ -4609,6 +4619,20 @@ static CompiledLinkResult finalize_linked_design(CompiledDesign output)
     if (!normalize_compiled_design(output)) {
         return { std::nullopt,
             "linked compiled-HIR bundle is structurally invalid" };
+    }
+    // Test-only: stored analysis results must equal a fresh resolution.
+    static const bool verify_analysis = [] {
+        const char* text = std::getenv("FSIM_VERIFY_VHDL_ANALYSIS");
+        return text != nullptr && std::string_view { text } == "1";
+    }();
+    if (verify_analysis) {
+        if (auto difference = verify_stamped_vhdl_analysis(output);
+            !difference.empty()) {
+            return { std::nullopt,
+                "stored VHDL analysis differs from a fresh resolution: "
+                    + difference,
+                "FSIM-SEM-0004" };
+        }
     }
     if (const auto error = checked_structural_hir_error(output);
         !error.empty()) {

@@ -530,6 +530,7 @@ include/fsim/semantic/compiled_design_linker.hpp
 include/fsim/semantic/compiled_design_normalization.hpp
 include/fsim/semantic/compiled_design_resolver.hpp
 include/fsim/semantic/compiled_design_specialization.hpp
+include/fsim/semantic/compiled_design_vhdl_analysis_stamp.hpp
 include/fsim/semantic/compiled_design_vhdl_resolution.hpp
 include/fsim/semantic/design_ir.hpp
 include/fsim/semantic/hierarchy_path.hpp
@@ -547,6 +548,7 @@ include/fsim/semantic/vhdl_hir.hpp
 include/fsim/semantic/vhdl_intrinsic_signatures.hpp
 include/fsim/semantic/vhdl_standard_catalog.hpp
 include/fsim/semantic/vhdl_standard_catalog.inc
+include/fsim/semantic/vhdl_standard_declaration.hpp
 include/fsim/support/active_set.hpp
 include/fsim/support/allocation_hooks.hpp
 include/fsim/support/atomic_shared_ptr.hpp
@@ -574,6 +576,7 @@ include/fsim/support/sha256.hpp
 include/fsim/support/sqlite_database.hpp
 include/fsim/support/stack_growth.hpp
 include/fsim/support/sva_marker.hpp
+include/fsim/support/symbol.hpp
 include/fsim/support/system_tf.hpp
 include/fsim/support/systemverilog_builtin_type.hpp
 include/fsim/support/teardown.hpp
@@ -583,6 +586,8 @@ include/fsim/support/vhdl_entity_class.hpp
 include/fsim/support/vhdl_fixed_bounds.hpp
 include/fsim/support/vhdl_formal_conversion.hpp
 include/fsim/support/vhdl_identifier.hpp
+include/fsim/support/vhdl_standard_declaration.hpp
+include/fsim/support/vhdl_standard_declaration.inc
 include/fsim/support/vhdl_standard_enumeration.hpp
 include/fsim/support/vhdl_time.hpp
 include/fsim/support/vhdl_tool_identity.hpp
@@ -1383,6 +1388,7 @@ src/semantic/compiled_design_normalization.cpp
 src/semantic/compiled_design_resolver.cpp
 src/semantic/compiled_design_specialization.cpp
 src/semantic/compiled_design_specialization_vhdl_generate.cpp
+src/semantic/compiled_design_vhdl_analysis_stamp.cpp
 src/semantic/compiled_design_vhdl_resolution.cpp
 src/semantic/design_ir.cpp
 src/semantic/hierarchy_path.cpp
@@ -1396,6 +1402,7 @@ src/semantic/systemverilog_structure_image.cpp
 src/semantic/systemverilog_type_descriptor.cpp
 src/semantic/vhdl_hir.cpp
 src/semantic/vhdl_standard_catalog.cpp
+src/semantic/vhdl_standard_declaration.cpp
 src/support/allocation_hooks.cpp
 src/support/allocation_hooks.def
 src/support/environment.cpp
@@ -1403,6 +1410,7 @@ src/support/payload_checksum.cpp
 src/support/sha256.cpp
 src/support/sqlite_database.cpp
 src/support/stack_growth.cpp
+src/support/symbol.cpp
 src/support/teardown.cpp
 src/systemc/accellera_compatibility.cpp
 src/systemc/accellera_runtime.cpp
@@ -4238,6 +4246,9 @@ tests/fixtures/vhdl/subtype_left/run_subtype_left.cmake
 tests/fixtures/vhdl/subtype_left/subtype_left.expected
 tests/fixtures/vhdl/subtype_left/subtype_left.expected.license
 tests/fixtures/vhdl/subtype_left/subtype_left.vhd
+tests/fixtures/vhdl/time_value/run_time_value.cmake
+tests/fixtures/vhdl/time_value/time_value.vhd
+tests/fixtures/vhdl/time_value/time_value_fs.vhd
 tests/fixtures/vhdl/user_array_case/run_user_array_case.cmake
 tests/fixtures/vhdl/user_array_case/user_array_case.expected
 tests/fixtures/vhdl/user_array_case/user_array_case.expected.license
@@ -4693,6 +4704,7 @@ tests/runtime/runtime_vpi_type_tests.cpp
 tests/runtime/runtime_vpi_value_tests.cpp
 tests/runtime/runtime_vpi_write_tests.cpp
 tests/runtime/simir_coverage_test.cpp
+tests/runtime/static_kernel_string_test.cpp
 tests/runtime/tf_argument_test.cpp
 tests/runtime/tf_call_test.cpp
 tests/runtime/tf_containment_test.cpp
@@ -4744,6 +4756,8 @@ tests/semantic/hierarchy_path_test.cpp
 tests/semantic/intrinsic_signatures_test.cpp
 tests/semantic/semantic_model_test.cpp
 tests/semantic/systemverilog_class_specialization_test.cpp
+tests/semantic/vhdl_analysis_anchor_test.cpp
+tests/semantic/vhdl_standard_declaration_test.cpp
 tests/support/bounded_bytes_test.cpp
 tests/support/container_test_support.hpp
 tests/support/ctype_whitespace_test.cpp
@@ -4752,6 +4766,7 @@ tests/support/native_filesystem_test.cpp
 tests/support/parallel_for_test.cpp
 tests/support/payload_checksum_test.cpp
 tests/support/stack_growth_test.cpp
+tests/support/symbol_test.cpp
 tests/support/test_helpers.hpp
 tests/systemc/accellera_systemc_corpus_test.cpp
 tests/systemc/accellera_upstream_sc_main.cpp

@@ -1270,7 +1270,7 @@ namespace {
 
 } // namespace
 
-DynFailure execute_str(const KInst& inst, const CompiledBody& body, std::string* strings,
+DynFailure execute_str(const KInst& inst, const CompiledBody& body, KernelString* strings,
     Word* registers)
 {
     switch (static_cast<StrOp>(inst.sub)) {
@@ -1280,8 +1280,8 @@ DynFailure execute_str(const KInst& inst, const CompiledBody& body, std::string*
         }
         return DynFailure::none;
     case StrOp::load_constant:
-        strings[inst.offset].assign(body.string_bytes, static_cast<std::size_t>(inst.imm_a),
-            static_cast<std::size_t>(inst.imm_b));
+        strings[inst.offset].assign(std::string_view { body.string_bytes }.substr(
+            static_cast<std::size_t>(inst.imm_a), static_cast<std::size_t>(inst.imm_b)));
         return DynFailure::none;
     case StrOp::concat: {
         const auto* operands = body.string_operands.data() + inst.imm_a;
@@ -1296,9 +1296,9 @@ DynFailure execute_str(const KInst& inst, const CompiledBody& body, std::string*
         std::string result;
         result.reserve(total);
         for (std::uint64_t index = 0U; index < inst.imm_b; ++index) {
-            result += strings[operands[index]];
+            result += strings[operands[index]].view();
         }
-        strings[inst.offset] = std::move(result);
+        strings[inst.offset] = result;
         return DynFailure::none;
     }
     case StrOp::compare: {
@@ -1310,7 +1310,7 @@ DynFailure execute_str(const KInst& inst, const CompiledBody& body, std::string*
         registers[inst.d] = { static_cast<std::uint32_t>(strings[inst.z].size()), 0U };
         return DynFailure::none;
     case StrOp::index: {
-        const auto& source = strings[inst.z];
+        const auto source = strings[inst.z].view();
         const auto at = string_byte_index(inst, registers[inst.y], source.size());
         registers[inst.d] = { at ? static_cast<unsigned char>(source[*at]) : 0U, 0U };
         return DynFailure::none;
@@ -1331,28 +1331,28 @@ DynFailure execute_str(const KInst& inst, const CompiledBody& body, std::string*
             return DynFailure::string_limit;
         }
         if ((byte.a & 0xffU) != 0U) {
-            target[*at] = static_cast<char>(byte.a & 0xffU);
+            target.data()[*at] = static_cast<char>(byte.a & 0xffU);
         }
         return DynFailure::none;
     }
     case StrOp::change_case:
-        strings[inst.offset] = string_change_case(strings[inst.z], inst.imm_a != 0U);
+        strings[inst.offset] = string_change_case(strings[inst.z].view(), inst.imm_a != 0U);
         return DynFailure::none;
     case StrOp::order:
         registers[inst.d] = { static_cast<std::uint32_t>(
-                                  string_compare(strings[inst.z],
-                                      strings[static_cast<std::size_t>(inst.imm_b)],
+                                  string_compare(strings[inst.z].view(),
+                                      strings[static_cast<std::size_t>(inst.imm_b)].view(),
                                       inst.imm_a != 0U)),
             0U };
         return DynFailure::none;
     case StrOp::substr:
-        strings[inst.offset] = string_substr(strings[inst.z],
+        strings[inst.offset] = string_substr(strings[inst.z].view(),
             string_method_integer(registers[inst.y], inst.width),
             string_method_integer(registers[inst.x], static_cast<std::uint32_t>(inst.imm_a)));
         return DynFailure::none;
     case StrOp::to_integer:
         registers[inst.d] = { static_cast<std::uint32_t>(string_to_integer(
-                                  strings[inst.z], static_cast<unsigned>(inst.imm_a))),
+                                  strings[inst.z].view(), static_cast<unsigned>(inst.imm_a))),
             0U };
         return DynFailure::none;
     case StrOp::from_integer:
@@ -1362,7 +1362,7 @@ DynFailure execute_str(const KInst& inst, const CompiledBody& body, std::string*
         return DynFailure::none;
     case StrOp::radix:
         strings[inst.offset] = vhdl_logic9_radix_string(
-            strings[inst.z], (inst.imm_a & 1U) != 0U, (inst.imm_a & 2U) != 0U);
+            strings[inst.z].view(), (inst.imm_a & 1U) != 0U, (inst.imm_a & 2U) != 0U);
         return DynFailure::none;
     case StrOp::plusarg:
     case StrOp::read_object:
@@ -1378,22 +1378,29 @@ DynFailure execute_str(const KInst& inst, const CompiledBody& body, std::string*
 }
 
 std::uint64_t execute_str_method(const std::uint64_t operation, const std::uint8_t flags,
-    std::string& source, const std::string_view argument, const Word first, const Word second,
-    std::string* destination)
+    KernelString& source, const std::string_view argument, const Word first, const Word second,
+    KernelString* destination, const std::uint64_t resolution_femtoseconds)
 {
     const auto operand = [&](const std::uint8_t flag, const Word word, const unsigned shift) {
         return (flags & flag) != 0U
             ? string_method_integer(word, static_cast<std::uint32_t>((operation >> shift) & 0xffU))
             : std::nullopt;
     };
+    // The reference routine works on a std::string; a method that changes
+    // its source (itoa and the like) changes the register.
+    auto text = source.str();
     auto result = execute_string_method(static_cast<StringMethodOperator>(operation & 0xffU),
-        source, argument, operand(str_method_first, first, 8U),
-        operand(str_method_second, second, 16U));
+        text, argument, operand(str_method_first, first, 8U),
+        operand(str_method_second, second, 16U), std::nullopt,
+        (flags & str_method_ticks) != 0U ? resolution_femtoseconds : 0U);
+    if (source != text) {
+        source = text;
+    }
     if ((flags & str_method_string) != 0U) {
         if (!result.string || destination == nullptr) {
             throw std::logic_error { "string method produced no string result" };
         }
-        *destination = std::move(*result.string);
+        *destination = *result.string;
         return 0U;
     }
     if (!result.scalar_bits) {
@@ -1402,7 +1409,7 @@ std::uint64_t execute_str_method(const std::uint64_t operation, const std::uint8
     return *result.scalar_bits;
 }
 
-void append_str_format(const std::uint64_t* record, std::string& destination,
+void append_str_format(const std::uint64_t* record, KernelString& destination,
     const PackedLogic4& value, const std::string_view argument,
     const PackedLogic4& field_width, const std::uint64_t tick,
     const SystemVerilogTimeFormat& time_format)
@@ -1418,7 +1425,11 @@ void append_str_format(const std::uint64_t* record, std::string& destination,
             ? M::format_string
             : M::format_packed;
     }
-    execute_string_format(method, destination, value, argument, tick, time_format);
+    // The reference routine appends to a std::string (its limit check
+    // counts the bytes already there).
+    auto text = destination.str();
+    execute_string_format(method, text, value, argument, tick, time_format);
+    destination = text;
 }
 
 std::string scalar_failure_message(const KInst& inst, const std::uint32_t error)
@@ -1547,7 +1558,7 @@ namespace {
 // The keyed KOp::dyn operations of an associative array with string keys:
 // key y is string register y (7.9).
 DynFailure execute_text_key_dyn(const KInst& inst, StaticKernelDynamicContainer& container,
-    Word* registers, std::string* strings)
+    Word* registers, KernelString* strings)
 {
     const auto op = static_cast<DynOp>(inst.sub);
     const bool text = (container.flags & dynamic_text_flag) != 0U;
@@ -1565,10 +1576,10 @@ DynFailure execute_text_key_dyn(const KInst& inst, StaticKernelDynamicContainer&
                 if (key_register.size() > maximum_string_bytes) {
                     return DynFailure::key_bytes;
                 }
-                const auto at = lower_text_key(container, key_register);
+                const auto at = lower_text_key(container, key_register.view());
                 if (op == DynOp::next) {
                     const auto following = at < container.size
-                            && text_of(text_key_slot(container, at)) == key_register
+                            && text_of(text_key_slot(container, at)) == key_register.view()
                         ? at + 1U : at;
                     if (following < container.size) {
                         selected = following;
@@ -1579,7 +1590,7 @@ DynFailure execute_text_key_dyn(const KInst& inst, StaticKernelDynamicContainer&
             }
         }
         if (selected) {
-            key_register = std::string { text_of(text_key_slot(container, *selected)) };
+            key_register = text_of(text_key_slot(container, *selected));
         }
         registers[inst.d] = { selected ? 1U : 0U, 0U };
         return DynFailure::none;
@@ -1591,9 +1602,9 @@ DynFailure execute_text_key_dyn(const KInst& inst, StaticKernelDynamicContainer&
         && (registers[inst.x].b & kernel_word::mask(container.element_width)) != 0U) {
         return DynFailure::write_mismatch;
     }
-    const auto at = lower_text_key(container, key_register);
+    const auto at = lower_text_key(container, key_register.view());
     const bool present
-        = at < container.size && text_of(text_key_slot(container, at)) == key_register;
+        = at < container.size && text_of(text_key_slot(container, at)) == key_register.view();
     // A missing key reads the `default:` value without a warning, else the
     // nonexistent-entry value with one (7.8.6).
     const auto missing = present || (container.flags & dynamic_default_flag) != 0U
@@ -1606,9 +1617,8 @@ DynFailure execute_text_key_dyn(const KInst& inst, StaticKernelDynamicContainer&
                                     : Word { container.fill_a, container.fill_b };
         return missing;
     case DynOp::text_read:
-        strings[inst.offset] = present
-            ? std::string { text_of(dynamic_element(container, at)) }
-            : std::string { default_text(container) };
+        strings[inst.offset] = present ? text_of(dynamic_element(container, at))
+                                       : default_text(container);
         return missing;
     case DynOp::exists:
         registers[inst.d] = { present ? 1U : 0U, 0U };
@@ -1624,10 +1634,10 @@ DynFailure execute_text_key_dyn(const KInst& inst, StaticKernelDynamicContainer&
             if (container.size >= container.limit) {
                 return text ? DynFailure::text_assoc_budget : DynFailure::assoc_budget;
             }
-            insert_text_key_slot(container, at, key_register);
+            insert_text_key_slot(container, at, key_register.view());
         }
         if (text) {
-            set_text_element(container, at, strings[inst.offset]);
+            set_text_element(container, at, strings[inst.offset].view());
         } else {
             set_dynamic_element(container, at, registers[inst.x]);
         }
@@ -1639,7 +1649,7 @@ DynFailure execute_text_key_dyn(const KInst& inst, StaticKernelDynamicContainer&
 
 // The KOp::dyn operations of a container of strings and the appends.
 DynFailure execute_text_dyn(const KInst& inst, StaticKernelDynamicContainer& container,
-    const StaticKernelDynamicContainer* other, Word* registers, std::string* strings)
+    const StaticKernelDynamicContainer* other, Word* registers, KernelString* strings)
 {
     const auto op = static_cast<DynOp>(inst.sub);
     const bool is_signed = (inst.flags & flag_signed) != 0U;
@@ -1655,7 +1665,7 @@ DynFailure execute_text_dyn(const KInst& inst, StaticKernelDynamicContainer& con
             if (op == DynOp::text_write) {
                 return DynFailure::invalid_write_index;
             }
-            strings[inst.offset] = std::string { default_text(container) };
+            strings[inst.offset] = default_text(container);
             return user_default ? DynFailure::none : DynFailure::invalid_read_index;
         }
         const auto key = order_key(key_word.a & kernel_word::mask(width), width,
@@ -1665,9 +1675,8 @@ DynFailure execute_text_dyn(const KInst& inst, StaticKernelDynamicContainer& con
         if (op == DynOp::text_read) {
             // A missing key reads the `default:` text without a warning,
             // else the empty string with one (7.8.6).
-            strings[inst.offset] = present
-                ? std::string { text_of(dynamic_element(container, at)) }
-                : std::string { default_text(container) };
+            strings[inst.offset] = present ? text_of(dynamic_element(container, at))
+                                           : default_text(container);
             return present || user_default ? DynFailure::none
                                            : DynFailure::missing_entry;
         }
@@ -1677,13 +1686,13 @@ DynFailure execute_text_dyn(const KInst& inst, StaticKernelDynamicContainer& con
             }
             insert_key_slot(container, at, key);
         }
-        set_text_element(container, at, strings[inst.offset]);
+        set_text_element(container, at, strings[inst.offset].view());
         return DynFailure::none;
     }
     switch (op) {
     case DynOp::text_default: {
         const auto slot = assign_text({ container.fill_a, container.fill_b },
-            strings[inst.offset]);
+            strings[inst.offset].view());
         container.fill_a = slot.a;
         container.fill_b = slot.b;
         container.flags |= dynamic_default_flag;
@@ -1697,15 +1706,14 @@ DynFailure execute_text_dyn(const KInst& inst, StaticKernelDynamicContainer& con
             if (!ordinal.ordinal) {
                 return ordinal.failure;
             }
-            strings[inst.offset]
-                = std::string { text_of(dynamic_element(container, *ordinal.ordinal)) };
+            strings[inst.offset] = text_of(dynamic_element(container, *ordinal.ordinal));
             return DynFailure::none;
         }
         // An invalid or out-of-range index reads the empty string (7.4.6).
         const auto at = text_index(registers[inst.y], inst.width, is_signed);
         strings[inst.offset] = at && *at < container.size
-            ? std::string { text_of(dynamic_element(container, *at)) }
-            : std::string { };
+            ? text_of(dynamic_element(container, *at))
+            : std::string_view { };
         return DynFailure::none;
     }
     case DynOp::text_write: {
@@ -1714,7 +1722,7 @@ DynFailure execute_text_dyn(const KInst& inst, StaticKernelDynamicContainer& con
             if (!ordinal.ordinal) {
                 return ordinal.failure;
             }
-            set_text_element(container, *ordinal.ordinal, strings[inst.offset]);
+            set_text_element(container, *ordinal.ordinal, strings[inst.offset].view());
             return DynFailure::none;
         }
         const auto at = text_index(registers[inst.y], inst.width, is_signed);
@@ -1730,7 +1738,7 @@ DynFailure execute_text_dyn(const KInst& inst, StaticKernelDynamicContainer& con
             ensure_capacity(container, size + 1U);
             ++container.size;
         }
-        set_text_element(container, *at, strings[inst.offset]);
+        set_text_element(container, *at, strings[inst.offset].view());
         return DynFailure::none;
     }
     case DynOp::append_clear:
@@ -1748,7 +1756,7 @@ DynFailure execute_text_dyn(const KInst& inst, StaticKernelDynamicContainer& con
             container.size = size + 1U;
         } else if (op == DynOp::append_text) {
             ensure_capacity(container, size + 1U);
-            set_text_element(container, size, strings[inst.offset]);
+            set_text_element(container, size, strings[inst.offset].view());
             container.size = size + 1U;
         } else if (op == DynOp::append_container && other != nullptr) {
             // The source's count before the append (it may be the target).
@@ -1843,7 +1851,7 @@ DynFailure execute_text_dyn(const KInst& inst, StaticKernelDynamicContainer& con
 } // namespace
 
 DynFailure execute_dyn(const KInst& inst, StaticKernelDynamicContainer& container,
-    const StaticKernelDynamicContainer* other, Word* registers, std::string* strings)
+    const StaticKernelDynamicContainer* other, Word* registers, KernelString* strings)
 {
     {
         const auto op = static_cast<DynOp>(inst.sub);

@@ -13,8 +13,12 @@
 
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <span>
+#include <stdexcept>
 #include <string>
+#include <string_view>
+#include <type_traits>
 #include <vector>
 
 namespace fsim::runtime::simir {
@@ -54,7 +58,7 @@ struct StaticKernelContainerInfo {
     /// packed_offset on; 4: a queue or dynamic array (KOp::dyn), whose
     /// StaticKernelDynamicContainer `elements` points at; 5: a member's
     /// string registers (KOp::str), `elements` pointing at the first
-    /// std::string.
+    /// StaticKernelString.
     std::uint32_t storage { };
     /// Storage 2: the packed slot.
     std::uint32_t slot { };
@@ -202,17 +206,6 @@ struct StaticKernelSvaTable {
     StaticKernelSvaReports* reports { };
 };
 
-/// Generated code's view of one unit activation. Field offsets are part of
-/// the ABI and are checked by static_asserts in the code generator.
-/// Where a string variable (a StringObjectId) is: the std::string at index
-/// `index` of the array whose first element `*holder` points to (the
-/// kernel's own pointer to the variable, or a fixed string array's element
-/// vector for an element alias).
-struct StaticKernelStringCell {
-    const void* holder { };
-    std::uint64_t index { };
-};
-
 /// The run's code coverage counters as generated code updates them
 /// (KOp::coverage; the reference's CodeCoverageCounters): the values, the
 /// per-counter enable flags, the counter count (0 while no counter
@@ -226,37 +219,222 @@ struct StaticKernelCoverageTable {
     std::uint64_t all_enabled { };
 };
 
-/// The std::string layouts generated code reads and writes in place (string
-/// registers, string variables, plusargs), fixed by the standard library
-/// fsim is built with:
-/// - libstdcxx (libstdc++): the data pointer, the length, then a 16-byte
-///   local buffer (data pointing at it, capacity 15) or the allocated
-///   capacity; 32 bytes.
-/// - libcxx (libc++, little-endian, standard layout): bit 0 of the first
-///   byte tells the long form. Short: that byte holds the length times 2,
-///   the bytes follow from offset 1 (capacity 22). Long: the first word is
-///   the allocation size with bit 0 set (capacity: that size minus 1), then
-///   the length, then the data pointer; 24 bytes.
-/// Any other standard library or layout does not build.
-/// StaticKernel::hold_string_file checks at run time that the host's
-/// std::string has the selected layout.
-enum class StaticKernelStringLayout : std::uint8_t { libstdcxx, libcxx };
-#if defined(_LIBCPP_VERSION)
-#    if defined(_LIBCPP_ABI_ALTERNATE_STRING_LAYOUT) || defined(_LIBCPP_BIG_ENDIAN)
-#        error "fsim's compiled kernel supports the standard little-endian libc++ string layout only"
-#    endif
-inline constexpr auto static_kernel_string_layout = StaticKernelStringLayout::libcxx;
-inline constexpr std::uint64_t static_kernel_string_object_bytes = 24U;
-inline constexpr std::uint64_t static_kernel_string_local_capacity = 22U;
-#elif defined(__GLIBCXX__)
-inline constexpr auto static_kernel_string_layout = StaticKernelStringLayout::libstdcxx;
-inline constexpr std::uint64_t static_kernel_string_object_bytes = 32U;
-inline constexpr std::uint64_t static_kernel_string_local_capacity = 15U;
-#else
-#    error "fsim's compiled kernel knows the std::string layout of libstdc++ and libc++ only"
-#endif
-static_assert(sizeof(std::string) == static_kernel_string_object_bytes);
+/// A string register as generated code reads and writes it (KOp::str): a
+/// layout fsim defines, the same with every standard library. `data` is
+/// never null and points at the `size` bytes, followed by a zero byte: in
+/// `local` while the string is short (`capacity` then
+/// static_kernel_string_local_capacity), else in an allocation of
+/// `capacity` + 1 bytes that the owning KernelString frees. Generated code
+/// loads data, size and capacity, writes bytes, the size and the
+/// terminating zero within the capacity, and grows a string only through
+/// `fsim_sk_str_reserve`. No generated code and no kernel admission check
+/// depends on the layout of a std::string or std::vector: string variables
+/// and plusargs (interpreter storage) are reached through helper calls
+/// (`fsim_sk_string_object_load`, `fsim_sk_string_object_store`,
+/// `fsim_sk_str_nba`, `fsim_sk_plusarg`). The code generator checks the
+/// offsets with static_asserts.
+inline constexpr std::uint64_t static_kernel_string_local_bytes = 16U;
+inline constexpr std::uint64_t static_kernel_string_local_capacity
+    = static_kernel_string_local_bytes - 1U;
+struct StaticKernelString {
+    char* data;
+    std::uint64_t size;
+    std::uint64_t capacity;
+    char local[static_kernel_string_local_bytes];
+};
+static_assert(std::is_standard_layout_v<StaticKernelString>);
+static_assert(std::is_trivially_copyable_v<StaticKernelString>);
+static_assert(sizeof(StaticKernelString) == 40U);
 
+/// The owner of one StaticKernelString (a member's string register): its
+/// only member is the header, so an array of them is an array of headers
+/// generated code indexes with the header's stride. Copies copy the bytes;
+/// a move takes the allocation (a short string's bytes are copied) and
+/// leaves the source empty. C++ code reads it as a std::string_view
+/// (view()) and assigns it by copy (assign, operator=).
+class KernelString {
+public:
+    KernelString() noexcept { reset(); }
+    explicit KernelString(const std::string_view text) : KernelString() { assign(text); }
+    KernelString(const KernelString& other) : KernelString() { assign(other.view()); }
+    KernelString(KernelString&& other) noexcept : KernelString() { take(other); }
+    ~KernelString() { release(); }
+    KernelString& operator=(const KernelString& other)
+    {
+        if (this != &other) {
+            assign(other.view());
+        }
+        return *this;
+    }
+    KernelString& operator=(KernelString&& other) noexcept
+    {
+        if (this != &other) {
+            release();
+            reset();
+            take(other);
+        }
+        return *this;
+    }
+    KernelString& operator=(const std::string_view text)
+    {
+        assign(text);
+        return *this;
+    }
+
+    [[nodiscard]] std::string_view view() const noexcept
+    {
+        return { header_.data, static_cast<std::size_t>(header_.size) };
+    }
+    [[nodiscard]] std::string str() const { return std::string { view() }; }
+    [[nodiscard]] const char* data() const noexcept { return header_.data; }
+    [[nodiscard]] char* data() noexcept { return header_.data; }
+    [[nodiscard]] std::size_t size() const noexcept
+    {
+        return static_cast<std::size_t>(header_.size);
+    }
+    [[nodiscard]] bool empty() const noexcept { return header_.size == 0U; }
+    [[nodiscard]] std::size_t capacity() const noexcept
+    {
+        return static_cast<std::size_t>(header_.capacity);
+    }
+
+    /// The bytes of `text`, which may be this string's own.
+    void assign(const std::string_view text)
+    {
+        const auto count = static_cast<std::uint64_t>(text.size());
+        if (count > header_.capacity) {
+            // Longer than this string, so not within its bytes.
+            auto grown = allocate(count);
+            std::memcpy(grown.data, text.data(), text.size());
+            release();
+            header_.data = grown.data;
+            header_.capacity = grown.capacity;
+        } else if (count != 0U) {
+            std::memmove(header_.data, text.data(), text.size());
+        }
+        set_size(count);
+    }
+    /// Appends the bytes of `text`, which may be this string's own.
+    void append(const std::string_view text)
+    {
+        const auto count = static_cast<std::uint64_t>(text.size());
+        if (count == 0U) {
+            return;
+        }
+        const auto size = header_.size;
+        if (count > max_size() - size) {
+            throw std::length_error { "kernel string exceeds its maximum size" };
+        }
+        if (size + count > header_.capacity) {
+            auto grown = allocate(size + count);
+            std::memcpy(grown.data, header_.data, static_cast<std::size_t>(size));
+            std::memcpy(grown.data + size, text.data(), text.size());
+            release();
+            header_.data = grown.data;
+            header_.capacity = grown.capacity;
+        } else {
+            std::memmove(header_.data + size, text.data(), text.size());
+        }
+        set_size(size + count);
+    }
+    /// Room for `needed` bytes, the bytes kept (fsim_sk_str_reserve).
+    void reserve(const std::uint64_t needed)
+    {
+        if (needed <= header_.capacity) {
+            return;
+        }
+        auto grown = allocate(needed);
+        std::memcpy(grown.data, header_.data, static_cast<std::size_t>(header_.size) + 1U);
+        release();
+        header_.data = grown.data;
+        header_.capacity = grown.capacity;
+    }
+    void clear() noexcept { set_size(0U); }
+
+    /// The header generated code reads and writes.
+    [[nodiscard]] StaticKernelString* header() noexcept { return &header_; }
+    [[nodiscard]] const StaticKernelString* header() const noexcept { return &header_; }
+    /// The owner of a header generated code handed to a helper.
+    [[nodiscard]] static KernelString& of(StaticKernelString* header) noexcept
+    {
+        return *reinterpret_cast<KernelString*>(header);
+    }
+    [[nodiscard]] static const KernelString& of(const StaticKernelString* header) noexcept
+    {
+        return *reinterpret_cast<const KernelString*>(header);
+    }
+
+    friend bool operator==(const KernelString& left, const KernelString& right) noexcept
+    {
+        return left.view() == right.view();
+    }
+    friend bool operator==(const KernelString& left, const std::string_view right) noexcept
+    {
+        return left.view() == right;
+    }
+
+private:
+    struct Allocation {
+        char* data;
+        std::uint64_t capacity;
+    };
+    [[nodiscard]] static constexpr std::uint64_t max_size() noexcept
+    {
+        return std::uint64_t { 1 } << 62U;
+    }
+    /// An allocation for at least `needed` bytes, at least twice the
+    /// current capacity (repeated appends take amortized constant time).
+    [[nodiscard]] Allocation allocate(const std::uint64_t needed) const
+    {
+        if (needed > max_size()) {
+            throw std::length_error { "kernel string exceeds its maximum size" };
+        }
+        auto capacity = header_.capacity <= max_size() / 2U ? 2U * header_.capacity : max_size();
+        if (capacity < needed) {
+            capacity = needed;
+        }
+        return { new char[static_cast<std::size_t>(capacity) + 1U], capacity };
+    }
+    void set_size(const std::uint64_t size) noexcept
+    {
+        header_.size = size;
+        header_.data[size] = '\0';
+    }
+    void reset() noexcept
+    {
+        header_.data = header_.local;
+        header_.size = 0U;
+        header_.capacity = static_kernel_string_local_capacity;
+        header_.local[0] = '\0';
+    }
+    void release() noexcept
+    {
+        if (header_.data != header_.local) {
+            delete[] header_.data;
+        }
+    }
+    /// From an empty, short string: `other`'s bytes, `other` left empty.
+    void take(KernelString& other) noexcept
+    {
+        if (other.header_.data == other.header_.local) {
+            std::memcpy(header_.local, other.header_.local,
+                static_cast<std::size_t>(other.header_.size) + 1U);
+            header_.size = other.header_.size;
+            other.reset();
+            return;
+        }
+        header_ = other.header_;
+        header_.local[0] = '\0';
+        other.reset();
+    }
+
+    StaticKernelString header_ { };
+};
+static_assert(std::is_standard_layout_v<KernelString>);
+static_assert(sizeof(KernelString) == sizeof(StaticKernelString));
+
+/// Generated code's view of one unit activation. Field offsets are part of
+/// the ABI and are checked by static_asserts in the code generator.
 struct StaticKernelNativeFrame {
     /// Kernel word arena (aval words at a slot's offset, bval after them).
     std::uint64_t* arena { };
@@ -336,15 +514,10 @@ struct StaticKernelNativeFrame {
     std::uint64_t* const* random_states { };
     /// The system seed $random draws from (Impl::system_random_seed).
     std::int32_t* system_random_seed { };
-    /// The run's plusargs (Impl::plusargs) for StrOp::plusarg.
-    const std::string* plusargs { };
-    std::uint64_t plusarg_count { };
     /// $reset_count and $reset_value (Impl::reset_count_result,
     /// reset_value_result).
     const std::int32_t* reset_count { };
     const std::int32_t* reset_value { };
-    /// Per string variable (StaticKernel::string_object_table).
-    const StaticKernelStringCell* string_objects { };
     /// The code coverage counters (StaticKernel::coverage_table_).
     const StaticKernelCoverageTable* coverage { };
 };
@@ -453,15 +626,36 @@ struct StaticKernelNativeHelpers {
         StaticKernelDynamicContainer* target,
         const StaticKernelDynamicContainer* source) { };
     /// `fsim_sk_str_reserve`: capacity for `needed` bytes in the string
-    /// register at `target` (a std::string), its bytes kept; nonzero when
-    /// the memory is not available (the failure is reported).
-    std::uint32_t (*str_reserve)(StaticKernelNativeFrame*, std::uint32_t at, void* target,
-        std::uint64_t needed) { };
+    /// register `target`, its bytes kept; nonzero when the memory is not
+    /// available (the failure is reported).
+    std::uint32_t (*str_reserve)(StaticKernelNativeFrame*, std::uint32_t at,
+        StaticKernelString* target, std::uint64_t needed) { };
     /// `fsim_sk_str_nba`: a nonblocking write of string variable `object`
-    /// with the string register at `source` (a std::string), queued among
-    /// the member's nonblocking updates.
+    /// with the string register `source`, queued among the member's
+    /// nonblocking updates.
     void (*str_nba)(StaticKernelNativeFrame*, std::uint32_t at, std::uint64_t object,
-        const void* source) { };
+        const StaticKernelString* source) { };
+    /// `fsim_sk_string_object_load`: the string register `target` = string
+    /// variable `object` (IEEE 1800-2023 6.16; the variable, or an element
+    /// of a fixed string array, is interpreter storage); nonzero when the
+    /// frame's status now holds the failure.
+    std::uint32_t (*string_object_load)(StaticKernelNativeFrame*, std::uint32_t at,
+        std::uint64_t object, StaticKernelString* target) { };
+    /// `fsim_sk_string_object_store`: a blocking write of string variable
+    /// `object` with the string register `source` (a string variable has no
+    /// events: the value is stored, as the reference's WriteStringObject
+    /// does); nonzero when the frame's status now holds the failure.
+    std::uint32_t (*string_object_store)(StaticKernelNativeFrame*, std::uint32_t at,
+        std::uint64_t object, const StaticKernelString* source) { };
+    /// `fsim_sk_plusarg`: $test$plusargs of the string register `query` over
+    /// the run's plusargs (IEEE 1800-2023 21.6; the reference's
+    /// select_plusarg); with `selected` not null, the matched plusarg
+    /// without its leading `+` (empty when none matched) goes to that string
+    /// register.
+    /// Returns 1 when a plusarg matched, 0 when none did, and 2 when the
+    /// frame's status now holds a failure.
+    std::uint64_t (*plusarg)(StaticKernelNativeFrame*, std::uint32_t at,
+        const StaticKernelString* query, StaticKernelString* selected) { };
     /// `fsim_sk_dyn_text_reserve`: room for `needed` bytes in the text slot
     /// at `slot` (a string element of a kernel container), its bytes kept;
     /// nonzero when the memory is not available (the failure is reported).
@@ -497,15 +691,15 @@ struct StaticKernelNativeHelpers {
     /// first_b) and (second_a, second_b), a string result to `destination`
     /// (null when none). Returns the 64-bit result. An error fails the run.
     std::uint64_t (*str_method)(StaticKernelNativeFrame*, std::uint32_t at,
-        std::uint64_t operation, std::uint32_t flags, void* source, const void* argument,
-        std::uint64_t first_a, std::uint64_t first_b, std::uint64_t second_a,
-        std::uint64_t second_b, void* destination) { };
+        std::uint64_t operation, std::uint32_t flags, StaticKernelString* source,
+        const StaticKernelString* argument, std::uint64_t first_a, std::uint64_t first_b,
+        std::uint64_t second_a, std::uint64_t second_b, StaticKernelString* destination) { };
     /// `fsim_sk_str_radix`: KOp::str radix, the string `destination` =
     /// TO_HSTRING or TO_OSTRING of the string `source` (flags: imm_a), by
     /// the reference's vhdl_logic9_radix_string (a pure fsim routine). An
     /// error (an allocation failure) fails the run.
-    void (*str_radix)(StaticKernelNativeFrame*, void* destination, const void* source,
-        std::uint32_t flags) { };
+    void (*str_radix)(StaticKernelNativeFrame*, StaticKernelString* destination,
+        const StaticKernelString* source, std::uint32_t flags) { };
     /// `fsim_sk_str_format`: KOp::str format at instruction `at` by the
     /// reference formatter (execute_string_format, a pure fsim routine):
     /// appends to the string `destination` the format record at `record`
@@ -515,8 +709,8 @@ struct StaticKernelNativeHelpers {
     /// string `argument`, with the field width `field` (word, 'U' mask, weak
     /// mask) of `field_bits` bits. An error fails the run.
     void (*str_format)(StaticKernelNativeFrame*, std::uint32_t at, const std::uint64_t* record,
-        void* destination, const std::uint64_t* value, const void* registers,
-        std::uint32_t entry, std::uint32_t bits, const void* argument,
+        StaticKernelString* destination, const std::uint64_t* value, const void* registers,
+        std::uint32_t entry, std::uint32_t bits, const StaticKernelString* argument,
         const std::uint64_t* field, std::uint32_t field_bits) { };
     /// Wide-register instructions by kind (`fsim_sk_wide_<op>`): instruction
     /// `at` with the caller's register file, where wide values live, and the

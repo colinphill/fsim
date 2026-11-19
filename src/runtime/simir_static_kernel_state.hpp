@@ -931,7 +931,7 @@ private:
             /// Behavioral members also save string values and container
             /// register bindings.
             std::vector<StringRegisterId> string_ids;
-            std::vector<std::string> strings;
+            std::vector<KernelString> strings;
             std::vector<ContainerRegisterId> container_ids;
             std::vector<std::uint32_t> containers;
             /// Per container_ids entry: the saved reference-format value,
@@ -1022,8 +1022,9 @@ private:
         /// runs on the operation tier, whose registers are the frame.
         bool isolated_forks { };
         /// Behavioral members: string registers shared by the member's
-        /// threads, and the signal/edge list of WaitSensitivity.
-        std::vector<std::string> strings;
+        /// threads (fsim's KernelString, which generated code reads and
+        /// writes in place), and the signal/edge list of WaitSensitivity.
+        std::vector<KernelString> strings;
         /// The kernel container record of storage `strings` through which
         /// compiled code reaches `strings` (KOp::str), and the scratch
         /// string register a concatenation that reads its destination after
@@ -1895,13 +1896,24 @@ private:
     void queue_string_update(std::uint32_t member, StringObjectId object,
         std::string value);
     /// fsim_sk_str_nba: StrOp::write_object_nba of instruction `at`, the
-    /// value the string register at `source` (a std::string).
+    /// value the string register `source`.
     static void native_str_nba(StaticKernelNativeFrame* frame, std::uint32_t at,
-        std::uint64_t object, const void* source);
+        std::uint64_t object, const StaticKernelString* source);
     /// fsim_sk_str_reserve: capacity for `needed` bytes in a member's
     /// string register (KOp::str), its bytes kept.
     static std::uint32_t native_str_reserve(StaticKernelNativeFrame* frame,
-        std::uint32_t at, std::string* target, std::uint64_t needed);
+        std::uint32_t at, StaticKernelString* target, std::uint64_t needed);
+    /// fsim_sk_string_object_load: StrOp::read_object of instruction `at`,
+    /// string variable `object` into the string register `target`.
+    static std::uint32_t native_string_object_load(StaticKernelNativeFrame* frame,
+        std::uint32_t at, std::uint64_t object, StaticKernelString* target);
+    /// fsim_sk_string_object_store: StrOp::write_object of instruction
+    /// `at`, string variable `object` = the string register `source`.
+    static std::uint32_t native_string_object_store(StaticKernelNativeFrame* frame,
+        std::uint32_t at, std::uint64_t object, const StaticKernelString* source);
+    /// fsim_sk_plusarg: StrOp::plusarg of instruction `at` (select_plusarg).
+    static std::uint64_t native_plusarg(StaticKernelNativeFrame* frame, std::uint32_t at,
+        const StaticKernelString* query, StaticKernelString* selected);
     /// fsim_sk_dyn_text_reserve: room for `needed` bytes in a text slot
     /// (a string element of a kernel container), its bytes kept.
     static std::uint32_t native_dyn_text_reserve(StaticKernelNativeFrame* frame,
@@ -1922,15 +1934,16 @@ private:
         std::uint32_t position, std::uint64_t counter);
     /// fsim_sk_str_format: KOp::str format by the reference formatter.
     static std::uint64_t native_str_method(StaticKernelNativeFrame* frame, std::uint32_t at,
-        std::uint64_t operation, std::uint32_t flags, void* source, const void* argument,
-        std::uint64_t first_a, std::uint64_t first_b, std::uint64_t second_a,
-        std::uint64_t second_b, void* destination);
-    static void native_str_radix(StaticKernelNativeFrame* frame, void* destination,
-        const void* source, std::uint32_t flags);
+        std::uint64_t operation, std::uint32_t flags, StaticKernelString* source,
+        const StaticKernelString* argument, std::uint64_t first_a, std::uint64_t first_b,
+        std::uint64_t second_a, std::uint64_t second_b, StaticKernelString* destination);
+    static void native_str_radix(StaticKernelNativeFrame* frame, StaticKernelString* destination,
+        const StaticKernelString* source, std::uint32_t flags);
     static void native_str_format(StaticKernelNativeFrame* frame, std::uint32_t at,
-        const std::uint64_t* record, void* destination, const std::uint64_t* value,
-        const void* registers, std::uint32_t entry, std::uint32_t bits, const void* argument,
-        const std::uint64_t* field, std::uint32_t field_bits);
+        const std::uint64_t* record, StaticKernelString* destination, const std::uint64_t* value,
+        const void* registers, std::uint32_t entry, std::uint32_t bits,
+        const StaticKernelString* argument, const std::uint64_t* field,
+        std::uint32_t field_bits);
     /// One counter update as the reference makes it (CodeCoverageHit of
     /// member `member_index` at operation `pc`).
     void record_coverage(std::uint32_t member_index, std::uint32_t pc,
@@ -2606,11 +2619,8 @@ private:
         frame.watch_writes = watch_writes_ ? &debug_write_flag_ : nullptr;
         frame.random_states = random_state_table();
         frame.system_random_seed = &impl_.system_random_seed;
-        frame.plusargs = impl_.plusargs.data();
-        frame.plusarg_count = impl_.plusargs.size();
         frame.reset_count = &impl_.reset_count_result;
         frame.reset_value = &impl_.reset_value_result;
-        frame.string_objects = string_object_table();
         frame.coverage = refresh_coverage_table();
         environment_revision_ = impl_.kernel_environment_revision;
     }
@@ -2900,7 +2910,7 @@ private:
         std::vector<RegisterId> ids;
         std::vector<PackedLogic4> values;
         std::vector<StringRegisterId> string_ids;
-        std::vector<std::string> strings;
+        std::vector<KernelString> strings;
         /// Private arrays of the activation (arguments and locals) and their
         /// arena words; registers bound to design arrays are not saved.
         std::vector<ContainerRegisterId> container_ids;
@@ -3450,6 +3460,10 @@ private:
     /// operations (run_file) use them.
     struct MemberFileStorage;
     struct MemberContainerAccess;
+    /// A member's string registers as the std::string the reference's
+    /// routines read and write in place (MemberFileStorage,
+    /// MemberContainerAccess).
+    class StringRegisterLoan;
     struct MemberRandomizeStorage;
     struct MemberVhdlApiStorage;
     /// A VHDL-2019 member's report or assertion violation (Impl::report_vhdl)
@@ -3591,8 +3605,8 @@ private:
     /// back when the scope ends.
     struct ReferenceStringScope {
         Member& member;
-        std::vector<std::string> compiled;
-        ReferenceStringScope(Member& owner, const std::vector<std::string>& values);
+        std::vector<KernelString> compiled;
+        ReferenceStringScope(Member& owner, const std::vector<KernelString>& values);
         ReferenceStringScope(const ReferenceStringScope&) = delete;
         ReferenceStringScope& operator=(const ReferenceStringScope&) = delete;
         ~ReferenceStringScope();
@@ -3604,7 +3618,7 @@ private:
         decltype(CompiledBody::registers) registers;
         NativeContainerValues containers;
         NativeObjectValues objects;
-        std::vector<std::string> strings;
+        std::vector<KernelString> strings;
         /// The string variables the body writes in place (StrOp::
         /// write_object), with their values at the start: the replay starts
         /// from these and must leave the values the compiled run left.
@@ -3737,7 +3751,7 @@ private:
         std::vector<std::pair<SignalId, PackedLogic4>> pending_commits;
         std::vector<Pending> pending_host_updates;
         /// The member's string registers before the generic operation.
-        std::vector<std::string> pending_strings;
+        std::vector<KernelString> pending_strings;
         std::uint64_t pending_random { };
         /// The compiled run is inside a generic operation (between
         /// shadow_note_reads and shadow_record_generic).
@@ -3830,7 +3844,7 @@ private:
     /// part of a compiled recursive callable's frame (frame_storage, at
     /// operation `pc`) share them.
     struct FrameResults {
-        std::vector<std::string> strings;
+        std::vector<KernelString> strings;
         std::vector<std::uint32_t> containers;
         std::vector<SharedContainerValue> dynamic;
     };
@@ -3980,16 +3994,6 @@ private:
         return build_random_state_table();
     }
     [[nodiscard]] std::uint64_t* const* build_random_state_table();
-    /// Per string variable, where generated code finds it (built on first
-    /// use; the variables and fixed string arrays never move).
-    [[nodiscard]] const StaticKernelStringCell* string_object_table()
-    {
-        if (string_object_cells_.size() == impl_.string_objects.size()) [[likely]] {
-            return string_object_cells_.data();
-        }
-        return build_string_object_table();
-    }
-    [[nodiscard]] const StaticKernelStringCell* build_string_object_table();
     /// The code coverage counters as they are now (KOp::coverage): a reset
     /// may have replaced their storage and a control switched counters.
     [[nodiscard]] const StaticKernelCoverageTable* refresh_coverage_table() noexcept
@@ -4010,10 +4014,6 @@ private:
     /// (threads_ may grow under it) and random_states_[member] points there;
     /// random_live_thread_[member] names the thread.
     std::vector<std::uint64_t*> random_states_;
-    /// string_object_table: the cells, and the kernel's pointers to the
-    /// variables that are not element aliases.
-    std::vector<StaticKernelStringCell> string_object_cells_;
-    std::vector<std::string*> string_object_pointers_;
     std::vector<std::uint64_t> random_live_;
     std::vector<std::uint32_t> random_live_thread_;
     /// Whether every live child is detached (none counts).

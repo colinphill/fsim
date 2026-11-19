@@ -492,6 +492,10 @@ inline constexpr std::uint8_t str_method_second = 2U;
 inline constexpr std::uint8_t str_method_argument = 4U;
 inline constexpr std::uint8_t str_method_scalar = 8U;
 inline constexpr std::uint8_t str_method_string = 16U;
+/// KOp::str method: a vhdl_physical_value of TIME, whose result is in
+/// simulation ticks (IEEE 1076-2019 5.2.4.2, 16.2.2); the run's resolution
+/// is applied where the method executes.
+inline constexpr std::uint8_t str_method_ticks = 32U;
 
 /// KOp::str format: register x is a chunked wide register.
 inline constexpr std::uint8_t str_format_wide = 1U;

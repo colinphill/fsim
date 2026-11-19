@@ -208,7 +208,15 @@ model `none`; enabled foundation coverage uses
 rejected directly.
 
 The compiled-HIR bundle is schema 14 and embeds semantic schema 9,
-SystemVerilog HIR schema 46, and VHDL HIR schema 20. SystemVerilog HIR
+SystemVerilog HIR schema 46, and VHDL HIR schema 21. VHDL HIR schema 21
+interns every name's canonical identifier (`Name::symbol`, written as its
+text, IEEE 1076-2019 15.4), marks a unit whose references compile-time
+analysis resolved (`Unit::analyzed`), and keeps its references into other
+library units as anchors rebound by position at link
+(`Unit::anchors`, `anchored`, `DeclarationAnchor`: the library unit as
+13.1 and 13.2 name it, checked by its digest, and the ordinal of the
+target among its items), with the provided type a name expression denotes
+(`Expression::denoted_provided_type`). SystemVerilog HIR
 schema 46 types an array method iterator's `.index` and an event's or
 sequence's `.triggered` (`Expression::builtin_method`, `BuiltinMethod::index`,
 `triggered`, IEEE 1800-2023 7.12.4, 15.5.3), so no consumer tests the name's

@@ -289,17 +289,21 @@ static_assert(offsetof(StaticKernelNativeFrame, variable_hooks) == 144U);
 static_assert(offsetof(StaticKernelNativeFrame, watch_writes) == 152U);
 static_assert(offsetof(StaticKernelNativeFrame, random_states) == 160U);
 static_assert(offsetof(StaticKernelNativeFrame, system_random_seed) == 168U);
-static_assert(offsetof(StaticKernelNativeFrame, plusargs) == 176U);
-static_assert(offsetof(StaticKernelNativeFrame, plusarg_count) == 184U);
-static_assert(offsetof(StaticKernelNativeFrame, reset_count) == 192U);
-static_assert(offsetof(StaticKernelNativeFrame, reset_value) == 200U);
-static_assert(offsetof(StaticKernelNativeFrame, string_objects) == 208U);
-static_assert(offsetof(StaticKernelNativeFrame, coverage) == 216U);
+static_assert(offsetof(StaticKernelNativeFrame, reset_count) == 176U);
+static_assert(offsetof(StaticKernelNativeFrame, reset_value) == 184U);
+static_assert(offsetof(StaticKernelNativeFrame, coverage) == 192U);
 static_assert(offsetof(runtime::simir::StaticKernelCoverageTable, values) == 0U);
 static_assert(offsetof(runtime::simir::StaticKernelCoverageTable, enabled) == 8U);
 static_assert(offsetof(runtime::simir::StaticKernelCoverageTable, count) == 16U);
 static_assert(offsetof(runtime::simir::StaticKernelCoverageTable, all_enabled) == 24U);
-static_assert(sizeof(runtime::simir::StaticKernelStringCell) == 16U);
+// String registers (KOp::str): fsim's StaticKernelString, never a library
+// string object.
+static_assert(offsetof(runtime::simir::StaticKernelString, data) == 0U);
+static_assert(offsetof(runtime::simir::StaticKernelString, size) == 8U);
+static_assert(offsetof(runtime::simir::StaticKernelString, capacity) == 16U);
+static_assert(offsetof(runtime::simir::StaticKernelString, local) == 24U);
+static_assert(sizeof(runtime::simir::StaticKernelString) == 40U);
+static_assert(sizeof(runtime::simir::KernelString) == 40U);
 static_assert(offsetof(detail::NativeCallStack, entries) == 0U);
 static_assert(offsetof(detail::NativeCallStack, capacity) == 8U);
 static_assert(offsetof(runtime::simir::StaticKernelSvaTable, blocks) == 0U);
@@ -8331,17 +8335,14 @@ private:
         dyn_end(stored);
     }
 
-    // A member's string registers (KOp::str) are its Member::strings, which
-    // generated code reads and writes in the layout
-    // static_kernel_string_layout selects (the standard library fsim is
-    // built with); the bytes end with a zero. StaticKernel::hold_string_file
-    // checks at run time that the host's std::string has that layout.
+    // A member's string registers (KOp::str) are its Member::strings, fsim's
+    // StaticKernelString headers (the data pointer, the length, the
+    // capacity, then the local bytes); the bytes end with a zero. No
+    // standard library object is read or written here: string variables
+    // and plusargs are the helpers' (emit_plusarg, StrOp::read_object,
+    // write_object).
     static constexpr std::uint64_t str_object_bytes
-        = runtime::simir::static_kernel_string_object_bytes;
-    static constexpr std::uint64_t str_local_capacity
-        = runtime::simir::static_kernel_string_local_capacity;
-    static constexpr bool str_libcxx = runtime::simir::static_kernel_string_layout
-        == runtime::simir::StaticKernelStringLayout::libcxx;
+        = sizeof(runtime::simir::StaticKernelString);
 
     /// String register `id` (a constant) of the member's string file.
     [[nodiscard]] llvm::Value* str_object(llvm::Value* file, const std::uint64_t id)
@@ -8349,56 +8350,21 @@ private:
         return builder_.CreateConstInBoundsGEP1_64(i8_, file, id * str_object_bytes);
     }
 
-    /// libc++: whether the string is in the long form (bit 0 of its first
-    /// byte).
-    [[nodiscard]] llvm::Value* str_is_long(llvm::Value* object)
-    {
-        return builder_.CreateICmpNE(
-            builder_.CreateAnd(builder_.CreateLoad(i8_, object), llvm::ConstantInt::get(i8_, 1U)),
-            llvm::ConstantInt::get(i8_, 0U));
-    }
-
     [[nodiscard]] llvm::Value* str_data(llvm::Value* object)
     {
-        if constexpr (str_libcxx) {
-            return builder_.CreateSelect(str_is_long(object),
-                builder_.CreateLoad(ptr_, builder_.CreateConstInBoundsGEP1_64(i8_, object, 16U)),
-                builder_.CreateConstInBoundsGEP1_64(i8_, object, 1U));
-        } else {
-            return builder_.CreateLoad(ptr_, object);
-        }
+        return builder_.CreateLoad(ptr_, object);
     }
 
     [[nodiscard]] llvm::Value* str_size(llvm::Value* object)
     {
-        auto* stored
-            = builder_.CreateLoad(i64_, builder_.CreateConstInBoundsGEP1_64(i8_, object, 8U));
-        if constexpr (str_libcxx) {
-            auto* short_size = builder_.CreateLShr(
-                builder_.CreateZExt(builder_.CreateLoad(i8_, object), i64_), constant(1U));
-            return builder_.CreateSelect(str_is_long(object), stored, short_size);
-        } else {
-            return stored;
-        }
+        return builder_.CreateLoad(i64_, builder_.CreateConstInBoundsGEP1_64(i8_, object, 8U));
     }
 
     /// The new length `size` (within the capacity), with the terminating
     /// zero after it.
     void str_set_size(llvm::Value* object, llvm::Value* size)
     {
-        if constexpr (str_libcxx) {
-            auto* is_long = str_is_long(object);
-            auto* stored_long = dyn_when(is_long);
-            builder_.CreateStore(size, builder_.CreateConstInBoundsGEP1_64(i8_, object, 8U));
-            dyn_end(stored_long);
-            auto* stored_short = dyn_when(builder_.CreateNot(is_long));
-            builder_.CreateStore(
-                builder_.CreateShl(builder_.CreateTrunc(size, i8_), llvm::ConstantInt::get(i8_, 1U)),
-                object);
-            dyn_end(stored_short);
-        } else {
-            builder_.CreateStore(size, builder_.CreateConstInBoundsGEP1_64(i8_, object, 8U));
-        }
+        builder_.CreateStore(size, builder_.CreateConstInBoundsGEP1_64(i8_, object, 8U));
         builder_.CreateStore(llvm::ConstantInt::get(i8_, 0U),
             builder_.CreateInBoundsGEP(i8_, str_data(object), size));
     }
@@ -8406,20 +8372,10 @@ private:
     /// The string's capacity.
     [[nodiscard]] llvm::Value* str_capacity(llvm::Value* object)
     {
-        if constexpr (str_libcxx) {
-            auto* allocation = builder_.CreateAnd(builder_.CreateLoad(i64_, object),
-                llvm::ConstantInt::get(i64_, ~std::uint64_t { 1U }));
-            return builder_.CreateSelect(str_is_long(object),
-                builder_.CreateSub(allocation, constant(1U)), constant(str_local_capacity));
-        } else {
-            auto* local = builder_.CreateICmpEQ(str_data(object),
-                builder_.CreateConstInBoundsGEP1_64(i8_, object, 16U));
-            return builder_.CreateSelect(local, constant(str_local_capacity),
-                builder_.CreateLoad(i64_, builder_.CreateConstInBoundsGEP1_64(i8_, object, 16U)));
-        }
+        return builder_.CreateLoad(i64_, builder_.CreateConstInBoundsGEP1_64(i8_, object, 16U));
     }
 
-    /// Room for `needed` bytes (the only runtime call of KOp::str).
+    /// Room for `needed` bytes (fsim_sk_str_reserve grows a string).
     void str_reserve(llvm::Value* object, llvm::Value* needed, const std::uint32_t at)
     {
         auto* capacity = str_capacity(object);
@@ -9017,7 +8973,7 @@ private:
     /// ascending order (record_code_coverage_toggles).
     void emit_coverage(const KInst& inst)
     {
-        auto* table = builder_.CreateLoad(ptr_, frame_field(216U));
+        auto* table = builder_.CreateLoad(ptr_, frame_field(192U));
         const bool bound = (inst.sub & detail::coverage_bound) != 0U;
         if ((inst.sub & detail::coverage_toggle) == 0U) {
             coverage_count(table,
@@ -9170,57 +9126,21 @@ private:
     void emit_plusarg(const KInst& inst, const std::uint32_t at)
     {
         if (inst.imm_a == 2U) {
-            auto* source = builder_.CreateLoad(ptr_, frame_field(inst.imm_b == 1U ? 192U : 200U));
+            auto* source = builder_.CreateLoad(ptr_, frame_field(inst.imm_b == 1U ? 176U : 184U));
             store_register(inst.d,
                 { builder_.CreateZExt(builder_.CreateLoad(i32_, source), i64_), constant(0U) });
             return;
         }
+        // The run's plusargs are the interpreter's: the reference's
+        // select_plusarg runs in the helper (fsim_sk_plusarg).
         auto* file = dyn_header(inst.aux);
-        auto* query = str_object(file, inst.z);
-        auto* wanted = str_size(query);
-        auto* table = builder_.CreateLoad(ptr_, frame_field(176U));
-        auto* count = builder_.CreateLoad(i64_, frame_field(184U));
-        auto* index = str_slot(i64_, constant(0U));
-        auto* found = str_slot(i64_, constant(0U));
-        auto* found_data = str_slot(ptr_, str_data(query));
-        auto* found_size = str_slot(i64_, constant(0U));
-        dyn_while(
-            [&] {
-                return builder_.CreateAnd(
-                    builder_.CreateICmpEQ(builder_.CreateLoad(i64_, found), constant(0U)),
-                    builder_.CreateICmpULT(builder_.CreateLoad(i64_, index), count));
-            },
-            [&] {
-                auto* position = builder_.CreateLoad(i64_, index);
-                auto* object = builder_.CreateInBoundsGEP(i8_, table,
-                    builder_.CreateMul(position, constant(str_object_bytes)));
-                // The leading `+` is not part of the plusarg (the byte after
-                // an empty string's end is its terminating zero).
-                auto* data = str_data(object);
-                auto* plus = builder_.CreateZExt(builder_.CreateICmpEQ(
-                    builder_.CreateLoad(i8_, data), llvm::ConstantInt::get(i8_, '+')), i64_);
-                data = builder_.CreateInBoundsGEP(i8_, data, plus);
-                auto* size = builder_.CreateSub(str_size(object), plus);
-                const auto matched = dyn_choose(builder_.CreateICmpUGE(size, wanted), [&] {
-                    return Pair { builder_.CreateZExt(
-                                      str_bytes_equal(data, str_data(query), wanted), i64_),
-                        constant(0U) };
-                }, { constant(0U), constant(0U) });
-                auto* hit = dyn_when(builder_.CreateICmpNE(matched.a, constant(0U)));
-                builder_.CreateStore(constant(1U), found);
-                builder_.CreateStore(data, found_data);
-                builder_.CreateStore(size, found_size);
-                dyn_end(hit);
-                builder_.CreateStore(builder_.CreateAdd(position, constant(1U)), index);
-            });
-        if (inst.imm_a == 1U) {
-            auto* target = str_object(file, inst.offset);
-            auto* size = builder_.CreateLoad(i64_, found_size);
-            str_reserve(target, size, at);
-            str_copy_bytes(str_data(target), builder_.CreateLoad(ptr_, found_data), size);
-            str_set_size(target, size);
-        }
-        store_register(inst.d, { builder_.CreateLoad(i64_, found), constant(0U) });
+        auto* null = llvm::ConstantPointerNull::get(llvm::PointerType::get(context_, 0U));
+        auto* type = llvm::FunctionType::get(i64_, { ptr_, i32_, ptr_, ptr_ }, false);
+        auto* found = builder_.CreateCall(type, helper_symbol("fsim_sk_plusarg", type),
+            { frame_, llvm::ConstantInt::get(i32_, at), str_object(file, inst.z),
+                inst.imm_a == 1U ? str_object(file, inst.offset) : null });
+        check_status();
+        store_register(inst.d, { found, constant(0U) });
     }
 
     void emit_str(const KInst& inst, const std::uint32_t at)
@@ -9376,12 +9296,13 @@ private:
         case StrOp::plusarg:
             break;
         case StrOp::read_object: {
-            auto* target = str_object(file, inst.offset);
-            auto* source = string_variable(inst.imm_a);
-            auto* size = str_size(source);
-            str_reserve(target, size, at);
-            str_copy_bytes(str_data(target), str_data(source), size);
-            str_set_size(target, size);
+            // A string variable is the interpreter's storage: the helper
+            // copies it (IEEE 1800-2023 6.16).
+            auto* type = llvm::FunctionType::get(i32_, { ptr_, i32_, i64_, ptr_ }, false);
+            builder_.CreateCall(type, helper_symbol("fsim_sk_string_object_load", type),
+                { frame_, llvm::ConstantInt::get(i32_, at), constant(inst.imm_a),
+                    str_object(file, inst.offset) });
+            check_status();
             break;
         }
         case StrOp::write_object_nba: {
@@ -9395,12 +9316,13 @@ private:
             break;
         }
         case StrOp::write_object: {
-            auto* target = string_variable(inst.imm_a);
-            auto* source = str_object(file, inst.z);
-            auto* size = str_size(source);
-            str_reserve(target, size, at);
-            str_copy_bytes(str_data(target), str_data(source), size);
-            str_set_size(target, size);
+            // A blocking write stores the variable, which has no events
+            // (6.16), in the helper.
+            auto* type = llvm::FunctionType::get(i32_, { ptr_, i32_, i64_, ptr_ }, false);
+            builder_.CreateCall(type, helper_symbol("fsim_sk_string_object_store", type),
+                { frame_, llvm::ConstantInt::get(i32_, at), constant(inst.imm_a),
+                    str_object(file, inst.z) });
+            check_status();
             break;
         }
         case StrOp::method: {
@@ -9498,17 +9420,6 @@ private:
             break;
         }
         }
-    }
-
-    /// The std::string of string variable `id` (frame string_objects).
-    [[nodiscard]] llvm::Value* string_variable(const std::uint64_t id)
-    {
-        auto* table = builder_.CreateLoad(ptr_, frame_field(208U));
-        auto* cell = builder_.CreateConstInBoundsGEP1_64(i8_, table, id * 16U);
-        auto* holder = builder_.CreateLoad(ptr_, cell);
-        auto* index = builder_.CreateLoad(i64_, builder_.CreateConstInBoundsGEP1_64(i8_, cell, 8U));
-        return builder_.CreateInBoundsGEP(i8_, builder_.CreateLoad(ptr_, holder),
-            builder_.CreateMul(index, constant(str_object_bytes)));
     }
 
     [[nodiscard]] llvm::AllocaInst* str_slot(llvm::Type* type, llvm::Value* initial)
@@ -22757,6 +22668,9 @@ private:
         add("fsim_sk_dyn_warn", helpers.dyn_warn);
         add("fsim_sk_str_reserve", helpers.str_reserve);
         add("fsim_sk_str_nba", helpers.str_nba);
+        add("fsim_sk_string_object_load", helpers.string_object_load);
+        add("fsim_sk_string_object_store", helpers.string_object_store);
+        add("fsim_sk_plusarg", helpers.plusarg);
         add("fsim_sk_dyn_text_reserve", helpers.dyn_text_reserve);
         add("fsim_sk_dyn_scratch", helpers.dyn_scratch);
         add("fsim_sk_dyn_stream_wide", helpers.dyn_stream_wide);
@@ -23269,7 +23183,7 @@ private:
             }
             return text;
         }();
-        std::string identity = "fsim-static-kernel-object-v1;";
+        std::string identity = "fsim-static-kernel-object-v2;";
         identity += __DATE__ " " __TIME__ ";";
         identity += LLVM_VERSION_STRING ";";
         identity += host;

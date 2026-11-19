@@ -7,6 +7,7 @@
 #include "fsim/frontend/coverage_resolution.hpp"
 #include "fsim/frontend/class_resolution.hpp"
 #include "fsim/frontend/class_inheritance.hpp"
+#include "fsim/semantic/compiled_design_vhdl_analysis_stamp.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
 #include "fsim/semantic/compiled_design_normalization.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
@@ -1218,6 +1219,7 @@ static std::optional<CompilationWorkspace> check_project_impl(
   if (!validate_vhdl_type_mark_visibility(checked, diagnostics)) {
     return std::nullopt;
   }
+  semantic::stamp_vhdl_analysis(checked, checked.source_units);
   install_compiled_class_specializations(checked, diagnostics);
   checked.systemverilog_uvm_provenance.release = *uvm_release;
   checked.systemverilog_uvm_provenance.source_identity =

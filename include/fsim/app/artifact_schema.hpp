@@ -17,6 +17,6 @@ inline constexpr std::uint32_t kSystemVerilogConstraintHirStateSchema = 46;
 inline constexpr std::uint32_t kSystemVerilogCoverageStateSchema = 10;
 inline constexpr std::uint32_t kSystemVerilogUvmStateSchema = 3;
 inline constexpr std::uint32_t kSystemVerilogClassSpecializationStateSchema = 8;
-inline constexpr std::uint32_t kVhdlHirStateSchema = 20;
+inline constexpr std::uint32_t kVhdlHirStateSchema = 21;
 
 } // namespace fsim::app

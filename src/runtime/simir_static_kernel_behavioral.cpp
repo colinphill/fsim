@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <cxxabi.h>
 #include <cstdlib>
+#include <deque>
 #include <iostream>
 #include <limits>
 #include <numeric>
@@ -54,6 +55,57 @@ std::string operation_type_name(const Operation& operation)
 }
 
 } // namespace
+
+/// A member's string registers (KernelString) lent to a reference routine
+/// that reads and writes std::string in place (ContainerRegisterAccess,
+/// FileOperationStorage, DpiFrame): each register the routine names is
+/// copied once, so the routine reads its own writes, and give_back stores
+/// the copies that changed back in the registers. The owner gives back at
+/// the end of the operation; its destructor gives back what is still lent
+/// when the operation failed (the run then fails with the operation's
+/// error).
+class Interpreter::Impl::StaticKernel::StringRegisterLoan {
+public:
+    StringRegisterLoan() = default;
+    StringRegisterLoan(const StringRegisterLoan&) = delete;
+    StringRegisterLoan& operator=(const StringRegisterLoan&) = delete;
+    ~StringRegisterLoan()
+    {
+        try {
+            give_back();
+        } catch (...) {
+            // Only while the failed operation's exception propagates.
+        }
+    }
+    [[nodiscard]] std::string& lend(KernelString& target)
+    {
+        for (auto& entry : entries_) {
+            if (entry.target == &target) {
+                return entry.text;
+            }
+        }
+        entries_.push_back({ &target, target.str() });
+        return entries_.back().text;
+    }
+    void give_back()
+    {
+        while (!entries_.empty()) {
+            auto& entry = entries_.front();
+            if (*entry.target != entry.text) {
+                *entry.target = entry.text;
+            }
+            entries_.pop_front();
+        }
+    }
+
+private:
+    struct Entry {
+        KernelString* target;
+        std::string text;
+    };
+    /// A deque: lent strings keep their addresses.
+    std::deque<Entry> entries_;
+};
 
 std::uint32_t Interpreter::Impl::StaticKernel::spawn_thread(
     const std::uint32_t member, const std::uint32_t pc,
@@ -982,31 +1034,6 @@ std::uint64_t* const* Interpreter::Impl::StaticKernel::build_random_state_table(
     return random_states_.data();
 }
 
-const StaticKernelStringCell* Interpreter::Impl::StaticKernel::build_string_object_table()
-{
-    const auto count = impl_.string_objects.size();
-    {
-        string_object_pointers_.assign(count, nullptr);
-        string_object_cells_.assign(count, { });
-        for (std::size_t id = 0U; id < count; ++id) {
-            auto& object = impl_.string_objects[id];
-            if (object.element_alias) {
-                // Lowering admits only valid aliases.
-                const auto& alias = *object.element_alias;
-                if (alias.object < impl_.container_objects.size()) {
-                    string_object_cells_[id] = {
-                        &impl_.container_objects[alias.object].initial_value.string_elements,
-                        alias.ordinal };
-                }
-                continue;
-            }
-            string_object_pointers_[id] = &object.initial_value;
-            string_object_cells_[id] = { &string_object_pointers_[id], 0U };
-        }
-    }
-    return string_object_cells_.data();
-}
-
 std::uint64_t& Interpreter::Impl::StaticKernel::thread_random_state(const std::uint32_t thread)
 {
     static_cast<void>(random_state_table());
@@ -1288,7 +1315,7 @@ struct Interpreter::Impl::StaticKernel::MemberSynchronizationClient final
     {
         return kernel.thread_register(member, pc, id);
     }
-    [[nodiscard]] std::string& string(const StringRegisterId id)
+    [[nodiscard]] KernelString& string(const StringRegisterId id)
     {
         auto& strings = kernel.members_[member].strings;
         if (id >= strings.size()) {
@@ -1298,7 +1325,7 @@ struct Interpreter::Impl::StaticKernel::MemberSynchronizationClient final
     }
     [[nodiscard]] std::string read_string(const StringRegisterId id) override
     {
-        return string(id);
+        return string(id).str();
     }
     void write(const RegisterId id, PackedLogic4 value) override
     {
@@ -1306,7 +1333,7 @@ struct Interpreter::Impl::StaticKernel::MemberSynchronizationClient final
     }
     void write_string(const StringRegisterId id, std::string value) override
     {
-        string(id) = std::move(value);
+        string(id) = value;
     }
     [[nodiscard]] ContainerValue read_container(
         const ContainerRegisterId id) override
@@ -2354,8 +2381,10 @@ struct Interpreter::Impl::StaticKernel::MemberFileStorage final
         if (id >= strings.size()) {
             kernel.fail(member, pc, "invalid string register ID");
         }
-        return strings[id];
+        return loan.lend(strings[id]);
     }
+    /// The string registers the operation wrote take their values.
+    void give_back() { loan.give_back(); }
     [[nodiscard]] PackedLogic4 handle(const RegisterId id) override
     {
         return packed(id);
@@ -2452,6 +2481,7 @@ struct Interpreter::Impl::StaticKernel::MemberFileStorage final
     StaticKernel& kernel;
     std::uint32_t member;
     std::uint32_t pc;
+    StringRegisterLoan loan;
 };
 
 // A member thread's registers for the reference's assertion operations
@@ -3138,7 +3168,7 @@ struct Interpreter::Impl::StaticKernel::MemberVhdlApiStorage final
     }
     [[nodiscard]] std::string text(const StringRegisterId id) override
     {
-        return string(id);
+        return string(id).str();
     }
     void write_text(const StringRegisterId id, const std::string_view value) override
     {
@@ -3181,7 +3211,7 @@ struct Interpreter::Impl::StaticKernel::MemberVhdlApiStorage final
     {
         kernel.fail(member, pc, message);
     }
-    [[nodiscard]] std::string& string(const StringRegisterId id)
+    [[nodiscard]] KernelString& string(const StringRegisterId id)
     {
         auto& strings = kernel.members_[member].strings;
         if (id >= strings.size()) {
@@ -3276,12 +3306,14 @@ struct Interpreter::Impl::StaticKernel::MemberContainerAccess final
         if (id >= strings.size()) {
             kernel.fail(member, pc, "invalid string register ID");
         }
-        return strings[id];
+        return loan.lend(strings[id]);
     }
     [[nodiscard]] const std::string& read_string(const StringRegisterId id) override
     {
         return string(id);
     }
+    /// The string registers the operation wrote take their values.
+    void give_back() { loan.give_back(); }
     [[nodiscard]] ContainerValue& container(const ContainerRegisterId id) override
     {
         auto& state = kernel.members_[member];
@@ -3314,6 +3346,7 @@ struct Interpreter::Impl::StaticKernel::MemberContainerAccess final
     StaticKernel& kernel;
     std::uint32_t member;
     std::uint32_t pc;
+    StringRegisterLoan loan;
 };
 
 namespace {
@@ -3375,7 +3408,7 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
     const std::uint32_t member_index, const std::uint32_t pc, const Op& op)
 {
     auto& member = members_[member_index];
-    const auto string_register = [&](const StringRegisterId id) -> std::string& {
+    const auto string_register = [&](const StringRegisterId id) -> KernelString& {
         if (id >= member.strings.size()) {
             fail(member_index, pc, "invalid string register ID");
         }
@@ -3421,6 +3454,7 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                 MemberContainerAccess access { *this, member_index, pc };
                 execute_container_operation(op, access, member.process,
                     pc < member.origin.size() ? member.origin[pc] : pc);
+                access.give_back();
                 return;
             }
         } else if constexpr (std::is_same_v<T, ReadContainerObject>) {
@@ -3527,6 +3561,7 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                 write.linear_index = op.linear_index;
                 execute_container_operation(write, access, member.process,
                     pc < member.origin.size() ? member.origin[pc] : pc);
+                member_access.give_back();
                 set_dynamic_object_value(target, value);
                 return;
             }
@@ -3569,7 +3604,7 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             const auto capture_index = [&](const RegisterId index,
                                            const bool text) {
                 if (text) {
-                    capture.texts.push_back(string_register(index));
+                    capture.texts.push_back(string_register(index).str());
                     capture.indices.emplace_back();
                 } else {
                     capture.indices.push_back(packed_register(index));
@@ -3582,7 +3617,7 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             capture_index(op.index, op.string_index);
             switch (op.source_kind) {
             case ContainerElementSourceKind::text:
-                capture.value = string_register(op.source);
+                capture.value = string_register(op.source).str();
                 break;
             case ContainerElementSourceKind::packed:
                 capture.packed = packed_register(op.packed_source);
@@ -3737,7 +3772,7 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             const auto text = format_display_text(op, packed_register(op.source));
             behavioral_output(member_index, text, op.newline);
         } else if constexpr (std::is_same_v<T, StringDisplay>) {
-            const auto text = op.prefix + string_register(op.source) + op.suffix;
+            const auto text = op.prefix + string_register(op.source).str() + op.suffix;
             behavioral_output(member_index, text, op.newline);
         } else if constexpr (std::is_same_v<T, SystemVerilogScalarBinary>) {
             // Real, shortreal and time arithmetic, comparisons and
@@ -3825,12 +3860,12 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             // 21.3.3), formatted as the reference formats it.
             try {
                 string_register(op.destination) = format_runtime_string(op,
-                    string_register(op.format),
+                    string_register(op.format).view(),
                     [&](const RuntimeFormatArgument& argument) {
                         return packed_register(argument.value);
                     },
                     [&](const RuntimeFormatArgument& argument) {
-                        return string_register(argument.value);
+                        return string_register(argument.value).str();
                     },
                     kernel_now(), impl_.time_format);
             } catch (const std::exception& error) {
@@ -3876,6 +3911,7 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             MemberFileStorage storage { *this, member_index, pc };
             try {
                 impl_.run_file(storage, op);
+                storage.give_back();
             } catch (const InterpreterError&) {
                 throw;
             } catch (const std::exception& error) {
@@ -3889,6 +3925,7 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             if (op.file_handle) {
                 MemberFileStorage storage { *this, member_index, pc };
                 file_handle = impl_.known_file_handle(storage, *op.file_handle);
+                storage.give_back();
             }
             impl_.install_monitor(member.process, op, file_handle);
         } else if constexpr (std::is_same_v<T, MonitorControl>) {
@@ -3928,7 +3965,7 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                 impl_.apply_time_format(packed_register(op.units),
                     packed_register(op.precision),
                     packed_register(op.minimum_width),
-                    string_register(op.suffix));
+                    string_register(op.suffix).str());
             } catch (const std::invalid_argument& error) {
                 fail(member_index, pc, error.what());
             }
@@ -3986,7 +4023,7 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             PackedLogic4 value;
             std::string string;
             if (op.write && text) {
-                string = string_register(op.text);
+                string = string_register(op.text).str();
             } else if (op.write) {
                 value = packed_register(op.value);
             }
@@ -4003,7 +4040,7 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                 impl_.coverage_option_hook(op, value, string);
             }
             if (!op.write && text) {
-                string_register(op.text) = std::move(string);
+                string_register(op.text) = string;
             } else if (!op.write) {
                 if (value.width() != 32U || value.is_logic9()) {
                     fail(member_index, pc,
@@ -4017,9 +4054,12 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             const auto read = [&](const RegisterId id) -> const PackedLogic4& {
                 return packed_register(id);
             };
+            // The reference reads std::string operands: copies that live
+            // until the operation ends.
+            std::deque<std::string> read_texts;
             const auto read_string
                 = [&](const StringRegisterId id) -> const std::string& {
-                return string_register(id);
+                return read_texts.emplace_back(string_register(id).str());
             };
             if constexpr (std::is_same_v<T, CoverageControl>) {
                 packed_register(op.destination)
@@ -4035,14 +4075,14 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                 fail(member_index, pc, "coverage database service is unavailable");
             }
             impl_.coverage_database_control_hook(
-                { op.kind, string_register(op.filename) });
+                { op.kind, string_register(op.filename).str() });
         } else if constexpr (std::is_same_v<T, SystemCommand>) {
             // $system (IEEE 1800-2023 20.18.1).
             if (!impl_.system_command_hook) {
                 fail(member_index, pc, "$system service is unavailable");
             }
             const auto command = op.command
-                ? std::optional<std::string_view> { string_register(*op.command) }
+                ? std::optional<std::string_view> { string_register(*op.command).view() }
                 : std::nullopt;
             const auto status = impl_.system_command_hook(command);
             if (op.destination) {
@@ -4079,16 +4119,16 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
         } else if constexpr (std::is_same_v<T, WriteStringObject>) {
             if (impl_.package_static_initialization_active) {
                 impl_.initialize_package_static_string_object(
-                    op.object, string_register(op.source), member.process);
+                    op.object, string_register(op.source).view(), member.process);
             } else if (op.nonblocking) {
                 // `s <= v` updates the string in the NBA region (IEEE
                 // 1800-2023 10.4.2, 4.9.4), in execution order with the
                 // thread's other nonblocking updates (4.6 b)): the kernel's
                 // queue holds it with them.
                 queue_string_update(member_index, op.object,
-                    string_register(op.source));
+                    string_register(op.source).str());
             } else {
-                impl_.string_object_storage(op.object) = string_register(op.source);
+                impl_.string_object_storage(op.object) = string_register(op.source).view();
             }
         } else if constexpr (std::is_same_v<T, LoadStringConstant>) {
             if (op.value.size() > maximum_string_bytes) {
@@ -4107,8 +4147,8 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             // 6.16; VHDL string `=` and `/=` as lowered, 1076-2019 9.2.3).
             bool equal { };
             try {
-                equal = systemverilog_string_compare(string_register(op.lhs),
-                            string_register(op.rhs))
+                equal = systemverilog_string_compare(string_register(op.lhs).view(),
+                            string_register(op.rhs).view())
                     == 0;
             } catch (const std::invalid_argument& error) {
                 fail(member_index, pc, error.what());
@@ -4118,7 +4158,7 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
         } else if constexpr (std::is_same_v<T, StringLength>) {
             std::size_t size { };
             try {
-                size = systemverilog_string_length(string_register(op.source));
+                size = systemverilog_string_length(string_register(op.source).view());
             } catch (const std::invalid_argument& error) {
                 fail(member_index, pc, error.what());
             }
@@ -4127,7 +4167,7 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
         } else if constexpr (std::is_same_v<T, StringIndex>
             || std::is_same_v<T, StringReplaceByte>) {
             constexpr bool read = std::is_same_v<T, StringIndex>;
-            auto& text = [&]() -> std::string& {
+            auto& text = [&]() -> KernelString& {
                 if constexpr (read) {
                     return string_register(op.source);
                 } else {
@@ -4136,7 +4176,7 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             }();
             std::size_t size { };
             try {
-                size = systemverilog_string_length(text);
+                size = systemverilog_string_length(text.view());
             } catch (const std::invalid_argument& error) {
                 fail(member_index, pc, error.what());
             }
@@ -4158,7 +4198,7 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             if constexpr (read) {
                 std::uint32_t byte { };
                 try {
-                    byte = index ? systemverilog_string_at(text, *index) : 0U;
+                    byte = index ? systemverilog_string_at(text.view(), *index) : 0U;
                 } catch (const std::invalid_argument& error) {
                     fail(member_index, pc, error.what());
                 }
@@ -4170,8 +4210,11 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                     fail(member_index, pc, "string replacement byte contains X or Z");
                 }
                 try {
-                    systemverilog_string_replace(text, *index,
+                    // The reference routine works on a std::string.
+                    auto replaced = text.str();
+                    systemverilog_string_replace(replaced, *index,
                         static_cast<std::uint32_t>(byte.aval), maximum_string_bytes);
+                    text = replaced;
                 } catch (const std::exception& error) {
                     fail(member_index, pc, error.what());
                 }
@@ -4186,7 +4229,7 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             VcdControlEvent event;
             event.kind = op.kind;
             if (op.filename) {
-                event.filename = string_register(*op.filename);
+                event.filename = string_register(*op.filename).str();
             }
             if (op.value) {
                 const auto converted = packed_register(*op.value).known_unsigned_value();
@@ -4215,6 +4258,7 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                           running_process(member_index))) {
                 fail(member_index, pc, error);
             }
+            access.give_back();
         } else if constexpr (std::is_same_v<T, ClassAllocate>) {
             // The application's class services (IEEE 1800-2023 8.7) on the
             // member's registers, for the running process: a fork child's
@@ -4226,6 +4270,7 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                     member_program(member_index).name())) {
                 fail(member_index, pc, error);
             }
+            access.give_back();
         } else if constexpr (std::is_same_v<T, ProcessSelf>) {
             // process::self (IEEE 1800-2023 9.7) of the running thread.
             MemberContainerAccess access { *this, member_index, pc };
@@ -4255,6 +4300,7 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                 = handle_record(member_index, pc, access.read(op.source));
             access.string(op.destination)
                 = Impl::encode_random_state(record_random_state(id, *record));
+            access.give_back();
         } else if constexpr (std::is_same_v<T, ProcessSetRandState>) {
             MemberContainerAccess access { *this, member_index, pc };
             auto [id, record]
@@ -4290,6 +4336,7 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                     running_process(member_index))) {
                 fail(member_index, pc, error);
             }
+            access.give_back();
         } else if constexpr (std::is_same_v<T, ClassPropertyRead>
             || std::is_same_v<T, ClassPropertyWrite>
             || std::is_same_v<T, ClassStaticPropertyRead>
@@ -4301,6 +4348,7 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             if (const auto* error = impl_.run_class_operation(access, op)) {
                 fail(member_index, pc, error);
             }
+            access.give_back();
         } else if constexpr (std::is_same_v<T, VhdlAssertApi>) {
             // The std.env assertion controls and counts (IEEE 1076-2019
             // 16.5.6), as the reference runs them.
@@ -4345,7 +4393,7 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             const auto severity = static_cast<AssertionSeverity>(
                 (encoded.get(0) == Logic4::one ? 1U : 0U)
                 | (encoded.get(1) == Logic4::one ? 2U : 0U));
-            const auto& message = string_register(op.message);
+            const auto message = string_register(op.message).str();
             if (member.vhdl_2019) {
                 report_vhdl(member_index, pc, message, severity, op.source,
                     op.standalone);
@@ -4372,19 +4420,26 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
         } else if constexpr (std::is_same_v<T, ConcatenateStrings>) {
             std::string result;
             for (const auto operand : op.operands) {
-                const auto& value = string_register(operand);
+                const auto value = string_register(operand).view();
                 if (value.size() > maximum_string_bytes - result.size()) {
                     fail(member_index, pc,
                         "string concatenation exceeds the string length limit");
                 }
                 result += value;
             }
-            string_register(op.destination) = std::move(result);
+            string_register(op.destination) = result;
         } else if constexpr (std::is_same_v<T, StringMethod>) {
             // The reference evaluator's execute_string, on the thread's
-            // registers.
+            // registers. Its routines work on a std::string: the source
+            // register takes the copy's value when the routine changed it.
             try {
-                auto& source = string_register(op.source);
+                auto& source_register = string_register(op.source);
+                auto source = source_register.str();
+                const auto give_back = [&] {
+                    if (source_register != source) {
+                        source_register = source;
+                    }
+                };
                 const bool dynamic_string_field = op.operation
                     == StringMethodOperator::format_string_dynamic_field;
                 const bool dynamic_packed_field = op.operation
@@ -4418,10 +4473,10 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                         ? packed_register(op.first)
                         : PackedLogic4 { 1, Logic4::zero };
                     execute_string_format(normalized, source, packed,
-                        string_format
-                            ? std::string_view { string_register(op.argument) }
-                            : std::string_view { },
+                        string_format ? string_register(op.argument).view()
+                                      : std::string_view { },
                         kernel_now(), impl_.time_format);
+                    give_back();
                 } else {
                     const auto signed32 = [&](const RegisterId id)
                         -> std::optional<std::int32_t> {
@@ -4460,14 +4515,21 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                         : std::nullopt;
                     const auto result = execute_string_method(op.operation,
                         source,
-                        compare ? std::string_view { string_register(op.argument) }
-                                : std::string_view { },
+                        compare ? string_register(op.argument).view() : std::string_view { },
                         has_first ? signed32(op.first) : std::nullopt,
                         has_second ? signed32(op.second) : std::nullopt,
                         op.operation == StringMethodOperator::realtoa
                                 && first_word && first_word->bval == 0
                             ? std::optional<std::uint64_t> { first_word->aval }
-                            : std::nullopt);
+                            : std::nullopt,
+                        op.operation
+                                    == StringMethodOperator::vhdl_physical_value
+                                && op.time_unit_femtoseconds != 0U
+                            ? (time_resolution_ != 0U
+                                    ? time_resolution_
+                                    : impl_.time_format.resolution_femtoseconds)
+                            : 0U);
+                    give_back();
                     if (result.integer) {
                         packed_register(op.destination)
                             = PackedLogic4::from_aval_bval(
@@ -4496,10 +4558,9 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                 return;
             }
             const auto selected = select_plusarg(
-                impl_.plusargs, string_register(op.query), op.format_query);
+                impl_.plusargs, string_register(op.query).view(), op.format_query);
             if (op.selected) {
-                string_register(*op.selected).assign(
-                    selected.value_or(std::string_view { }));
+                string_register(*op.selected) = selected.value_or(std::string_view { });
             }
             packed_register(op.destination) = PackedLogic4::from_aval_bval(
                 32, selected ? 1U : 0U, 0);
@@ -4630,7 +4691,7 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                 op.write ? "write-memory finish" : "read-memory finish");
             const auto write_file = [&](const ContainerValue& source) {
                 try {
-                    impl_.write_memory_file(member.process, string_register(op.path),
+                    impl_.write_memory_file(member.process, string_register(op.path).str(),
                         source, op.hexadecimal, start, finish);
                 } catch (const InterpreterError&) {
                     throw;
@@ -4643,9 +4704,10 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                 if (op.write) {
                     write_file(access.read_container(op.target));
                 } else {
-                    impl_.read_memory_file(member.process, pc, string_register(op.path),
+                    impl_.read_memory_file(member.process, pc, string_register(op.path).str(),
                         access.container(op.target), op.hexadecimal, start, finish);
                 }
+                access.give_back();
                 return;
             }
             auto& container = containers_[index];
@@ -4659,7 +4721,7 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                 write_file(value);
                 return;
             }
-            impl_.read_memory_file(member.process, pc, string_register(op.path), value,
+            impl_.read_memory_file(member.process, pc, string_register(op.path).str(), value,
                 op.hexadecimal, start, finish);
             for (std::uint32_t ordinal = 0U; ordinal < container.count; ++ordinal) {
                 if (!(value.elements[ordinal] == container_element(container, ordinal))) {
@@ -5797,11 +5859,11 @@ std::string Interpreter::Impl::StaticKernel::debug_string_register(
                 continue;
             }
             return frame->strings[static_cast<std::size_t>(
-                saved - frame->string_ids.begin())];
+                saved - frame->string_ids.begin())].str();
         }
         throw std::logic_error { "SimIR debug string local has no outer activation" };
     }
-    return found->strings[reg];
+    return found->strings[reg].str();
 }
 
 void Interpreter::Impl::StaticKernel::debug_write_container_register(
@@ -5868,12 +5930,12 @@ void Interpreter::Impl::StaticKernel::debug_write_string_register(
                 continue;
             }
             frame->strings[static_cast<std::size_t>(
-                saved - frame->string_ids.begin())] = std::string { value };
+                saved - frame->string_ids.begin())] = value;
             return;
         }
         throw std::logic_error { "SimIR debug string local has no outer activation" };
     }
-    found->strings[reg] = std::string { value };
+    found->strings[reg] = value;
 }
 
 void Interpreter::Impl::StaticKernel::run_thread(const std::uint32_t index)
@@ -6027,7 +6089,7 @@ void Interpreter::Impl::StaticKernel::run_thread(const std::uint32_t index)
                 fail(member_index, threads_[index].pc,
                     "invalid string register ID");
             }
-            member.strings[*result.string_destination] = std::move(result.text);
+            member.strings[*result.string_destination] = result.text;
         } else if (result.container_destination) {
             if (!member.dynamic_container(*result.container_destination)) {
                 fail(member_index, threads_[index].pc,
@@ -6565,7 +6627,8 @@ void Interpreter::Impl::StaticKernel::shadow_record_generic(
     for (std::size_t id = 0U; id < member.strings.size(); ++id) {
         if (id >= shadow_->pending_strings.size()
             || member.strings[id] != shadow_->pending_strings[id]) {
-            record.strings.emplace_back(static_cast<StringRegisterId>(id), member.strings[id]);
+            record.strings.emplace_back(
+                static_cast<StringRegisterId>(id), member.strings[id].str());
         }
     }
     shadow_->pending_strings.clear();
@@ -7317,6 +7380,8 @@ void Interpreter::Impl::StaticKernel::save_frame_storage(
             fail(member_index, pc, "invalid string register ID");
         }
         frame.strings.push_back(member.strings[id]);
+        // The reference's frame accounting (simir_execution: a string's
+        // object and its bytes).
         frame.bytes += sizeof(std::string) + frame.strings.back().size();
     }
     frame.container_ids.assign(op.containers.begin(), op.containers.end());

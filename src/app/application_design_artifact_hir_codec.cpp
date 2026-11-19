@@ -3,6 +3,7 @@
 
 #include "fsim/app/artifact_schema.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
+#include "fsim/support/symbol.hpp"
 
 namespace fsim::app {
 namespace codec_detail {
@@ -94,7 +95,8 @@ namespace codec_detail {
         } else if constexpr (
             std::is_arithmetic_v<Value> || std::same_as<Value, std::string>
             || std::same_as<Value, std::filesystem::path>
-            || std::same_as<Value, runtime::PackedLogic4>) {
+            || std::same_as<Value, runtime::PackedLogic4>
+            || std::same_as<Value, support::SymbolId>) {
             return true;
         } else if constexpr (IsVector<Value>::value
             || IsSpan<Value>::value || IsArray<Value>::value) {

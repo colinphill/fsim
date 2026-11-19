@@ -192,7 +192,7 @@ private:
 /// registers `strings` (IEEE 1800-2023 6.16, 11.4). Returns DynFailure::none,
 /// or the reference's error to report.
 [[nodiscard]] DynFailure execute_str(const KInst& inst, const CompiledBody& body,
-    std::string* strings, kernel_word::Word* registers);
+    KernelString* strings, kernel_word::Word* registers);
 
 /// KOp::str method: the reference's execute_string_method of the operator
 /// in `operation` (KInst::imm_a, with the integer operands' widths) on
@@ -201,8 +201,9 @@ private:
 /// result (flags str_method_scalar); a string result goes to `destination`.
 /// Throws the reference's errors.
 [[nodiscard]] std::uint64_t execute_str_method(std::uint64_t operation, std::uint8_t flags,
-    std::string& source, std::string_view argument, kernel_word::Word first,
-    kernel_word::Word second, std::string* destination);
+    KernelString& source, std::string_view argument, kernel_word::Word first,
+    kernel_word::Word second, KernelString* destination,
+    std::uint64_t resolution_femtoseconds = 0U);
 
 /// KOp::str format: appends to `destination` the reference's
 /// execute_string_format of the format record `record`
@@ -210,7 +211,7 @@ private:
 /// or on `argument`, a dynamic field form with the field width
 /// `field_width` (checked_vhdl_textio_field_width). Throws the reference's
 /// errors.
-void append_str_format(const std::uint64_t* record, std::string& destination,
+void append_str_format(const std::uint64_t* record, KernelString& destination,
     const PackedLogic4& value, std::string_view argument, const PackedLogic4& field_width,
     std::uint64_t tick, const SystemVerilogTimeFormat& time_format);
 
@@ -258,7 +259,7 @@ void execute_dyn_whole(const KInst& inst, const CompiledBody& body,
 [[nodiscard]] DynFailure execute_dyn(const KInst& inst,
     StaticKernelDynamicContainer& container,
     const StaticKernelDynamicContainer* other, kernel_word::Word* registers,
-    std::string* strings);
+    KernelString* strings);
 /// DynOp::aggregate_element_read / aggregate_element_write: `box` is the
 /// structure register's container, `array` the indexed one; `nodes` the
 /// instruction's leaf nodes (dyn_graph_node_words words each: width | the

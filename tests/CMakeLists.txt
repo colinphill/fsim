@@ -79,6 +79,33 @@ fsim_register_simple_test(
   "fast;semantic;vhdl;signatures"
 )
 
+# Compile-time VHDL analysis kept through link: stamps, cross-library
+# anchors, and the verifier.
+add_executable(
+  fsim_vhdl_analysis_anchor_tests
+  semantic/vhdl_analysis_anchor_test.cpp
+)
+fsim_configure_test(fsim_vhdl_analysis_anchor_tests)
+target_link_libraries(fsim_vhdl_analysis_anchor_tests PRIVATE fsim_application)
+fsim_register_simple_test(
+  fsim.semantic.vhdl_analysis_anchors
+  fsim_vhdl_analysis_anchor_tests
+  "fast;semantic;vhdl;library;positive;negative"
+)
+
+# STD.STANDARD declarations as a typed identity with their revisions.
+add_executable(
+  fsim_vhdl_standard_declaration_tests
+  semantic/vhdl_standard_declaration_test.cpp
+)
+fsim_configure_test(fsim_vhdl_standard_declaration_tests)
+target_link_libraries(fsim_vhdl_standard_declaration_tests PRIVATE fsim_semantic)
+fsim_register_simple_test(
+  fsim.semantic.vhdl_standard_declarations
+  fsim_vhdl_standard_declaration_tests
+  "fast;semantic;vhdl;positive"
+)
+
 add_executable(
   fsim_hierarchy_path_tests
   semantic/hierarchy_path_test.cpp
@@ -1179,6 +1206,17 @@ fsim_register_simple_test(
   fsim.support.stack_growth
   fsim_stack_growth_tests
   "fast;support;positive"
+)
+
+# Interned identifiers (IEEE 1076-2019 15.4, IEEE 1800-2023 5.6) and their
+# artifact round trip.
+add_executable(fsim_symbol_tests support/symbol_test.cpp)
+fsim_configure_test(fsim_symbol_tests)
+target_link_libraries(fsim_symbol_tests PRIVATE fsim_application)
+fsim_register_simple_test(
+  fsim.symbol-interning
+  fsim_symbol_tests
+  "fast;support;vhdl;systemverilog;identity;positive;negative"
 )
 
 add_executable(fsim_payload_checksum_tests support/payload_checksum_test.cpp)
@@ -7006,6 +7044,21 @@ add_test(
 set_tests_properties(fsim.application.vhdl-string-allocators PROPERTIES
   LABELS "application;vhdl;access;static-kernel;positive"
   TIMEOUT 300)
+# TIME'VALUE (IEEE 1076-2019 16.2.2): a physical literal of TIME in a
+# string, converted to the resolution limit with truncation toward zero
+# (5.2.4.2), on the compiled kernel and the interpreter.
+add_test(
+  NAME fsim.application.vhdl-time-value
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/time_value"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/time_value/run_time_value.cmake"
+)
+set_tests_properties(fsim.application.vhdl-time-value PROPERTIES
+  LABELS "application;vhdl;static-kernel;positive"
+  TIMEOUT 300)
+
 add_test(
   NAME fsim.application.vhdl-string-shaped
   COMMAND "${CMAKE_COMMAND}"

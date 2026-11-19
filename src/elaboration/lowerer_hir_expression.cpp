@@ -29911,11 +29911,27 @@ Lowerer::hir_vhdl_value_attribute_prefix(
             expression->vhdl->operands.back(), hir_process_scope_)) {
         return std::nullopt;
     }
-    auto prefix = hir_vhdl_type_actual(expression->vhdl->operands.front());
+    // TIME or DELAY_LENGTH, by the type the prefix denotes (12.3): before
+    // any other reading of the prefix, which does not carry that identity.
+    const auto time_mark = specialized_hir_unit_->find_expression(
+        expression->vhdl->operands.front());
+    std::optional<semantic::vhdl::SubtypeIndication> prefix;
+    if (time_mark && time_mark->vhdl != nullptr
+        && time_mark->vhdl->kind == semantic::vhdl::ExpressionKind::name
+        && (time_mark->vhdl->denoted_provided_type
+                == semantic::vhdl::ProvidedType::time
+            || time_mark->vhdl->denoted_provided_type
+                == semantic::vhdl::ProvidedType::delay_length)) {
+        semantic::vhdl::SubtypeIndication time;
+        time.provided_type = *time_mark->vhdl->denoted_provided_type;
+        time.domain = semantic::vhdl::ValueDomain::integer;
+        prefix = std::move(time);
+    } else {
+        prefix = hir_vhdl_type_actual(expression->vhdl->operands.front());
+    }
     if (!prefix) {
         // A predefined type named by its type mark (`BIT_VECTOR'VALUE`).
-        const auto mark = specialized_hir_unit_->find_expression(
-            expression->vhdl->operands.front());
+        const auto mark = time_mark;
         if (mark && mark->vhdl != nullptr
             && mark->vhdl->kind == semantic::vhdl::ExpressionKind::name
             && !mark->vhdl->text.empty()) {
@@ -30130,6 +30146,48 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_string_value(
         process_.operations.emplace_back(operation);
         return parsed;
     };
+    // TIME and DELAY_LENGTH, by the type the prefix denotes or the subtype
+    // chain reaches (IEEE 1076-2019 5.2.4.2, 16.2.2): the unit table is in
+    // femtoseconds and the value is returned in simulation ticks, truncated
+    // toward zero (the method converts at run time by the run's resolution,
+    // time_unit_femtoseconds != 0).
+    const auto is_time = [](const semantic::vhdl::ProvidedType provided) {
+        return provided == semantic::vhdl::ProvidedType::time
+            || provided == semantic::vhdl::ProvidedType::delay_length;
+    };
+    bool time_value = is_time(subtype.provided_type);
+    for (auto link = subtype.type_mark.target;
+         !time_value && link.valid();) {
+        const auto type = specialized_hir_unit_->find_type(link);
+        if (!type || type->vhdl == nullptr
+            || type->vhdl->form != semantic::vhdl::TypeForm::subtype
+            || type->vhdl->base.type_mark.target == link) {
+            break;
+        }
+        time_value = is_time(type->vhdl->base.provided_type);
+        link = type->vhdl->base.type_mark.target;
+    }
+    if (time_value) {
+        std::string table;
+        for (const auto& [name, femtoseconds] : support::vhdl_time_units) {
+            table += std::string { name } + "="
+                + std::to_string(femtoseconds) + "\n";
+        }
+        const auto parsed = allocate_register(
+            64U, frontend::ValueDomain::Integer);
+        StringMethod operation;
+        operation.operation = StringMethodOperator::vhdl_physical_value;
+        operation.destination = parsed;
+        operation.source = text;
+        operation.argument = allocate_string_register();
+        operation.time_unit_femtoseconds = 1U;
+        process_.operations.emplace_back(LoadStringConstant {
+            operation.argument, table });
+        process_.operations.emplace_back(operation);
+        return width == 0U || width == 64U
+            ? parsed
+            : resize_register(parsed, width, true);
+    }
     if (const auto composite = hir_vhdl_composite_value_form(subtype)) {
         return lower_hir_vhdl_composite_string_value(
             text, *composite, width, span);

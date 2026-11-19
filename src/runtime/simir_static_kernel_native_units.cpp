@@ -4,6 +4,7 @@
 // runtime helpers, template binding and partitions.
 #include "simir_static_kernel_compiled_internal.hpp"
 #include "simir_static_kernel_dynamic.hpp"
+#include "fsim/runtime/file_scanning.hpp"
 #include "fsim/runtime/simir_interpreter.hpp"
 #include "fsim/runtime/string_methods.hpp"
 #include "fsim/support/parallel_for.hpp"
@@ -1045,11 +1046,11 @@ std::uint32_t Interpreter::Impl::StaticKernel::native_dyn_reshape(
 }
 
 std::uint32_t Interpreter::Impl::StaticKernel::native_str_reserve(
-    StaticKernelNativeFrame* frame, const std::uint32_t at, std::string* target,
+    StaticKernelNativeFrame* frame, const std::uint32_t at, StaticKernelString* target,
     const std::uint64_t needed)
 {
     try {
-        target->reserve(static_cast<std::size_t>(needed));
+        KernelString::of(target).reserve(needed);
         return 0U;
     } catch (const std::exception&) {
         native_fail(frame, at, static_kernel_detail::dyn_fail_first
@@ -1060,16 +1061,87 @@ std::uint32_t Interpreter::Impl::StaticKernel::native_str_reserve(
 }
 
 void Interpreter::Impl::StaticKernel::native_str_nba(StaticKernelNativeFrame* frame,
-    const std::uint32_t at, const std::uint64_t object, const void* source)
+    const std::uint32_t at, const std::uint64_t object, const StaticKernelString* source)
 {
     auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
     try {
         kernel.queue_string_update(frame->member, static_cast<StringObjectId>(object),
-            *static_cast<const std::string*>(source));
+            KernelString::of(source).str());
     } catch (...) {
         (void)at;
         kernel.scratch().native_exception = std::current_exception();
         frame->status = 1U;
+    }
+}
+
+std::uint32_t Interpreter::Impl::StaticKernel::native_string_object_load(
+    StaticKernelNativeFrame* frame, const std::uint32_t at, const std::uint64_t object,
+    StaticKernelString* target)
+{
+    auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
+    try {
+        // The reference's ReadStringObject (the member's serial place).
+        KernelString::of(target)
+            = kernel.impl_.string_object_storage(static_cast<StringObjectId>(object));
+        return 0U;
+    } catch (const std::bad_alloc&) {
+        native_fail(frame, at, static_kernel_detail::dyn_fail_first
+                + static_cast<std::uint32_t>(
+                    static_kernel_detail::DynFailure::out_of_memory));
+        return 1U;
+    } catch (...) {
+        kernel.scratch().native_exception = std::current_exception();
+        frame->status = 1U;
+        return 1U;
+    }
+}
+
+std::uint32_t Interpreter::Impl::StaticKernel::native_string_object_store(
+    StaticKernelNativeFrame* frame, const std::uint32_t at, const std::uint64_t object,
+    const StaticKernelString* source)
+{
+    auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
+    try {
+        // The reference's blocking WriteStringObject: a string variable is
+        // storage with no events (IEEE 1800-2023 6.16), so the value is
+        // only stored.
+        kernel.impl_.string_object_storage(static_cast<StringObjectId>(object))
+            = KernelString::of(source).view();
+        return 0U;
+    } catch (const std::bad_alloc&) {
+        native_fail(frame, at, static_kernel_detail::dyn_fail_first
+                + static_cast<std::uint32_t>(
+                    static_kernel_detail::DynFailure::out_of_memory));
+        return 1U;
+    } catch (...) {
+        kernel.scratch().native_exception = std::current_exception();
+        frame->status = 1U;
+        return 1U;
+    }
+}
+
+std::uint64_t Interpreter::Impl::StaticKernel::native_plusarg(StaticKernelNativeFrame* frame,
+    const std::uint32_t at, const StaticKernelString* query, StaticKernelString* selected)
+{
+    auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
+    try {
+        // The reference's PlusArgSelect without a format query (IEEE
+        // 1800-2023 21.6).
+        const auto found
+            = select_plusarg(kernel.impl_.plusargs, KernelString::of(query).view(), false);
+        if (selected != nullptr) {
+            KernelString::of(selected) = found.value_or(std::string_view { });
+        }
+        return found ? 1U : 0U;
+    } catch (const std::bad_alloc&) {
+        native_fail(frame, at, static_kernel_detail::dyn_fail_first
+                + static_cast<std::uint32_t>(
+                    static_kernel_detail::DynFailure::out_of_memory));
+        return 2U;
+    } catch (...) {
+        kernel.scratch().native_exception = std::current_exception();
+        frame->status = 1U;
+        return 2U;
     }
 }
 
@@ -1173,19 +1245,22 @@ void Interpreter::Impl::StaticKernel::native_coverage_record(StaticKernelNativeF
 }
 
 std::uint64_t Interpreter::Impl::StaticKernel::native_str_method(StaticKernelNativeFrame* frame,
-    const std::uint32_t at, const std::uint64_t operation, const std::uint32_t flags, void* source,
-    const void* argument, const std::uint64_t first_a, const std::uint64_t first_b,
-    const std::uint64_t second_a, const std::uint64_t second_b, void* destination)
+    const std::uint32_t at, const std::uint64_t operation, const std::uint32_t flags,
+    StaticKernelString* source, const StaticKernelString* argument, const std::uint64_t first_a,
+    const std::uint64_t first_b, const std::uint64_t second_a, const std::uint64_t second_b,
+    StaticKernelString* destination)
 {
     auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
     try {
         try {
             return static_kernel_detail::execute_str_method(operation,
-                static_cast<std::uint8_t>(flags), *static_cast<std::string*>(source),
-                argument != nullptr ? std::string_view { *static_cast<const std::string*>(argument) }
-                                    : std::string_view { },
+                static_cast<std::uint8_t>(flags), KernelString::of(source),
+                argument != nullptr ? KernelString::of(argument).view() : std::string_view { },
                 Word { first_a, first_b }, Word { second_a, second_b },
-                static_cast<std::string*>(destination));
+                destination != nullptr ? &KernelString::of(destination) : nullptr,
+                kernel.time_resolution_ != 0U
+                    ? kernel.time_resolution_
+                    : kernel.impl_.time_format.resolution_femtoseconds);
         } catch (const std::exception& error) {
             const auto& member = kernel.members_[frame->member];
             kernel.fail(frame->member, (member.vhdl ? 0U : member.body_begin) + at,
@@ -1199,12 +1274,12 @@ std::uint64_t Interpreter::Impl::StaticKernel::native_str_method(StaticKernelNat
 }
 
 void Interpreter::Impl::StaticKernel::native_str_radix(StaticKernelNativeFrame* frame,
-    void* destination, const void* source, const std::uint32_t flags)
+    StaticKernelString* destination, const StaticKernelString* source, const std::uint32_t flags)
 {
     auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
     try {
-        *static_cast<std::string*>(destination) = vhdl_logic9_radix_string(
-            *static_cast<const std::string*>(source), (flags & 1U) != 0U, (flags & 2U) != 0U);
+        KernelString::of(destination) = vhdl_logic9_radix_string(
+            KernelString::of(source).view(), (flags & 1U) != 0U, (flags & 2U) != 0U);
     } catch (...) {
         kernel.scratch().native_exception = std::current_exception();
         frame->status = 1U;
@@ -1212,9 +1287,9 @@ void Interpreter::Impl::StaticKernel::native_str_radix(StaticKernelNativeFrame* 
 }
 
 void Interpreter::Impl::StaticKernel::native_str_format(StaticKernelNativeFrame* frame,
-    const std::uint32_t at, const std::uint64_t* record, void* destination,
+    const std::uint32_t at, const std::uint64_t* record, StaticKernelString* destination,
     const std::uint64_t* value, const void* registers, const std::uint32_t entry,
-    const std::uint32_t bits, const void* argument, const std::uint64_t* field,
+    const std::uint32_t bits, const StaticKernelString* argument, const std::uint64_t* field,
     const std::uint32_t field_bits)
 {
     auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
@@ -1230,9 +1305,8 @@ void Interpreter::Impl::StaticKernel::native_str_format(StaticKernelNativeFrame*
                 : static_kernel_detail::uword_value(Word { field[0], field[1] }, field[2],
                       field_bits, static_kernel_detail::string_format_width_kind(record),
                       field[3]);
-            static_kernel_detail::append_str_format(record,
-                *static_cast<std::string*>(destination), packed,
-                *static_cast<const std::string*>(argument), width, kernel.kernel_now(),
+            static_kernel_detail::append_str_format(record, KernelString::of(destination),
+                packed, KernelString::of(argument).view(), width, kernel.kernel_now(),
                 kernel.impl_.time_format);
         } catch (const std::exception& error) {
             const auto& member = kernel.members_[frame->member];
