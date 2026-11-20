@@ -3940,32 +3940,58 @@ Lowerer::lower_hir_vhdl_environment_string_expression(
               } }
             : std::nullopt;
     };
-    const bool named_call_path_profile = std::ranges::any_of(
-        source.argument_names, [](const std::string& name) {
-            return equal_ignoring_ascii_case(name, "call_path")
-                || equal_ignoring_ascii_case(name, "separator");
-        });
-    const auto positional_call_path = call_path_actual(
-        source.operands.front());
-    if (named_call_path_profile || positional_call_path) {
-        std::array<std::optional<semantic::ExpressionId>, 2> actuals;
+    // The associations of the call, by the formals of the overload the call
+    // resolved to (IEEE 1076-2019 6.5.7.1, 16.5.6): a formal designator
+    // names a formal of that declaration, never a spelled profile.
+    std::vector<std::string_view> callee_formal_names;
+    if (const auto callee = hir_referenced_declaration(expression_id)) {
+        const auto callee_declaration
+            = specialized_hir_unit_->find_declaration(*callee);
+        if (callee_declaration && callee_declaration->vhdl != nullptr
+            && callee_declaration->vhdl->callable) {
+            for (const auto formal_id :
+                callee_declaration->vhdl->callable->formals) {
+                const auto formal_declaration
+                    = specialized_hir_unit_->find_declaration(formal_id);
+                if (formal_declaration
+                    && formal_declaration->vhdl != nullptr) {
+                    callee_formal_names.emplace_back(
+                        formal_declaration->vhdl->name);
+                }
+            }
+        }
+    }
+    std::array<std::optional<semantic::ExpressionId>, 2> actuals;
+    bool valid { true };
+    {
         std::size_t positional { };
-        bool valid { true };
         for (std::size_t index { }; index < source.operands.size(); ++index) {
             const auto name = index < source.argument_names.size()
                 ? std::string_view { source.argument_names[index] }
                 : std::string_view { };
-            const auto formal = name.empty()
-                ? positional++
-                : equal_ignoring_ascii_case(name, "call_path") ? 0U
-                : equal_ignoring_ascii_case(name, "separator") ? 1U
-                                                       : actuals.size();
+            std::size_t formal = positional;
+            if (name.empty()) {
+                ++positional;
+            } else {
+                const auto named = std::ranges::find_if(callee_formal_names,
+                    [&](const std::string_view candidate) {
+                        return equal_ignoring_ascii_case(candidate, name);
+                    });
+                formal = named == callee_formal_names.end()
+                    ? actuals.size()
+                    : static_cast<std::size_t>(
+                          named - callee_formal_names.begin());
+            }
             if (formal >= actuals.size() || actuals[formal]) {
                 valid = false;
                 continue;
             }
             actuals[formal] = source.operands[index];
         }
+    }
+    const auto call_path_profile = valid && actuals[0]
+        && call_path_actual(*actuals[0]).has_value();
+    if (call_path_profile) {
         const auto actual = valid && actuals[0]
             ? call_path_actual(*actuals[0])
             : std::nullopt;
@@ -4040,24 +4066,6 @@ Lowerer::lower_hir_vhdl_environment_string_expression(
         return destination;
     }
 
-    std::array<std::optional<semantic::ExpressionId>, 2> actuals;
-    std::size_t positional { };
-    bool valid { true };
-    for (std::size_t index { }; index < source.operands.size(); ++index) {
-        const auto name = index < source.argument_names.size()
-            ? std::string_view { source.argument_names[index] }
-            : std::string_view { };
-        const auto formal = name.empty()
-            ? positional++
-            : equal_ignoring_ascii_case(name, "trec") ? 0U
-            : equal_ignoring_ascii_case(name, "frac_digits") ? 1U
-                                                   : actuals.size();
-        if (formal >= actuals.size() || actuals[formal]) {
-            valid = false;
-            continue;
-        }
-        actuals[formal] = source.operands[index];
-    }
     if (!valid || !actuals[0]) {
         report(
             "FSIM-ELAB-VHENV-003",

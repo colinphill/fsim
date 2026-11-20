@@ -183,9 +183,10 @@ const semantic::sv::Unit* Lowerer::hir_time_scope_unit(
         : fallback;
 }
 
-std::optional<std::string> Lowerer::hir_vhdl_math_real_function(
+std::optional<semantic::VhdlNativeName> Lowerer::hir_vhdl_math_real_function(
     const semantic::ExpressionId expression_id) const
 {
+    using Name = semantic::VhdlNativeName;
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
     }
@@ -197,33 +198,58 @@ std::optional<std::string> Lowerer::hir_vhdl_math_real_function(
         || expression->vhdl->operands.size() > 2U) {
         return std::nullopt;
     }
-    // The callee is the IEEE.MATH_REAL function the call resolved to
-    // (IEEE 1076.2): a user function of the same name is an ordinary one.
-    using Name = semantic::VhdlNativeName;
-    const auto* const entry = hir_vhdl_native_callee(expression_id);
-    if (entry == nullptr
-        || entry->package_id != semantic::VhdlNativePackage::ieee_math_real
-        || entry->kind != semantic::VhdlNativeKind::function) {
+    const auto& source = *expression->vhdl;
+    // The selected callee is the IEEE.MATH_REAL declaration (IEEE 1076-2019
+    // 16.7 and the package of IEEE 1076.2): overload resolution has already
+    // chosen it over any user homograph.
+    const auto* const native = hir_vhdl_native_callee(expression_id);
+    if (native == nullptr
+        || native->package_id != semantic::VhdlNativePackage::ieee_math_real
+        || native->kind != semantic::VhdlNativeKind::function) {
         return std::nullopt;
     }
-    static constexpr std::array<Name, 25> functions {
-        Name::ceil, Name::floor, Name::sqrt, Name::exp, Name::log,
-        Name::log2, Name::log10, Name::sin, Name::cos, Name::tan,
-        Name::arcsin, Name::arccos, Name::arctan, Name::sinh, Name::cosh,
-        Name::tanh, Name::arcsinh, Name::arccosh, Name::arctanh, Name::cbrt,
-        Name::sign, Name::round, Name::trunc, Name::realmax, Name::realmin
-    };
-    const auto binary = entry->name == Name::log || entry->name == Name::arctan
-        || entry->name == Name::realmax || entry->name == Name::realmin;
-    const auto operands = expression->vhdl->operands.size();
-    if (std::ranges::find(functions, entry->name) == functions.end()
-        || (operands == 2U && !binary)
-        || (operands == 1U
-            && (entry->name == Name::realmax
-                || entry->name == Name::realmin))) {
+    std::size_t arity_low { 1U };
+    std::size_t arity_high { 1U };
+    switch (native->name) {
+    case Name::log:
+    case Name::arctan:
+        arity_high = 2U;
+        break;
+    case Name::realmax:
+    case Name::realmin:
+        arity_low = 2U;
+        arity_high = 2U;
+        break;
+    case Name::ceil:
+    case Name::floor:
+    case Name::sqrt:
+    case Name::exp:
+    case Name::log2:
+    case Name::log10:
+    case Name::sin:
+    case Name::cos:
+    case Name::tan:
+    case Name::arcsin:
+    case Name::arccos:
+    case Name::sinh:
+    case Name::cosh:
+    case Name::tanh:
+    case Name::arcsinh:
+    case Name::arccosh:
+    case Name::arctanh:
+    case Name::cbrt:
+    case Name::sign:
+    case Name::round:
+    case Name::trunc:
+        break;
+    default:
         return std::nullopt;
     }
-    return std::string { semantic::vhdl_native_designator(*entry) };
+    if (source.operands.size() < arity_low
+        || source.operands.size() > arity_high) {
+        return std::nullopt;
+    }
+    return native->name;
 }
 
 std::optional<RegisterId> Lowerer::lower_hir_vhdl_math_real_call(
@@ -235,6 +261,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_math_real_call(
     }
     using Function = runtime::SystemVerilogMathFunction;
     using ScalarKind = frontend::SystemVerilogScalarKind;
+    using Name = semantic::VhdlNativeName;
     const auto& operands
         = specialized_hir_unit_->find_expression(expression_id)->vhdl->operands;
     std::vector<RegisterId> values;
@@ -274,41 +301,21 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_math_real_call(
             unsigned_value(std::bit_cast<std::uint64_t>(value), 64U),
             frontend::ValueDomain::Bit2);
     };
-    static constexpr std::array<std::pair<std::string_view, Function>, 17>
-        direct {
-            std::pair { std::string_view { "ceil" }, Function::Ceil },
-            std::pair { std::string_view { "floor" }, Function::Floor },
-            std::pair { std::string_view { "sqrt" }, Function::Sqrt },
-            std::pair { std::string_view { "exp" }, Function::Exp },
-            std::pair { std::string_view { "log" }, Function::Ln },
-            std::pair { std::string_view { "log10" }, Function::Log10 },
-            std::pair { std::string_view { "sin" }, Function::Sin },
-            std::pair { std::string_view { "cos" }, Function::Cos },
-            std::pair { std::string_view { "tan" }, Function::Tan },
-            std::pair { std::string_view { "arcsin" }, Function::Asin },
-            std::pair { std::string_view { "arccos" }, Function::Acos },
-            std::pair { std::string_view { "arctan" }, Function::Atan },
-            std::pair { std::string_view { "sinh" }, Function::Sinh },
-            std::pair { std::string_view { "cosh" }, Function::Cosh },
-            std::pair { std::string_view { "tanh" }, Function::Tanh },
-            std::pair { std::string_view { "arcsinh" }, Function::Asinh },
-            std::pair { std::string_view { "arccosh" }, Function::Acosh },
-        };
     using Operator = runtime::SystemVerilogScalarBinaryOperator;
-    if (*name == "arctanh") {
+    if (*name == Name::arctanh) {
         return math(Function::Atanh, values.front());
     }
     // ARCTAN(Y, X) is the angle of the point (X, Y).
-    if (*name == "arctan" && values.size() == 2U) {
+    if (*name == Name::arctan && values.size() == 2U) {
         return math(Function::Atan2, values[0], values[1]);
     }
     // LOG(X, BASE) is LOG(X) / LOG(BASE).
-    if (*name == "log" && values.size() == 2U) {
+    if (*name == Name::log && values.size() == 2U) {
         return binary(Operator::Divide, math(Function::Ln, values[0]),
             math(Function::Ln, values[1]));
     }
     // CBRT(X) is X ** (1/3), keeping the sign of X.
-    if (*name == "cbrt") {
+    if (*name == Name::cbrt) {
         const auto zero = real(0.0);
         const auto negative = binary(
             Operator::Less, values.front(), zero, ScalarKind::None);
@@ -335,14 +342,14 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_math_real_call(
         return result;
     };
     // REALMAX and REALMIN select the larger or smaller operand.
-    if (*name == "realmax" || *name == "realmin") {
+    if (*name == Name::realmax || *name == Name::realmin) {
         const auto less = binary(
             Operator::Less, values[0], values[1], ScalarKind::None);
-        return *name == "realmax" ? select(less, values[1], values[0])
+        return *name == Name::realmax ? select(less, values[1], values[0])
                                   : select(less, values[0], values[1]);
     }
     // SIGN(X) is -1.0, 0.0 or 1.0.
-    if (*name == "sign") {
+    if (*name == Name::sign) {
         const auto zero = real(0.0);
         return select(
             binary(Operator::Less, values.front(), zero, ScalarKind::None),
@@ -352,10 +359,10 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_math_real_call(
                 real(1.0), zero));
     }
     // ROUND(X) rounds halves away from zero; TRUNC(X) rounds toward zero.
-    if (*name == "round" || *name == "trunc") {
+    if (*name == Name::round || *name == Name::trunc) {
         const auto negative = binary(
             Operator::Less, values.front(), real(0.0), ScalarKind::None);
-        const auto half = real(*name == "round" ? 0.5 : 0.0);
+        const auto half = real(*name == Name::round ? 0.5 : 0.0);
         return select(negative,
             math(Function::Ceil,
                 binary(Operator::Subtract, values.front(), half)),
@@ -363,7 +370,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_math_real_call(
                 binary(Operator::Add, values.front(), half)));
     }
     // LOG2(X) is LN(X) / LN(2), exact at the powers of two.
-    if (*name == "log2") {
+    if (*name == Name::log2) {
         const auto ratio = binary(Operator::Divide,
             math(Function::Ln, values.front()), real(std::log(2.0)));
         const auto nearest = math(
@@ -377,12 +384,30 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_math_real_call(
             result, exact, nearest, ratio });
         return result;
     }
-    const auto function = std::ranges::find(
-        direct, *name, &std::pair<std::string_view, Function>::first);
-    if (function == direct.end()) {
-        return std::nullopt;
+    // The remaining functions are one SystemVerilog math function of the
+    // first operand.
+    Function function {};
+    switch (*name) {
+    case Name::ceil: function = Function::Ceil; break;
+    case Name::floor: function = Function::Floor; break;
+    case Name::sqrt: function = Function::Sqrt; break;
+    case Name::exp: function = Function::Exp; break;
+    case Name::log: function = Function::Ln; break;
+    case Name::log10: function = Function::Log10; break;
+    case Name::sin: function = Function::Sin; break;
+    case Name::cos: function = Function::Cos; break;
+    case Name::tan: function = Function::Tan; break;
+    case Name::arcsin: function = Function::Asin; break;
+    case Name::arccos: function = Function::Acos; break;
+    case Name::arctan: function = Function::Atan; break;
+    case Name::sinh: function = Function::Sinh; break;
+    case Name::cosh: function = Function::Cosh; break;
+    case Name::tanh: function = Function::Tanh; break;
+    case Name::arcsinh: function = Function::Asinh; break;
+    case Name::arccosh: function = Function::Acosh; break;
+    default: return std::nullopt;
     }
-    return math(function->second, values.front());
+    return math(function, values.front());
 }
 
 std::optional<RegisterId> Lowerer::lower_hir_systemverilog_math_call(

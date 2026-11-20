@@ -230,6 +230,38 @@ std::optional<CompiledDeclarationView> find_declaration(
     return design.find_declaration(id);
 }
 
+// The native entry of the type declaration `type_id` denotes (IEEE 1076-2019
+// 6.6: an alias denotes its target): STD_LOGIC for STD_LOGIC and U_UNSIGNED
+// for the alias of UNRESOLVED_UNSIGNED, null for an ordinary type. A user
+// subtype of a native type is its own declaration, not a native one, unless
+// `through_subtypes` follows the subtype chain to the nearest native type
+// (what a subtype inherits: its value domain and element type).
+const VhdlNativeIntrinsic* denoted_native_type(const CompiledDesign& design,
+    const SpecializedHirUnit* effective, const TypeId type_id,
+    const bool through_subtypes = false)
+{
+    auto type = find_type(design, effective, type_id);
+    for (std::size_t steps = 0; type && type->vhdl != nullptr && steps < 64U;
+         ++steps) {
+        const auto declaration
+            = find_declaration(design, effective, type->vhdl->declaration);
+        if (!declaration || declaration->vhdl == nullptr) {
+            return nullptr;
+        }
+        if (const auto* const native = vhdl_native_of(*declaration->vhdl);
+            native != nullptr && native->kind == VhdlNativeKind::type) {
+            return native;
+        }
+        if (type->vhdl->form != vhdl::TypeForm::alias
+            && !(through_subtypes
+                && type->vhdl->form == vhdl::TypeForm::subtype)) {
+            return nullptr;
+        }
+        type = find_type(design, effective, type->vhdl->base.type_mark.target);
+    }
+    return nullptr;
+}
+
 // The parameter and result type profile of a VHDL subprogram by base type,
 // which decides homographs (IEEE 1076-2008 4.5.1, 12.3); nullopt when a type
 // is unknown, which callers treat as a homograph of every declaration.
@@ -1263,8 +1295,8 @@ VhdlProfileTypeClass vhdl_profile_type_class(
     }
     if (same_vhdl_identifier(spelling, "string")
         || spelling.ends_with("_vector")
-        || same_vhdl_identifier(spelling, "signed")
-        || same_vhdl_identifier(spelling, "unsigned")
+        || subtype.provided_type == vhdl::ProvidedType::std_logic_arith_signed
+        || subtype.provided_type == vhdl::ProvidedType::std_logic_arith_unsigned
         || same_vhdl_identifier(spelling, "ufixed")
         || same_vhdl_identifier(spelling, "sfixed")
         || same_vhdl_identifier(spelling, "unresolved_ufixed")
@@ -4456,6 +4488,24 @@ CompiledDesignResolver::effective_vhdl_subtype(
             result->provided_type
                 = vhdl_provided_type_of(result->type_mark.target);
         }
+        // The value domain of a native type and of every subtype of it
+        // (STD_ULOGIC's nine values, NUMERIC_BIT's bits) is its declaration's,
+        // not what the mark's spelling suggested before resolution.
+        if (result && result->type_mark.target.valid()) {
+            if (const auto* const native = denoted_native_type(
+                    *design_, effective_, result->type_mark.target, true)) {
+                switch (vhdl_native_domain(*native)) {
+                case VhdlNativeDomain::logic9:
+                    result->domain = vhdl::ValueDomain::logic9;
+                    break;
+                case VhdlNativeDomain::bit2:
+                    result->domain = vhdl::ValueDomain::bit2;
+                    break;
+                case VhdlNativeDomain::none:
+                    break;
+                }
+            }
+        }
         // An object of STD.TEXTIO.LINE (access STRING, IEEE 1076-2019 16.4)
         // is held as a dynamic string.
         if (result
@@ -4674,6 +4724,20 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
         const ScopeId subtype_scope) {
         materialize_boundaries(result, active);
         const auto name = simple_vhdl_name(result.type_mark.spelling);
+        // The type declaration the mark denotes decides the domain, the
+        // signedness and the element width of the precompiled standard
+        // packages' types (IEEE 1076-2019 16.7, 16.8, G.3): its native
+        // identity, never the mark's spelling.
+        const auto* const native = result.type_mark.target.valid()
+            ? denoted_native_type(*design_, effective_, result.type_mark.target)
+            : nullptr;
+        if (native != nullptr
+            && result.builtin_type == vhdl::BuiltinTypeIdentity::none) {
+            result.builtin_type = vhdl_native_builtin_type(*native);
+        }
+        const auto native_domain = native != nullptr
+            ? vhdl_native_domain(*native)
+            : VhdlNativeDomain::none;
         if (result.builtin_type == vhdl::BuiltinTypeIdentity::none
             && !result.type_mark.target.valid()) {
             auto spelling = std::string_view {
@@ -4726,22 +4790,16 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
             result.domain = vhdl::ValueDomain::bit2;
             result.executable_width = 1U;
             return true;
-        } else if (same_vhdl_identifier(name, "std_logic")
-            || same_vhdl_identifier(name, "std_ulogic")) {
+        } else if (native_domain != VhdlNativeDomain::none
+            && (native->name == VhdlNativeName::std_ulogic
+                || native->name == VhdlNativeName::std_logic)) {
+            // STD_ULOGIC and its resolved subtype STD_LOGIC are scalars.
             result.domain = vhdl::ValueDomain::logic9;
             result.executable_width = 1U;
             return true;
         } else if (same_vhdl_identifier(name, "character")) {
             result.domain = vhdl::ValueDomain::bit2;
             result.executable_width = 8U;
-            return true;
-        } else if (same_vhdl_identifier(name, "time_record")) {
-            result.domain = vhdl::ValueDomain::bit2;
-            result.executable_width = 515U;
-            return true;
-        } else if (same_vhdl_identifier(name, "dayofweek")) {
-            result.domain = vhdl::ValueDomain::bit2;
-            result.executable_width = 3U;
             return true;
         } else if (const auto* enumeration
                    = support::find_vhdl_standard_enumeration(name)) {
@@ -4795,12 +4853,20 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
             default:
                 break;
             }
+            if (element_width == 0U && native_domain != VhdlNativeDomain::none) {
+                // The vectors of IEEE.STD_LOGIC_1164 and IEEE.NUMERIC_STD
+                // are arrays of STD_ULOGIC, those of IEEE.NUMERIC_BIT arrays
+                // of BIT.
+                element_width = 1U;
+                element_domain = native_domain == VhdlNativeDomain::bit2
+                    ? vhdl::ValueDomain::bit2
+                    : vhdl::ValueDomain::logic9;
+            }
+            // The fixed- and floating-point packages are still compiler
+            // projected: their types have no declaration to denote.
             if (element_width == 0U
-                && (same_vhdl_identifier(name, "std_logic_vector")
-                || same_vhdl_identifier(name, "std_ulogic_vector")
-                || same_vhdl_identifier(name, "signed")
-                || same_vhdl_identifier(name, "unsigned")
-                || same_vhdl_identifier(name, "ufixed")
+                && !result.type_mark.target.valid()
+                && (same_vhdl_identifier(name, "ufixed")
                 || same_vhdl_identifier(name, "sfixed")
                 || same_vhdl_identifier(name, "unresolved_ufixed")
                 || same_vhdl_identifier(name, "unresolved_sfixed")
@@ -4844,12 +4910,11 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
                     || same_vhdl_identifier(name, "unresolved_float")
                     || same_vhdl_identifier(name, "u_float"));
             const bool compiler_owned_unconstrained_logic_vector
-                = !result.type_mark.target.valid()
-                && (result.builtin_type
-                        == vhdl::BuiltinTypeIdentity::ieee_std_logic_1164_std_logic_vector
-                    || result.builtin_type
-                        == vhdl::BuiltinTypeIdentity::ieee_std_logic_1164_std_ulogic_vector
-                    || compiler_owned_fixed_or_float)
+                = ((native != nullptr
+                        && vhdl_native_builtin_type(*native)
+                            != vhdl::BuiltinTypeIdentity::none)
+                    || (!result.type_mark.target.valid()
+                        && compiler_owned_fixed_or_float))
                 && result.constraints.empty();
             if (compiler_owned_unconstrained_logic_vector
                 && result.executable_width
@@ -5870,18 +5935,11 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
                     }
                 }
             } else if (definition == nullptr && dimension == 1
-                && (!builtin_element.empty()
-                    || effective.builtin_type
-                        == vhdl::BuiltinTypeIdentity::
-                            ieee_std_logic_1164_std_logic_vector
-                    || effective.builtin_type
-                        == vhdl::BuiltinTypeIdentity::
-                            ieee_std_logic_1164_std_ulogic_vector
-                    || same_vhdl_identifier(builtin_array, "std_logic_vector")
-                    || same_vhdl_identifier(
-                        builtin_array, "std_ulogic_vector"))) {
-                // STD_ULOGIC_VECTOR and its subtype STD_LOGIC_VECTOR are
-                // indexed by NATURAL (IEEE 1076-2008 16.7).
+                && !builtin_element.empty()) {
+                // The predefined STD.STANDARD arrays are indexed by NATURAL
+                // (POSITIVE for STRING); the vectors of IEEE.STD_LOGIC_1164
+                // are declared arrays whose index subtype is their own
+                // (IEEE 1076-2008 16.7).
                 selected = named(same_vhdl_identifier(builtin_array, "string")
                         ? "positive" : "natural");
             }
@@ -9507,32 +9565,12 @@ CompiledVhdlProvidedType CompiledDesignResolver::vhdl_provided_type_of(
     if (!declaration || declaration->vhdl == nullptr) {
         return CompiledVhdlProvidedType::none;
     }
-    // The precompiled standard packages' types carry their native identity.
-    // Only the declaration the mark denotes counts, through alias links
-    // (IEEE 1076-2019 6.6: U_UNSIGNED denotes UNRESOLVED_UNSIGNED); a user
-    // subtype is its own subtype (it may name its own resolution function).
-    {
-        auto current = type;
-        auto current_declaration = declaration;
-        for (std::size_t steps = 0; steps < 64U; ++steps) {
-            if (const auto* const native = vhdl_native_of(*current_declaration->vhdl);
-                native != nullptr && native->kind == VhdlNativeKind::type) {
-                return vhdl_native_provided_type(*native);
-            }
-            if (current->vhdl->form != vhdl::TypeForm::alias) {
-                break;
-            }
-            current = semantic::find_type(
-                *design_, effective_, current->vhdl->base.type_mark.target);
-            if (!current || current->vhdl == nullptr) {
-                break;
-            }
-            current_declaration = find_declaration(
-                *design_, effective_, current->vhdl->declaration);
-            if (!current_declaration || current_declaration->vhdl == nullptr) {
-                break;
-            }
-        }
+    // The precompiled standard packages' types carry their native identity
+    // (IEEE 1076-2019 6.6: an alias denotes its target; a user subtype is its
+    // own subtype and may name its own resolution function).
+    if (const auto* const native
+        = denoted_native_type(*design_, effective_, type_id)) {
+        return vhdl_native_provided_type(*native);
     }
     for (const auto& provided : provided_package_members) {
         if (same_vhdl_identifier(type->vhdl->name, provided.member)
@@ -9599,8 +9637,9 @@ CompiledVhdlProvidedType CompiledDesignResolver::compute_provided_type(
         standard != CompiledVhdlProvidedType::none) {
         return standard;
     }
-    // Homographs that use clauses make visible hide each other (12.4):
-    // NUMERIC_STD's and NUMERIC_BIT's UNSIGNED, for one.
+    // Only the projected packages' types (fixed_pkg, float_pkg,
+    // std_logic_arith) have no declaration to resolve to; homographs that
+    // use clauses make visible hide each other (12.4).
     auto found = CompiledVhdlProvidedType::none;
     for (const auto& provided : provided_package_members) {
         if (provided.type != found

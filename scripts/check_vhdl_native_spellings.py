@@ -14,7 +14,17 @@ ceiling that has any hit, fails the check (exit 1).  Files under their ceiling
 pass (lower the ceiling with --update).  `--update` prints the current table in
 a form that can be pasted over CEILINGS; `--sites` lists every hit.
 
-Usage: check_vhdl_native_spellings.py [--root DIR] [--update] [--sites]
+Counted: whole-literal type/package/function names, qualified literals
+("ieee.std_logic_1164.std_logic", "std.env.directory", ...), generic words in a
+comparison, the stub-visibility queries and the STD.ENV spelling APIs, and
+package predicates naming a native package.  NOT counted (see NOT_COUNTED,
+printed by --uncounted): a native spelling held in a named constant is counted
+once at its definition, not at each use; spellings assembled at run time or
+read from tables keyed elsewhere; and code outside SCAN_DIRS (the frontend's
+pre-resolution domain hints).  A zero count therefore means no counted
+pattern is left, not that no name matching is left.
+
+Usage: check_vhdl_native_spellings.py [--root DIR] [--update] [--sites] [--uncounted]
 """
 
 from __future__ import annotations
@@ -79,6 +89,35 @@ CALL_NAMES = (
     "vhdl_builtin_package_member_imported",
     "vhdl_denotes_provided_package_member",
     "builtin_standard_package_exports",
+    "vhdl_standard_package_member_visible",
+    "vhdl_builtin_type_visible",
+    # STD.ENV recognized by spelling (frontend simulator-API table).
+    "vhdl_simulator_api",
+    "vhdl_environment_type_api",
+    "vhdl_environment_status_literal_name",
+)
+# A literal that qualifies a name by a native package ("ieee.numeric_std.",
+# "std.env.dayofweek", "std.textio.line").
+_native_packages = (
+    "std_logic_1164|numeric_std_unsigned|numeric_bit_unsigned|numeric_std"
+    "|numeric_bit|math_real|textio|env")
+RE_QUALIFIED = re.compile(
+    r'"(?:ieee|std)\.(?:{})(?:\.|")'.format(_native_packages), re.IGNORECASE)
+
+# Name matching the patterns above cannot see; kept here so a falling count
+# is read with it (update when a site is found or retired).
+NOT_COUNTED = (
+    "Named constants: a native spelling bound to a constant counts once at"
+    " its definition (compiled_design_vhdl_resolution.cpp native key"
+    " vocabulary; hierarchy_packages.cpp native_logic_resolver_designator,"
+    " the bind-config resolver keyword).",
+    "Frontend (src/frontend, not scanned): pre-resolution Logic9 domain hints"
+    " for std_logic*/signed/unsigned/fixed/float marks; the simulator-API"
+    " table behind vhdl_simulator_api.",
+    "STD.STANDARD implicit operations without declarations (2008 RISING_EDGE/"
+    "FALLING_EDGE of BIT/BOOLEAN, file READ/WRITE/FLUSH) are identified by"
+    " spelling until implicit-operation identities (gate BD build D4); they"
+    " count when written as literals.",
 )
 # Package predicates; a hit whose argument window names a projected stub
 # package or STD.STANDARD is a keeper and is not counted.
@@ -104,28 +143,27 @@ RE_PRED = re.compile(r"\b(?:{})\s*\(".format("|".join(PREDICATE_NAMES)))
 # Today's counts (generated with --update).
 CEILINGS: dict[str, int] = {
     "src/app/application_analysis.cpp": 1,
-    "src/app/application_vhdl_analysis.cpp": 1,
+    "src/app/application_vhdl_analysis.cpp": 4,
+    "src/app/application_vhdl_executable_hir.cpp": 4,
     "src/app/application_vhdl_hir_projection.cpp": 2,
     "src/app/application_workspace_compile.cpp": 4,
-    "src/elaboration/hierarchy_packages.cpp": 33,
+    "src/elaboration/hierarchy_packages.cpp": 5,
     "src/elaboration/hierarchy_resolution.cpp": 5,
-    "src/elaboration/lowerer_hir_callable.cpp": 46,
-    "src/elaboration/lowerer_hir_capability.cpp": 54,
-    "src/elaboration/lowerer_hir_expression.cpp": 94,
-    "src/elaboration/lowerer_hir_file.cpp": 46,
-    "src/elaboration/lowerer_hir_math.cpp": 28,
-    "src/elaboration/lowerer_hir_process.cpp": 3,
-    "src/elaboration/lowerer_hir_statement.cpp": 53,
+    "src/elaboration/lowerer_hir_callable.cpp": 10,
+    "src/elaboration/lowerer_hir_capability.cpp": 16,
+    "src/elaboration/lowerer_hir_expression.cpp": 2,
+    "src/elaboration/lowerer_hir_file.cpp": 7,
+    "src/elaboration/lowerer_hir_statement.cpp": 2,
     "src/elaboration/lowerer_hir_vhdl_shaped.cpp": 1,
-    "src/elaboration/lowerer_hir_vhdl_special.cpp": 4,
-    "src/elaboration/lowerer_hir_vhdl_vital.cpp": 2,
+    "src/elaboration/lowerer_hir_vhdl_special.cpp": 21,
+    "src/elaboration/lowerer_hir_vhdl_vital.cpp": 4,
     "src/elaboration/lowerer_hir_vhdl_vital_state.cpp": 1,
     "src/elaboration/lowerer_vhdl_vital_names.hpp": 8,
-    "src/elaboration/vhdl_hir_type_validation.cpp": 65,
+    "src/elaboration/vhdl_hir_type_validation.cpp": 31,
     "src/semantic/compiled_design.cpp": 2,
-    "src/semantic/compiled_design_resolver.cpp": 29,
-    "src/semantic/compiled_design_specialization.cpp": 101,
-    "src/semantic/compiled_design_vhdl_resolution.cpp": 12,
+    "src/semantic/compiled_design_resolver.cpp": 22,
+    "src/semantic/compiled_design_specialization.cpp": 9,
+    "src/semantic/compiled_design_vhdl_resolution.cpp": 8,
 }
 
 
@@ -186,6 +224,7 @@ def scan_file(path: Path) -> list[tuple[int, str]]:
         # a generic word counts only when the comparison is on this line
         count += len(RE_GENERIC.findall(line))
         count += len(RE_CALL.findall(line))
+        count += len(RE_QUALIFIED.findall(line))
         for m in RE_PRED.finditer(line):
             tail = window[m.start():]
             end = tail.find(";")
@@ -218,7 +257,13 @@ def main() -> int:
     ap.add_argument("--root", default=str(Path(__file__).resolve().parent.parent))
     ap.add_argument("--update", action="store_true", help="print the current ceiling table")
     ap.add_argument("--sites", action="store_true", help="list every hit")
+    ap.add_argument("--uncounted", action="store_true",
+                    help="print the name matching this check cannot count")
     args = ap.parse_args()
+    if args.uncounted:
+        for line in NOT_COUNTED:
+            print(f"- {line}")
+        return 0
     root = Path(args.root)
 
     counts: dict[str, int] = {}

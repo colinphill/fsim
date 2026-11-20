@@ -136,8 +136,9 @@ public:
 
     [[nodiscard]] std::vector<VhdlHirTypeValidationIssue> run()
     {
-        // STD.ENV, IEEE.MATH_REAL/MATH_COMPLEX and the VHDL-2019 reflection
-        // API are compiler-supplied without retained declarations.
+        // IEEE.MATH_COMPLEX and the VHDL-2019 reflection API are
+        // compiler-supplied without retained declarations; STD.ENV and
+        // IEEE.MATH_REAL are real declarations of the precompiled libraries.
         for (const auto* unit : { &entity_, &architecture_ }) {
             if (unit->standard == "2019") {
                 name_check_ = false;
@@ -147,14 +148,11 @@ public:
                     for (const auto* spelling : { &name.spelling, &name.canonical }) {
                         std::string lowered { *spelling };
                         lowercase_ascii(lowered);
-                        if (lowered.find("std.env") != std::string::npos
-                            || lowered.find("math_real") != std::string::npos
-                            || lowered.find("math_complex") != std::string::npos) {
+                        if (lowered.find("math_complex") != std::string::npos) {
                             name_check_ = false;
                         }
-                        // MATH_REAL overloads "mod" and "**" for REAL.
-                        if (lowered.find("math_real") != std::string::npos
-                            || lowered.find("math_complex") != std::string::npos) {
+                        // MATH_COMPLEX overloads "mod" and "**".
+                        if (lowered.find("math_complex") != std::string::npos) {
                             operator_check_ = false;
                         }
                     }
@@ -1008,37 +1006,6 @@ private:
                 }
                 return std::nullopt;
             }
-        } else if (const auto literal_order
-            = targetless_std_ulogic_index_literal_order(
-                array, dimension_index)) {
-            if (const auto ordinal = targetless_std_ulogic_index_literal(
-                    *literal_order, *expression)) {
-                return ordinal;
-            }
-            const auto attribute = specialization_.find_expression(
-                *expression);
-            if (attribute && attribute->vhdl != nullptr
-                && (semantic::vhdl::is_scalar_bound_attribute(
-                    attribute->vhdl->text))
-                && attribute->vhdl->kind == semantic::vhdl::ExpressionKind::call
-                && attribute->vhdl->operands.size() == 1U) {
-                const auto prefix = specialization_.find_expression(
-                    attribute->vhdl->operands.front());
-                if (prefix && prefix->vhdl != nullptr
-                    && prefix->vhdl->kind
-                        == semantic::vhdl::ExpressionKind::name
-                    && (!prefix->vhdl->referenced_name
-                        || (!prefix->vhdl->referenced_name->selected
-                            && prefix->vhdl->referenced_name->overloads
-                                   .empty()))
-                    && provided_type(prefix->vhdl->text, prefix->vhdl->scope)
-                        == semantic::CompiledVhdlProvidedType::std_ulogic
-                    && prefix->vhdl->scope
-                        == type_declaration_scope(array)) {
-                    return bound(std::nullopt, expression);
-                }
-            }
-            return std::nullopt;
         }
         return bound(value, expression);
     }
@@ -1430,61 +1397,6 @@ private:
             && visible_name.candidates.empty();
     }
 
-    std::optional<std::string_view> targetless_std_ulogic_index_literal_order(
-        const TypeDefinition& array,
-        const std::size_t dimension_index) const
-    {
-        if (array.form != TypeForm::array
-            || dimension_index >= array.array_dimensions.size()) {
-            return std::nullopt;
-        }
-        const auto& index_name
-            = array.array_dimensions[dimension_index].index_subtype;
-        const auto spelling = index_name.text();
-        if (index_name.selected
-            || !equal_ignoring_ascii_case(
-                index_name.spelling, "std_ulogic")
-            || !equal_ignoring_ascii_case(spelling, "std_ulogic")) {
-            return std::nullopt;
-        }
-
-        const auto scope = type_declaration_scope(array);
-        if (!scope.valid()) {
-            return std::nullopt;
-        }
-        const semantic::CompiledDesignResolver resolver { specialization_ };
-        if (!resolver.vhdl_builtin_type_visible(spelling, scope)
-            || !resolver.vhdl_builtin_package_member_imported(
-                "ieee", "std_logic_1164", "std_ulogic", scope)
-            || resolver.resolve_vhdl_named_type(spelling, scope)) {
-            return std::nullopt;
-        }
-
-        semantic::vhdl::Name type_name;
-        type_name.spelling = index_name.spelling;
-        type_name.canonical = std::string { spelling };
-        const auto visible_type = resolver.resolve_vhdl(
-            type_name, scope,
-            [](const semantic::CompiledDeclarationView& candidate) {
-                if (candidate.vhdl == nullptr) {
-                    return false;
-                }
-                using Form = semantic::vhdl::DeclarationForm;
-                const auto form = candidate.vhdl->form;
-                return form == Form::type || form == Form::subtype
-                    || form == Form::generic_type;
-            });
-        if (visible_type.status
-                != semantic::CompiledResolutionStatus::not_found
-            || !visible_type.candidates.empty()) {
-            return std::nullopt;
-        }
-
-        // This is the IEEE std_logic_1164 enumeration order, also used by
-        // the HIR lowerer.
-        return std::string_view { "UX01ZWLH-" };
-    }
-
     std::optional<unsigned char> targetless_untyped_character_literal(
         const semantic::ExpressionId expression_id) const
     {
@@ -1512,22 +1424,6 @@ private:
             return std::nullopt;
         }
         return static_cast<unsigned char>(value.text[1]);
-    }
-
-    std::optional<std::int64_t> targetless_std_ulogic_index_literal(
-        const std::string_view literal_order,
-        const semantic::ExpressionId expression_id) const
-    {
-        const auto character
-            = targetless_untyped_character_literal(expression_id);
-        if (!character) {
-            return std::nullopt;
-        }
-        const auto ordinal = literal_order.find(
-            static_cast<char>(*character));
-        return ordinal != std::string_view::npos
-            ? std::optional { static_cast<std::int64_t>(ordinal) }
-            : std::nullopt;
     }
 
     std::optional<std::int64_t> targetless_standard_character_index_literal(
@@ -1561,12 +1457,6 @@ private:
                 = targetless_standard_character_index_literal(
                     *array, dimension_index, expression)) {
                 return ordinal;
-            }
-            if (const auto literal_order
-                = targetless_std_ulogic_index_literal_order(
-                    *array, dimension_index)) {
-                return targetless_std_ulogic_index_literal(
-                    *literal_order, expression);
             }
             return bound(std::nullopt, expression);
         }
@@ -4281,7 +4171,9 @@ private:
         case Provided::delay_length:
             return "time";
         case Provided::std_logic:
-            return "std_ulogic";
+            // STD_LOGIC is a subtype of STD_ULOGIC (one root).
+            return std::string { semantic::vhdl_provided_type_name(
+                Provided::std_ulogic) };
         // Each package's UNSIGNED and SIGNED are distinct types (IEEE
         // 1076-2019 16.8.5.1; Synopsys STD_LOGIC_ARITH declares its own), so
         // an operation mixing two packages' types is a type error (9.2);
@@ -5365,49 +5257,60 @@ private:
             && constraints_are_static(*effective);
     }
 
-    bool vhdl_package_owner_matches(
-        const semantic::DeclarationId declaration_id,
-        const std::string_view library,
-        const std::string_view package) const
-    {
-        const auto declaration
-            = specialization_.find_declaration(declaration_id);
-        if (!declaration || declaration->vhdl == nullptr
-            || !declaration->vhdl->scope.valid()) {
-            return false;
-        }
-        return specialization_.design().vhdl_scope_in_package(
-            declaration->vhdl->scope, library, package);
-    }
-
-    bool declaration_is_ieee_function(
-        const semantic::DeclarationId id,
-        const std::string_view package) const
+    // A pure function declaration of the native IEEE packages that make
+    // operators and conversions locally static (STD_LOGIC_1164, NUMERIC_BIT,
+    // NUMERIC_STD and their UNSIGNED companions), by its native identity.
+    bool declaration_is_native_ieee_function(
+        const semantic::DeclarationId id) const
     {
         const auto declaration = specialization_.find_declaration(id);
-        return declaration && declaration->vhdl != nullptr
-            && declaration->vhdl->callable
-            && declaration->vhdl->callable->function
-            && declaration->vhdl->callable->pure
-            && vhdl_package_owner_matches(id, "ieee", package);
+        if (!declaration || declaration->vhdl == nullptr
+            || !declaration->vhdl->callable
+            || !declaration->vhdl->callable->function
+            || !declaration->vhdl->callable->pure) {
+            return false;
+        }
+        const auto* entry = semantic::vhdl_native_of(*declaration->vhdl);
+        if (entry == nullptr
+            || entry->kind != semantic::VhdlNativeKind::function) {
+            return false;
+        }
+        using Package = semantic::VhdlNativePackage;
+        switch (entry->package_id) {
+        case Package::ieee_std_logic_1164:
+        case Package::ieee_numeric_bit:
+        case Package::ieee_numeric_std:
+        case Package::ieee_numeric_bit_unsigned:
+        case Package::ieee_numeric_std_unsigned:
+            return true;
+        default:
+            return false;
+        }
     }
 
     bool exact_ieee_callable(
         const semantic::CompiledVhdlCallableResolution& candidate) const
     {
-        for (const auto package : {
-                 std::string_view { "std_logic_1164" },
-                 std::string_view { "numeric_bit" },
-                 std::string_view { "numeric_std" },
-                 std::string_view { "numeric_bit_unsigned" },
-                 std::string_view { "numeric_std_unsigned" },
-             }) {
-            if (declaration_is_ieee_function(candidate.key, package)
-                && declaration_is_ieee_function(candidate.body, package)) {
-                return true;
-            }
-        }
-        return false;
+        // Only package declarations carry the native stamp; the callable's
+        // body is the body of that declaration.
+        return declaration_is_native_ieee_function(candidate.key);
+    }
+
+    // Every candidate of a call or operator is a native IEEE function and
+    // one of them takes `arity` operands (overload resolution picks among
+    // them; every one is locally static).
+    bool native_ieee_callables_static(
+        const std::vector<semantic::CompiledVhdlCallableResolution>& candidates,
+        const std::size_t arity) const
+    {
+        return !candidates.empty()
+            && std::ranges::all_of(candidates,
+                [&](const auto& candidate) {
+                    return exact_ieee_callable(candidate);
+                })
+            && std::ranges::any_of(candidates, [&](const auto& candidate) {
+                   return ieee_callable_arity_matches(candidate, arity);
+               });
     }
 
     bool ieee_callable_arity_matches(
@@ -5420,57 +5323,6 @@ private:
                 && declaration->vhdl->callable
                 && declaration->vhdl->callable->function) {
                 return declaration->vhdl->callable->formals.size() == arity;
-            }
-        }
-        return false;
-    }
-
-    bool exact_imported_ieee_member(
-        const semantic::vhdl::Name& name,
-        const semantic::ScopeId scope) const
-    {
-        if (name.selected || !name.overloads.empty()) {
-            return false;
-        }
-        auto spelling = std::string_view { name.spelling };
-        const auto first_separator = spelling.find_first_of(".:");
-        const auto last_separator = spelling.find_last_of(".:");
-        const auto is_package = [](const std::string_view package) {
-            return equal_ignoring_ascii_case(package, "std_logic_1164")
-                || equal_ignoring_ascii_case(package, "numeric_bit")
-                || equal_ignoring_ascii_case(package, "numeric_std")
-                || equal_ignoring_ascii_case(
-                    package, "numeric_bit_unsigned")
-                || equal_ignoring_ascii_case(
-                    package, "numeric_std_unsigned");
-        };
-        const auto resolver
-            = semantic::CompiledDesignResolver { specialization_ };
-        if (first_separator != std::string_view::npos
-            && last_separator != first_separator) {
-            const auto library = spelling.substr(0U, first_separator);
-            const auto package = spelling.substr(
-                first_separator + 1U,
-                last_separator - first_separator - 1U);
-            if (equal_ignoring_ascii_case(library, "ieee")
-                && is_package(package)
-                && resolver.vhdl_standard_package_member_visible(name, scope)) {
-                return true;
-            }
-        }
-        const auto member = last_separator == std::string_view::npos
-            ? spelling
-            : spelling.substr(last_separator + 1U);
-        for (const auto package : {
-                 std::string_view { "std_logic_1164" },
-                 std::string_view { "numeric_bit" },
-                 std::string_view { "numeric_std" },
-                 std::string_view { "numeric_bit_unsigned" },
-                 std::string_view { "numeric_std_unsigned" },
-             }) {
-            if (resolver.vhdl_builtin_package_member_imported(
-                    "ieee", package, member, scope)) {
-                return true;
             }
         }
         return false;
@@ -5490,32 +5342,21 @@ private:
             = semantic::CompiledDesignResolver { specialization_ };
         const auto resolutions = resolver.resolve_vhdl_callables(
             operation_name, expression.scope);
-        if (resolutions.candidates.size() == 1U) {
-            const auto& candidate = resolutions.candidates.front();
+        if (!resolutions.candidates.empty()) {
             const auto arity
                 = expression.kind == semantic::vhdl::ExpressionKind::unary
                 ? std::size_t { 1U }
                 : std::size_t { 2U };
-            return exact_ieee_callable(candidate)
-                && ieee_callable_arity_matches(candidate, arity);
+            return native_ieee_callables_static(
+                resolutions.candidates, arity);
         }
-        if (!resolutions.candidates.empty() || operation_name.selected
-            || !operation_name.overloads.empty()) {
+        if (operation_name.selected || !operation_name.overloads.empty()) {
             return false;
         }
         if (!resolver.resolve_vhdl_callable_candidates(
                          operation_name, expression.scope)
                 .candidates.empty()) {
             return false;
-        }
-        if (expression.builtin_operator
-            != semantic::vhdl::BuiltinOperatorIdentity::none) {
-            return resolver.vhdl_builtin_package_member_imported(
-                "ieee", "std_logic_1164", expression.text,
-                expression.scope);
-        }
-        if (exact_imported_ieee_member(operation_name, expression.scope)) {
-            return true;
         }
         const auto is_operator = [&](const auto operators) {
             return std::ranges::any_of(
@@ -5759,25 +5600,9 @@ private:
             }
             const auto resolutions = resolver.resolve_vhdl_callables(
                 *expression.referenced_name, expression.scope);
-            if (resolutions.candidates.size() == 1U) {
-                const auto& candidate = resolutions.candidates.front();
-                return finish(exact_ieee_callable(candidate)
-                    && ieee_callable_arity_matches(
-                        candidate, expression.operands.size())
-                    && all_operands_static());
-            }
-            if (!resolutions.candidates.empty()
-                || !resolver.resolve_vhdl_callable_candidates(
-                                *expression.referenced_name,
-                                expression.scope)
-                    .candidates.empty()
-                || expression.referenced_name->selected
-                || !expression.referenced_name->overloads.empty()) {
-                return finish(false);
-            }
-            return finish(exact_imported_ieee_member(
-                              *expression.referenced_name,
-                              expression.scope)
+            return finish(native_ieee_callables_static(
+                              resolutions.candidates,
+                              expression.operands.size())
                 && all_operands_static());
         }
         case Kind::index:
@@ -7088,21 +6913,10 @@ private:
                     type, expression.text).has_value();
             });
         const semantic::CompiledDesignResolver resolver { specialization_ };
-        // SIDE and its RIGHT/LEFT literals predate VHDL-2008 in STD.TEXTIO.
-        // Accept declaration-free literals only when the exact compiler-owned
-        // member is imported and lexical declaration lookup finds no shadow.
-        const bool has_textio_side_literal
-            = (equal_ignoring_ascii_case(expression.text, "right")
-                || equal_ignoring_ascii_case(expression.text, "left"))
-            && resolver.resolve_vhdl(reference, expression.scope)
-                    .candidates.empty()
-            && resolver.vhdl_builtin_package_member_imported(
-                "std", "textio", expression.text, expression.scope);
         if (standard_enumeration_literal
             || std::ranges::any_of(predefined_literals, [&](const auto literal) {
                 return equal_ignoring_ascii_case(expression.text, literal);
             })
-            || has_textio_side_literal
             || builtin_operand_class(
                    provided_type(expression.text, expression.scope))
                 != OperandClass::unknown
@@ -9312,6 +9126,45 @@ private:
         return nullptr;
     }
 
+    // The predefined array identity of a native array type declaration of
+    // IEEE.STD_LOGIC_1164, IEEE.NUMERIC_STD or IEEE.NUMERIC_BIT; the
+    // UNRESOLVED_ forms of NUMERIC_STD denote the one UNSIGNED/SIGNED
+    // identity (the resolved subtype is the same array, IEEE 1076-2019
+    // 16.8.5.1).
+    static std::optional<std::string> native_array_identity(
+        const semantic::VhdlNativeIntrinsic& entry)
+    {
+        using Package = semantic::VhdlNativePackage;
+        using Name = semantic::VhdlNativeName;
+        if (entry.kind != semantic::VhdlNativeKind::type) {
+            return std::nullopt;
+        }
+        if (entry.package_id == Package::ieee_std_logic_1164) {
+            if (entry.name == Name::std_logic_vector) {
+                return std::string { "ieee.std_logic_1164.std_logic_vector" };
+            }
+            if (entry.name == Name::std_ulogic_vector) {
+                return std::string { "ieee.std_logic_1164.std_ulogic_vector" };
+            }
+            return std::nullopt;
+        }
+        const bool numeric_std = entry.package_id == Package::ieee_numeric_std;
+        if (!numeric_std && entry.package_id != Package::ieee_numeric_bit) {
+            return std::nullopt;
+        }
+        if (entry.name == Name::signed_
+            || (numeric_std && entry.name == Name::unresolved_signed)) {
+            return std::string { numeric_std ? "ieee.numeric_std.signed"
+                                             : "ieee.numeric_bit.signed" };
+        }
+        if (entry.name == Name::unsigned_
+            || (numeric_std && entry.name == Name::unresolved_unsigned)) {
+            return std::string { numeric_std ? "ieee.numeric_std.unsigned"
+                                             : "ieee.numeric_bit.unsigned" };
+        }
+        return std::nullopt;
+    }
+
     std::optional<std::string> predefined_array_identity(
         const SubtypeIndication& subtype,
         const semantic::ScopeId scope,
@@ -9381,21 +9234,6 @@ private:
             std::string_view { "real_vector" },
             std::string_view { "time_vector" },
         };
-        // An array type's root definition and the unit declaring it.
-        const auto root_and_owner
-            = [&](const std::optional<semantic::TypeId> root)
-            -> std::pair<const semantic::vhdl::TypeDefinition*,
-                const semantic::vhdl::Unit*> {
-            const auto* definition = root ? type_definition(*root) : nullptr;
-            const auto declaration = definition != nullptr
-                ? specialization_.find_declaration(definition->declaration)
-                : std::nullopt;
-            return { definition,
-                declaration && declaration->vhdl != nullptr
-                    ? specialization_.design().vhdl_scope_unit(
-                          declaration->vhdl->scope)
-                    : nullptr };
-        };
         const auto standard_array = [&](const std::string_view name) {
             return std::ranges::find(standard_arrays, name)
                 != standard_arrays.end();
@@ -9434,43 +9272,21 @@ private:
                     && standard_revision_available(type_name)) {
                     return standard_qualified_name(type_name);
                 }
-                {
-                    if (semantic::vhdl::is_package(
-                            owner, "ieee", "std_logic_1164")
-                        && (type_name == "std_logic_vector"
-                            || type_name == "std_ulogic_vector")) {
-                        return "ieee.std_logic_1164." + type_name;
-                    }
-                    // The Synopsys STD_LOGIC_ARITH package's array types
-                    // carry its arithmetic, as NUMERIC_STD's do.
-                    if (semantic::vhdl::is_package(
-                            owner, "ieee", "std_logic_arith")
-                        && (type_name == "signed" || type_name == "unsigned")) {
-                        return "ieee.std_logic_arith." + type_name;
-                    }
-                    const bool numeric_std_package
-                        = semantic::vhdl::is_package(
-                            owner, "ieee", "numeric_std");
-                    const bool numeric_bit_package
-                        = semantic::vhdl::is_package(
-                            owner, "ieee", "numeric_bit");
-                    if (numeric_std_package || numeric_bit_package) {
-                        const auto numeric_type
-                            = std::string_view { type_name };
-                        const auto resolved_numeric_type
-                            = numeric_std_package
-                                && numeric_type.starts_with("unresolved_")
-                            ? numeric_type.substr(
-                                  std::string_view { "unresolved_" }.size())
-                            : numeric_type;
-                        if (resolved_numeric_type == "signed"
-                            || resolved_numeric_type == "unsigned") {
-                            return std::string { "ieee." }
-                                + (numeric_bit_package
-                                    ? "numeric_bit." : "numeric_std.")
-                                + std::string { resolved_numeric_type };
+                if (declaration && declaration->vhdl != nullptr) {
+                    if (const auto* entry
+                        = semantic::vhdl_native_of(*declaration->vhdl)) {
+                        if (const auto identity
+                            = native_array_identity(*entry)) {
+                            return identity;
                         }
                     }
+                }
+                // The Synopsys STD_LOGIC_ARITH package's array types
+                // carry its arithmetic, as NUMERIC_STD's do.
+                if (semantic::vhdl::is_package(
+                        owner, "ieee", "std_logic_arith")
+                    && (type_name == "signed" || type_name == "unsigned")) {
+                    return "ieee.std_logic_arith." + type_name;
                 }
                 // Compiler-created predefined array roots can carry a
                 // TypeDefinition without a source declaration or owner unit.
@@ -9511,140 +9327,8 @@ private:
             }
             return std::nullopt;
         }
-        constexpr std::array ieee_arrays {
-            std::string_view { "ieee.std_logic_1164.std_logic_vector" },
-            std::string_view { "ieee.std_logic_1164.std_ulogic_vector" },
-            std::string_view { "ieee.numeric_std.signed" },
-            std::string_view { "ieee.numeric_std.unsigned" },
-            std::string_view { "ieee.numeric_bit.signed" },
-            std::string_view { "ieee.numeric_bit.unsigned" },
-        };
-        if (std::ranges::find(ieee_arrays, canonical) != ieee_arrays.end()) {
-            return canonical;
-        }
-        const bool numeric_bit_or_std_vector
-            = canonical == "signed" || canonical == "unsigned";
-        if (numeric_bit_or_std_vector) {
-            semantic::vhdl::Name reference;
-            reference.spelling = canonical;
-            reference.canonical = canonical;
-            const semantic::CompiledDeclarationPredicate type_declaration
-                = semantic::is_vhdl_type_declaration;
-            const semantic::CompiledDesignResolver resolver {
-                specialization_ };
-            const auto resolution = resolver.resolve_vhdl(
-                reference, scope, type_declaration);
-            if (resolution.status
-                == semantic::CompiledResolutionStatus::ambiguous) {
-                return std::nullopt;
-            }
-            if (const auto declaration_id = resolution.unique()) {
-                const auto declaration
-                    = specialization_.find_declaration(*declaration_id);
-                const auto root = declaration
-                        && declaration->vhdl != nullptr
-                        && declaration->vhdl->declared_type
-                    ? array_root(*declaration->vhdl->declared_type)
-                    : std::nullopt;
-                const auto [definition, owner] = root_and_owner(root);
-                if (definition != nullptr
-                    && (semantic::vhdl::is_package(owner, "ieee", "numeric_std")
-                        || semantic::vhdl::is_package(
-                            owner, "ieee", "numeric_bit"))
-                    && equal_ignoring_ascii_case(
-                        simple_name_of(definition->name), canonical)) {
-                    const auto package = equal_ignoring_ascii_case(
-                        owner->name, "numeric_bit")
-                        ? std::string_view { "numeric_bit" }
-                        : std::string_view { "numeric_std" };
-                    return "ieee." + std::string { package }
-                        + "." + canonical;
-                }
-                return std::nullopt;
-            }
-            if (resolution.status
-                    != semantic::CompiledResolutionStatus::not_found
-                || !resolution.candidates.empty()) {
-                return std::nullopt;
-            }
-            std::optional<std::string> imported_identity;
-            for (const auto package : {
-                     std::string_view { "numeric_std" },
-                     std::string_view { "numeric_bit" } }) {
-                if (!resolver.vhdl_builtin_package_member_imported(
-                        "ieee", package, canonical, scope)) {
-                    continue;
-                }
-                if (imported_identity) {
-                    // Importing the same simple vector name from both IEEE
-                    // numeric packages is ambiguous without a retained type.
-                    return std::nullopt;
-                }
-                imported_identity = "ieee." + std::string { package }
-                    + "." + canonical;
-            }
-            if (imported_identity) {
-                return imported_identity;
-            }
-            if (compiler_owned) {
-                // Preserve the existing compiler-provided numeric_std
-                // fallback only when no source declaration or package import
-                // can identify the unqualified vector name.
-                return "ieee.numeric_std." + canonical;
-            }
-            return std::nullopt;
-        }
-        // A targetless IEEE array type is compiler-owned only when its package
-        // member is imported and ordinary declaration lookup finds no
-        // shadowing type. The linked design may omit the package's HIR type
-        // declaration while still retaining the import.
-        const auto ieee_package = [&]() -> std::optional<std::string_view> {
-            if (canonical == "std_logic_vector"
-                || canonical == "std_ulogic_vector") {
-                return "std_logic_1164";
-            }
-            return std::nullopt;
-        }();
-        if (ieee_package) {
-            const auto qualified
-                = "ieee." + std::string { *ieee_package } + "." + canonical;
-            if (compiler_owned) {
-                return qualified;
-            }
-            semantic::vhdl::Name reference;
-            reference.spelling = canonical;
-            reference.canonical = canonical;
-            const semantic::CompiledDeclarationPredicate type_declaration
-                = semantic::is_vhdl_type_declaration;
-            const semantic::CompiledDesignResolver resolver {
-                specialization_ };
-            const auto resolution = resolver.resolve_vhdl(
-                reference, scope, type_declaration);
-            if (resolution.status
-                    == semantic::CompiledResolutionStatus::not_found
-                && resolution.candidates.empty()
-                && resolver.vhdl_builtin_package_member_imported(
-                    "ieee", *ieee_package, canonical, scope)) {
-                return qualified;
-            }
-            const auto declaration_id = resolution.unique();
-            const auto declaration = declaration_id
-                ? specialization_.find_declaration(*declaration_id)
-                : std::nullopt;
-            if (declaration && declaration->vhdl != nullptr
-                && declaration->vhdl->declared_type) {
-                const auto root = array_root(
-                    *declaration->vhdl->declared_type);
-                const auto [definition, owner] = root_and_owner(root);
-                if (definition != nullptr
-                    && semantic::vhdl::is_package(owner, "ieee", *ieee_package)
-                    && equal_ignoring_ascii_case(
-                        simple_name_of(definition->name), canonical)) {
-                    return qualified;
-                }
-            }
-            return std::nullopt;
-        }
+        // The native IEEE array types are real declarations: their marks
+        // carry a target and take the retained-declaration path above.
         if (!standard_array(canonical)
             || !standard_revision_available(canonical)) {
             return std::nullopt;
@@ -9805,8 +9489,9 @@ private:
         }
         if (profile(*element).kind
             != ProfileKind::enumeration) {
-            // STD.STANDARD.CHARACTER and BIT (and the STD_LOGIC_1164 logic
-            // types) may not have a retained TypeDefinition. Resolve the
+            // STD.STANDARD.CHARACTER and BIT may not have a retained
+            // TypeDefinition (the STD_LOGIC_1164 logic types are real
+            // enumeration declarations and take the enumeration path). Resolve the
             // spelling in the expected type's declaration scope before
             // accepting this compiler-owned implicit type, so a visible user
             // type of the same name never inherits the builtin identity.
@@ -9827,10 +9512,6 @@ private:
                 PredefinedCharacterElement {
                     "character", "std", "standard", { } },
                 PredefinedCharacterElement { "bit", "std", "standard", "01" },
-                PredefinedCharacterElement { "std_ulogic", "ieee",
-                    "std_logic_1164", "UX01ZWLH-" },
-                PredefinedCharacterElement { "std_logic", "ieee",
-                    "std_logic_1164", "UX01ZWLH-" },
             };
             const auto predefined = std::ranges::find_if(
                 predefined_elements, [&](const auto& candidate) {
@@ -9884,8 +9565,7 @@ private:
                 return false;
             }
             return specialization_.design().vhdl_scope_in_package(
-                       declaration->vhdl->scope, predefined->library,
-                       predefined->package)
+                       declaration->vhdl->scope, "std", "standard")
                 && equal_ignoring_ascii_case(
                     declaration->vhdl->name, predefined->name)
                 && members_allowed();

@@ -12269,12 +12269,15 @@ void test_compiled_vhdl_predefined_subtype_fast_path()
         return actual;
     };
 
+    // Gate BD build D2-sites-2: IEEE.STD_LOGIC_1164 and NUMERIC_STD are
+    // precompiled declarations identified by native identity. A mark that
+    // denotes no declaration is not STD_LOGIC (or UNSIGNED below) by its
+    // spelling: it gets no logic9 domain (IEEE 1076-2019 12.3, 16.7).
     vhdl::SubtypeIndication scalar;
     scalar.type_mark.spelling = "std_logic";
     const auto effective_scalar = assert_equivalent(scalar);
-    assert(effective_scalar
-        && effective_scalar->domain == vhdl::ValueDomain::logic9
-        && effective_scalar->executable_width == 1U);
+    assert(!effective_scalar
+        || effective_scalar->domain != vhdl::ValueDomain::logic9);
     assert_equivalent(
         scalar, design.units()[unit.value()].scope);
 
@@ -12287,10 +12290,8 @@ void test_compiled_vhdl_predefined_subtype_fast_path()
     range.descending = true;
     vector.constraints.push_back(range);
     const auto effective_vector = assert_equivalent(vector);
-    assert(effective_vector
-        && effective_vector->domain == vhdl::ValueDomain::logic9
-        && effective_vector->executable_width == 8U
-        && !effective_vector->unconstrained);
+    assert(!effective_vector
+        || effective_vector->domain != vhdl::ValueDomain::logic9);
 
     auto residual = vector;
     residual.constraints.front().left_expression

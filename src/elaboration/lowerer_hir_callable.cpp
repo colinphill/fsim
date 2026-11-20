@@ -16521,100 +16521,22 @@ Lowerer::hir_vhdl_function_result_proof(
             return std::nullopt;
         }
 
+        // NUMERIC_STD's UNSIGNED or UNRESOLVED_UNSIGNED, or a subtype of
+        // either, by the native identity of the type's declaration.
         const auto exact_numeric_std_unsigned
-            = [&](const semantic::vhdl::SubtypeIndication& subtype,
-                  const semantic::ScopeId use_scope) {
-                if (subtype.domain
-                    != semantic::vhdl::ValueDomain::logic9) {
+            = [&](const semantic::vhdl::SubtypeIndication& subtype) {
+                if (subtype.domain != semantic::vhdl::ValueDomain::logic9
+                    || !subtype.type_mark.resolved()) {
                     return false;
                 }
-                const auto builtin_unsigned_visible = [&] (
-                    std::string_view spelling,
-                    const semantic::ScopeId scope) {
-                    if (const auto separator
-                            = spelling.find_last_of(":.");
-                        separator != std::string_view::npos) {
-                        if (!same_hir_identifier(
-                                spelling.substr(0U, separator),
-                                "ieee.numeric_std", true)) {
-                            return false;
-                        }
-                        spelling.remove_prefix(separator + 1U);
-                    }
-                    if (!same_hir_identifier(spelling, "unsigned", true)
-                        && !same_hir_identifier(
-                            spelling, "unresolved_unsigned", true)) {
-                        return false;
-                    }
-                    const auto scoped_resolver = hir_resolver();
-                    return scoped_resolver.vhdl_builtin_package_member_imported(
-                               "ieee", "numeric_std", spelling, scope)
-                        && !scoped_resolver.vhdl_builtin_package_member_imported(
-                               "ieee", "numeric_bit", spelling, scope);
-                };
-
-                auto type_id = subtype.type_mark.target;
-                if (!type_id.valid()) {
-                    return builtin_unsigned_visible(
-                        subtype.type_mark.spelling, use_scope);
-                }
-                std::unordered_set<std::uint32_t> visited_types;
-                while (type_id.valid()
-                    && visited_types.insert(type_id.value()).second) {
-                    const auto type = specialized_hir_unit_->find_type(type_id);
-                    if (!type || type->vhdl == nullptr) {
-                        return false;
-                    }
-                    const auto& definition = *type->vhdl;
-                    if (definition.form
-                        == semantic::vhdl::TypeForm::array) {
-                        const auto type_declaration
-                            = specialized_hir_unit_->find_declaration(
-                                definition.declaration);
-                        if (!type_declaration
-                            || type_declaration->vhdl == nullptr
-                            || !same_hir_identifier(
-                                definition.name, "unresolved_unsigned", true)
-                            || definition.array_dimensions.size() != 1U
-                            || !definition.element_subtype
-                            || !semantic::vhdl::is_package(
-                                specialized_hir_unit_->design()
-                                    .vhdl_scope_unit(
-                                        type_declaration->vhdl->scope),
-                                "ieee", "numeric_std")) {
-                            return false;
-                        }
-                        const auto element_resolver = hir_resolver();
-                        const auto element = element_resolver.effective_vhdl_subtype(
-                            *definition.element_subtype,
-                            type_declaration->vhdl->scope);
-                        return element
-                            && element->domain
-                                == semantic::vhdl::ValueDomain::logic9
-                            && element->executable_width
-                            && *element->executable_width == 1U
-                            && element->constraints.empty();
-                    }
-                    if (definition.form
-                            != semantic::vhdl::TypeForm::subtype
-                        && definition.form
-                            != semantic::vhdl::TypeForm::alias) {
-                        return false;
-                    }
-                    if (definition.base.type_mark.target.valid()) {
-                        type_id = definition.base.type_mark.target;
-                        continue;
-                    }
-                    const auto owner_declaration
-                        = specialized_hir_unit_->find_declaration(
-                            definition.declaration);
-                    const auto base_scope = owner_declaration
-                            && owner_declaration->vhdl != nullptr
-                        ? owner_declaration->vhdl->scope : use_scope;
-                    return builtin_unsigned_visible(
-                        definition.base.type_mark.spelling, base_scope);
-                }
-                return false;
+                const auto* entry = semantic::vhdl_native_type_of(
+                    *specialized_hir_unit_, subtype.type_mark.target);
+                return entry != nullptr
+                    && entry->package_id
+                        == semantic::VhdlNativePackage::ieee_numeric_std
+                    && (entry->name == semantic::VhdlNativeName::unsigned_
+                        || entry->name
+                            == semantic::VhdlNativeName::unresolved_unsigned);
             };
 
         const auto local_subtype = resolver.effective_vhdl_subtype(
@@ -16623,10 +16545,8 @@ Lowerer::hir_vhdl_function_result_proof(
             || local_subtype->constraints.size() != 1U
             || !local_subtype->element_constraints.empty()
             || local_subtype->unspecified_array_index_count != 0U
-            || !exact_numeric_std_unsigned(
-                *return_subtype, declaration->vhdl->scope)
-            || !exact_numeric_std_unsigned(
-                *local_subtype, result_local->vhdl->scope)
+            || !exact_numeric_std_unsigned(*return_subtype)
+            || !exact_numeric_std_unsigned(*local_subtype)
             || !hir_vhdl_same_nominal_array_type(
                 *return_subtype, *local_subtype,
                 declaration->vhdl->scope)) {
@@ -19277,48 +19197,24 @@ bool Lowerer::hir_vhdl_actual_matches_formal(
     // array. Preserve its nominal access identity before applying STRING's
     // array-profile check to values such as ordinary quoted literals.
     const auto is_standard_textio_line_subtype =
-        [&](const semantic::vhdl::SubtypeIndication& subtype,
-            const semantic::ScopeId use_scope) {
+        [&](const semantic::vhdl::SubtypeIndication& subtype) {
             if (specialized_hir_unit_ == nullptr
-                || subtype.domain != semantic::vhdl::ValueDomain::string) {
+                || subtype.domain != semantic::vhdl::ValueDomain::string
+                || !subtype.type_mark.resolved()) {
                 return false;
             }
-            const auto* access_type
-                = hir_vhdl_access_type_definition(subtype);
-            if (access_type != nullptr) {
-                if (!same_hir_identifier(access_type->name, "line", true)) {
-                    return false;
-                }
-                if (access_type->declaration.valid()) {
-                    const auto type_declaration
-                        = specialized_hir_unit_->find_declaration(
-                            access_type->declaration);
-                    if (!type_declaration
-                        || type_declaration->vhdl == nullptr
-                        || !type_declaration->vhdl->scope.valid()) {
-                        return false;
-                    }
-                    return specialized_hir_unit_->design()
-                        .vhdl_scope_in_package(
-                            type_declaration->vhdl->scope, "std", "textio");
-                }
-            } else if (subtype.type_mark.target.valid()) {
-                return false;
-            }
-            auto spelling = std::string_view {
-                subtype.type_mark.spelling
-            };
-            spelling = simple_name_of(spelling);
-            return same_hir_identifier(spelling, "line", true)
-                && hir_resolver().vhdl_builtin_type_visible(
-                       subtype.type_mark.spelling, use_scope);
+            const auto* entry = semantic::vhdl_native_type_of(
+                *specialized_hir_unit_, subtype.type_mark.target);
+            return entry != nullptr
+                && entry->package_id
+                    == semantic::VhdlNativePackage::std_textio
+                && entry->name == semantic::VhdlNativeName::line;
         };
     if (formal_subtype
-        && is_standard_textio_line_subtype(*formal_subtype, callable_scope)) {
+        && is_standard_textio_line_subtype(*formal_subtype)) {
         const auto actual_subtype = hir_vhdl_expression_subtype(actual_id);
         return actual_subtype
-            && is_standard_textio_line_subtype(
-                *actual_subtype, process_scope);
+            && is_standard_textio_line_subtype(*actual_subtype);
     }
     // STRING and REAL formals accept exactly the actuals of their type,
     // including literals of that type (IEEE 1076-2008 9.3.2).
@@ -19934,7 +19830,9 @@ bool Lowerer::hir_vhdl_actual_matches_formal(
             : std::string_view { };
         const bool scalar_logic_actual = actual_subtype
             && actual_subtype->constraints.empty()
-            && (scalar_name == "std_ulogic" || scalar_name == "std_logic"
+            && ((actual_subtype->type_mark.resolved()
+                    && semantic::vhdl_native_logic9(*specialized_hir_unit_,
+                        actual_subtype->type_mark.target))
                 || scalar_name == "bit");
         // A record value is not an array (IEEE 1076-2008 5.3.1).
         if ((formal_family && actual_family && *formal_family != *actual_family)
@@ -21637,21 +21535,13 @@ std::optional<Lowerer::HirPackedRange> Lowerer::hir_vhdl_literal_actual_range(
         index = hir_vhdl_index_subtype_range(
             definition->array_dimensions.front().index_subtype);
     } else {
-        // The standard vectors without a retained type payload: STRING is
-        // indexed by POSITIVE, the others by NATURAL (IEEE 1076-2008
-        // 16.3, 16.7, 16.8).
+        // The STD.STANDARD vectors without a retained type payload: STRING
+        // is indexed by POSITIVE, the others by NATURAL (IEEE 1076-2008
+        // 5.3.2.2). The IEEE vectors always have a declaration.
         const auto mark = simple_name_of(formal.type_mark.spelling);
         constexpr std::array natural_indexed {
             std::string_view { "bit_vector" },
             std::string_view { "boolean_vector" },
-            std::string_view { "std_logic_vector" },
-            std::string_view { "std_ulogic_vector" },
-            std::string_view { "signed" },
-            std::string_view { "unsigned" },
-            std::string_view { "unresolved_signed" },
-            std::string_view { "unresolved_unsigned" },
-            std::string_view { "u_signed" },
-            std::string_view { "u_unsigned" },
         };
         semantic::vhdl::Name index_name;
         if (same_hir_identifier(mark, "string", true)) {
@@ -21724,23 +21614,23 @@ Lowerer::HirVhdlFunctionActualShapes Lowerer::hir_vhdl_function_actual_shapes(
         -> std::optional<std::pair<std::string_view,
             frontend::ValueDomain>> {
         using BuiltinType = semantic::vhdl::BuiltinTypeIdentity;
-        if (subtype.domain
-            == semantic::vhdl::ValueDomain::logic9) {
-            if (subtype.builtin_type
-                == BuiltinType::
-                    ieee_std_logic_1164_std_logic_vector) {
-                return std::pair {
-                    std::string_view { "std_logic_vector" },
-                    frontend::ValueDomain::Logic9,
-                };
-            }
-            if (subtype.builtin_type
-                == BuiltinType::
-                    ieee_std_logic_1164_std_ulogic_vector) {
-                return std::pair {
-                    std::string_view { "std_ulogic_vector" },
-                    frontend::ValueDomain::Logic9,
-                };
+        // The native logic vectors of IEEE.STD_LOGIC_1164 and
+        // IEEE.NUMERIC_STD, by the identity of the type's declaration.
+        if (const auto* entry = subtype.type_mark.resolved()
+                ? semantic::vhdl_native_type_of(
+                      *specialized_hir_unit_, subtype.type_mark.target)
+                : nullptr;
+            entry != nullptr
+            && semantic::vhdl_native_domain(*entry)
+                == semantic::VhdlNativeDomain::logic9) {
+            using Provided = semantic::vhdl::ProvidedType;
+            const auto provided = semantic::vhdl_native_provided_type(*entry);
+            if (provided == Provided::std_logic_vector
+                || provided == Provided::std_ulogic_vector
+                || provided == Provided::numeric_std_signed
+                || provided == Provided::numeric_std_unsigned) {
+                return std::pair { semantic::vhdl_provided_type_name(provided),
+                    frontend::ValueDomain::Logic9 };
             }
         }
         const auto referenced_type = subtype.type_mark.target.valid()
@@ -21815,69 +21705,7 @@ Lowerer::HirVhdlFunctionActualShapes Lowerer::hir_vhdl_function_actual_shapes(
                 frontend::ValueDomain::Logic9,
             };
         }
-        const auto spelling
-            = std::string_view { subtype.type_mark.spelling };
-        const auto separator = spelling.find_last_of(":.");
-        const auto numeric_member = separator == std::string_view::npos
-            ? spelling
-            : spelling.substr(separator + 1U);
-        if (subtype.domain
-                != semantic::vhdl::ValueDomain::logic9
-            || (!same_hir_identifier(numeric_member, "signed", true)
-                && !same_hir_identifier(
-                    numeric_member, "unsigned", true))) {
-            return std::nullopt;
-        }
-        const auto resolver = hir_resolver();
-        bool package_member_visible { };
-        if (separator == std::string_view::npos) {
-            const bool numeric_bit_visible
-                = resolver.vhdl_builtin_package_member_imported(
-                    "ieee", "numeric_bit", numeric_member, use_scope);
-            package_member_visible = !numeric_bit_visible
-                && resolver.vhdl_builtin_package_member_imported(
-                    "ieee", "numeric_std", numeric_member, use_scope);
-        } else if (same_hir_identifier(
-                       spelling.substr(0U, separator),
-                       "ieee.numeric_std", true)) {
-            semantic::vhdl::Name standard_member;
-            standard_member.spelling = "ieee.numeric_std."
-                + std::string { numeric_member };
-            standard_member.canonical = standard_member.spelling;
-            package_member_visible
-                = resolver.vhdl_standard_package_member_visible(
-                    standard_member, use_scope);
-        }
-        if (!package_member_visible) {
-            return std::nullopt;
-        }
-        const auto declarations = specialized_hir_unit_->design()
-            .vhdl_type_declarations_named(numeric_member);
-        if (declarations) {
-            const auto declarations_are_numeric_std =
-                std::ranges::all_of(
-                    *declarations,
-                    [&](const semantic::DeclarationId id) {
-                        const auto declaration
-                            = specialized_hir_unit_->find_declaration(id);
-                        if (!declaration || declaration->vhdl == nullptr
-                            || !declaration->vhdl->scope.valid()) {
-                            return false;
-                        }
-                        return specialized_hir_unit_->design()
-                            .vhdl_scope_in_package(declaration->vhdl->scope,
-                                "ieee", "numeric_std");
-                    });
-            if (!declarations_are_numeric_std) {
-                return std::nullopt;
-            }
-        }
-        return std::pair {
-            same_hir_identifier(numeric_member, "signed", true)
-                ? std::string_view { "signed" }
-                : std::string_view { "unsigned" },
-            frontend::ValueDomain::Logic9,
-        };
+        return std::nullopt;
     };
     const auto index_origin = [&](const semantic::vhdl::Name& name) {
         return hir_vhdl_index_subtype_range(name);
@@ -25478,41 +25306,11 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_function_call(
         && expression->vhdl->referenced_name
         && vhdl_standard_ >= frontend::VhdlStandard::Vhdl2008
         && [&] {
-               const auto& source = *expression->vhdl;
-               const auto& name = *source.referenced_name;
-               const auto spelling = lowercase_ascii_copy(
-                   name.canonical.empty() ? name.spelling : name.canonical);
-               const auto member = simple_name_of(spelling);
-               if (member != "justify"
-                   || !hir_resolver()
-                           .vhdl_standard_package_member_visible(
-                               name, source.scope)) {
-                   return false;
-               }
-               const auto resolution = resolve_hir_vhdl_function_call(
-                   expression_id, hir_process_scope_, 0U);
-               if (!resolution) {
-                   const auto referenced = hir_referenced_declaration(
-                       expression_id);
-                   const auto declaration = referenced
-                       ? specialized_hir_unit_->find_declaration(
-                             *referenced)
-                       : std::nullopt;
-                   if (declaration && declaration->vhdl != nullptr
-                       && declaration->vhdl->form
-                           != semantic::vhdl::DeclarationForm::function) {
-                       return false;
-                   }
-                   return true;
-               }
-               const auto declaration = specialized_hir_unit_->find_declaration(
-                   resolution->body);
-               if (!declaration || declaration->vhdl == nullptr
-                   || !declaration->vhdl->scope.valid()) {
-                   return false;
-               }
-               return specialized_hir_unit_->design().vhdl_scope_in_package(
-                   declaration->vhdl->scope, "std", "textio");
+               const auto* native = hir_vhdl_native_callee(expression_id);
+               return native != nullptr
+                   && native->package_id
+                       == semantic::VhdlNativePackage::std_textio
+                   && native->name == semantic::VhdlNativeName::justify;
            }()) {
         const auto& source = *expression->vhdl;
         std::vector<std::optional<semantic::ExpressionId>> actuals(3U);
@@ -25570,63 +25368,15 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_function_call(
             if (!ordinal) {
                 const auto is_compiler_owned_side_type = [&](
                     const semantic::vhdl::SubtypeIndication& subtype) {
-                    const auto type_id = subtype.type_mark.target;
-                    if (!type_id.valid()) {
-                        auto spelling = std::string_view {
-                            subtype.type_mark.spelling
-                        };
-                        const auto separator = spelling.find_last_of(".:");
-                        const auto member = simple_name_of(spelling);
-                        if (!same_hir_identifier(member, "side", true)) {
-                            return false;
-                        }
-                        const auto resolver = hir_resolver();
-                        semantic::vhdl::Name type_name;
-                        type_name.spelling = std::string { spelling };
-                        type_name.canonical = lowercase_ascii_copy(spelling);
-                        if (!resolver.resolve_vhdl(
-                                type_name, hir_process_scope_).candidates.empty()) {
-                            return false;
-                        }
-                        if (separator == std::string_view::npos) {
-                            return resolver.vhdl_builtin_package_member_imported(
-                                "std", "textio", "side", hir_process_scope_);
-                        }
-                        const auto package_separator = spelling.find_last_of(
-                            ".:", separator - 1U);
-                        if (package_separator == std::string_view::npos
-                            || !same_hir_identifier(
-                                spelling.substr(0U, package_separator),
-                                "std", true)
-                            || !same_hir_identifier(
-                                spelling.substr(
-                                    package_separator + 1U,
-                                    separator - package_separator - 1U),
-                                "textio", true)) {
-                            return false;
-                        }
-                        return resolver.vhdl_builtin_type_visible(
-                            subtype.type_mark.spelling, hir_process_scope_);
-                    }
-                    const auto type
-                        = specialized_hir_unit_->find_type(type_id);
-                    if (!type || type->vhdl == nullptr
-                        || type->vhdl->form
-                            != semantic::vhdl::TypeForm::enumeration
-                        || lowercase_ascii_copy(type->vhdl->name) != "side"
-                        || !type->vhdl->declaration.valid()) {
-                        return false;
-                    }
-                    const auto declaration
-                        = specialized_hir_unit_->find_declaration(
-                            type->vhdl->declaration);
-                    if (!declaration || declaration->vhdl == nullptr
-                        || !declaration->vhdl->scope.valid()) {
-                        return false;
-                    }
-                    return specialized_hir_unit_->design()
-                        .vhdl_scope_in_package(
-                            declaration->vhdl->scope, "std", "textio");
+                    const auto* entry = subtype.type_mark.resolved()
+                        ? semantic::vhdl_native_type_of(
+                              *specialized_hir_unit_,
+                              subtype.type_mark.target)
+                        : nullptr;
+                    return entry != nullptr
+                        && entry->package_id
+                            == semantic::VhdlNativePackage::std_textio
+                        && entry->name == semantic::VhdlNativeName::side;
                 };
                 const auto declaration_id = hir_referenced_declaration(
                     *actuals[1]);

@@ -173,11 +173,6 @@ ParseResult VhdlParser::run()
                 return name == "ieee.numeric_bit" || name.starts_with("ieee.numeric_bit.");
             });
         });
-        std_env_context_ = std::ranges::any_of(pending_context, [](const VhdlContextItem& item) {
-            return item.kind == VhdlContextItemKind::UseClause && std::ranges::any_of(item.selected_names, [](const std::string_view name) {
-                return name == "std.env.all";
-            });
-        });
         // VITAL_Timing declares the BOOLEAN attributes VITAL_Level0 and
         // VITAL_Level1 (IEEE 1076.4-2000 4.1); the built-in package carries
         // no VHDL source for them.
@@ -467,10 +462,9 @@ std::optional<VhdlContextItem> VhdlParser::parse_context_item()
     }
     // A use clause in a declarative region makes the package's names visible
     // for the rest of the design unit (IEEE 1076-2008 12.4); the unit's
-    // context clause resets these flags for the next unit.
+    // context clause resets this flag for the next unit.
     if (item.kind == VhdlContextItemKind::UseClause) {
         for (const auto& name : item.selected_names) {
-            std_env_context_ = std_env_context_ || name == "std.env.all";
             numeric_bit_context_ = numeric_bit_context_
                 || name == "ieee.numeric_bit"
                 || name.starts_with("ieee.numeric_bit.");
@@ -1489,21 +1483,6 @@ Type VhdlParser::parse_vhdl_type(const bool allow_integer,
     const auto simple_name = spelling.substr(spelling.find_last_of('.') == std::string::npos
             ? 0
             : spelling.find_last_of('.') + 1);
-    // A STD.ENV type imported by `use std.env.all` denotes the package's
-    // type (IEEE 1076-2019 16.5).
-    if (std_env_context_ && spelling.find('.') == std::string::npos
-        && !vhdl_source_declares_type(spelling)
-        && (spelling == "dayofweek" || spelling == "time_record"
-            || spelling == "call_path_element"
-            || spelling == "call_path_vector"
-            || spelling == "call_path_vector_ptr" || spelling == "directory"
-            || spelling == "directory_items" || spelling == "dir_open_status"
-            || spelling == "dir_create_status"
-            || spelling == "dir_delete_status"
-            || spelling == "file_delete_status")) {
-        spelling = "std.env." + spelling;
-        type.spelling = spelling;
-    }
     if (simple_name == "file_open_kind" || simple_name == "file_open_status") {
         require_vhdl_standard(
             first, VhdlStandard::Vhdl1993,
@@ -1533,77 +1512,7 @@ Type VhdlParser::parse_vhdl_type(const bool allow_integer,
             "the predefined " + simple_name + " type",
             "select VHDL-2008 or declare an explicit array type");
     }
-    if (spelling == "std.env.dayofweek") {
-        require_vhdl_standard(
-            first, VhdlStandard::Vhdl2019,
-            "the STD.ENV DAYOFWEEK type",
-            "select VHDL-2019 or declare an independent calendar type");
-        type = vhdl_environment_dayofweek_type();
-    } else if (spelling == "std.env.time_record") {
-        require_vhdl_standard(
-            first, VhdlStandard::Vhdl2019,
-            "the STD.ENV TIME_RECORD type",
-            "select VHDL-2019 or declare an independent calendar record");
-        type = vhdl_environment_time_record_type();
-    } else if (spelling == "std.env.call_path_element") {
-        require_vhdl_standard(
-            first, VhdlStandard::Vhdl2019,
-            "the STD.ENV CALL_PATH_ELEMENT type",
-            "select VHDL-2019 or declare an independent call-path record");
-        type = vhdl_environment_call_path_element_type();
-    } else if (spelling == "std.env.call_path_vector") {
-        require_vhdl_standard(
-            first, VhdlStandard::Vhdl2019,
-            "the STD.ENV CALL_PATH_VECTOR type",
-            "select VHDL-2019 or declare an independent call-path vector");
-        type = vhdl_environment_call_path_vector_type();
-    } else if (spelling == "std.env.call_path_vector_ptr") {
-        require_vhdl_standard(
-            first, VhdlStandard::Vhdl2019,
-            "the STD.ENV CALL_PATH_VECTOR_PTR type",
-            "select VHDL-2019 or declare an independent call-path access type");
-        type = vhdl_environment_call_path_vector_ptr_type();
-    } else if (spelling == "std.env.directory") {
-        require_vhdl_standard(
-            first, VhdlStandard::Vhdl2019,
-            "the STD.ENV DIRECTORY type",
-            "select VHDL-2019 or declare an independent directory type");
-        type = vhdl_environment_directory_type();
-    } else if (spelling == "std.env.directory_items") {
-        require_vhdl_standard(
-            first, VhdlStandard::Vhdl2019,
-            "the STD.ENV DIRECTORY_ITEMS type",
-            "select VHDL-2019 or declare an independent directory-items type");
-        type = vhdl_environment_directory_items_type();
-    } else if (spelling == "std.env.dir_open_status") {
-        require_vhdl_standard(
-            first, VhdlStandard::Vhdl2019,
-            "the STD.ENV DIR_OPEN_STATUS type",
-            "select VHDL-2019 or declare an independent status type");
-        type = vhdl_environment_directory_status_type(
-            VhdlSimulatorApi::dir_open_status);
-    } else if (spelling == "std.env.dir_create_status") {
-        require_vhdl_standard(
-            first, VhdlStandard::Vhdl2019,
-            "the STD.ENV DIR_CREATE_STATUS type",
-            "select VHDL-2019 or declare an independent status type");
-        type = vhdl_environment_directory_status_type(
-            VhdlSimulatorApi::dir_create_status);
-    } else if (spelling == "std.env.dir_delete_status") {
-        require_vhdl_standard(
-            first, VhdlStandard::Vhdl2019,
-            "the STD.ENV DIR_DELETE_STATUS type",
-            "select VHDL-2019 or declare an independent status type");
-        type = vhdl_environment_directory_status_type(
-            VhdlSimulatorApi::dir_delete_status);
-    } else if (spelling == "std.env.file_delete_status") {
-        require_vhdl_standard(
-            first, VhdlStandard::Vhdl2019,
-            "the STD.ENV FILE_DELETE_STATUS type",
-            "select VHDL-2019 or declare an independent status type");
-        type = vhdl_environment_directory_status_type(
-            VhdlSimulatorApi::file_delete_status);
-    } else if (const auto reflection = vhdl_reflection_type(simple_name)) {
+    if (const auto reflection = vhdl_reflection_type(simple_name)) {
         require_vhdl_standard(
             first, VhdlStandard::Vhdl2019,
             "the STD.REFLECTION " + simple_name + " type",

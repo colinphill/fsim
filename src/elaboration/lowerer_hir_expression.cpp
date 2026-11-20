@@ -1319,6 +1319,144 @@ PackedLogic4 character_string_value(const std::string_view text)
 
     using support::same_vhdl_identifier;
 
+    // The provided type `subtype` denotes: the native declaration on its
+    // type chain (IEEE 1076-2019 6.3, 6.4.2.3), else the type identity the
+    // resolution pass stamped where the mark is written.
+    semantic::vhdl::ProvidedType vhdl_provided_type_of_subtype(
+        const semantic::SpecializedHirUnit& unit,
+        const semantic::vhdl::SubtypeIndication& subtype)
+    {
+        if (subtype.type_mark.target.valid()) {
+            if (const auto* entry = semantic::vhdl_native_type_of(
+                    unit, subtype.type_mark.target)) {
+                return semantic::vhdl_native_provided_type(*entry);
+            }
+        }
+        return subtype.provided_type;
+    }
+
+    // The native type declaration `name` of `package`: its definition and
+    // table entry, found by the entry the declaration carries, never by its
+    // spelling; null when the design does not load the package.
+    std::pair<const semantic::vhdl::TypeDefinition*,
+        const semantic::VhdlNativeIntrinsic*>
+    vhdl_native_type_definition(const semantic::SpecializedHirUnit& unit,
+        const semantic::VhdlNativePackage package,
+        const semantic::VhdlNativeName name)
+    {
+        for (const auto& entry : semantic::vhdl_native_intrinsics()) {
+            if (entry.package_id != package
+                || entry.kind != semantic::VhdlNativeKind::type
+                || entry.name != name) {
+                continue;
+            }
+            for (const auto* definition : unit.vhdl_types_named(
+                     semantic::vhdl_native_designator(entry))) {
+                const auto declaration
+                    = unit.find_declaration(definition->declaration);
+                if (declaration && declaration->vhdl != nullptr
+                    && semantic::vhdl_native_of(*declaration->vhdl)
+                        == &entry) {
+                    return { definition, &entry };
+                }
+            }
+        }
+        return { nullptr, nullptr };
+    }
+
+    // The unconstrained subtype indication denoting the native type
+    // declaration `name` of `package`; none when the design does not load
+    // the package.
+    std::optional<semantic::vhdl::SubtypeIndication> vhdl_native_type_subtype(
+        const semantic::SpecializedHirUnit& unit,
+        const semantic::VhdlNativePackage package,
+        const semantic::VhdlNativeName name)
+    {
+        const auto [definition, entry]
+            = vhdl_native_type_definition(unit, package, name);
+        if (definition == nullptr) {
+            return std::nullopt;
+        }
+        semantic::vhdl::SubtypeIndication subtype;
+        subtype.type_mark.spelling
+            = std::string { semantic::vhdl_native_designator(*entry) };
+        subtype.type_mark.target = definition->id;
+        subtype.provided_type = semantic::vhdl_native_provided_type(*entry);
+        subtype.domain = semantic::vhdl_native_domain(*entry)
+                == semantic::VhdlNativeDomain::bit2
+            ? semantic::vhdl::ValueDomain::bit2
+            : semantic::vhdl::ValueDomain::logic9;
+        subtype.unconstrained = true;
+        return subtype;
+    }
+
+    // The provided type of the native declaration of `definition` (a type
+    // reached through the subtype chain); none for an ordinary type.
+    semantic::vhdl::ProvidedType vhdl_provided_type_of_definition(
+        const semantic::SpecializedHirUnit& unit,
+        const semantic::vhdl::TypeDefinition* definition)
+    {
+        if (definition == nullptr || !definition->declaration.valid()) {
+            return semantic::vhdl::ProvidedType::none;
+        }
+        const auto declaration = unit.find_declaration(definition->declaration);
+        const auto* entry = declaration && declaration->vhdl != nullptr
+            ? semantic::vhdl_native_of(*declaration->vhdl)
+            : nullptr;
+        return entry != nullptr && entry->kind == semantic::VhdlNativeKind::type
+            ? semantic::vhdl_native_provided_type(*entry)
+            : semantic::vhdl::ProvidedType::none;
+    }
+
+    // Whether `subtype` is a vector of STD_ULOGIC or BIT identified by its
+    // native declaration (STD_(U)LOGIC_VECTOR, NUMERIC_STD and NUMERIC_BIT
+    // UNSIGNED/SIGNED) or by the stamped provided type (the projected
+    // Synopsys STD_LOGIC_ARITH UNSIGNED/SIGNED).
+    bool vhdl_subtype_is_logic_or_numeric_vector(
+        const semantic::SpecializedHirUnit& unit,
+        const semantic::vhdl::SubtypeIndication& subtype)
+    {
+        switch (vhdl_provided_type_of_subtype(unit, subtype)) {
+        case semantic::vhdl::ProvidedType::std_ulogic_vector:
+        case semantic::vhdl::ProvidedType::std_logic_vector:
+        case semantic::vhdl::ProvidedType::numeric_std_unsigned:
+        case semantic::vhdl::ProvidedType::numeric_std_signed:
+        case semantic::vhdl::ProvidedType::numeric_bit_unsigned:
+        case semantic::vhdl::ProvidedType::numeric_bit_signed:
+        case semantic::vhdl::ProvidedType::std_logic_arith_unsigned:
+        case semantic::vhdl::ProvidedType::std_logic_arith_signed:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    // Whether `subtype` is STD_ULOGIC or STD_LOGIC.
+    bool vhdl_subtype_is_logic9_scalar(
+        const semantic::SpecializedHirUnit& unit,
+        const semantic::vhdl::SubtypeIndication& subtype)
+    {
+        switch (vhdl_provided_type_of_subtype(unit, subtype)) {
+        case semantic::vhdl::ProvidedType::std_ulogic:
+        case semantic::vhdl::ProvidedType::std_logic:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    enum class VhdlLogicStringRadix : std::uint8_t {
+        binary, octal, hexadecimal
+    };
+    // A call of TO_STRING, TO_BSTRING, TO_OSTRING, TO_HSTRING or one of their
+    // aliases (IEEE 1076-2019 5.3.2.4, 16.7): the name as written for
+    // diagnostics, the radix of the digits, and whether it is TO_STRING.
+    struct VhdlLogicStringFunction {
+        std::string name;
+        VhdlLogicStringRadix radix;
+        bool is_to_string;
+    };
+
     struct HirVhdlArraySegmentType {
         semantic::TypeId identity;
         std::string builtin;
@@ -1402,43 +1540,9 @@ PackedLogic4 character_string_value(const std::string_view text)
                     || definition->array_dimensions.empty()) {
                     return std::nullopt;
                 }
-                std::string builtin;
-                // UNSIGNED/SIGNED (or their unresolved base arrays) of
-                // IEEE.NUMERIC_STD: the native type declaration, not its name.
-                std::string_view numeric_member;
-                if (definition->array_dimensions.size() == 1U
-                    && definition->element_subtype
-                    && definition->element_subtype->domain
-                        == semantic::vhdl::ValueDomain::logic9) {
-                    const auto declaration = specialization.find_declaration(
-                        definition->declaration);
-                    const auto* entry = declaration
-                            && declaration->vhdl != nullptr
-                        ? semantic::vhdl_native_of(*declaration->vhdl)
-                        : nullptr;
-                    if (entry != nullptr
-                        && entry->package_id
-                            == semantic::VhdlNativePackage::ieee_numeric_std
-                        && entry->kind == semantic::VhdlNativeKind::type) {
-                        switch (semantic::vhdl_native_provided_type(*entry)) {
-                        case semantic::vhdl::ProvidedType::numeric_std_unsigned:
-                            numeric_member = "unsigned";
-                            break;
-                        case semantic::vhdl::ProvidedType::numeric_std_signed:
-                            numeric_member = "signed";
-                            break;
-                        default:
-                            break;
-                        }
-                    }
-                    if (!numeric_member.empty()) {
-                        builtin = "ieee.numeric_std."
-                            + std::string { numeric_member };
-                    }
-                }
                 return HirVhdlArraySegmentType {
                     definition->id,
-                    std::move(builtin),
+                    std::string { },
                     definition->array_dimensions.size(),
                     definition,
                 };
@@ -1448,18 +1552,6 @@ PackedLogic4 character_string_value(const std::string_view text)
             }
         }
 
-        using Builtin = semantic::vhdl::BuiltinTypeIdentity;
-        if (builtin_subtype->builtin_type == Builtin::ieee_std_logic_1164_std_logic_vector) {
-            return HirVhdlArraySegmentType {
-                { }, "ieee.std_logic_1164.std_logic_vector", 1U, nullptr
-            };
-        }
-        if (builtin_subtype->builtin_type
-            == Builtin::ieee_std_logic_1164_std_ulogic_vector) {
-            return HirVhdlArraySegmentType {
-                { }, "ieee.std_logic_1164.std_ulogic_vector", 1U, nullptr
-            };
-        }
         const auto standard_identity
             = hir_vhdl_standard_array_builtin_type(
                 specialization, *builtin_subtype, builtin_scope,
@@ -1475,123 +1567,9 @@ PackedLogic4 character_string_value(const std::string_view text)
             };
         }
 
-        const auto spelling
-            = std::string_view { builtin_subtype->type_mark.spelling };
-        const bool compiler_builtin
-            = builtin_subtype->type_mark.builtin_declaration;
-        std::string_view package;
-        auto name = spelling;
-        if (const auto separator = spelling.find_last_of(".:");
-            separator != std::string_view::npos) {
-            package = spelling.substr(0U, separator);
-            name = spelling.substr(separator + 1U);
-        }
-
-        const auto in_names = [&](const auto& names) {
-            return std::ranges::any_of(names, [&](const auto candidate) {
-                return same_vhdl_identifier(name, candidate);
-            });
-        };
-        constexpr std::array logic_arrays {
-            std::string_view { "std_logic_vector" },
-            std::string_view { "std_ulogic_vector" },
-        };
-        constexpr std::array numeric_arrays {
-            std::string_view { "signed" },
-            std::string_view { "unsigned" },
-        };
-        const bool selected_logic
-            = same_vhdl_identifier(package, "ieee.std_logic_1164");
-        const bool selected_numeric
-            = same_vhdl_identifier(package, "ieee.numeric_std");
-        const auto numeric_base_member = [&]()
-            -> std::optional<std::string_view> {
-            if (same_vhdl_identifier(name, "signed")
-                || same_vhdl_identifier(name, "unresolved_signed")) {
-                return std::string_view { "signed" };
-            }
-            if (same_vhdl_identifier(name, "unsigned")
-                || same_vhdl_identifier(name, "unresolved_unsigned")) {
-                return std::string_view { "unsigned" };
-            }
-            return std::nullopt;
-        }();
-        if (numeric_base_member
-            && (selected_numeric
-                || (package.empty()
-                    && builtin_subtype->domain
-                        == semantic::vhdl::ValueDomain::logic9))) {
-            const auto subtype_domain = builtin_subtype->domain;
-            if (subtype_domain == semantic::vhdl::ValueDomain::logic9) {
-                const auto declarations = specialization.design()
-                    .vhdl_type_declarations_named(name);
-                const auto declarations_are_package_owned = [&] {
-                    return declarations && !declarations->empty()
-                        && std::ranges::all_of(
-                            *declarations,
-                            [&](const semantic::DeclarationId id) {
-                                const auto declaration
-                                    = specialization.find_declaration(id);
-                                if (!declaration
-                                    || declaration->vhdl == nullptr
-                                    || !declaration->vhdl->scope.valid()) {
-                                    return false;
-                                }
-                                const auto* entry
-                                    = semantic::vhdl_native_of(*declaration->vhdl);
-                                return entry != nullptr
-                                    && entry->package_id
-                                        == semantic::VhdlNativePackage::
-                                            ieee_numeric_std;
-                            });
-                };
-                if (declarations_are_package_owned()) {
-                    return HirVhdlArraySegmentType {
-                        { },
-                        std::string { "ieee.numeric_std" } + "."
-                            + std::string { *numeric_base_member },
-                        1U,
-                        nullptr,
-                    };
-                }
-            }
-        }
-        const bool logic_name = in_names(logic_arrays);
-        const bool numeric_name = in_names(numeric_arrays);
-        const bool supported = package.empty()
-            ? logic_name || numeric_name
-            : (selected_logic && logic_name)
-                || (selected_numeric && numeric_name);
-        if (!supported) {
-            return std::nullopt;
-        }
-        if (package.empty() && !compiler_builtin) {
-            if (same_vhdl_identifier(name, "integer_vector")) {
-                if (!hir_vhdl_unshadowed_integer_vector(
-                        specialization, *builtin_subtype, builtin_scope, binding_frames)) {
-                    return std::nullopt;
-                }
-            } else {
-                const auto declarations = specialization.design()
-                                              .vhdl_type_declarations_named(name);
-                if (!declarations || !declarations->empty()) {
-                    return std::nullopt;
-                }
-            }
-        }
-
-        auto canonical_package = std::string_view { "std.standard" };
-        if (selected_logic || (package.empty() && logic_name)) {
-            canonical_package = "ieee.std_logic_1164";
-        } else if (selected_numeric || (package.empty() && numeric_name)) {
-            canonical_package = "ieee.numeric_std";
-        }
-        return HirVhdlArraySegmentType {
-            { },
-            std::string { canonical_package } + "." + std::string { name },
-            1U,
-            nullptr,
-        };
+        // The native array types of IEEE.STD_LOGIC_1164 and IEEE.NUMERIC_STD
+        // are declared arrays reached through the type chain above.
+        return std::nullopt;
     }
 
     bool same_hir_vhdl_array_segment_type(
@@ -4490,19 +4468,6 @@ std::optional<std::size_t> Lowerer::hir_vhdl_positional_aggregate_width(
             element_name = "std.standard.bit";
             element_domain = semantic::vhdl::ValueDomain::bit2;
             element_width = 1U;
-        } else if (same_vhdl_identifier(array_name, "std_logic_vector")) {
-            element_name = "ieee.std_logic_1164.std_logic";
-            element_domain = semantic::vhdl::ValueDomain::logic9;
-            element_width = 1U;
-        } else if (same_vhdl_identifier(array_name, "std_ulogic_vector")) {
-            element_name = "ieee.std_logic_1164.std_ulogic";
-            element_domain = semantic::vhdl::ValueDomain::logic9;
-            element_width = 1U;
-        } else if (same_vhdl_identifier(array_name, "signed")
-            || same_vhdl_identifier(array_name, "unsigned")) {
-            element_name = "ieee.std_logic_1164.std_logic";
-            element_domain = semantic::vhdl::ValueDomain::logic9;
-            element_width = 1U;
         } else if (same_vhdl_identifier(array_name, "time_vector")) {
             element_name = "std.standard.time";
             element_domain = semantic::vhdl::ValueDomain::integer;
@@ -5436,14 +5401,6 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
             simple_spelling.remove_prefix(separator + 1U);
         }
         constexpr std::array logic_arrays {
-            std::string_view { "std_logic_vector" },
-            std::string_view { "std_ulogic_vector" },
-            std::string_view { "signed" },
-            std::string_view { "unsigned" },
-            std::string_view { "unresolved_signed" },
-            std::string_view { "unresolved_unsigned" },
-            std::string_view { "u_signed" },
-            std::string_view { "u_unsigned" },
             // IEEE.FIXED_GENERIC_PKG and IEEE.FLOAT_GENERIC_PKG arrays of
             // STD_ULOGIC (IEEE 1076-2008 G.2, G.3).
             std::string_view { "unresolved_ufixed" },
@@ -5555,12 +5512,18 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
             predefined_array_element.emplace();
             predefined_array_element->domain = effective->domain;
             predefined_array_element->executable_width = 1U;
-            predefined_array_element->type_mark.spelling
-                = effective->domain == semantic::vhdl::ValueDomain::bit2
-                ? "bit"
-                : effective->domain == semantic::vhdl::ValueDomain::boolean
-                ? "boolean"
-                : "std_logic";
+            if (effective->domain == semantic::vhdl::ValueDomain::bit2) {
+                predefined_array_element->type_mark.spelling = "bit";
+            } else if (effective->domain
+                == semantic::vhdl::ValueDomain::boolean) {
+                predefined_array_element->type_mark.spelling = "boolean";
+            } else if (const auto native = vhdl_native_type_subtype(
+                           *specialized_hir_unit_,
+                           semantic::VhdlNativePackage::ieee_std_logic_1164,
+                           semantic::VhdlNativeName::std_logic)) {
+                // A logic9 element is STD_LOGIC (its native declaration).
+                predefined_array_element->type_mark = native->type_mark;
+            }
         }
     }
     auto aggregate_expected_width = expected_width;
@@ -6536,9 +6499,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
         }
         if (same_vhdl_identifier(spelling, "boolean")
             || same_vhdl_identifier(spelling, "bit")
-            || same_vhdl_identifier(spelling, "character")
-            || same_vhdl_identifier(spelling, "std_logic")
-            || same_vhdl_identifier(spelling, "std_ulogic")) {
+            || same_vhdl_identifier(spelling, "character")) {
             return std::pair { std::int64_t { 0 }, false };
         }
         return std::nullopt;
@@ -7776,32 +7737,28 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
                 }
                 return std::nullopt;
             }
-            semantic::vhdl::SubtypeIndication standard_std_logic_vector;
-            standard_std_logic_vector.type_mark.spelling
-                = "ieee.std_logic_1164.std_logic_vector";
-            standard_std_logic_vector.domain
-                = semantic::vhdl::ValueDomain::logic9;
-            standard_std_logic_vector.builtin_type
-                = semantic::vhdl::BuiltinTypeIdentity::
-                    ieee_std_logic_1164_std_logic_vector;
-            semantic::vhdl::SubtypeIndication standard_std_ulogic_vector;
-            standard_std_ulogic_vector.type_mark.spelling
-                = "ieee.std_logic_1164.std_ulogic_vector";
-            standard_std_ulogic_vector.domain
-                = semantic::vhdl::ValueDomain::logic9;
-            standard_std_ulogic_vector.builtin_type
-                = semantic::vhdl::BuiltinTypeIdentity::
-                    ieee_std_logic_1164_std_ulogic_vector;
+            // IEEE.STD_LOGIC_1164's native STD_LOGIC_VECTOR and
+            // STD_ULOGIC_VECTOR.
+            const auto standard_std_logic_vector = vhdl_native_type_subtype(
+                *specialized_hir_unit_,
+                semantic::VhdlNativePackage::ieee_std_logic_1164,
+                semantic::VhdlNativeName::std_logic_vector);
+            const auto standard_std_ulogic_vector = vhdl_native_type_subtype(
+                *specialized_hir_unit_,
+                semantic::VhdlNativePackage::ieee_std_logic_1164,
+                semantic::VhdlNativeName::std_ulogic_vector);
             const auto logic_vector_context = effective && element
                 && element->domain
                     == semantic::vhdl::ValueDomain::logic9
                 && element_width && *element_width == 1U
-                && (hir_vhdl_same_nominal_array_type(
-                        *effective, standard_std_logic_vector,
-                        aggregate.scope)
-                    || hir_vhdl_same_nominal_array_type(
-                        *effective, standard_std_ulogic_vector,
-                        aggregate.scope));
+                && ((standard_std_logic_vector
+                        && hir_vhdl_same_nominal_array_type(
+                            *effective, *standard_std_logic_vector,
+                            aggregate.scope))
+                    || (standard_std_ulogic_vector
+                        && hir_vhdl_same_nominal_array_type(
+                            *effective, *standard_std_ulogic_vector,
+                            aggregate.scope)));
             constexpr std::string_view logic_literal_alphabet {
                 "UX01ZWLH-"
             };
@@ -11162,22 +11119,13 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_standard_function(
         && profile.kind == HirVhdlStandardFunctionKind::logic_mapping
         && profile.name == semantic::VhdlNativeName::to_01) {
         const auto subtype = hir_vhdl_expression_subtype(source.operands[0]);
-        const auto chain = subtype
-            ? std::optional { hir_vhdl_subtype_chain(*subtype, source.scope) }
-            : std::nullopt;
-        const auto numeric_name = [](const std::string_view spelling) {
-            const auto name = simple_name_of(spelling);
-            return std::ranges::any_of(
-                std::array<std::string_view, 6U> { "signed", "unsigned",
-                    "unresolved_signed", "unresolved_unsigned", "u_signed",
-                    "u_unsigned" },
-                [&](const std::string_view candidate) {
-                    return same_hir_identifier(name, candidate, true);
-                });
-        };
-        if (subtype
-            && (numeric_name(subtype->type_mark.spelling)
-                || numeric_name(chain->spelling))) {
+        const auto numeric_provided = subtype
+            ? vhdl_provided_type_of_subtype(*specialized_hir_unit_, *subtype)
+            : semantic::vhdl::ProvidedType::none;
+        if (numeric_provided
+                == semantic::vhdl::ProvidedType::numeric_std_unsigned
+            || numeric_provided
+                == semantic::vhdl::ProvidedType::numeric_std_signed) {
             process_.operations.emplace_back(Assert {
                 load_integer(0, 1U, frontend::ValueDomain::Boolean),
                 "NUMERIC_STD.TO_01: null detected, returning NAU",
@@ -14655,67 +14603,14 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
     const auto hir_vhdl_edge_call
         = [&](const semantic::ExpressionId call_id)
         -> std::optional<VhdlEdgeKind> {
-        const auto call = specialized_hir_unit_->find_expression(call_id);
-        if (!call || call->vhdl == nullptr
-            || call->vhdl->kind != semantic::vhdl::ExpressionKind::call
-            || call->vhdl->operands.size() != 1U) {
-            return std::nullopt;
+        const auto edge = hir_vhdl_edge_function(call_id);
+        if (edge == semantic::VhdlNativeName::rising_edge) {
+            return VhdlEdgeKind::rising;
         }
-        const auto callee = hir_referenced_declaration(call_id);
-        const auto callee_declaration = callee
-            ? specialized_hir_unit_->find_declaration(*callee)
-            : std::nullopt;
-        if (callee_declaration && callee_declaration->vhdl != nullptr) {
-            const auto* entry
-                = semantic::vhdl_native_of(*callee_declaration->vhdl);
-            if (entry == nullptr
-                || entry->package_id
-                    != semantic::VhdlNativePackage::ieee_std_logic_1164) {
-                return std::nullopt;
-            }
-            if (entry->name == semantic::VhdlNativeName::rising_edge) {
-                return VhdlEdgeKind::rising;
-            }
-            if (entry->name == semantic::VhdlNativeName::falling_edge) {
-                return VhdlEdgeKind::falling;
-            }
-            return std::nullopt;
+        if (edge == semantic::VhdlNativeName::falling_edge) {
+            return VhdlEdgeKind::falling;
         }
-        if (callee) {
-            return std::nullopt;
-        }
-        const auto operand_subtype
-            = hir_vhdl_expression_subtype(call->vhdl->operands.front());
-        if (!operand_subtype) {
-            return std::nullopt;
-        }
-        std::string_view spelling = operand_subtype->type_mark.spelling;
-        auto type_id = operand_subtype->type_mark.target;
-        std::unordered_set<std::uint32_t> visited;
-        const support::VhdlStandardEnumeration* root
-            = support::find_vhdl_standard_enumeration(spelling);
-        while (root == nullptr && type_id.valid()
-            && visited.insert(type_id.value()).second) {
-            const auto type = specialized_hir_unit_->find_type(type_id);
-            if (!type || type->vhdl == nullptr
-                || (type->vhdl->form != semantic::vhdl::TypeForm::subtype
-                    && type->vhdl->form != semantic::vhdl::TypeForm::alias)) {
-                break;
-            }
-            spelling = type->vhdl->base.type_mark.spelling;
-            type_id = type->vhdl->base.type_mark.target;
-            root = support::find_vhdl_standard_enumeration(spelling);
-        }
-        if (root == nullptr
-            || !(same_vhdl_identifier(root->name, "bit")
-                || same_vhdl_identifier(root->name, "boolean"))) {
-            return std::nullopt;
-        }
-        return same_vhdl_identifier(call->vhdl->text, "rising_edge")
-            ? std::optional { VhdlEdgeKind::rising }
-            : same_vhdl_identifier(call->vhdl->text, "falling_edge")
-            ? std::optional { VhdlEdgeKind::falling }
-            : std::nullopt;
+        return std::nullopt;
     };
     // `ea[i].triggered` of an event array element (IEEE 1800-2023 15.5.3,
     // 7.4): a static array's elements are named events, selected by the
@@ -15720,6 +15615,16 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                     == semantic::vhdl::DeclarationForm::type
                 || declaration->vhdl->form
                     == semantic::vhdl::DeclarationForm::subtype);
+        // STD_ULOGIC and STD_LOGIC of IEEE.STD_LOGIC_1164 are definite
+        // scalar types: identified by the native declaration.
+        const auto* const native_type = declared_type
+            ? semantic::vhdl_native_of(*declaration->vhdl)
+            : nullptr;
+        const auto native_logic_scalar_type = native_type != nullptr
+            && (semantic::vhdl_native_provided_type(*native_type)
+                    == semantic::vhdl::ProvidedType::std_ulogic
+                || semantic::vhdl_native_provided_type(*native_type)
+                    == semantic::vhdl::ProvidedType::std_logic);
         auto canonical_type = std::string { type_name };
         lowercase_ascii(canonical_type);
         const auto predefined_definite_type
@@ -15727,8 +15632,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             || canonical_type == "integer" || canonical_type == "natural"
             || canonical_type == "positive"
             || canonical_type == "time"
-            || canonical_type == "std_logic"
-            || canonical_type == "std_ulogic";
+            || (declared_type && native_logic_scalar_type);
         const auto code = predefined_definite_type
             ? std::string_view { "FSIM-ELAB-VHQUAL-003" }
             : declared_type
@@ -16994,24 +16898,31 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                     == std::optional<std::size_t> { 1U }) {
                 const auto domain = hir_expression_domain(
                     *sibling_id, hir_process_scope_);
-                const std::string_view vector
-                    = domain == frontend::ValueDomain::Logic9
-                    ? "std_ulogic_vector"
-                    : domain == frontend::ValueDomain::Bit2 ? "bit_vector"
-                    : domain == frontend::ValueDomain::Boolean
-                    ? "boolean_vector"
-                    : "";
-                if (!vector.empty()) {
-                    semantic::vhdl::SubtypeIndication vector_subtype;
-                    vector_subtype.type_mark.spelling = std::string { vector };
-                    vector_subtype.domain
-                        = domain == frontend::ValueDomain::Logic9
-                        ? semantic::vhdl::ValueDomain::logic9
-                        : domain == frontend::ValueDomain::Bit2
-                        ? semantic::vhdl::ValueDomain::bit2
-                        : semantic::vhdl::ValueDomain::boolean;
-                    vector_subtype.unconstrained = true;
-                    sibling_context = std::move(vector_subtype);
+                if (domain == frontend::ValueDomain::Logic9) {
+                    // An array of STD_ULOGIC: IEEE.STD_LOGIC_1164's native
+                    // STD_ULOGIC_VECTOR.
+                    sibling_context = vhdl_native_type_subtype(
+                        *specialized_hir_unit_,
+                        semantic::VhdlNativePackage::ieee_std_logic_1164,
+                        semantic::VhdlNativeName::std_ulogic_vector);
+                } else {
+                    const std::string_view vector
+                        = domain == frontend::ValueDomain::Bit2
+                        ? "bit_vector"
+                        : domain == frontend::ValueDomain::Boolean
+                        ? "boolean_vector"
+                        : "";
+                    if (!vector.empty()) {
+                        semantic::vhdl::SubtypeIndication vector_subtype;
+                        vector_subtype.type_mark.spelling
+                            = std::string { vector };
+                        vector_subtype.domain
+                            = domain == frontend::ValueDomain::Bit2
+                            ? semantic::vhdl::ValueDomain::bit2
+                            : semantic::vhdl::ValueDomain::boolean;
+                        vector_subtype.unconstrained = true;
+                        sibling_context = std::move(vector_subtype);
+                    }
                 }
             }
         }
@@ -23141,10 +23052,6 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                     || (array_family && *array_family == "bit_vector"));
             const auto predefined_array
                 = predefined_bit_vector
-                || same_vhdl_identifier(type_name, "std_logic_vector")
-                || same_vhdl_identifier(type_name, "std_ulogic_vector")
-                || same_vhdl_identifier(type_name, "signed")
-                || same_vhdl_identifier(type_name, "unsigned")
                 || predefined_integer_vector;
             const auto element_width = predefined_integer_vector
                 ? static_cast<std::size_t>(
@@ -23307,29 +23214,19 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 if (!subtype) {
                     return false;
                 }
+                if (vhdl_subtype_is_logic_or_numeric_vector(
+                        *specialized_hir_unit_, *subtype)) {
+                    return true;
+                }
                 const auto family = hir_vhdl_array_type_family(*subtype);
-                if (family
-                    && (*family == "bit_vector"
-                        || *family == "std_ulogic_vector"
-                        || *family == "signed"
-                        || *family == "unsigned")) {
+                if (family && *family == "bit_vector") {
                     return true;
                 }
-                if (hir_vhdl_standard_array_builtin_type(
-                        *specialized_hir_unit_, *subtype, scope,
-                        hir_generic_binding_frames_)
+                return hir_vhdl_standard_array_builtin_type(
+                           *specialized_hir_unit_, *subtype, scope,
+                           hir_generic_binding_frames_)
                     == semantic::vhdl::BuiltinTypeIdentity::
-                        std_standard_bit_vector) {
-                    return true;
-                }
-                auto spelling = std::string_view {
-                    subtype->type_mark.spelling };
-                spelling = simple_name_of(spelling);
-                return same_vhdl_identifier(spelling, "std_logic_vector")
-                    || same_vhdl_identifier(
-                        spelling, "std_ulogic_vector")
-                    || same_vhdl_identifier(spelling, "signed")
-                    || same_vhdl_identifier(spelling, "unsigned");
+                        std_standard_bit_vector;
             };
             const auto target_scope = expression->vhdl->scope;
             const auto operand_node
@@ -23574,18 +23471,16 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                                 = simple_type_name(
                                     operand_element_subtype
                                         ->type_mark.spelling);
+                            // STD_LOGIC is a subtype of STD_ULOGIC: elements
+                            // of either are the same base type (IEEE 1076-2019
+                            // 6.3).
                             const auto resolved_logic_pair
-                                = (same_vhdl_identifier(
-                                       target_element_name, "std_logic")
-                                      && same_vhdl_identifier(
-                                          operand_element_name,
-                                          "std_ulogic"))
-                                || (same_vhdl_identifier(
-                                        target_element_name,
-                                        "std_ulogic")
-                                    && same_vhdl_identifier(
-                                        operand_element_name,
-                                        "std_logic"));
+                                = vhdl_subtype_is_logic9_scalar(
+                                      *specialized_hir_unit_,
+                                      *target_element_subtype)
+                                && vhdl_subtype_is_logic9_scalar(
+                                    *specialized_hir_unit_,
+                                    *operand_element_subtype);
                             if (!target_element_name.empty()
                                 && !operand_element_name.empty()
                                 && !same_vhdl_identifier(
@@ -23785,7 +23680,8 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
     } else if (expression->vhdl != nullptr
         && expression->vhdl->kind
             == semantic::vhdl::ExpressionKind::call
-        && expression->vhdl->text == "is_x"
+        && hir_vhdl_edge_function(expression_id)
+            == semantic::VhdlNativeName::is_x
         && expression->vhdl->operands.size() == 1U) {
         const auto operand = expression->vhdl->operands.front();
         const auto source_width = hir_expression_width(
@@ -26376,26 +26272,9 @@ report(
                     == Builtin::ieee_std_logic_1164_std_ulogic_vector) {
                 return true;
             }
-            // Resolved type marks retain user-defined nominal identity, even
-            // if their leaf spelling or scalar domain resembles a builtin.
-            if (subtype.type_mark.target.valid()) {
-                return false;
-            }
-            constexpr std::array ieee_array_names {
-                std::string_view { "std_logic_vector" },
-                std::string_view { "std_ulogic_vector" },
-            };
-            const auto spelling
-                = std::string_view { subtype.type_mark.spelling };
-            if (std::ranges::none_of(
-                    ieee_array_names, [&](const std::string_view name) {
-                        return same_vhdl_identifier(spelling, name);
-                    })) {
-                return false;
-            }
-            const auto declarations = specialized_hir_unit_->design()
-                .vhdl_type_declarations_named(spelling);
-            return declarations && declarations->empty();
+            // Resolved type marks retain their declared nominal identity;
+            // the native STD_LOGIC_1164 arrays are declared composites.
+            return false;
         };
         const auto vhdl_array_operand = [&](const semantic::ExpressionId id) {
             if (const auto composite = hir_vhdl_composite_root_type(id);
@@ -27194,21 +27073,9 @@ report(
                 if (!subtype) {
                     return false;
                 }
-                auto name = std::string_view {
-                    subtype->type_mark.spelling
-                };
-                if (const auto separator = name.find_last_of('.');
-                    separator != std::string_view::npos) {
-                    name.remove_prefix(separator + 1U);
-                }
-                return std::ranges::equal(
-                    name, std::string_view { "std_logic_vector" },
-                    [](const char left, const char right) {
-                        return std::tolower(
-                                   static_cast<unsigned char>(left))
-                            == std::tolower(
-                                static_cast<unsigned char>(right));
-                    });
+                return vhdl_provided_type_of_subtype(
+                           *specialized_hir_unit_, *subtype)
+                    == semantic::vhdl::ProvidedType::std_logic_vector;
             };
             const auto numeric_context
                 = hir_vhdl_synopsys_numeric_context(
@@ -28359,18 +28226,15 @@ report(
                                   if (!subtype) {
                                       return false;
                                   }
-                                  const auto mark = simple_name_of(
-                                      subtype->type_mark.spelling);
-                                  return std::ranges::any_of(
-                                      std::array<std::string_view, 6U> {
-                                          "unsigned", "signed",
-                                          "unresolved_unsigned",
-                                          "unresolved_signed", "u_unsigned",
-                                          "u_signed" },
-                                      [&](const std::string_view name) {
-                                          return same_hir_identifier(
-                                              mark, name, true);
-                                      });
+                                  const auto provided
+                                      = vhdl_provided_type_of_subtype(
+                                          *specialized_hir_unit_, *subtype);
+                                  return provided
+                                          == semantic::vhdl::ProvidedType::
+                                              numeric_std_unsigned
+                                      || provided
+                                          == semantic::vhdl::ProvidedType::
+                                              numeric_std_signed;
                               };
                         const auto vhdl_ordering
                             = language_ == frontend::Language::Vhdl2008
@@ -28390,10 +28254,10 @@ report(
                                   if (!subtype) {
                                       return false;
                                   }
-                                  return same_hir_identifier(
-                                      simple_name_of(
-                                          subtype->type_mark.spelling),
-                                      "std_logic_vector", true);
+                                  return vhdl_provided_type_of_subtype(
+                                             *specialized_hir_unit_, *subtype)
+                                      == semantic::vhdl::ProvidedType::
+                                          std_logic_vector;
                               };
                         const auto synopsys_ordering = [&] {
                             if (vhdl_ordering
@@ -29563,9 +29427,15 @@ std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_runtime_image(
         }
         const bool logic = loop_type
             == support::VhdlIntrinsicEnumeration::std_ulogic;
-        return lower_hir_vhdl_scalar_image(*element, 1U, definition, false,
-            logic ? std::string_view { "std_ulogic" }
-                  : std::string_view { "bit" },
+        // STD_ULOGIC is the native declaration of IEEE.STD_LOGIC_1164.
+        const auto* const image_type = logic
+            ? vhdl_native_type_definition(*specialized_hir_unit_,
+                  semantic::VhdlNativePackage::ieee_std_logic_1164,
+                  semantic::VhdlNativeName::std_ulogic).first
+            : definition;
+        return lower_hir_vhdl_scalar_image(*element, 1U,
+            image_type != nullptr ? image_type : definition, false,
+            logic ? std::string_view { } : std::string_view { "bit" },
             false, vector_format, image_quotes, span);
     }
     const bool real_value = simple_type == "real"
@@ -29580,8 +29450,10 @@ std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_runtime_image(
     // A STD_ULOGIC or BIT scalar, such as an attribute of an IEEE subtype
     // (`X01'LEFT`), is one element wide.
     if (!width
-        && (simple_type == "std_ulogic" || simple_type == "std_logic"
-            || simple_type == "bit")) {
+        && (simple_type == "bit"
+            || vhdl_provided_type_of_definition(
+                   *specialized_hir_unit_, definition)
+                == semantic::vhdl::ProvidedType::std_ulogic)) {
         width = 1U;
     }
     // A null array of a predefined type, such as STD_LOGIC_VECTOR, images
@@ -30104,15 +29976,15 @@ Lowerer::hir_vhdl_composite_value_form(
                         })));
         return form;
     }
-    // The predefined array types of STD.STANDARD and IEEE.STD_LOGIC_1164.
+    // The predefined array types of STD.STANDARD; the array types of
+    // IEEE.STD_LOGIC_1164 are native declarations reached above.
     std::string_view element;
     switch (builtin) {
     case Builtin::std_standard_string: element = "character"; break;
     case Builtin::std_standard_bit_vector: element = "bit"; break;
     case Builtin::ieee_std_logic_1164_std_logic_vector:
     case Builtin::ieee_std_logic_1164_std_ulogic_vector:
-        element = "std_ulogic";
-        break;
+        return std::nullopt;
     case Builtin::std_standard_boolean_vector: element = "boolean"; break;
     case Builtin::std_standard_integer_vector: element = "integer"; break;
     case Builtin::std_standard_real_vector: element = "real"; break;
@@ -30126,8 +29998,7 @@ Lowerer::hir_vhdl_composite_value_form(
     if (auto resolved = hir_effective_vhdl_subtype(*form.element)) {
         form.element = std::move(*resolved);
     }
-    form.character_string = element == "character" || element == "bit"
-        || element == "std_ulogic";
+    form.character_string = element == "character" || element == "bit";
     return form;
 }
 
@@ -30664,8 +30535,12 @@ std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_scalar_image(
                 frontend::SystemVerilogScalarKind::None);
             const bool hexadecimal
                 = vector_format == runtime::simir::OutputFormat::hexadecimal;
-            const bool is_signed = simple_type == "signed"
-                || simple_type == "unresolved_signed";
+            const auto numeric_provided = vhdl_provided_type_of_definition(
+                *specialized_hir_unit_, definition);
+            const bool is_signed = numeric_provided
+                    == semantic::vhdl::ProvidedType::numeric_std_signed
+                || numeric_provided
+                    == semantic::vhdl::ProvidedType::numeric_bit_signed;
             StringMethod conversion;
             conversion.operation = hexadecimal
                 ? (is_signed ? StringMethodOperator::vhdl_logic9_hstring_signed
@@ -30682,8 +30557,9 @@ std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_scalar_image(
         return string_quoted(upper());
     }
     if (domain == frontend::ValueDomain::Logic9
-        || simple_type == "bit" || simple_type == "std_ulogic"
-        || simple_type == "std_logic") {
+        || simple_type == "bit"
+        || vhdl_provided_type_of_definition(*specialized_hir_unit_, definition)
+            == semantic::vhdl::ProvidedType::std_ulogic) {
         append_formatted(runtime::simir::OutputFormat::binary, false,
             frontend::SystemVerilogScalarKind::None);
         return quoted(upper());
@@ -32189,12 +32065,46 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
         }
         const auto builtin_alias_name
             = vhdl_builtin_alias_call_name(*specialized_hir_unit_, source);
-        auto logic_string_function
-            = source.kind == semantic::vhdl::ExpressionKind::call
-            ? vhdl_logic_string_function_name(builtin_alias_name
-                      ? std::string_view { *builtin_alias_name }
-                      : std::string_view { source.text })
-            : std::nullopt;
+        // TO_STRING, TO_HSTRING and TO_OSTRING of IEEE.STD_LOGIC_1164 (their
+        // aliases included) are identified by the callee's native entry; the
+        // predefined STD.STANDARD forms and a design's own overload by the
+        // call's name.
+        std::optional<VhdlLogicStringFunction> logic_string_function;
+        if (source.kind == semantic::vhdl::ExpressionKind::call) {
+            const auto* const native = hir_vhdl_native_callee(expression_id);
+            if (native != nullptr) {
+                using Name = semantic::VhdlNativeName;
+                if (native->kind == semantic::VhdlNativeKind::function
+                    && (native->name == Name::to_string
+                        || native->name == Name::to_ostring
+                        || native->name == Name::to_hstring)) {
+                    logic_string_function = VhdlLogicStringFunction {
+                        std::string { semantic::vhdl_native_designator(
+                            *native) },
+                        native->name == Name::to_ostring
+                            ? VhdlLogicStringRadix::octal
+                            : native->name == Name::to_hstring
+                            ? VhdlLogicStringRadix::hexadecimal
+                            : VhdlLogicStringRadix::binary,
+                        native->name == Name::to_string };
+                }
+            } else if (const auto standard_name = vhdl_logic_string_function_name(
+                           builtin_alias_name
+                               ? std::string_view { *builtin_alias_name }
+                               : std::string_view { source.text })) {
+                // The STD.STANDARD names: TO_OSTRING and TO_OCTAL_STRING
+                // (TO_O...), TO_HSTRING and TO_HEX_STRING (TO_H...), else
+                // binary.
+                logic_string_function = VhdlLogicStringFunction {
+                    std::string { *standard_name },
+                    standard_name->starts_with("to_o")
+                        ? VhdlLogicStringRadix::octal
+                        : standard_name->starts_with("to_h")
+                        ? VhdlLogicStringRadix::hexadecimal
+                        : VhdlLogicStringRadix::binary,
+                    *standard_name == "to_string" };
+            }
+        }
         // A design's own TO_STRING (or TO_HSTRING ...) overload is called
         // rather than the predefined one (IEEE 1076-2008 12.3).
         if (logic_string_function) {
@@ -32235,12 +32145,12 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
                 report(
                     "FSIM-ELAB-VHSTD-001",
                     "predefined IEEE function '"
-                        + std::string { *logic_string_function }
+                        + logic_string_function->name
                         + "' requires VHDL-2008",
                     span);
                 return std::nullopt;
             }
-            if (*logic_string_function == "to_string"
+            if (logic_string_function->is_to_string
                 && source.operands.size() <= 2U) {
                 if (const auto real_text = lower_hir_vhdl_real_to_string(
                         expression_id)) {
@@ -32250,7 +32160,7 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
             if (source.operands.size() != 1U) {
                 report(
                     "FSIM-ELAB-VHLOGIC-001",
-                    std::string { *logic_string_function }
+                    logic_string_function->name
                         + " requires exactly one packed value",
                     span);
                 return std::nullopt;
@@ -32260,7 +32170,7 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
                 operand_id, hir_process_scope_);
             const auto operand = specialized_hir_unit_->find_expression(
                 operand_id);
-            if (*logic_string_function == "to_string" && operand
+            if (logic_string_function->is_to_string && operand
                 && operand->vhdl != nullptr
                 && operand->vhdl->kind
                     != semantic::vhdl::ExpressionKind::string_literal) {
@@ -32323,11 +32233,11 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
                 // A runtime value: TO_STRING of any scalar or array, and the
                 // octal and hexadecimal forms of a bit or logic array.
                 const auto format
-                    = *logic_string_function == "to_ostring"
-                        || *logic_string_function == "to_octal_string"
+                    = logic_string_function->radix
+                        == VhdlLogicStringRadix::octal
                     ? runtime::simir::OutputFormat::octal
-                    : *logic_string_function == "to_hstring"
-                        || *logic_string_function == "to_hex_string"
+                    : logic_string_function->radix
+                        == VhdlLogicStringRadix::hexadecimal
                     ? runtime::simir::OutputFormat::hexadecimal
                     : runtime::simir::OutputFormat::binary;
                 return lower_hir_vhdl_runtime_image(
@@ -32337,7 +32247,7 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
                 || operand->vhdl == nullptr || !literal) {
                 report(
                     "FSIM-ELAB-VHLOGIC-003",
-                    std::string { *logic_string_function }
+                    logic_string_function->name
                         + " requires a nonempty static packed value",
                     operand && operand->vhdl != nullptr
                         ? hir_source_span(operand->vhdl->source)
@@ -32345,12 +32255,9 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
                 return std::nullopt;
             }
             const bool binary
-                = *logic_string_function == "to_string"
-                || *logic_string_function == "to_bstring"
-                || *logic_string_function == "to_binary_string";
+                = logic_string_function->radix == VhdlLogicStringRadix::binary;
             const auto group
-                = *logic_string_function == "to_ostring"
-                    || *logic_string_function == "to_octal_string"
+                = logic_string_function->radix == VhdlLogicStringRadix::octal
                 ? 3U
                 : 4U;
             const auto output_bytes = binary
@@ -32359,7 +32266,7 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
             if (output_bytes > maximum_string_bytes) {
                 report(
                     "FSIM-ELAB-VHLOGIC-003",
-                    std::string { *logic_string_function }
+                    logic_string_function->name
                         + " result exceeds the bounded runtime string "
                           "storage limit",
                     hir_source_span(operand->vhdl->source));
@@ -33924,7 +33831,6 @@ Lowerer::hir_vhdl_mixed_aggregate_target_segments(
     using Subtype = semantic::vhdl::SubtypeIndication;
     using TypeDefinition = semantic::vhdl::TypeDefinition;
     using TypeForm = semantic::vhdl::TypeForm;
-    using BuiltinType = semantic::vhdl::BuiltinTypeIdentity;
     if (specialized_hir_unit_ == nullptr
         || vhdl_standard_ < frontend::VhdlStandard::Vhdl2008
         || source_width == 0U
@@ -33975,7 +33881,6 @@ Lowerer::hir_vhdl_mixed_aggregate_target_segments(
         auto type_id = subtype.type_mark.target;
         auto spelling = std::string_view { subtype.type_mark.spelling };
         bool compiler_builtin = subtype.type_mark.builtin_declaration;
-        auto builtin_type = subtype.builtin_type;
         std::unordered_set<std::uint32_t> visited;
         while (type_id.valid()
             && visited.insert(type_id.value()).second) {
@@ -33989,9 +33894,6 @@ Lowerer::hir_vhdl_mixed_aggregate_target_segments(
                 spelling = definition->base.type_mark.spelling;
                 compiler_builtin
                     = definition->base.type_mark.builtin_declaration;
-                if (builtin_type == BuiltinType::none) {
-                    builtin_type = definition->base.builtin_type;
-                }
                 type_id = definition->base.type_mark.target;
                 continue;
             }
@@ -34019,16 +33921,8 @@ Lowerer::hir_vhdl_mixed_aggregate_target_segments(
                     + std::string { standard_array_name },
                 TypeForm::array, nullptr };
         }
-        if (builtin_type
-            == BuiltinType::ieee_std_logic_1164_std_logic_vector) {
-            return NominalType { { }, "ieee.std_logic_1164.std_logic_vector",
-                TypeForm::array, nullptr };
-        }
-        if (builtin_type
-            == BuiltinType::ieee_std_logic_1164_std_ulogic_vector) {
-            return NominalType { { }, "ieee.std_logic_1164.std_ulogic_vector",
-                TypeForm::array, nullptr };
-        }
+        // The array and scalar types of IEEE.STD_LOGIC_1164 are native
+        // declarations reached through the type chain above.
         std::string_view package;
         std::string_view name = spelling;
         constexpr std::array prefixes {
@@ -34036,8 +33930,6 @@ Lowerer::hir_vhdl_mixed_aggregate_target_segments(
                 std::string_view { "std.standard" } },
             std::pair { std::string_view { "standard." },
                 std::string_view { "std.standard" } },
-            std::pair { std::string_view { "ieee.std_logic_1164." },
-                std::string_view { "ieee.std_logic_1164" } },
         };
         for (const auto& [prefix, selected_package] : prefixes) {
             if (spelling.size() > prefix.size()
@@ -34058,21 +33950,10 @@ Lowerer::hir_vhdl_mixed_aggregate_target_segments(
             standard_types, [&](const auto& candidate) {
                 return same_vhdl_identifier(name, candidate.first);
             });
-        const bool standard_name = predefined != standard_types.end();
-        const bool logic_type
-            = subtype.domain == semantic::vhdl::ValueDomain::logic9
-            && (same_vhdl_identifier(name, "std_logic")
-                || same_vhdl_identifier(name, "std_ulogic")
-                || same_vhdl_identifier(name, "std_logic_vector")
-                || same_vhdl_identifier(name, "std_ulogic_vector"));
-        if (!standard_name && !logic_type) {
+        if (predefined == standard_types.end()) {
             return std::nullopt;
         }
-        const bool standard_package = package == "std.standard";
-        const bool logic_package = package == "ieee.std_logic_1164";
-        if ((!package.empty() && !standard_package && !logic_package)
-            || (standard_package && !standard_name)
-            || (logic_package && !logic_type)) {
+        if (!package.empty() && package != "std.standard") {
             return std::nullopt;
         }
         if (package.empty() && !compiler_builtin) {
@@ -34082,22 +33963,12 @@ Lowerer::hir_vhdl_mixed_aggregate_target_segments(
                 return std::nullopt;
             }
         }
-        package = package.empty()
-            ? (logic_type && !standard_name
-                    ? std::string_view { "ieee.std_logic_1164" }
-                    : std::string_view { "std.standard" })
-            : package;
-        const bool array = standard_name
-                ? predefined->second == TypeForm::array
-                : same_vhdl_identifier(name, "std_logic_vector")
-                    || same_vhdl_identifier(name, "std_ulogic_vector");
-        const auto form = array ? TypeForm::array
-            : standard_name ? predefined->second : TypeForm::enumeration;
+        const auto form = predefined->second;
         const auto canonical_name
             = same_vhdl_identifier(name, "natural")
                     || same_vhdl_identifier(name, "positive")
             ? std::string_view { "integer" } : name;
-        return NominalType { { }, std::string { package } + "."
+        return NominalType { { }, "std.standard."
                 + std::string { canonical_name },
             form, nullptr };
     };
@@ -34476,28 +34347,31 @@ bool Lowerer::lower_hir_vhdl_aggregate_copy_out(
                 return element;
             }
         }
-        const auto logic_element = [](const std::string_view spelling) {
+        // STD_LOGIC by its native declaration (IEEE 1076-2019 16.7).
+        const auto logic_element = [&]() {
             semantic::vhdl::SubtypeIndication element;
-            element.type_mark.spelling = std::string { spelling };
+            if (const auto native = vhdl_native_type_subtype(
+                    *specialized_hir_unit_,
+                    semantic::VhdlNativePackage::ieee_std_logic_1164,
+                    semantic::VhdlNativeName::std_logic)) {
+                element.type_mark = native->type_mark;
+            }
             element.domain = semantic::vhdl::ValueDomain::logic9;
             element.executable_width = 1U;
             return std::optional { element };
         };
         array_spelling = simple_name_of(array_spelling);
-        if (same_vhdl_identifier(array_spelling, "std_logic_vector")
-            || same_vhdl_identifier(array_spelling, "signed")
-            || same_vhdl_identifier(array_spelling, "unsigned")
-            || same_vhdl_identifier(array_spelling, "ufixed")
+        // The arrays of IEEE.STD_LOGIC_1164 and IEEE.NUMERIC_STD are native
+        // declarations with a definition; the projected fixed- and
+        // floating-point types are arrays of STD_LOGIC.
+        if (same_vhdl_identifier(array_spelling, "ufixed")
             || same_vhdl_identifier(array_spelling, "sfixed")
             || same_vhdl_identifier(array_spelling, "unresolved_ufixed")
             || same_vhdl_identifier(array_spelling, "unresolved_sfixed")
             || same_vhdl_identifier(array_spelling, "float")
             || same_vhdl_identifier(array_spelling, "unresolved_float")
             || same_vhdl_identifier(array_spelling, "u_float")) {
-            return logic_element("std_logic");
-        }
-        if (same_vhdl_identifier(array_spelling, "std_ulogic_vector")) {
-            return logic_element("std_ulogic");
+            return logic_element();
         }
         return std::nullopt;
     };
@@ -36034,12 +35908,6 @@ Lowerer::hir_vhdl_predefined_array_element(
         element.integer_storage_width = 64U;
     } else if (same_vhdl_identifier(array_name, "real_vector")) {
         set("std.standard.real", semantic::vhdl::ValueDomain::bit2, 64U);
-    } else if (same_vhdl_identifier(array_name, "std_logic_vector")) {
-        set("ieee.std_logic_1164.std_logic",
-            semantic::vhdl::ValueDomain::logic9, 1U);
-    } else if (same_vhdl_identifier(array_name, "std_ulogic_vector")) {
-        set("ieee.std_logic_1164.std_ulogic",
-            semantic::vhdl::ValueDomain::logic9, 1U);
     } else {
         return std::nullopt;
     }
@@ -36180,9 +36048,21 @@ void Lowerer::warn_hir_vhdl_numeric_integer_truncation(
         if (!size || *size == 0U || *size >= value_width) {
             return;
         }
-        const auto vector_domain = hir_expression_domain(
-            vector, hir_process_scope_);
-        const bool numeric_bit = vector_domain == frontend::ValueDomain::Bit2;
+        // The package that declares the vector's type (the native entry).
+        const auto vector_subtype = hir_vhdl_expression_subtype(vector);
+        const auto* vector_entry = vector_subtype
+                && vector_subtype->type_mark.target.valid()
+            ? semantic::vhdl_native_type_of(
+                  *specialized_hir_unit_, vector_subtype->type_mark.target)
+            : nullptr;
+        std::string package_name { vector_entry != nullptr
+                ? vector_entry->package
+                : std::string_view { } };
+        std::ranges::transform(package_name, package_name.begin(),
+            [](const char value) {
+                return static_cast<char>(std::toupper(
+                    static_cast<unsigned char>(value)));
+            });
         const auto truncated = resize_register(
             integer_value, *size, *signed_vector);
         const auto restored = resize_register(
@@ -36192,7 +36072,7 @@ void Lowerer::warn_hir_vhdl_numeric_integer_truncation(
             BinaryOperator::equal, fits, integer_value, restored });
         process_.operations.emplace_back(Assert {
             fits,
-            std::string { numeric_bit ? "NUMERIC_BIT" : "NUMERIC_STD" }
+            package_name
                 + (*signed_vector ? ".TO_SIGNED" : ".TO_UNSIGNED")
                 + ": vector truncated",
             AssertionSeverity::warning,

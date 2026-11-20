@@ -73,6 +73,14 @@ struct TypeKey {
 constexpr std::string_view universal_integer { "universal_integer" };
 constexpr std::string_view universal_real { "universal_real" };
 
+// The keys this pass gives the types of the precompiled standard packages
+// (native_type_key): one per type, shared by a resolved subtype and its
+// unresolved type (16.7, 16.8.5).
+constexpr std::string_view logic9_key { "std_ulogic" };
+constexpr std::string_view logic9_vector_key { "std_ulogic_vector" };
+constexpr std::string_view numeric_std_unsigned_key { "unsigned" };
+constexpr std::string_view numeric_std_signed_key { "signed" };
+
 // The predefined types named by STD.STANDARD. A subtype names its base type
 // (5.2.6, 16.3).
 [[nodiscard]] std::string predefined_base(const std::string_view name)
@@ -111,11 +119,12 @@ constexpr std::string_view universal_real { "universal_real" };
 {
     switch (vhdl_native_provided_type(entry)) {
     case vhdl::ProvidedType::std_ulogic:
-    case vhdl::ProvidedType::std_logic: return "std_ulogic";
+    case vhdl::ProvidedType::std_logic: return logic9_key;
     case vhdl::ProvidedType::std_ulogic_vector:
-    case vhdl::ProvidedType::std_logic_vector: return "std_ulogic_vector";
-    case vhdl::ProvidedType::numeric_std_unsigned: return "unsigned";
-    case vhdl::ProvidedType::numeric_std_signed: return "signed";
+    case vhdl::ProvidedType::std_logic_vector: return logic9_vector_key;
+    case vhdl::ProvidedType::numeric_std_unsigned:
+        return numeric_std_unsigned_key;
+    case vhdl::ProvidedType::numeric_std_signed: return numeric_std_signed_key;
     case vhdl::ProvidedType::numeric_bit_unsigned: return "bit_unsigned";
     case vhdl::ProvidedType::numeric_bit_signed: return "bit_signed";
     case vhdl::ProvidedType::textio_line: return "std.textio.line";
@@ -138,9 +147,9 @@ constexpr std::string_view universal_real { "universal_real" };
         || name == "bit_signed") {
         return "bit";
     }
-    if (name == "std_ulogic_vector" || name == "std_logic_vector"
-        || name == "unsigned" || name == "signed") {
-        return "std_ulogic";
+    if (name == logic9_vector_key || name == numeric_std_unsigned_key
+        || name == numeric_std_signed_key) {
+        return logic9_key;
     }
     if (name == "boolean_vector") {
         return "boolean";
@@ -166,7 +175,7 @@ constexpr std::string_view universal_real { "universal_real" };
     case Intrinsic::boolean: return "boolean";
     case Intrinsic::bit: return "bit";
     case Intrinsic::character: return "character";
-    case Intrinsic::std_ulogic: return "std_ulogic";
+    case Intrinsic::std_ulogic: return logic9_key;
     }
     return { };
 }
@@ -2117,11 +2126,11 @@ private:
         const bool is_bit = std::ranges::find(types, builtin("bit"))
             != types.end();
         const bool is_logic
-            = std::ranges::find(types, builtin("std_ulogic")) != types.end();
+            = std::ranges::find(types, builtin(logic9_key)) != types.end();
         if (is_bit && is_logic) {
             annotate_type(id, pseudo_type(PseudoType::ambiguous_literal));
         } else if (is_logic) {
-            annotate_type(id, builtin("std_ulogic"));
+            annotate_type(id, builtin(logic9_key));
         } else if (is_bit) {
             annotate_type(id, builtin("bit"));
         }

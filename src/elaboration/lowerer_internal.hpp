@@ -3534,9 +3534,10 @@ private:
     [[nodiscard]] std::optional<RegisterId>
     lower_hir_systemverilog_math_call(
         semantic::ExpressionId expression);
-    // The IEEE.MATH_REAL function (IEEE 1076.2) a VHDL call names, by its
-    // lower-case simple name, when every operand is REAL.
-    [[nodiscard]] std::optional<std::string> hir_vhdl_math_real_function(
+    // The native name of the IEEE.MATH_REAL function (IEEE 1076.2) a VHDL
+    // call's selected callee is, when its operand count fits that function.
+    [[nodiscard]] std::optional<semantic::VhdlNativeName>
+    hir_vhdl_math_real_function(
         semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<RegisterId> lower_hir_vhdl_math_real_call(
         semantic::ExpressionId expression);

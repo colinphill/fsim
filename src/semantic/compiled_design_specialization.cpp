@@ -1212,29 +1212,6 @@ std::vector<InstanceId> collect_instance_ids(const CompiledDesign& design,
     return result;
 }
 
-// IEEE.MATH_REAL constants (IEEE 1076.2), keyed by normalized spelling.
-constexpr std::array<std::pair<std::string_view, double>, 18>
-    math_real_constants {
-        std::pair { std::string_view { "mathe" }, 2.71828182845904523536 },
-        std::pair { std::string_view { "math1overe" }, 0.36787944117144233402 },
-        std::pair { std::string_view { "mathpi" }, 3.14159265358979323846 },
-        std::pair { std::string_view { "math2pi" }, 6.28318530717958647693 },
-        std::pair { std::string_view { "math1overpi" }, 0.31830988618379067154 },
-        std::pair { std::string_view { "mathpiover2" }, 1.57079632679489661923 },
-        std::pair { std::string_view { "mathpiover3" }, 1.04719755119659774615 },
-        std::pair { std::string_view { "mathpiover4" }, 0.78539816339744830962 },
-        std::pair { std::string_view { "math3piover2" }, 4.71238898038468985769 },
-        std::pair { std::string_view { "mathlogof2" }, 0.69314718055994530942 },
-        std::pair { std::string_view { "mathlogof10" }, 2.30258509299404568402 },
-        std::pair { std::string_view { "mathlog2ofe" }, 1.44269504088896340736 },
-        std::pair { std::string_view { "mathlog10ofe" }, 0.43429448190325182765 },
-        std::pair { std::string_view { "mathsqrt2" }, 1.41421356237309504880 },
-        std::pair { std::string_view { "math1oversqrt2" }, 0.70710678118654752440 },
-        std::pair { std::string_view { "mathsqrtpi" }, 1.77245385090551602730 },
-        std::pair { std::string_view { "mathdegtorad" }, 0.01745329251994329577 },
-        std::pair { std::string_view { "mathradtodeg" }, 57.29577951308232087680 },
-    };
-
 // The name a VHDL call node designates: the type mark of a qualified
 // expression, otherwise the node's text.
 std::string_view vhdl_call_designator(const vhdl::Expression& expression)
@@ -2038,24 +2015,51 @@ public:
             == vhdl::ProvidedType::real;
     }
 
+    // Whether a call node is a type conversion to a logic array type: the
+    // native STD_LOGIC_VECTOR, STD_ULOGIC_VECTOR, NUMERIC_STD or NUMERIC_BIT
+    // vector type (by the identity of the type declaration its name denotes,
+    // IEEE 1076-2019 9.3.6) or one of the projected std_logic_arith arrays.
     [[nodiscard]] bool vhdl_logic_array_type_mark(
-        const std::string_view mark, const ScopeId scope) const
+        const vhdl::Expression& expression) const
     {
-        using Provided = vhdl::ProvidedType;
-        switch (CompiledDesignResolver { unit_ }
-                    .resolve_vhdl_provided_type(
-                        mark, scope)) {
-        case Provided::std_logic_vector:
-        case Provided::std_ulogic_vector:
-        case Provided::numeric_std_signed:
-        case Provided::numeric_std_unsigned:
-        case Provided::numeric_bit_signed:
-        case Provided::std_logic_arith_unsigned:
-        case Provided::std_logic_arith_signed:
-        case Provided::numeric_bit_unsigned:
-            return true;
-        default: return false;
+        if (expression.referenced_name && expression.referenced_name->selected) {
+            const auto declaration = unit_.find_declaration(
+                *expression.referenced_name->selected);
+            if (declaration && declaration->vhdl != nullptr) {
+                // The type mark's own declaration (a native type or
+                // subtype), else the nearest native type on its chain.
+                const auto* own = vhdl_native_of(*declaration->vhdl);
+                const auto* native = own != nullptr
+                        && own->kind == VhdlNativeKind::type
+                    ? own
+                    : declaration->vhdl->declared_type
+                    ? vhdl_native_type_of(
+                          unit_, *declaration->vhdl->declared_type)
+                    : nullptr;
+                if (native != nullptr
+                    && vhdl_native_domain(*native) != VhdlNativeDomain::none
+                    && vhdl_native_provided_type(*native)
+                        != vhdl::ProvidedType::std_ulogic
+                    && vhdl_native_provided_type(*native)
+                        != vhdl::ProvidedType::std_logic) {
+                    return true;
+                }
+            }
         }
+        // A mark analysis left unbound: the provided type its name denotes
+        // where it is written (12.3, 12.4), a native vector type or a
+        // projected std_logic_arith array.
+        if (expression.referenced_name
+            && expression.referenced_name->selected) {
+            return false;
+        }
+        using Provided = vhdl::ProvidedType;
+        const auto provided = CompiledDesignResolver { unit_ }
+                                  .resolve_vhdl_provided_type(
+                                      expression.text, expression.scope);
+        return native_logic_vector_type(provided)
+            || provided == Provided::std_logic_arith_unsigned
+            || provided == Provided::std_logic_arith_signed;
     }
 
     explicit HirIntegralEvaluator(const SpecializedHirUnit& unit,
@@ -3356,12 +3360,37 @@ private:
     [[nodiscard]] bool vhdl_native_logic_vector(
         const vhdl::SubtypeIndication& subtype) const
     {
-        const auto* native
-            = vhdl_native_type_of(unit_, subtype.type_mark.target);
-        return native != nullptr
-            && vhdl_native_domain(*native) != VhdlNativeDomain::none
-            && vhdl_native_provided_type(*native) != vhdl::ProvidedType::std_ulogic
-            && vhdl_native_provided_type(*native) != vhdl::ProvidedType::std_logic;
+        // A mark analysis left unbound carries the provided type the
+        // resolution pass found visible where it is written (12.3, 12.4).
+        const auto provided = subtype.type_mark.target.valid()
+            ? [&] {
+                  const auto* native
+                      = vhdl_native_type_of(unit_, subtype.type_mark.target);
+                  return native != nullptr
+                          && vhdl_native_domain(*native)
+                              != VhdlNativeDomain::none
+                      ? vhdl_native_provided_type(*native)
+                      : vhdl::ProvidedType::none;
+              }()
+            : subtype.provided_type;
+        return native_logic_vector_type(provided);
+    }
+
+    // The vector types of IEEE.STD_LOGIC_1164, NUMERIC_STD and NUMERIC_BIT.
+    [[nodiscard]] static bool native_logic_vector_type(
+        const vhdl::ProvidedType provided) noexcept
+    {
+        using Provided = vhdl::ProvidedType;
+        switch (provided) {
+        case Provided::std_logic_vector:
+        case Provided::std_ulogic_vector:
+        case Provided::numeric_std_unsigned:
+        case Provided::numeric_std_signed:
+        case Provided::numeric_bit_unsigned:
+        case Provided::numeric_bit_signed:
+            return true;
+        default: return false;
+        }
     }
 
     [[nodiscard]] std::optional<vhdl::SubtypeIndication>
@@ -6532,6 +6561,37 @@ private:
         return result;
     }
 
+    // The native function of `package` a call denotes: every declaration its
+    // name denotes is a native function of that package with one designator
+    // (overloads differ by profile only, IEEE 1076-2019 4.5.1); none for a
+    // user function of the same spelling.
+    [[nodiscard]] std::optional<VhdlNativeName> vhdl_native_function_call(
+        const vhdl::Expression& expression,
+        const VhdlNativePackage package) const
+    {
+        if (!expression.referenced_name) {
+            return std::nullopt;
+        }
+        const auto& name = *expression.referenced_name;
+        std::vector<DeclarationId> denoted;
+        if (name.selected) {
+            denoted.push_back(*name.selected);
+        } else {
+            denoted = name.overloads;
+        }
+        std::optional<VhdlNativeName> result;
+        for (const auto declaration : denoted) {
+            const auto* entry = vhdl_native_subprogram(declaration);
+            if (entry == nullptr || entry->package_id != package
+                || entry->kind != VhdlNativeKind::function
+                || (result && *result != entry->name)) {
+                return std::nullopt;
+            }
+            result = entry->name;
+        }
+        return result;
+    }
+
     // Whether a subtype is of IEEE.NUMERIC_STD's SIGNED (true) or UNSIGNED
     // (false) family, by the native identity of its type (16.8.5): the
     // resolved subtypes and the UNRESOLVED_ types alike.
@@ -7178,7 +7238,11 @@ private:
             return integer ? std::optional { static_cast<double>(*integer) }
                            : std::nullopt;
         }
-        const auto math_real = [&] {
+        // The callee is an IEEE.MATH_REAL function exactly when every
+        // candidate is that package's native declaration of one function.
+        // The package constants are ordinary constants folded from their
+        // initializers above.
+        const auto math_real = [&]() -> std::optional<VhdlNativeName> {
             std::vector<DeclarationId> candidates;
             if (source.referenced_name) {
                 candidates = source.referenced_name->overloads;
@@ -7202,52 +7266,28 @@ private:
                 }
             }
             if (candidates.empty()) {
-                // A name no user declaration claims is the IEEE.MATH_REAL
-                // member (IEEE 1076.2), whose package may not be linked
-                // into this specialization yet.
-                static constexpr std::array members {
-                    std::string_view { "ceil" }, std::string_view { "floor" },
-                    std::string_view { "round" }, std::string_view { "trunc" },
-                    std::string_view { "sqrt" }, std::string_view { "exp" },
-                    std::string_view { "log" }, std::string_view { "log2" },
-                    std::string_view { "log10" },
-                    std::string_view { "realmax" },
-                    std::string_view { "realmin" }, std::string_view { "sign" },
-                    std::string_view { "cbrt" }, std::string_view { "sin" },
-                    std::string_view { "cos" }, std::string_view { "tan" },
-                    std::string_view { "arcsin" },
-                    std::string_view { "arccos" },
-                    std::string_view { "arctan" }, std::string_view { "sinh" },
-                    std::string_view { "cosh" }, std::string_view { "tanh" },
-                    std::string_view { "arcsinh" },
-                    std::string_view { "arccosh" },
-                    std::string_view { "arctanh" },
-                };
-                return std::ranges::find(members, name) != members.end()
-                    || std::ranges::find(math_real_constants, name,
-                           &std::pair<std::string_view, double>::first)
-                    != math_real_constants.end();
+                return std::nullopt;
             }
-            return std::ranges::all_of(candidates,
-                    [&](const DeclarationId candidate) {
-                        const auto declaration
-                            = unit_.find_declaration(candidate);
-                        return declaration && declaration->vhdl != nullptr
-                            && unit_.design().vhdl_scope_in_package(
-                                declaration->vhdl->scope, "ieee",
-                                "math_real");
-                    });
+            std::optional<VhdlNativeName> function;
+            for (const auto candidate : candidates) {
+                const auto declaration = unit_.find_declaration(candidate);
+                const auto* entry = declaration && declaration->vhdl != nullptr
+                    ? vhdl_native_of(*declaration->vhdl)
+                    : nullptr;
+                if (entry == nullptr
+                    || entry->package_id != VhdlNativePackage::ieee_math_real
+                    || entry->kind != VhdlNativeKind::function
+                    || (function && *function != entry->name)) {
+                    return std::nullopt;
+                }
+                function = entry->name;
+            }
+            return function;
         }();
         if (!math_real) {
             return std::nullopt;
         }
-        if (source.operands.empty()) {
-            const auto found = std::ranges::find(math_real_constants, name,
-                &std::pair<std::string_view, double>::first);
-            if (found != math_real_constants.end()) {
-                return found->second;
-            }
-        }
+        const auto function_name = *math_real;
         std::vector<double> arguments;
         for (const auto operand : source.operands) {
             const auto value = support::with_stack([&] { return vhdl_real_expression(operand, depth + 1U); });
@@ -7262,93 +7302,80 @@ private:
                 ? std::optional { function(arguments.front()) }
                 : std::nullopt;
         };
-        if (name == "ceil") {
+        using N = VhdlNativeName;
+        if (function_name == N::ceil) {
             return unary(std::ceil);
         }
-        if (name == "floor") {
+        if (function_name == N::floor) {
             return unary(std::floor);
         }
-        if (name == "round") {
+        if (function_name == N::round) {
             return unary(std::round);
         }
-        if (name == "trunc") {
+        if (function_name == N::trunc) {
             return unary(std::trunc);
         }
-        if (name == "sqrt" && arguments.size() == 1U
+        if (function_name == N::sqrt && arguments.size() == 1U
             && arguments.front() >= 0.0) {
             return std::sqrt(arguments.front());
         }
-        if (name == "exp") {
+        if (function_name == N::exp) {
             return unary(std::exp);
         }
-        if ((name == "log2" || name == "log10" || name == "log")
+        if ((function_name == N::log2 || function_name == N::log10 || function_name == N::log)
             && !arguments.empty() && arguments.front() > 0.0) {
-            if (name == "log2" && arguments.size() == 1U) {
+            if (function_name == N::log2 && arguments.size() == 1U) {
                 return std::log2(arguments.front());
             }
-            if (name == "log10" && arguments.size() == 1U) {
+            if (function_name == N::log10 && arguments.size() == 1U) {
                 return std::log10(arguments.front());
             }
-            if (name == "log" && arguments.size() == 1U) {
+            if (function_name == N::log && arguments.size() == 1U) {
                 return std::log(arguments.front());
             }
-            if (name == "log" && arguments.size() == 2U
+            if (function_name == N::log && arguments.size() == 2U
                 && arguments.back() > 0.0 && arguments.back() != 1.0) {
                 return std::log(arguments.front())
                     / std::log(arguments.back());
             }
             return std::nullopt;
         }
-        if (name == "realmax" && arguments.size() == 2U) {
+        if (function_name == N::realmax && arguments.size() == 2U) {
             return std::max(arguments[0], arguments[1]);
         }
-        if (name == "realmin" && arguments.size() == 2U) {
+        if (function_name == N::realmin && arguments.size() == 2U) {
             return std::min(arguments[0], arguments[1]);
         }
-        if (name == "sign" && arguments.size() == 1U) {
+        if (function_name == N::sign && arguments.size() == 1U) {
             return arguments.front() > 0.0 ? 1.0
                 : arguments.front() < 0.0 ? -1.0
                                           : 0.0;
         }
-        if (name == "cbrt") {
+        if (function_name == N::cbrt) {
             return unary(std::cbrt);
         }
-        if (name == "arctan" && arguments.size() == 2U) {
+        if (function_name == N::arctan && arguments.size() == 2U) {
             return std::atan2(arguments[0], arguments[1]);
         }
-        static constexpr std::array<std::pair<std::string_view,
-                                        double (*)(double)>,
-            12>
-            trigonometric {
-                std::pair { std::string_view { "sin" },
-                    static_cast<double (*)(double)>(std::sin) },
-                std::pair { std::string_view { "cos" },
-                    static_cast<double (*)(double)>(std::cos) },
-                std::pair { std::string_view { "tan" },
-                    static_cast<double (*)(double)>(std::tan) },
-                std::pair { std::string_view { "arcsin" },
-                    static_cast<double (*)(double)>(std::asin) },
-                std::pair { std::string_view { "arccos" },
-                    static_cast<double (*)(double)>(std::acos) },
-                std::pair { std::string_view { "arctan" },
-                    static_cast<double (*)(double)>(std::atan) },
-                std::pair { std::string_view { "sinh" },
-                    static_cast<double (*)(double)>(std::sinh) },
-                std::pair { std::string_view { "cosh" },
-                    static_cast<double (*)(double)>(std::cosh) },
-                std::pair { std::string_view { "tanh" },
-                    static_cast<double (*)(double)>(std::tanh) },
-                std::pair { std::string_view { "arcsinh" },
-                    static_cast<double (*)(double)>(std::asinh) },
-                std::pair { std::string_view { "arccosh" },
-                    static_cast<double (*)(double)>(std::acosh) },
-                std::pair { std::string_view { "arctanh" },
-                    static_cast<double (*)(double)>(std::atanh) },
-            };
-        if (const auto function = std::ranges::find(trigonometric, name,
-                &std::pair<std::string_view, double (*)(double)>::first);
-            function != trigonometric.end()) {
-            const auto value = unary(function->second);
+        const auto trigonometric = [&]() -> double (*)(double) {
+            switch (function_name) {
+            case N::sin: return std::sin;
+            case N::cos: return std::cos;
+            case N::tan: return std::tan;
+            case N::arcsin: return std::asin;
+            case N::arccos: return std::acos;
+            case N::arctan: return std::atan;
+            case N::sinh: return std::sinh;
+            case N::cosh: return std::cosh;
+            case N::tanh: return std::tanh;
+            case N::arcsinh: return std::asinh;
+            case N::arccosh: return std::acosh;
+            case N::arctanh: return std::atanh;
+            default: return nullptr;
+            }
+        }();
+        if (trigonometric != nullptr) {
+            const auto value = unary(trigonometric);
             return value && std::isfinite(*value) ? value : std::nullopt;
         }
         return std::nullopt;
@@ -7557,10 +7584,7 @@ private:
             }
             return vhdl_packed_value(std::move(bits), *width - 1, 0);
         }
-        if ((name == "signed" || name == "unsigned"
-                || name == "stdlogicvector"
-                || name == "stdulogicvector")
-            && vhdl_logic_array_type_mark(expression.text, expression.scope)) {
+        if (vhdl_logic_array_type_mark(expression)) {
             if (expression.operands.size() != 1U) {
                 return std::nullopt;
             }
@@ -12880,14 +12904,7 @@ private:
         const auto predefined_array = subtype != nullptr
             && (support::equal_ignoring_ascii_case(
                     subtype->type_mark.spelling, "bit_vector")
-                || support::equal_ignoring_ascii_case(
-                    subtype->type_mark.spelling, "std_logic_vector")
-                || support::equal_ignoring_ascii_case(
-                    subtype->type_mark.spelling, "std_ulogic_vector")
-                || support::equal_ignoring_ascii_case(
-                    subtype->type_mark.spelling, "signed")
-                || support::equal_ignoring_ascii_case(
-                    subtype->type_mark.spelling, "unsigned"));
+                || vhdl_native_logic_vector(*subtype));
         const auto constrained_array = subtype != nullptr
             && std::ranges::any_of(
                 subtype->constraints,
@@ -14986,23 +15003,23 @@ private:
             || declaration->vhdl == nullptr) {
             return std::nullopt;
         }
-        const auto declared = [&](const std::string_view library,
-                                  const std::string_view package,
-                                  const std::string_view name) {
+        const auto declared = [&](const std::string_view name) {
             return support::equal_ignoring_ascii_case(definition.name, name)
                 && unit_.design().vhdl_scope_in_package(
-                    declaration->vhdl->scope, library, package);
+                    declaration->vhdl->scope, "std", "standard");
         };
-        if (declared("std", "standard", "boolean")) {
+        if (declared("boolean")) {
             return Intrinsic::boolean;
         }
-        if (declared("std", "standard", "bit")) {
+        if (declared("bit")) {
             return Intrinsic::bit;
         }
-        if (declared("std", "standard", "character")) {
+        if (declared("character")) {
             return Intrinsic::character;
         }
-        if (declared("ieee", "std_logic_1164", "std_ulogic")) {
+        if (vhdl_native_is(*declaration->vhdl,
+                VhdlNativePackage::ieee_std_logic_1164,
+                VhdlNativeName::std_ulogic)) {
             return Intrinsic::std_ulogic;
         }
         return std::nullopt;
@@ -15178,7 +15195,7 @@ private:
     };
 
     struct ProvidedLogicCall {
-        std::string_view function;
+        VhdlNativeName function;
         ProvidedLogicResult result;
     };
 
@@ -15205,19 +15222,20 @@ private:
         const vhdl::Expression& call) const
     {
         using Result = ProvidedLogicResult;
+        using N = VhdlNativeName;
         struct Entry {
-            std::string_view name;
+            VhdlNativeName name;
             Result result;
             std::size_t operands;
         };
         static constexpr std::array<Entry, 7U> table {{
-            { "to_x01", Result::std_ulogic, 1U },
-            { "to_x01z", Result::std_ulogic, 1U },
-            { "to_ux01", Result::std_ulogic, 1U },
-            { "to_01", Result::std_ulogic, 2U },
-            { "to_bit", Result::bit, 2U },
-            { "to_stdulogic", Result::std_ulogic, 1U },
-            { "is_x", Result::boolean, 1U },
+            { N::to_x01, Result::std_ulogic, 1U },
+            { N::to_x01z, Result::std_ulogic, 1U },
+            { N::to_ux01, Result::std_ulogic, 1U },
+            { N::to_01, Result::std_ulogic, 2U },
+            { N::to_bit, Result::bit, 2U },
+            { N::to_stdulogic, Result::std_ulogic, 1U },
+            { N::is_x, Result::boolean, 1U },
         }};
         if (call.kind != vhdl::ExpressionKind::call || call.operands.empty()
             || call.text.starts_with('\'')
@@ -15228,18 +15246,15 @@ private:
                 })) {
             return std::nullopt;
         }
-        auto simple = std::string_view { call.text };
-        if (const auto dot = simple.find_last_of('.');
-            dot != std::string_view::npos) {
-            simple.remove_prefix(dot + 1U);
+        const auto native = vhdl_native_function_call(
+            call, VhdlNativePackage::ieee_std_logic_1164);
+        if (!native) {
+            return std::nullopt;
         }
         const auto entry = std::ranges::find_if(table, [&](const Entry& e) {
-            return support::equal_ignoring_ascii_case(simple, e.name);
+            return e.name == *native;
         });
         if (entry == table.end() || call.operands.size() > entry->operands
-            || !CompiledDesignResolver { unit_ }
-                    .vhdl_denotes_provided_package_member(call.text, "ieee",
-                        "std_logic_1164", entry->name, call.scope)
             || !vhdl_scalar_logic_operand(call.operands.front())) {
             return std::nullopt;
         }
@@ -15259,7 +15274,7 @@ private:
     };
 
     struct ProvidedLogicVectorCall {
-        std::string_view function;
+        VhdlNativeName function;
         ProvidedLogicVector result;
     };
 
@@ -15370,22 +15385,23 @@ private:
     vhdl_provided_logic_vector_call(const vhdl::Expression& call) const
     {
         using Result = ProvidedLogicVector;
+        using N = VhdlNativeName;
         struct Entry {
-            std::string_view name;
+            VhdlNativeName name;
             Result result;
             std::size_t operands;
             // Whether a BIT_VECTOR operand has an overload.
             bool bit_operand;
         };
         static constexpr std::array<Entry, 8U> table {{
-            { "to_x01", Result::ulogic_vector, 1U, true },
-            { "to_x01z", Result::ulogic_vector, 1U, true },
-            { "to_ux01", Result::ulogic_vector, 1U, true },
-            { "to_01", Result::ulogic_vector, 2U, true },
-            { "to_bitvector", Result::bit_vector, 2U, false },
-            { "to_stdlogicvector", Result::ulogic_vector, 1U, true },
-            { "to_stdulogicvector", Result::ulogic_vector, 1U, true },
-            { "is_x", Result::boolean, 1U, false },
+            { N::to_x01, Result::ulogic_vector, 1U, true },
+            { N::to_x01z, Result::ulogic_vector, 1U, true },
+            { N::to_ux01, Result::ulogic_vector, 1U, true },
+            { N::to_01, Result::ulogic_vector, 2U, true },
+            { N::to_bitvector, Result::bit_vector, 2U, false },
+            { N::to_stdlogicvector, Result::ulogic_vector, 1U, true },
+            { N::to_stdulogicvector, Result::ulogic_vector, 1U, true },
+            { N::is_x, Result::boolean, 1U, false },
         }};
         if (call.kind != vhdl::ExpressionKind::call || call.operands.empty()
             || call.text.starts_with('\'')
@@ -15396,18 +15412,15 @@ private:
                 })) {
             return std::nullopt;
         }
-        auto simple = std::string_view { call.text };
-        if (const auto dot = simple.find_last_of('.');
-            dot != std::string_view::npos) {
-            simple.remove_prefix(dot + 1U);
+        const auto native = vhdl_native_function_call(
+            call, VhdlNativePackage::ieee_std_logic_1164);
+        if (!native) {
+            return std::nullopt;
         }
         const auto entry = std::ranges::find_if(table, [&](const Entry& e) {
-            return support::equal_ignoring_ascii_case(simple, e.name);
+            return e.name == *native;
         });
-        if (entry == table.end() || call.operands.size() > entry->operands
-            || !CompiledDesignResolver { unit_ }
-                    .vhdl_denotes_provided_package_member(call.text, "ieee",
-                        "std_logic_1164", entry->name, call.scope)) {
+        if (entry == table.end() || call.operands.size() > entry->operands) {
             return std::nullopt;
         }
         const auto operand = vhdl_logic_vector_kind(call.operands.front());
@@ -15443,8 +15456,9 @@ private:
             return std::nullopt;
         }
         const auto& bits = operand->packed.bits;
+        using N = VhdlNativeName;
         const auto name = function.function;
-        if (name == "is_x") {
+        if (name == N::is_x) {
             // IS_X: true when any element is 'U', 'X', 'Z', 'W' or '-'; a
             // null vector has none.
             return vhdl_integer_value(std::ranges::any_of(bits,
@@ -15467,7 +15481,7 @@ private:
             return c == '0' || c == 'L' ? '0' : '1';
         };
         std::string result(bits.size(), '0');
-        if (name == "to_x01" || name == "to_x01z" || name == "to_ux01") {
+        if (name == N::to_x01 || name == N::to_x01z || name == N::to_ux01) {
             // The result variable is (1 to s'length).
             for (std::size_t index { }; index < bits.size(); ++index) {
                 result[index] = vhdl_logic_mapped(name, bits[index]);
@@ -15475,7 +15489,7 @@ private:
             return vhdl_packed_value(std::move(result), 1, length);
         }
         // The remaining results are (s'length-1 downto 0).
-        if (name == "to_stdlogicvector" || name == "to_stdulogicvector") {
+        if (name == N::to_stdlogicvector || name == N::to_stdulogicvector) {
             result = bits;
         } else {
             char xmap = '0';
@@ -15486,7 +15500,7 @@ private:
                 }
                 xmap = *mapping;
             }
-            if (name == "to_bitvector") {
+            if (name == N::to_bitvector) {
                 // TO_BITVECTOR(s, xmap): an element that is not strong
                 // becomes the BIT xmap.
                 if (xmap != '0' && xmap != '1') {
@@ -15540,10 +15554,10 @@ private:
     // one element: TO_X01, TO_X01Z and TO_UX01 keep the states their name
     // lists and map the others to 'X', 'L' and 'H' to '0' and '1'.
     [[nodiscard]] static char vhdl_logic_mapped(
-        const std::string_view name, const char state)
+        const VhdlNativeName name, const char state)
     {
-        if ((name == "to_x01z" && state == 'Z')
-            || (name == "to_ux01" && state == 'U')) {
+        if ((name == VhdlNativeName::to_x01z && state == 'Z')
+            || (name == VhdlNativeName::to_ux01 && state == 'U')) {
             return state;
         }
         return state == '0' || state == 'L' ? '0'
@@ -15572,19 +15586,20 @@ private:
             }
             xmap = *mapping;
         }
+        using N = VhdlNativeName;
         const auto name = function.function;
         const bool low = state == '0' || state == 'L';
         const bool high = state == '1' || state == 'H';
         const auto packed = [](const char value) {
             return vhdl_packed_value(std::string(1U, value), 0, 0);
         };
-        if (name == "is_x") {
+        if (name == N::is_x) {
             return vhdl_integer_value(low || high ? 0 : 1);
         }
-        if (name == "to_stdulogic") {
+        if (name == N::to_stdulogic) {
             return packed(state);
         }
-        if (name == "to_01" || name == "to_bit") {
+        if (name == N::to_01 || name == N::to_bit) {
             return packed(low ? '0' : high ? '1' : xmap);
         }
         return packed(vhdl_logic_mapped(name, state));
@@ -17396,10 +17411,6 @@ InferredVhdlTypeClass vhdl_builtin_type_class(
             ? 0U
             : separator + 1U);
     if (support::equal_ignoring_ascii_case(name, "bit_vector")
-        || support::equal_ignoring_ascii_case(name, "std_logic_vector")
-        || support::equal_ignoring_ascii_case(name, "std_ulogic_vector")
-        || support::equal_ignoring_ascii_case(name, "signed")
-        || support::equal_ignoring_ascii_case(name, "unsigned")
         || support::equal_ignoring_ascii_case(name, "string")
         || support::equal_ignoring_ascii_case(name, "boolean_vector")
         || support::equal_ignoring_ascii_case(name, "integer_vector")
@@ -17431,9 +17442,7 @@ InferredVhdlTypeClass vhdl_builtin_type_class(
     if (support::equal_ignoring_ascii_case(name, "boolean")
         || support::equal_ignoring_ascii_case(name, "bit")
         || support::equal_ignoring_ascii_case(name, "character")
-        || support::find_vhdl_standard_enumeration(name) != nullptr
-        || support::equal_ignoring_ascii_case(name, "std_logic")
-        || support::equal_ignoring_ascii_case(name, "std_ulogic")) {
+        || support::find_vhdl_standard_enumeration(name) != nullptr) {
         return InferredVhdlTypeClass::discrete;
     }
     if (domain == vhdl::ValueDomain::boolean

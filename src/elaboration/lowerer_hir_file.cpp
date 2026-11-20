@@ -101,20 +101,49 @@ namespace {
     return name;
 }
 
+// The file procedures this lowering handles.
+enum class FileProcedure : std::uint8_t {
+    none,
+    file_open,
+    file_close,
+    file_rewind,
+    file_seek,
+    file_truncate,
+    flush,
+    read,
+    write,
+    readline,
+    writeline,
+    tee,
+    hread,
+    hwrite,
+    oread,
+    owrite,
+    sread
+};
+
 // The predefined file operations of a file type (IEEE 1076-2019 5.5.2) and
 // the IEEE.STD_LOGIC_TEXTIO procedures (still a projected package): they
 // have no declaration of their own, so a call is recognized by its
 // spelling and its operands. Every STD.TEXTIO and IEEE.STD_LOGIC_1164
 // procedure is a native declaration instead (file_native_procedure).
-[[nodiscard]] bool vhdl_file_procedure_name(
+[[nodiscard]] FileProcedure vhdl_file_procedure_name(
     const std::string_view name) noexcept
 {
     const auto simple = vhdl_simple_name(name);
-    return simple == "file_open" || simple == "file_close"
-        || simple == "read" || simple == "write" || simple == "flush"
-        || simple == "hread" || simple == "hwrite" || simple == "oread"
-        || simple == "owrite" || simple == "file_rewind"
-        || simple == "file_seek" || simple == "file_truncate";
+    return simple == "file_open" ? FileProcedure::file_open
+        : simple == "file_close" ? FileProcedure::file_close
+        : simple == "read" ? FileProcedure::read
+        : simple == "write" ? FileProcedure::write
+        : simple == "flush" ? FileProcedure::flush
+        : simple == "hread" ? FileProcedure::hread
+        : simple == "hwrite" ? FileProcedure::hwrite
+        : simple == "oread" ? FileProcedure::oread
+        : simple == "owrite" ? FileProcedure::owrite
+        : simple == "file_rewind" ? FileProcedure::file_rewind
+        : simple == "file_seek" ? FileProcedure::file_seek
+        : simple == "file_truncate" ? FileProcedure::file_truncate
+        : FileProcedure::none;
 }
 
 // The native entry `declaration` denotes when it is a declaration of
@@ -168,36 +197,36 @@ file_native_declaration(const semantic::SpecializedHirUnit& unit,
 // The TextIO procedure a native entry stands for: READ, WRITE, READLINE,
 // WRITELINE, TEE, HREAD, HWRITE, OREAD, OWRITE, SREAD (IEEE 1076-2019
 // 16.4, 16.7); empty for any other entry.
-[[nodiscard]] std::string_view file_native_procedure(
+[[nodiscard]] FileProcedure file_native_procedure(
     const semantic::VhdlNativeIntrinsic* entry) noexcept
 {
     if (entry == nullptr
         || entry->kind != semantic::VhdlNativeKind::procedure) {
-        return { };
+        return FileProcedure::none;
     }
     switch (entry->name) {
     case semantic::VhdlNativeName::read:
-        return "read";
+        return FileProcedure::read;
     case semantic::VhdlNativeName::write:
-        return "write";
+        return FileProcedure::write;
     case semantic::VhdlNativeName::readline:
-        return "readline";
+        return FileProcedure::readline;
     case semantic::VhdlNativeName::writeline:
-        return "writeline";
+        return FileProcedure::writeline;
     case semantic::VhdlNativeName::tee:
-        return "tee";
+        return FileProcedure::tee;
     case semantic::VhdlNativeName::hread:
-        return "hread";
+        return FileProcedure::hread;
     case semantic::VhdlNativeName::hwrite:
-        return "hwrite";
+        return FileProcedure::hwrite;
     case semantic::VhdlNativeName::oread:
-        return "oread";
+        return FileProcedure::oread;
     case semantic::VhdlNativeName::owrite:
-        return "owrite";
+        return FileProcedure::owrite;
     case semantic::VhdlNativeName::sread:
-        return "sread";
+        return FileProcedure::sread;
     default:
-        return { };
+        return FileProcedure::none;
     }
 }
 
@@ -880,17 +909,19 @@ bool Lowerer::is_hir_vhdl_file_statement(
     // STD.TEXTIO or IEEE.STD_LOGIC_1164 procedure; every other declared
     // procedure is ordinary VHDL, whatever its name.
     if (statement->vhdl->resolved_procedure) {
-        return !file_native_procedure(file_native_declaration(
-                    *specialized_hir_unit_, *statement->vhdl->resolved_procedure))
-                    .empty();
+        return file_native_procedure(file_native_declaration(
+                   *specialized_hir_unit_,
+                   *statement->vhdl->resolved_procedure))
+            != FileProcedure::none;
     }
-    if (!vhdl_file_procedure_name(
+    if (vhdl_file_procedure_name(
             statement->vhdl->procedure.canonical.empty()
                 ? statement->vhdl->procedure.spelling
-                : statement->vhdl->procedure.canonical)) {
+                : statement->vhdl->procedure.canonical)
+        == FileProcedure::none) {
         return false;
     }
-    const auto name = vhdl_simple_name(
+    const auto name = vhdl_file_procedure_name(
         statement->vhdl->procedure.text());
     // Predefined READ, WRITE and FLUSH take a file object (IEEE 1076-2019
     // 5.5.2); the STD_LOGIC_TEXTIO procedures take a line.
@@ -898,17 +929,18 @@ bool Lowerer::is_hir_vhdl_file_statement(
     // when a declaration of that name is visible; otherwise the name
     // denotes nothing (e.g. STD.TEXTIO HREAD before VHDL-2008, IEEE
     // 1076-2019 16.4). FILE_OPEN, FILE_CLOSE, ... are implicit (5.5.2).
-    if (name == "hread" || name == "hwrite" || name == "oread"
-        || name == "owrite") {
+    if (name == FileProcedure::hread || name == FileProcedure::hwrite
+        || name == FileProcedure::oread || name == FileProcedure::owrite) {
         return !hir_vhdl_callable_candidates(
             statement->vhdl->procedure, statement->vhdl->scope)
                     .empty();
     }
-    if (name != "read" && name != "write" && name != "flush") {
+    if (name != FileProcedure::read && name != FileProcedure::write
+        && name != FileProcedure::flush) {
         return true;
     }
     if (statement->vhdl->procedure_arguments.empty()) {
-        return name != "flush";
+        return name != FileProcedure::flush;
     }
     const auto first = statement->vhdl->procedure_arguments.front().actual;
     const auto selected = hir_referenced_declaration(first);
@@ -3516,19 +3548,25 @@ bool Lowerer::lower_hir_vhdl_file_statement(
     // procedure (an alias such as SWRITE or BREAD denotes its target) or an
     // ordinary procedure; the predefined file operations (IEEE 1076-2019
     // 5.5.2) and the STD_LOGIC_TEXTIO procedures have no declaration.
-    std::string_view name;
+    FileProcedure name;
+    const semantic::VhdlNativeIntrinsic* native { };
     if (call.resolved_procedure) {
-        name = file_native_procedure(file_native_declaration(
-            *specialized_hir_unit_, *call.resolved_procedure));
-        if (name.empty()) {
-            return false;
-        }
+        native = file_native_declaration(
+            *specialized_hir_unit_, *call.resolved_procedure);
+        name = file_native_procedure(native);
     } else {
-        name = vhdl_simple_name(call.procedure.text());
-        if (!vhdl_file_procedure_name(name)) {
-            return false;
-        }
+        name = vhdl_file_procedure_name(call.procedure.text());
     }
+    if (name == FileProcedure::none) {
+        return false;
+    }
+    // The procedure for diagnostics: a native one's designator (an alias
+    // names its target), else the call's spelling (canonical form).
+    const auto called_name = native != nullptr
+        ? semantic::vhdl_native_designator(*native)
+        : vhdl_simple_name(call.procedure.canonical.empty()
+                  ? call.procedure.spelling
+                  : call.procedure.canonical);
     const auto span = hir_source_span(call.source);
     const auto fail = [&](std::string code, std::string message) {
         report(std::move(code), std::move(message), span);
@@ -3813,7 +3851,7 @@ bool Lowerer::lower_hir_vhdl_file_statement(
         return handle;
     };
     // VHDL-2008 FLUSH (5.5.2) writes out buffered data of an open file.
-    if (name == "flush") {
+    if (name == FileProcedure::flush) {
         const auto target = actual("f", 0U);
         if (call.procedure_arguments.size() == 1U && target
             && standard_output(*target)) {
@@ -3830,16 +3868,16 @@ bool Lowerer::lower_hir_vhdl_file_statement(
             FileFlush { *file->second.local, false });
         return true;
     }
-    if (name == "readline" || name == "writeline" || name == "tee") {
+    if (name == FileProcedure::readline || name == FileProcedure::writeline || name == FileProcedure::tee) {
         const auto line = actual("l", 1U);
         const auto line_local = line ? string_binding(*line) : std::nullopt;
         // IEEE 1076-2008 16.4: std.textio.OUTPUT is the host standard
         // output, the runtime's multichannel stdout channel.
         if (const auto target = actual("f", 0U);
-            name != "readline" && target && standard_output(*target)
+            name != FileProcedure::readline && target && standard_output(*target)
             && call.procedure_arguments.size() == 2U && line_local
             && line_local->local) {
-            if (name == "tee") {
+            if (name == FileProcedure::tee) {
                 process_.operations.emplace_back(FileWriteString {
                     output_handle(), *line_local->local, { }, { }, true,
                     false });
@@ -3859,17 +3897,17 @@ bool Lowerer::lower_hir_vhdl_file_statement(
             || !textio_text_file(file->first)
             || !line_local || !line_local->local) {
             return fail("FSIM-ELAB-VHTEXTIO-001",
-                std::string { name }
+                std::string { called_name }
                     + " requires a file of std.textio.TEXT and a writable "
                       "line object");
         }
-        if (name == "readline") {
+        if (name == FileProcedure::readline) {
             const auto count = allocate_register(
                 32U, frontend::ValueDomain::Integer);
             process_.operations.emplace_back(FileReadLine {
                 count, *file->second.local, *line_local->local, 0U,
                 FileReadKind::line, true });
-        } else if (name == "tee") {
+        } else if (name == FileProcedure::tee) {
             // VHDL-2008 TEE (16.4) writes the line to the file and to
             // OUTPUT, then empties it like WRITELINE.
             process_.operations.emplace_back(FileWriteString {
@@ -3887,7 +3925,7 @@ bool Lowerer::lower_hir_vhdl_file_statement(
     }
 
     bool status_form { };
-    if (name == "file_open") {
+    if (name == FileProcedure::file_open) {
         status_form = call.procedure_arguments.size() == 4U
             || std::ranges::any_of(
                 call.procedure_arguments,
@@ -3901,36 +3939,36 @@ bool Lowerer::lower_hir_vhdl_file_statement(
                 });
     }
     const auto file = file_actual(status_form ? 1U : 0U);
-    const bool positioning = name == "file_rewind" || name == "file_seek"
-        || name == "file_truncate";
-    if ((name == "file_open" || name == "file_close" || positioning)
+    const bool positioning = name == FileProcedure::file_rewind || name == FileProcedure::file_seek
+        || name == FileProcedure::file_truncate;
+    if ((name == FileProcedure::file_open || name == FileProcedure::file_close || positioning)
         && !file) {
         return fail("FSIM-ELAB-VHFILE-005",
             "VHDL file operation requires a whole file object");
     }
     if (positioning) {
         // IEEE 1076-2019 5.5.2.
-        const auto rewind = name == "file_rewind";
+        const auto rewind = name == FileProcedure::file_rewind;
         const auto amount = rewind
             ? std::nullopt
-            : actual(name == "file_seek" ? "offset" : "size", 1U);
+            : actual(name == FileProcedure::file_seek ? "offset" : "size", 1U);
         const auto origin = rewind ? std::nullopt : actual("origin", 2U);
         if (rewind ? call.procedure_arguments.size() != 1U
                    : !amount || call.procedure_arguments.size() > 3U) {
             return fail("FSIM-ELAB-VHFILE-005",
-                std::string { name }
+                std::string { called_name }
                     + (rewind ? " requires exactly one file object"
                               : " requires a file object, an INTEGER, and "
                                 "an optional FILE_ORIGIN_KIND"));
         }
         return lower_hir_vhdl_file_position(rewind
                     ? FilePositionKind::rewind
-                    : name == "file_seek" ? FilePositionKind::seek
+                    : name == FileProcedure::file_seek ? FilePositionKind::seek
                                           : FilePositionKind::truncate,
                    *file->second.local, file->first, amount, origin)
             .has_value();
     }
-    if (name == "file_close") {
+    if (name == FileProcedure::file_close) {
         if (call.procedure_arguments.size() != 1U) {
             return fail("FSIM-ELAB-VHFILE-006",
                 "file_close requires exactly one file object");
@@ -3941,7 +3979,7 @@ bool Lowerer::lower_hir_vhdl_file_statement(
             *file->second.local, true, true });
         return true;
     }
-    if (name == "file_open") {
+    if (name == FileProcedure::file_open) {
         const auto path = actual(
             "external_name", status_form ? 2U : 1U);
         const auto kind = actual(
@@ -4000,7 +4038,7 @@ bool Lowerer::lower_hir_vhdl_file_statement(
     const auto first = actual("l", 0U);
     const auto line = first ? string_binding(*first) : std::nullopt;
     if (line && line->local) {
-        if (name == "sread") {
+        if (name == FileProcedure::sread) {
             const auto value = actual("value", 1U);
             const auto length = actual("strlen", 2U);
             if (call.procedure_arguments.size() != 3U || !value || !length) {
@@ -4045,8 +4083,8 @@ bool Lowerer::lower_hir_vhdl_file_statement(
             return fail("FSIM-ELAB-VHTEXTIO-003",
                 "TextIO read/write requires a value actual");
         }
-        if (name == "read" || name == "hread" || name == "oread") {
-            const bool radix_read = name == "hread" || name == "oread";
+        if (name == FileProcedure::read || name == FileProcedure::hread || name == FileProcedure::oread) {
+            const bool radix_read = name == FileProcedure::hread || name == FileProcedure::oread;
             if (call.procedure_arguments.size() < 2U
                 || call.procedure_arguments.size() > 3U) {
                 return fail("FSIM-ELAB-VHTEXTIO-003",
@@ -4147,14 +4185,14 @@ bool Lowerer::lower_hir_vhdl_file_statement(
                     : *target->local;
                 conversion.format = logic9_read
                     ? (radix_read
-                              ? (name == "hread"
+                              ? (name == FileProcedure::hread
                                       ? InputScanFormat::vhdl_logic9_hexadecimal
                                       : InputScanFormat::vhdl_logic9_octal)
                               : value_class
                                       == TextioScalarClass::logic9_scalar
                                   ? InputScanFormat::vhdl_logic9_scalar
                                   : InputScanFormat::vhdl_logic9_vector)
-                    : name == "hread" ? InputScanFormat::hexadecimal
+                    : name == FileProcedure::hread ? InputScanFormat::hexadecimal
                                       : InputScanFormat::octal;
                 conversion.target = {
                     InputScanTargetKind::packed_register,
@@ -4612,7 +4650,7 @@ bool Lowerer::lower_hir_vhdl_file_statement(
             append_string(formatted);
             return true;
         };
-        if (name == "hwrite" || name == "owrite") {
+        if (name == FileProcedure::hwrite || name == FileProcedure::owrite) {
             // A direct string literal in this context is a context-dependent
             // BIT_VECTOR actual (IEEE 1076-2008 8.6). Materialize its decoded
             // bit payload explicitly: generic STRING lowering may choose an
@@ -4643,7 +4681,7 @@ bool Lowerer::lower_hir_vhdl_file_statement(
                 }
                 const auto formatted = allocate_string_register();
                 StringMethod conversion;
-                conversion.operation = name == "hwrite"
+                conversion.operation = name == FileProcedure::hwrite
                     ? StringMethodOperator::vhdl_logic9_hstring
                     : StringMethodOperator::vhdl_logic9_ostring;
                 conversion.source = *image;
@@ -4681,7 +4719,7 @@ bool Lowerer::lower_hir_vhdl_file_statement(
                 return false;
             }
             return append_radix_string(*lowered, *width,
-                name == "hwrite"
+                name == FileProcedure::hwrite
                     ? OutputFormat::hexadecimal
                     : OutputFormat::octal);
         }
@@ -4976,7 +5014,7 @@ bool Lowerer::lower_hir_vhdl_file_statement(
     // VHDL-2008 implicit WRITE(F, VALUE) of a STRING to a TEXT file such as
     // OUTPUT appends the characters without a line terminator (5.5.2).
     if (const auto target = actual("f", 0U), text = actual("value", 1U);
-        name == "write" && target && text
+        name == FileProcedure::write && target && text
         && call.procedure_arguments.size() == 2U
         && hir_expression_is_string(*text, hir_process_scope_)) {
         std::optional<RegisterId> handle;
@@ -5000,7 +5038,7 @@ bool Lowerer::lower_hir_vhdl_file_statement(
     }
     const auto direct_file = file_actual(0U);
     const auto value = actual("value", 1U);
-    const auto length = name == "read" ? actual("length", 2U) : std::nullopt;
+    const auto length = name == FileProcedure::read ? actual("length", 2U) : std::nullopt;
     if (!direct_file || !value
         || (call.procedure_arguments.size() != 2U
             && !(length && call.procedure_arguments.size() == 3U))) {
@@ -5011,7 +5049,7 @@ bool Lowerer::lower_hir_vhdl_file_statement(
     const auto element_subtype = file_element_subtype(
         direct_file->first);
     const auto result = element_subtype
-        ? lower_hir_vhdl_file_image(name == "write",
+        ? lower_hir_vhdl_file_image(name == FileProcedure::write,
               *direct_file->second.local, *element_subtype, *value, length, span)
         : HirVhdlFileImageResult::unsupported;
     if (result == HirVhdlFileImageResult::unsupported) {

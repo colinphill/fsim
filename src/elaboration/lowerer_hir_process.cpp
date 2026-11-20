@@ -3544,28 +3544,16 @@ std::optional<Process> Lowerer::lower_hir_process(
                 // native declarations (IEEE 1076-2019 16.7); the VHDL-2008
                 // STD.STANDARD overloads for BIT and BOOLEAN are predefined
                 // (no declaration).
-                const auto* native
-                    = hir_vhdl_native_callee(*statement->vhdl->condition);
-                auto edge_name = semantic::VhdlNativeName::rising_edge;
-                bool edge_call { };
-                if (native != nullptr) {
-                    edge_call = native->name
-                            == semantic::VhdlNativeName::rising_edge
-                        || native->name
-                            == semantic::VhdlNativeName::falling_edge;
-                    edge_name = native->name;
-                } else if (!condition->vhdl->resolved_declaration
-                    && (condition->vhdl->text == "rising_edge"
-                        || condition->vhdl->text == "falling_edge")) {
-                    const auto operand = hir_vhdl_expression_subtype(
-                        condition->vhdl->operands.front());
-                    edge_call = operand
-                        && (operand->type_mark.spelling == "bit"
-                            || operand->type_mark.spelling == "boolean");
-                    edge_name = condition->vhdl->text == "rising_edge"
-                        ? semantic::VhdlNativeName::rising_edge
-                        : semantic::VhdlNativeName::falling_edge;
-                }
+                // hir_vhdl_edge_function: the native declaration, or the
+                // predefined BIT/BOOLEAN overload without one.
+                const auto edge_function = hir_vhdl_edge_function(
+                    *statement->vhdl->condition);
+                const bool edge_call = edge_function
+                    && (*edge_function == semantic::VhdlNativeName::rising_edge
+                        || *edge_function
+                            == semantic::VhdlNativeName::falling_edge);
+                const auto edge_name = edge_function.value_or(
+                    semantic::VhdlNativeName::rising_edge);
                 if (edge_call) {
                     edge_signal = hir_referenced_declaration(
                         condition->vhdl->operands.front());

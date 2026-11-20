@@ -5607,7 +5607,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     }
                     return static_cast<std::size_t>(*width);
                 };
-                const auto builtin_array_element = [this](std::string_view name)
+                const auto builtin_array_element = [this](std::string_view name,
+                                                       const bool synopsys_arith)
                     -> std::optional<semantic::vhdl::SubtypeIndication> {
                     name = simple_name_of(name);
                     semantic::vhdl::SubtypeIndication element;
@@ -5635,9 +5636,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         element.integer_storage_width = 64U;
                     } else if (equal_ignoring_ascii_case(name, "real_vector")) {
                         set("real", semantic::vhdl::ValueDomain::bit2, 64U);
-                    } else if (equal_ignoring_ascii_case(name, "std_logic_vector")
-                        || equal_ignoring_ascii_case(name, "signed")
-                        || equal_ignoring_ascii_case(name, "unsigned")
+                    } else if (synopsys_arith
                         || equal_ignoring_ascii_case(name, "ufixed")
                         || equal_ignoring_ascii_case(name, "sfixed")
                         || equal_ignoring_ascii_case(name, "unresolved_ufixed")
@@ -5645,9 +5644,27 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         || equal_ignoring_ascii_case(name, "float")
                         || equal_ignoring_ascii_case(name, "unresolved_float")
                         || equal_ignoring_ascii_case(name, "u_float")) {
-                        set("std_logic", semantic::vhdl::ValueDomain::logic9, 1U);
-                    } else if (equal_ignoring_ascii_case(name, "std_ulogic_vector")) {
-                        set("std_ulogic", semantic::vhdl::ValueDomain::logic9, 1U);
+                        // Arrays of STD_LOGIC, its native declaration
+                        // (IEEE 1076-2019 16.7).
+                        set({ }, semantic::vhdl::ValueDomain::logic9, 1U);
+                        for (const auto& declaration :
+                            specialized_hir_unit_->design()
+                                .vhdl_hir.declarations()) {
+                            if (!declaration.declared_type
+                                || !semantic::vhdl_native_is(declaration,
+                                    semantic::VhdlNativePackage::
+                                        ieee_std_logic_1164,
+                                    semantic::VhdlNativeName::std_logic)) {
+                                continue;
+                            }
+                            element.type_mark.target
+                                = *declaration.declared_type;
+                            element.type_mark.spelling = std::string {
+                                semantic::vhdl_native_designator(
+                                    *semantic::vhdl_native_of(declaration))
+                            };
+                            break;
+                        }
                     } else {
                         return std::nullopt;
                     }
@@ -5681,32 +5698,22 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 // The predefined array type the mark denotes where it is
                 // written, not a type that merely spells like one (12.4).
                 const auto provided_array_name = [&]() -> std::string_view {
-                    using Provided = semantic::vhdl::ProvidedType;
-                    switch (array_provided) {
-                    case Provided::bit_vector: return "bit_vector";
-                    case Provided::string: return "string";
-                    case Provided::boolean_vector: return "boolean_vector";
-                    case Provided::integer_vector: return "integer_vector";
-                    case Provided::real_vector: return "real_vector";
-                    case Provided::time_vector: return "time_vector";
-                    case Provided::std_logic_vector: return "std_logic_vector";
-                    case Provided::std_ulogic_vector:
-                        return "std_ulogic_vector";
-                    case Provided::numeric_std_unsigned:
-                    case Provided::numeric_bit_unsigned:
-                    case Provided::std_logic_arith_unsigned: return "unsigned";
-                    case Provided::numeric_std_signed:
-                    case Provided::numeric_bit_signed:
-                    case Provided::std_logic_arith_signed: return "signed";
-                    case Provided::sfixed: return "sfixed";
-                    case Provided::ufixed: return "ufixed";
-                    case Provided::ieee_float: return "float";
-                    default: return array_spelling;
-                    }
+                    const auto name
+                        = semantic::vhdl_provided_type_name(array_provided);
+                    return name.empty() ? array_spelling : name;
                 }();
-                const auto builtin_element = definition == nullptr
-                    ? builtin_array_element(provided_array_name)
-                    : std::nullopt;
+                // The Synopsys STD_LOGIC_ARITH projected stubs have no
+                // declaration to reach; the IEEE packages' vectors do and
+                // take the definition path.
+                const bool synopsys_arith_vector
+                    = array_provided
+                        == semantic::vhdl::ProvidedType::std_logic_arith_unsigned
+                    || array_provided
+                        == semantic::vhdl::ProvidedType::std_logic_arith_signed;
+                const auto builtin_element = definition != nullptr
+                    ? std::nullopt
+                    : builtin_array_element(
+                          provided_array_name, synopsys_arith_vector);
                 if (definition == nullptr && !builtin_element) {
                     return false;
                 }
@@ -17256,107 +17263,52 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         .vhdl_scope_in_package(
                             declaration->vhdl->scope, library, package);
                 };
-                const auto exact_case_vector_definition = [&](
+                // STD.STANDARD's BIT_VECTOR (kept: not a native package).
+                const auto is_standard_bit_vector_definition = [&](
                     const semantic::vhdl::TypeDefinition& definition) {
-                    if (definition.form
-                            != semantic::vhdl::TypeForm::array
-                        || definition.array_dimensions.size() != 1U
-                        || !definition.element_subtype) {
+                    return definition.form == semantic::vhdl::TypeForm::array
+                        && definition.array_dimensions.size() == 1U
+                        && definition.element_subtype
+                        && definition.element_subtype->domain
+                            == semantic::vhdl::ValueDomain::bit2
+                        && equal_ignoring_ascii_case(
+                            definition.name, "bit_vector")
+                        && package_owner_matches(
+                            definition.declaration, "std", "standard");
+                };
+                // IEEE.STD_LOGIC_1164 and NUMERIC_STD/NUMERIC_BIT vector
+                // types by the native identity on the type's subtype chain
+                // (5.3.2, 16.7, 16.8.5): a user type of the same spelling
+                // has no native entry.
+                const auto native_case_vector = [&](
+                    const semantic::TypeId type_id,
+                    const frontend::ValueDomain selector_value_domain) {
+                    const auto* entry = semantic::vhdl_native_type_of(
+                        *specialized_hir_unit_, type_id);
+                    if (entry == nullptr) {
                         return false;
                     }
-                    const auto package_is = [&](const std::string_view member,
-                                                const std::string_view library,
-                                                const std::string_view package,
-                                                const semantic::vhdl::ValueDomain
-                                                    domain) {
-                        return same_vhdl_identifier(definition.name, member)
-                            && definition.element_subtype->domain == domain
-                            && package_owner_matches(
-                                definition.declaration, library, package);
-                    };
-                    return package_is(
-                               "bit_vector", "std", "standard",
-                               semantic::vhdl::ValueDomain::bit2)
-                        || package_is(
-                            "std_logic_vector", "ieee", "std_logic_1164",
-                            semantic::vhdl::ValueDomain::logic9)
-                        || package_is(
-                            "std_ulogic_vector", "ieee", "std_logic_1164",
-                            semantic::vhdl::ValueDomain::logic9)
-                        || package_is(
-                            "signed", "ieee", "numeric_std",
-                            semantic::vhdl::ValueDomain::logic9)
-                        || package_is(
-                            "unsigned", "ieee", "numeric_std",
-                            semantic::vhdl::ValueDomain::logic9)
-                        || package_is(
-                            "signed", "ieee", "numeric_bit",
-                            semantic::vhdl::ValueDomain::bit2)
-                        || package_is(
-                            "unsigned", "ieee", "numeric_bit",
-                            semantic::vhdl::ValueDomain::bit2);
-                };
-                const auto exact_resolved_numeric_std_case_vector = [&](
-                    semantic::TypeId type_id) {
-                    // NUMERIC_STD declares SIGNED and UNSIGNED as resolved
-                    // subtypes of package-owned UNRESOLVED_* array types.
-                    // Follow that actual TypeId chain and verify both owners.
-                    std::unordered_set<std::uint32_t> visited;
-                    std::string_view numeric_member;
-                    while (type_id.valid()
-                        && visited.insert(type_id.value()).second) {
-                        const auto type
-                            = specialized_hir_unit_->find_type(type_id);
-                        if (!type || type->vhdl == nullptr) {
-                            return false;
-                        }
-                        const auto& definition = *type->vhdl;
-                        if (definition.form
-                                == semantic::vhdl::TypeForm::subtype
-                            || definition.form
-                                == semantic::vhdl::TypeForm::alias) {
-                            if (package_owner_matches(
-                                    definition.declaration, "ieee",
-                                    "numeric_std")
-                                && (same_vhdl_identifier(
-                                        definition.name, "unsigned")
-                                    || same_vhdl_identifier(
-                                        definition.name, "signed"))) {
-                                numeric_member = same_vhdl_identifier(
-                                        definition.name, "unsigned")
-                                    ? std::string_view { "unsigned" }
-                                    : std::string_view { "signed" };
-                            }
-                            type_id = definition.base.type_mark.target;
-                            continue;
-                        }
-                        if (definition.form
-                                != semantic::vhdl::TypeForm::array
-                            || definition.array_dimensions.size() != 1U
-                            || !definition.element_subtype
-                            || definition.element_subtype->domain
-                                != semantic::vhdl::ValueDomain::logic9
-                            || !package_owner_matches(
-                                definition.declaration, "ieee",
-                                "numeric_std")) {
-                            return false;
-                        }
-                        const auto expected_array_name
-                            = numeric_member == "unsigned"
-                            ? std::string_view {
-                                  "unresolved_unsigned" }
-                            : numeric_member == "signed"
-                            ? std::string_view { "unresolved_signed" }
-                            : std::string_view { };
-                        if (!expected_array_name.empty()) {
-                            return same_vhdl_identifier(
-                                definition.name, expected_array_name);
-                        }
-                        return same_vhdl_identifier(
-                                   definition.name,
-                                   "unresolved_unsigned")
-                            || same_vhdl_identifier(
-                                definition.name, "unresolved_signed");
+                    using Provided = semantic::vhdl::ProvidedType;
+                    switch (semantic::vhdl_native_provided_type(*entry)) {
+                    case Provided::std_logic_vector:
+                    case Provided::std_ulogic_vector:
+                    case Provided::numeric_std_unsigned:
+                    case Provided::numeric_std_signed:
+                    case Provided::numeric_bit_unsigned:
+                    case Provided::numeric_bit_signed:
+                        break;
+                    default:
+                        return false;
+                    }
+                    switch (semantic::vhdl_native_domain(*entry)) {
+                    case semantic::VhdlNativeDomain::logic9:
+                        return selector_value_domain
+                            == frontend::ValueDomain::Logic9;
+                    case semantic::VhdlNativeDomain::bit2:
+                        return selector_value_domain
+                            == frontend::ValueDomain::Bit2;
+                    case semantic::VhdlNativeDomain::none:
+                        break;
                     }
                     return false;
                 };
@@ -17374,15 +17326,14 @@ bool Lowerer::lower_hir_statement_unsuspended(
                             selector_subtype->builtin_type);
                     }
                     if (selector_subtype->type_mark.target.valid()
-                        && exact_resolved_numeric_std_case_vector(
-                            selector_subtype->type_mark.target)) {
+                        && native_case_vector(
+                            selector_subtype->type_mark.target,
+                            *selector_domain)) {
                         return true;
                     }
                     if (selector_character_array_definition != nullptr) {
-                        return exact_case_vector_definition(
-                                   *selector_character_array_definition)
-                            || exact_resolved_numeric_std_case_vector(
-                                selector_subtype->type_mark.target);
+                        return is_standard_bit_vector_definition(
+                            *selector_character_array_definition);
                     }
                     const auto type_payload_missing = [&](const auto& subtype) {
                         if (!subtype.type_mark.target.valid()) {
@@ -17395,8 +17346,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     // A compiled bundle can retain a type reference while
                     // omitting its package TypeDefinition. Only use the
                     // spelling fallback for that missing payload, and only
-                    // when import visibility and package-owned declarations
-                    // prove that no user type shadows the standard member.
+                    // for STD.STANDARD's BIT_VECTOR, when package-owned
+                    // declarations prove that no user type shadows it.
                     if (!selector_array_base_subtype
                         || (selector_subtype->type_mark.target.valid()
                             && !type_payload_missing(*selector_subtype))
@@ -17405,98 +17356,22 @@ bool Lowerer::lower_hir_statement_unsuspended(
                                 *selector_array_base_subtype))) {
                         return false;
                     }
-                    auto spelling = std::string_view {
-                        selector_array_base_subtype->type_mark.spelling
-                    };
-                    const auto declarations_are_from_standard_package = [&](
-                        const auto name,
-                        const std::string_view library,
-                        const std::string_view package) {
-                        const auto declarations
-                            = specialized_hir_unit_->design()
-                                  .vhdl_type_declarations_named(name);
-                        return declarations
-                            && std::ranges::all_of(
-                                *declarations,
-                                [&](const semantic::DeclarationId declaration) {
-                                    return package_owner_matches(
-                                        declaration, library, package);
-                                });
-                    };
-                    constexpr auto numeric_std_prefix
-                        = std::string_view { "ieee.numeric_std." };
-                    // An expanded name proves its package directly. Bare
-                    // numeric_std marks still pass the import check below.
-                    if (spelling.size() > numeric_std_prefix.size()
-                        && same_vhdl_identifier(
-                            spelling.substr(0U, numeric_std_prefix.size()),
-                            numeric_std_prefix)
-                        && spelling.find('.', numeric_std_prefix.size())
-                            == std::string_view::npos) {
-                        const auto member
-                            = spelling.substr(numeric_std_prefix.size());
-                        if (!same_vhdl_identifier(member, "signed")
-                            && !same_vhdl_identifier(member, "unsigned")) {
-                            return false;
-                        }
-                        if (*selector_domain
-                                != frontend::ValueDomain::Logic9
-                            || !declarations_are_from_standard_package(
-                                member, "ieee", "numeric_std")) {
-                            return false;
-                        }
-                        semantic::vhdl::Name standard_member;
-                        standard_member.spelling
-                            = "ieee.numeric_std." + std::string { member };
-                        standard_member.canonical
-                            = standard_member.spelling;
-                        return resolver.vhdl_standard_package_member_visible(
-                            standard_member, selector_scope);
+                    if (!equal_ignoring_ascii_case(
+                            selector_array_base_subtype->type_mark.spelling,
+                            "bit_vector")) {
+                        return false;
                     }
-                    if (same_vhdl_identifier(spelling, "bit_vector")) {
-                        return *selector_domain
-                                == frontend::ValueDomain::Bit2
-                            && declarations_are_from_standard_package(
-                                "bit_vector", "std", "standard");
-                    }
-                    struct BuiltinCaseVector {
-                        std::string_view member;
-                        std::string_view package;
-                        frontend::ValueDomain domain;
-                    };
-                    constexpr auto ieee_vector_packages
-                        = std::array<BuiltinCaseVector, 6> {
-                            BuiltinCaseVector {
-                                "std_logic_vector", "std_logic_1164",
-                                frontend::ValueDomain::Logic9 },
-                            BuiltinCaseVector {
-                                "std_ulogic_vector", "std_logic_1164",
-                                frontend::ValueDomain::Logic9 },
-                            BuiltinCaseVector {
-                                "signed", "numeric_std",
-                                frontend::ValueDomain::Logic9 },
-                            BuiltinCaseVector {
-                                "unsigned", "numeric_std",
-                                frontend::ValueDomain::Logic9 },
-                            BuiltinCaseVector {
-                                "signed", "numeric_bit",
-                                frontend::ValueDomain::Bit2 },
-                            BuiltinCaseVector {
-                                "unsigned", "numeric_bit",
-                                frontend::ValueDomain::Bit2 },
-                    };
-                    return std::ranges::any_of(
-                        ieee_vector_packages, [&](const auto& candidate) {
-                            return same_vhdl_identifier(
-                                       spelling, candidate.member)
-                                && *selector_domain == candidate.domain
-                                && declarations_are_from_standard_package(
-                                    candidate.member, "ieee",
-                                    candidate.package)
-                                && resolver.vhdl_builtin_package_member_imported(
-                                    "ieee", candidate.package,
-                                    candidate.member, selector_scope);
-                        });
+                    const auto declarations
+                        = specialized_hir_unit_->design()
+                              .vhdl_type_declarations_named("bit_vector");
+                    return *selector_domain == frontend::ValueDomain::Bit2
+                        && declarations
+                        && std::ranges::all_of(
+                            *declarations,
+                            [&](const semantic::DeclarationId declaration) {
+                                return package_owner_matches(
+                                    declaration, "std", "standard");
+                            });
                 };
                 const bool packed_array_case_selector
                     = selector_subtype
