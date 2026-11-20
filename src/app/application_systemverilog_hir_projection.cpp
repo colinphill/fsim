@@ -391,6 +391,7 @@ void SystemVerilogHirBuilder::apply_named_type_dimensions(
     output.scope = scope;
     output.form = form;
     output.name = declaration_name;
+    output.symbol = support::systemverilog_symbol(output.name);
     output.source = span;
     output.origin = declaration_origin;
     hir_.mutable_declarations().push_back(std::move(output));

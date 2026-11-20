@@ -2,7 +2,12 @@
 #include "fsim/semantic/systemverilog_hir.hpp"
 #include "fsim/support/stack_growth.hpp"
 
+#include <boost/pfr/core.hpp>
+
 #include <algorithm>
+#include <concepts>
+#include <ranges>
+#include <type_traits>
 #include <array>
 #include <deque>
 #include <map>
@@ -14,6 +19,58 @@
 
 namespace fsim::semantic::sv {
 namespace {
+
+// Sets the symbol of every Name and Declaration reachable from `value`.
+template <typename Value>
+void intern_names_in(Value& value)
+{
+    using Type = std::remove_cvref_t<Value>;
+    if constexpr (std::same_as<Type, Name>) {
+        if (!value.symbol.valid() && !value.spelling.empty()) {
+            value.symbol = support::systemverilog_symbol(value.spelling);
+        }
+    } else if constexpr (std::is_arithmetic_v<Type> || std::is_enum_v<Type>
+        || std::same_as<Type, std::string>
+        || std::same_as<Type, support::SymbolId>) {
+        return;
+    } else if constexpr (requires {
+        typename Type::element_type;
+        value.get();
+    }) {
+        // A shared pointee may be const and shared with other holders:
+        // intern a private copy.
+        if (value) {
+            auto copy = std::make_shared<
+                std::remove_const_t<typename Type::element_type>>(*value);
+            intern_names_in(*copy);
+            value = std::move(copy);
+        }
+    } else if constexpr (std::ranges::range<Type>) {
+        for (auto& item : value) {
+            intern_names_in(item);
+        }
+    } else if constexpr (requires {
+        value.has_value();
+        *value;
+    }) {
+        if (value.has_value()) {
+            intern_names_in(*value);
+        }
+    } else if constexpr (std::is_aggregate_v<Type>) {
+        // Declaration, ClassDeclaration, ClassParameter, ClassProperty and
+        // ClassMethod: the symbol of `name`.
+        if constexpr (requires {
+            { value.name } -> std::convertible_to<std::string_view>;
+            { value.symbol } -> std::convertible_to<support::SymbolId>;
+        }) {
+            if (!value.symbol.valid() && !value.name.empty()) {
+                value.symbol = support::systemverilog_symbol(value.name);
+            }
+        }
+        boost::pfr::for_each_field(
+            value, [](auto& field) { intern_names_in(field); });
+    }
+}
 
 bool udp_language_revision_matches(
     const Language language, const std::string_view standard) noexcept
@@ -1426,6 +1483,21 @@ NamedPackedDimensions compose_named_packed_dimensions(
     reference.executable_width = width;
     reference.packed_over_named_type = false;
     return NamedPackedDimensions::composed;
+}
+
+void intern_names(Hir& hir)
+{
+    intern_names_in(hir.mutable_units());
+    intern_names_in(hir.mutable_declarations());
+    intern_names_in(hir.mutable_types());
+    intern_names_in(hir.mutable_expressions());
+    intern_names_in(hir.mutable_statements());
+    intern_names_in(hir.mutable_processes());
+    intern_names_in(hir.mutable_classes());
+    intern_names_in(hir.mutable_instances());
+    intern_names_in(hir.mutable_udps());
+    intern_names_in(hir.mutable_dpi_declarations());
+    intern_names_in(hir.mutable_covergroup_instances());
 }
 
 } // namespace fsim::semantic::sv

@@ -229,10 +229,11 @@ systemverilog_decimal_literal(
     };
 }
 
-// The class and member names of `C::m` written with the unadorned name of
+// The class and member symbols of `C::m` written with the unadorned name of
 // class C (no parameter value assignment, IEEE 1800-2023 8.23, 8.25.1), as
 // the parser recorded its components; none for any other name.
-[[nodiscard]] inline std::optional<std::pair<std::string, std::string>>
+[[nodiscard]] inline std::optional<
+    std::pair<support::SymbolId, support::SymbolId>>
 systemverilog_unadorned_class_scoped_name(const frontend::Expression& input)
 {
     const auto& components = input.name_components;
@@ -241,33 +242,39 @@ systemverilog_unadorned_class_scoped_name(const frontend::Expression& input)
         || !components[1].scoped) {
         return std::nullopt;
     }
-    return std::pair { components[0].name, components[1].name };
+    // The parser's components, interned once (IEEE 1800-2023 5.6).
+    return std::pair { support::systemverilog_symbol(components[0].name),
+        support::systemverilog_symbol(components[1].name) };
 }
 
 // `C::T`, the unadorned name of parameterized class C and its type
 // parameter T, written in C or in a class nested in it (its members and
 // out-of-block declarations): T itself, as though named inside C (IEEE
-// 1800-2023 8.25.1). None when no enclosing class C declares a type
-// parameter T. `class_scope(scope)` tells whether a scope is the body of a
-// class.
-template <typename ClassScope>
+// 1800-2023 8.23, 8.25.1). C is the nearest enclosing class body whose
+// class's symbol is C's; T is then looked up in that body's declarations
+// (`named(scope, symbol)`) among its type parameters. None when no
+// enclosing class C declares a type parameter T. `class_symbol(scope)` is
+// the symbol of the class whose body `scope` is (none for another scope).
+template <typename ClassSymbol, typename Named>
 [[nodiscard]] std::optional<semantic::DeclarationId>
-systemverilog_own_class_type_parameter(const std::string_view class_name,
-    const std::string_view parameter_name, const semantic::ScopeId scope,
+systemverilog_enclosing_class_type_parameter(const support::SymbolId class_name,
+    const support::SymbolId parameter_name, const semantic::ScopeId scope,
     const semantic::Model& model, const sv::Hir& hir,
-    const ClassScope& class_scope)
+    const ClassSymbol& class_symbol, Named&& named)
 {
+    if (!class_name.valid() || !parameter_name.valid()) {
+        return std::nullopt;
+    }
     for (auto visible = std::optional<semantic::ScopeId> { scope }; visible;
         visible = model.scopes()[visible->value()].parent) {
-        if (model.scopes()[visible->value()].name != class_name
-            || !class_scope(*visible)) {
+        if (class_symbol(*visible) != class_name) {
             continue;
         }
-        for (const auto& declaration : hir.declarations()) {
-            if (declaration.scope == *visible
-                && declaration.form == sv::DeclarationForm::type_parameter
-                && declaration.name == parameter_name) {
-                return declaration.id;
+        for (const auto id : named(*visible, parameter_name)) {
+            const auto* declaration = hir.find_declaration(id);
+            if (declaration != nullptr
+                && declaration->form == sv::DeclarationForm::type_parameter) {
+                return id;
             }
         }
         return std::nullopt;
@@ -388,6 +395,109 @@ inline std::vector<bool> omit_systemverilog_call_arguments(
     }
     names = std::move(kept);
     return omitted;
+}
+
+// Declarations by scope and interned name (IEEE 1800-2023 3.13, 5.6), and
+// by id, extended over the declarations appended since the last lookup, in
+// HIR order. The builders only append declarations and never rescope or
+// rename one. Indexing interns a declaration's name once (its symbol).
+class SystemVerilogScopeSymbols final {
+public:
+    explicit SystemVerilogScopeSymbols(sv::Hir& hir) noexcept
+        : hir_ { hir }
+    {
+    }
+
+    [[nodiscard]] std::span<const semantic::DeclarationId> named(
+        const semantic::ScopeId scope, const support::SymbolId symbol)
+    {
+        extend();
+        const auto in_scope = scopes_.find(scope.value());
+        if (in_scope == scopes_.end() || !symbol.valid()) {
+            return { };
+        }
+        const auto found = in_scope->second.by_symbol.find(symbol.index());
+        return found == in_scope->second.by_symbol.end()
+            ? std::span<const semantic::DeclarationId> { }
+            : std::span<const semantic::DeclarationId> { found->second };
+    }
+
+    [[nodiscard]] std::span<const semantic::DeclarationId> in_scope(
+        const semantic::ScopeId scope)
+    {
+        extend();
+        const auto found = scopes_.find(scope.value());
+        return found == scopes_.end()
+            ? std::span<const semantic::DeclarationId> { }
+            : std::span<const semantic::DeclarationId> { found->second.all };
+    }
+
+    // The interned name of a design unit, once per unit.
+    [[nodiscard]] support::SymbolId unit_symbol(const sv::Unit& unit) const
+    {
+        const auto [found, inserted] = unit_symbols_.try_emplace(unit.id.value());
+        if (inserted) {
+            found->second = support::systemverilog_symbol(unit.name);
+        }
+        return found->second;
+    }
+
+    [[nodiscard]] sv::Declaration* by_id(const semantic::DeclarationId id)
+    {
+        extend();
+        const auto found = positions_.find(id.value());
+        return found == positions_.end()
+            ? nullptr
+            : &hir_.mutable_declarations()[found->second];
+    }
+
+private:
+    struct Scope {
+        std::vector<semantic::DeclarationId> all;
+        std::unordered_map<std::uint32_t, std::vector<semantic::DeclarationId>>
+            by_symbol;
+    };
+
+    void extend()
+    {
+        const auto& declarations = hir_.declarations();
+        if (declarations.size() < indexed_) {
+            scopes_.clear();
+            positions_.clear();
+            indexed_ = 0U;
+        }
+        if (indexed_ == declarations.size()) {
+            return;
+        }
+        auto& mutable_declarations = hir_.mutable_declarations();
+        for (; indexed_ < mutable_declarations.size(); ++indexed_) {
+            auto& declaration = mutable_declarations[indexed_];
+            if (!declaration.symbol.valid() && !declaration.name.empty()) {
+                declaration.symbol = support::systemverilog_symbol(declaration.name);
+            }
+            auto& scope = scopes_[declaration.scope.value()];
+            scope.all.push_back(declaration.id);
+            scope.by_symbol[declaration.symbol.index()].push_back(declaration.id);
+            positions_.try_emplace(declaration.id.value(), indexed_);
+        }
+    }
+
+    sv::Hir& hir_;
+    std::unordered_map<std::uint32_t, Scope> scopes_;
+    std::unordered_map<std::uint32_t, std::size_t> positions_;
+    std::size_t indexed_ { };
+    mutable std::unordered_map<std::uint32_t, support::SymbolId> unit_symbols_;
+};
+
+// A Name of `spelling` with its interned symbol (IEEE 1800-2023 5.6).
+[[nodiscard]] inline sv::Name systemverilog_name(
+    std::string spelling, const semantic::SourceSpanId source)
+{
+    sv::Name result;
+    result.symbol = support::systemverilog_symbol(spelling);
+    result.spelling = std::move(spelling);
+    result.source = source;
+    return result;
 }
 
 class SystemVerilogHirBuilder final {
@@ -761,9 +871,10 @@ private:
 
     semantic::Model& model_;
     sv::Hir& hir_;
+    mutable SystemVerilogScopeSymbols scope_symbols_ { hir_ };
     // The genvar of each loop-generate block scope, which hides outer
     // declarations of its name inside the block (IEEE 1800-2017 27.4).
-    std::map<semantic::ScopeId, std::string> genvar_scopes_;
+    std::map<semantic::ScopeId, support::SymbolId> genvar_scopes_;
     std::span<const frontend::SystemVerilogClassSpecialization>
         class_specializations_;
     std::span<const frontend::SystemVerilogImport> current_imports_;
@@ -771,6 +882,9 @@ private:
     // projection; each import retains its owning scope for lexical lookup.
     std::span<const std::pair<semantic::ScopeId, sv::Import>> statement_imports_;
     std::multimap<std::string, semantic::ScopeId, std::less<>> class_scopes_;
+    // The symbol of the class whose body each scope is, recorded when the
+    // body opens (before its members are built).
+    std::unordered_map<std::uint32_t, support::SymbolId> class_body_symbols_;
     std::unordered_map<const frontend::Expression*, semantic::ExpressionId>
         expressions_;
     std::unordered_map<std::string, semantic::TypeId>

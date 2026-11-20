@@ -1097,17 +1097,19 @@ void SystemVerilogHirBuilder::resolve_constraint_expression(
             const auto unit_id = scope_unit(class_scope->second);
             const auto unit = std::ranges::find(
                 hir_.units(), unit_id, &sv::Unit::id);
+            const auto target_symbol = support::systemverilog_symbol(target);
             if (found == nullptr && unit != hir_.units().end()) {
                 for (const auto& imported : unit->imports) {
                     if (!imported.wildcard
                         && (!imported.member
-                            || imported.member->spelling != target)) {
+                            || imported.member->symbol != target_symbol)) {
                         continue;
                     }
                     const auto package = std::ranges::find_if(hir_.units(),
                         [&](const sv::Unit& candidate) {
                             return candidate.kind == sv::UnitKind::package
-                                && candidate.name == imported.package.spelling;
+                                && scope_symbols_.unit_symbol(candidate)
+                                    == imported.package.symbol;
                         });
                     if (package == hir_.units().end()) {
                         continue;
@@ -1116,7 +1118,7 @@ void SystemVerilogHirBuilder::resolve_constraint_expression(
                         const auto* candidate = hir_.find_declaration(id);
                         if (candidate != nullptr
                             && candidate->scope == package->scope
-                            && candidate->name == target) {
+                            && candidate->symbol == target_symbol) {
                             found = candidate;
                             break;
                         }
@@ -1534,11 +1536,13 @@ semantic::ScopeId SystemVerilogHirBuilder::class_parent_scope(
         for (const auto& input_import : input.compilation_unit_imports) {
             const bool known = std::ranges::any_of(unit.imports,
                 [&](const sv::Import& existing) {
-                    return existing.package.spelling == input_import.package
-                        && (existing.member
-                                   ? existing.member->spelling
-                                   : std::string { })
-                        == input_import.name;
+                    return existing.package.symbol
+                            == support::systemverilog_symbol(input_import.package)
+                        && (existing.member ? existing.member->symbol
+                                            : support::SymbolId { })
+                        == (input_import.name.empty()
+                                ? support::SymbolId { }
+                                : support::systemverilog_symbol(input_import.name));
                 });
             if (known) {
                 continue;
@@ -1684,6 +1688,7 @@ void SystemVerilogHirBuilder::add_class(
     output.name = generate_separator == std::string::npos
         ? input.name
         : input.name.substr(generate_separator + 1U);
+    output.symbol = support::systemverilog_symbol(output.name);
     output.canonical_identity = class_identity(input, parent_scope);
     output.alternative_discriminator = alternative_discriminator;
     const auto enclosing_class = std::ranges::find(
@@ -1720,6 +1725,7 @@ void SystemVerilogHirBuilder::add_class(
     output.scope = nested_scope(
         parent_scope, output.name, output.source, output.origin);
     class_scopes_.emplace(output.canonical_identity, output.scope);
+    class_body_symbols_.insert_or_assign(output.scope.value(), output.symbol);
 
     for (const auto& parameter : input.parameters) {
         const auto id = add_parameter(parameter, output.scope, output.origin);
@@ -1727,6 +1733,7 @@ void SystemVerilogHirBuilder::add_class(
         sv::ClassParameter retained;
         retained.declaration = id;
         retained.name = parameter.name;
+        retained.symbol = support::systemverilog_symbol(retained.name);
         retained.type_parameter
             = parameter.kind == frontend::ParameterKind::Type;
         retained.type = retained_declaration.type;
@@ -1774,6 +1781,7 @@ void SystemVerilogHirBuilder::add_class(
         sv::ClassProperty retained;
         retained.declaration = id;
         retained.name = property.declaration.name;
+        retained.symbol = support::systemverilog_symbol(retained.name);
         retained.owner_identity = owner_identity;
         retained.canonical_identity = owner_identity + "::"
             + property.declaration.name;
@@ -1835,6 +1843,7 @@ void SystemVerilogHirBuilder::add_class(
         sv::ClassMethod retained;
         retained.declaration = id;
         retained.name = method.name;
+        retained.symbol = support::systemverilog_symbol(retained.name);
         retained.canonical_identity = method.canonical_identity.empty()
                 || !output.alternative_discriminator.empty()
             ? owner_identity + "::" + method.name

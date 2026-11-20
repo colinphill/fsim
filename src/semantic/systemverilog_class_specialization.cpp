@@ -167,7 +167,9 @@ public:
         }
         for (const auto& type : hir_.types()) {
             types_.emplace(type.id, &type);
-            types_by_name_[type.name].push_back(&type);
+            // Interned once (IEEE 1800-2023 5.6).
+            types_by_name_[support::systemverilog_symbol(type.name).index()]
+                .push_back(&type);
         }
         for (const auto& expression : hir_.expressions()) {
             expressions_.emplace(expression.id, &expression);
@@ -1232,11 +1234,11 @@ private:
         // A value parameter of the class is one of its formals (`D#(x)::v`,
         // IEEE 1800-2017 8.25.1).
         const auto cut = member.rfind("::");
-        const auto name = cut == std::string_view::npos
-            ? member : member.substr(cut + 2U);
+        const auto name = support::systemverilog_symbol(
+            cut == std::string_view::npos ? member : member.substr(cut + 2U));
         const auto formal = std::ranges::find_if(target->parameters,
             [&](const ClassParameter& parameter) {
-                return !parameter.type_parameter && parameter.name == name;
+                return !parameter.type_parameter && parameter.symbol == name;
             });
         const bool constant_property = property != target->properties.end()
             && property->parameter && property->initializer;
@@ -1531,10 +1533,11 @@ private:
                 named_class = class_declaration_identity(*unique);
             }
         }
+        const auto symbol = support::systemverilog_symbol(name);
         for (const auto* ancestor : class_chain(named_class)) {
             for (const auto alias : ancestor->type_aliases) {
                 const auto* declaration = record_for(declarations_, alias);
-                if (declaration != nullptr && declaration->name == name
+                if (declaration != nullptr && declaration->symbol == symbol
                     && declaration->declared_type) {
                     return declaration->declared_type;
                 }
@@ -1548,9 +1551,10 @@ private:
     const TypeBinding* bound_type_parameter(const std::string_view name,
         const Environment& environment, const std::string_view owner)
     {
+        const auto symbol = support::systemverilog_symbol(name);
         for (const auto* current : class_chain(owner)) {
             for (const auto& parameter : current->parameters) {
-                if (!parameter.type_parameter || parameter.name != name) {
+                if (!parameter.type_parameter || parameter.symbol != symbol) {
                     continue;
                 }
                 const auto* member = record_for(
@@ -1625,7 +1629,8 @@ private:
             ? spelling
             : spelling.substr(separator + 2U);
         std::vector<const TypeDefinition*> candidates;
-        const auto named = types_by_name_.find(name);
+        const auto named = types_by_name_.find(
+            support::systemverilog_symbol(name).index());
         if (named == types_by_name_.end()) {
             return std::nullopt;
         }
@@ -3302,7 +3307,7 @@ private:
     std::map<DeclarationId, const Declaration*> declarations_;
     std::map<TypeId, const TypeDefinition*> types_;
     std::set<TypeId> type_parameter_types_;
-    std::map<std::string, std::vector<const TypeDefinition*>, std::less<>>
+    std::unordered_map<std::uint32_t, std::vector<const TypeDefinition*>>
         types_by_name_;
     std::map<ExpressionId, const Expression*> expressions_;
     // Static selections through a parameterized class (`C#(N)::f()`).

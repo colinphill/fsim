@@ -208,7 +208,7 @@ model `none`; enabled foundation coverage uses
 rejected directly.
 
 The compiled-HIR bundle is schema 14 and embeds semantic schema 9,
-SystemVerilog HIR schema 46, and VHDL HIR schema 25. VHDL HIR schema 25
+SystemVerilog HIR schema 47, and VHDL HIR schema 25. VHDL HIR schema 25
 keeps one stored expression type, `Expression::type` (the link resolution's
 `resolved_type` and `resolved_builtin_type` are removed, and with them the
 `expression_resolved_type` anchored slot). VHDL HIR schema 24
@@ -232,6 +232,10 @@ library units as anchors rebound by position at link
 13.1 and 13.2 name it, checked by its digest, and the ordinal of the
 target among its items), with the provided type a name expression denotes
 (`Expression::denoted_provided_type`). SystemVerilog HIR
+schema 47 interns the identifiers lookup compares (`Name::symbol`,
+`Declaration::symbol`, and the class, class parameter, property and method
+`symbol`, IEEE 1800-2023 5.6) and marks a `C::T` the builder resolved through
+the scope of class C (`Name::class_scoped`, 8.23, 8.25.1). SystemVerilog HIR
 schema 46 types an array method iterator's `.index` and an event's or
 sequence's `.triggered` (`Expression::builtin_method`, `BuiltinMethod::index`,
 `triggered`, IEEE 1800-2023 7.12.4, 15.5.3), so no consumer tests the name's

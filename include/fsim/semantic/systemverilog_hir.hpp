@@ -8,6 +8,7 @@
 #include "fsim/support/gate_driver.hpp"
 #include "fsim/support/rare_vector.hpp"
 #include "fsim/support/sva_marker.hpp"
+#include "fsim/support/symbol.hpp"
 #include "fsim/support/system_tf.hpp"
 #include "fsim/support/systemverilog_builtin_type.hpp"
 #include "fsim/support/uvm_role.hpp"
@@ -341,6 +342,13 @@ struct Name {
     std::vector<DeclarationId> overloads;
     // One-based source-token ordinal; zero denotes legacy or generated data.
     std::uint64_t source_order { };
+    /// The interned identifier (owner 11-19; support/symbol.hpp, IEEE
+    /// 1800-2023 5.6), set where the name is made and by intern_names:
+    /// symbol == systemverilog_symbol(spelling). Lookup compares symbols.
+    support::SymbolId symbol { };
+    /// `C::T` resolved through the scope of class C by the HIR builder
+    /// (IEEE 1800-2023 8.23, 8.25.1): `selected` is final.
+    bool class_scoped { };
 };
 
 struct Import {
@@ -1217,6 +1225,8 @@ struct ClassParameter {
     SourceSpanId source;
     OriginId origin;
     ResidualDependencies dependencies;
+    /// The interned `name` (IEEE 1800-2023 5.6; owner 11-19).
+    support::SymbolId symbol { };
 };
 
 struct ClassRelation {
@@ -1254,6 +1264,8 @@ struct ClassProperty {
     std::vector<std::uint64_t> enumeration_domain { };
     // The property's role in the governed UVM library (none outside it).
     support::UvmRole uvm_role { };
+    /// The interned `name` (IEEE 1800-2023 5.6; owner 11-19).
+    support::SymbolId symbol { };
 };
 
 struct ClassMethod {
@@ -1277,6 +1289,8 @@ struct ClassMethod {
     ResidualDependencies dependencies;
     // The method's role in the governed UVM library (none outside it).
     support::UvmRole uvm_role { };
+    /// The interned `name` (IEEE 1800-2023 5.6; owner 11-19).
+    support::SymbolId symbol { };
 };
 
 struct ClassConstraint {
@@ -1341,6 +1355,8 @@ struct ClassDeclaration {
     // The class's role in the governed UVM library (none outside it),
     // recorded on the frontend declaration (support::UvmRole).
     support::UvmRole uvm_role { };
+    /// The interned `name` (IEEE 1800-2023 5.6; owner 11-19).
+    support::SymbolId symbol { };
 };
 
 struct PackedMember {
@@ -1449,6 +1465,9 @@ struct Declaration {
     // matched case item or if statement (IEEE 1800-2023 12.6): its type and
     // value are the matched member's, bound by the match; no storage.
     bool pattern_variable { };
+    /// The interned `name` (IEEE 1800-2023 5.6), set by the builders'
+    /// declaration index and intern_names.
+    support::SymbolId symbol { };
 };
 
 // A named constant usable as a casting size: a parameter, a local
@@ -3071,5 +3090,9 @@ struct TopLevelHirView {
     std::span<const Declaration> declarations,
     std::span<const Statement> statements,
     std::span<const ClassDeclaration> classes);
+
+/// Sets Name::symbol and Declaration::symbol wherever one is missing
+/// (owner 11-19: identifiers are interned once; lookup compares symbols).
+void intern_names(Hir& hir);
 
 } // namespace fsim::semantic::sv

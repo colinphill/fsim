@@ -19,6 +19,7 @@
 #include <span>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 #include <cstddef>
@@ -150,19 +151,19 @@ namespace {
                 return false;
             }
             const auto append_declarations
-                = [&](const std::string_view package_name,
-                      const std::string_view declaration_name) {
+                = [&](const support::SymbolId package_name,
+                      const support::SymbolId declaration_name) {
                 for (const auto& package : hir_.units()) {
                     if (package.kind != sv::UnitKind::package
                         || package.library != owner->library
-                        || package.name != package_name) {
+                        || unit_symbol(package) != package_name) {
                         continue;
                     }
                     for (const auto declaration_id : package.declarations) {
                         const auto* declaration
                             = hir_.find_declaration(declaration_id);
                         if (declaration == nullptr
-                            || declaration->name != declaration_name
+                            || declaration->symbol != declaration_name
                             || std::ranges::find(
                                    result.overloads, declaration_id)
                                 != result.overloads.end()) {
@@ -173,13 +174,16 @@ namespace {
                 }
             };
 
+            // `p::x` (26.3): the parts of the written name, interned once.
             const auto qualifier = result.spelling.rfind("::");
             if (qualifier != std::string::npos) {
                 append_declarations(
-                    std::string_view { result.spelling }.substr(
-                        0U, qualifier),
-                    std::string_view { result.spelling }.substr(
-                        qualifier + 2U));
+                    support::systemverilog_symbol(
+                        std::string_view { result.spelling }.substr(
+                            0U, qualifier)),
+                    support::systemverilog_symbol(
+                        std::string_view { result.spelling }.substr(
+                            qualifier + 2U)));
                 return true;
             }
 
@@ -194,12 +198,12 @@ namespace {
                         continue;
                     }
                     if (import.wildcard || !import.member
-                        || import.member->spelling != result.spelling) {
+                        || import.member->symbol != result.symbol) {
                         continue;
                     }
                     explicit_import = true;
                     append_declarations(
-                        import.package.spelling, result.spelling);
+                        import.package.symbol, result.symbol);
                 }
                 if (explicit_import) {
                     return true;
@@ -208,7 +212,7 @@ namespace {
                 for (const auto& import : imports) {
                     if (visible_at_use(import) && import.wildcard) {
                         append_declarations(
-                            import.package.spelling, result.spelling);
+                            import.package.symbol, result.symbol);
                     }
                 }
                 return result.overloads.size() != before;
@@ -227,7 +231,7 @@ namespace {
         }
 
         [[nodiscard]] bool genvar_scope(
-            const semantic::ScopeId scope, const std::string_view spelling)
+            const semantic::ScopeId scope, const support::SymbolId symbol)
         {
             if (!genvar_scopes_) {
                 genvar_scopes_.emplace();
@@ -236,8 +240,10 @@ namespace {
                     for (const auto& region : regions) {
                         if (region.kind == sv::GenerateKind::iterative
                             && !region.iterator.empty()) {
+                            const auto iterator
+                                = support::systemverilog_symbol(region.iterator);
                             genvar_scopes_->insert_or_assign(
-                                region.scope, region.iterator);
+                                region.scope, iterator);
                             // A process of the block has its own scope
                             // outside the block's scope chain.
                             for (const auto process : region.processes) {
@@ -246,7 +252,7 @@ namespace {
                                     &sv::Process::id);
                                 if (found != hir_.processes().end()) {
                                     genvar_scopes_->insert_or_assign(
-                                        found->scope, region.iterator);
+                                        found->scope, iterator);
                                 }
                             }
                         }
@@ -258,7 +264,7 @@ namespace {
                 }
             }
             const auto found = genvar_scopes_->find(scope);
-            return found != genvar_scopes_->end() && found->second == spelling;
+            return found != genvar_scopes_->end() && found->second == symbol;
         }
 
         // `blk.v` names `v` of the enclosing named block `blk`, found by
@@ -287,23 +293,26 @@ namespace {
             if (std::ranges::any_of(parts, &std::string_view::empty)) {
                 return std::nullopt;
             }
+            // The written name's parts, interned once (IEEE 1800-2023 5.6).
+            std::vector<support::SymbolId> symbols;
+            symbols.reserve(parts.size());
+            for (const auto part : parts) {
+                symbols.push_back(support::systemverilog_symbol(part));
+            }
             std::vector<semantic::ScopeId> ancestors;
             for (auto visible = std::optional { scope }; visible;
                  visible = parent_scope(*visible)) {
                 ancestors.push_back(*visible);
             }
-            const auto scope_name = [&](const semantic::ScopeId id) {
-                return std::string_view { model_.scopes()[id.value()].name };
-            };
             std::size_t head = ancestors.size();
             for (std::size_t index { }; index < ancestors.size(); ++index) {
-                if (!declarations_named(ancestors[index], parts.front())
+                if (!scope_symbols_.named(ancestors[index], symbols.front())
                          .empty()) {
                     return std::nullopt;
                 }
                 // A design unit's own name is left to hierarchical
                 // references.
-                if (scope_name(ancestors[index]) == parts.front()) {
+                if (scope_symbol(ancestors[index]) == symbols.front()) {
                     if (!parent_scope(ancestors[index])) {
                         return std::nullopt;
                     }
@@ -321,14 +330,14 @@ namespace {
                         return std::nullopt;
                     }
                     --target;
-                } while (scope_name(ancestors[target]).empty()
+                } while (!scope_symbol(ancestors[target]).valid()
                     || model_.scopes()[ancestors[target].value()].role
                         != semantic::ScopeRole::named);
-                if (scope_name(ancestors[target]) != parts[part]) {
+                if (scope_symbol(ancestors[target]) != symbols[part]) {
                     return std::nullopt;
                 }
             }
-            auto named = declarations_named(ancestors[target], parts.back());
+            auto named = scope_symbols_.named(ancestors[target], symbols.back());
             if (named.empty()) {
                 return std::nullopt;
             }
@@ -342,12 +351,14 @@ namespace {
             const semantic::ScopeId scope,
             const std::uint64_t source_order = 0U)
         {
-            sv::Name result { std::string { spelling }, source(span), std::nullopt, { } };
+            auto result = systemverilog_hir_detail::systemverilog_name(
+                std::string { spelling }, source(span));
             result.source_order = source_order;
             if (const auto bound = enclosing_block_member(spelling, scope)) {
                 // The bound name is the block's own declaration.
                 result.spelling = std::string {
                     spelling.substr(spelling.rfind('.') + 1U) };
+                result.symbol = support::systemverilog_symbol(result.spelling);
                 result.overloads = *bound;
                 if (result.overloads.size() == 1) {
                     result.selected = result.overloads.front();
@@ -356,7 +367,7 @@ namespace {
             }
             auto visible_scope = std::optional<semantic::ScopeId> { scope };
             while (visible_scope) {
-                const auto named = declarations_named(*visible_scope, spelling);
+                const auto named = scope_symbols_.named(*visible_scope, result.symbol);
                 result.overloads.insert(
                     result.overloads.end(), named.begin(), named.end());
                 if (!result.overloads.empty()) {
@@ -364,7 +375,7 @@ namespace {
                 }
                 // A loop-generate block's genvar hides outer declarations of
                 // its name (IEEE 1800-2017 27.4).
-                if (genvar_scope(*visible_scope, spelling)) {
+                if (genvar_scope(*visible_scope, result.symbol)) {
                     return result;
                 }
                 if (append_imported_name_candidates(
@@ -504,11 +515,12 @@ namespace {
             const std::string_view identity,
             const semantic::ScopeId scope) const
         {
+            const auto symbol = support::systemverilog_symbol(identity);
             const auto visible = [&](const sv::ClassDeclaration& item) {
                 if (item.canonical_identity == identity) {
                     return true;
                 }
-                if (item.name != identity || !item.scope.valid()) {
+                if (item.symbol != symbol || !item.scope.valid()) {
                     return false;
                 }
                 auto visible_scope = std::optional<semantic::ScopeId> { scope };
@@ -573,19 +585,19 @@ namespace {
             if (declaration == nullptr) {
                 return;
             }
-            const auto member_name
-                = std::string_view { output.text }.substr(1U);
+            const auto member_name = support::systemverilog_symbol(
+                std::string_view { output.text }.substr(1U));
             const auto method = std::ranges::find_if(
                 declaration->methods,
                 [&](const sv::ClassMethod& candidate) {
-                    return candidate.name == member_name
+                    return candidate.symbol == member_name
                         && !candidate.static_method;
                 });
             if (method == declaration->methods.end()
                 || std::ranges::any_of(
                     std::next(method), declaration->methods.end(),
                     [&](const sv::ClassMethod& candidate) {
-                        return candidate.name == member_name
+                        return candidate.symbol == member_name
                             && !candidate.static_method;
                     })) {
                 return;
@@ -610,6 +622,8 @@ namespace {
             semantic::ExpressionId receiver;
             const sv::ClassDeclaration* declaration { };
             std::string_view member;
+            // The member's interned name (IEEE 1800-2023 5.6).
+            support::SymbolId member_symbol;
             // The object's type is a type parameter of an enclosing class;
             // `declaration`, when present, is its default.
             bool type_parameter { };
@@ -673,13 +687,16 @@ namespace {
                 return std::nullopt;
             }
             return ImplicitClassMember { *receiver_id, declaration,
-                dotted.substr(dot + 1U), type_parameter };
+                dotted.substr(dot + 1U),
+                support::systemverilog_symbol(dotted.substr(dot + 1U)),
+                type_parameter };
         }
 
         // Whether `name` is a type parameter of a class enclosing `scope`.
         [[nodiscard]] bool enclosing_type_parameter(
             const std::string_view name, const semantic::ScopeId scope) const
         {
+            const auto symbol = support::systemverilog_symbol(name);
             for (auto visible = std::optional<semantic::ScopeId> { scope };
                  visible; visible = parent_scope(*visible)) {
                 for (const auto& item : hir_.classes()) {
@@ -687,7 +704,7 @@ namespace {
                         && std::ranges::any_of(item.parameters,
                             [&](const sv::ClassParameter& parameter) {
                                 return parameter.type_parameter
-                                    && parameter.name == name;
+                                    && parameter.symbol == symbol;
                             })) {
                         return true;
                     }
@@ -703,6 +720,7 @@ namespace {
         [[nodiscard]] const sv::ClassDeclaration* type_parameter_default_class(
             const std::string_view name, const semantic::ScopeId scope) const
         {
+            const auto symbol = support::systemverilog_symbol(name);
             for (auto visible = std::optional<semantic::ScopeId> { scope };
                  visible; visible = parent_scope(*visible)) {
                 for (const auto& item : hir_.classes()) {
@@ -711,7 +729,7 @@ namespace {
                     }
                     const auto parameter = std::ranges::find_if(
                         item.parameters, [&](const sv::ClassParameter& p) {
-                            return p.type_parameter && p.name == name;
+                            return p.type_parameter && p.symbol == symbol;
                         });
                     if (parameter == item.parameters.end()) {
                         continue;
@@ -761,7 +779,7 @@ namespace {
             const auto* property = access->declaration == nullptr ? nullptr
                 : unique_match(access->declaration->properties,
                       [&](const sv::ClassProperty& candidate) {
-                          return candidate.name == access->member
+                          return candidate.symbol == access->member_symbol
                               && !candidate.static_storage
                               && candidate.visibility
                                   == sv::ClassVisibility::public_access;
@@ -815,7 +833,7 @@ namespace {
             const auto* method = unique_match(
                 access->declaration->methods,
                 [&](const sv::ClassMethod& candidate) {
-                    return candidate.name == access->member
+                    return candidate.symbol == access->member_symbol
                         && candidate.kind == sv::ClassMethodKind::task
                         && !candidate.static_method
                         && candidate.visibility
@@ -975,24 +993,31 @@ namespace {
                 output.referenced_name = name(
                     input.text, input.span, scope,
                     input.systemverilog_source_order);
-                // `C::T` in C: T itself (IEEE 1800-2023 8.25.1); the
-                // final name resolution keeps it (resolve_expression_names).
+                // `C::T` in C: T itself (IEEE 1800-2023 8.23, 8.25.1),
+                // resolved through the class's scope; the final name
+                // resolution keeps it (Name::class_scoped).
                 if (const auto scoped = systemverilog_hir_detail::
                         systemverilog_unadorned_class_scoped_name(input);
                     scoped && !output.referenced_name->selected) {
                     if (const auto parameter = systemverilog_hir_detail::
-                            systemverilog_own_class_type_parameter(
+                            systemverilog_enclosing_class_type_parameter(
                                 scoped->first, scoped->second, scope, model_,
                                 hir_, [&](const semantic::ScopeId candidate) {
-                                    return std::ranges::any_of(hir_.classes(),
-                                        [&](const auto& declaration) {
-                                            return declaration.scope
-                                                == candidate;
-                                        });
+                                    const auto found = std::ranges::find(
+                                        hir_.classes(), candidate,
+                                        &sv::ClassDeclaration::scope);
+                                    return found == hir_.classes().end()
+                                        ? support::SymbolId { }
+                                        : found->symbol;
+                                },
+                                [&](const semantic::ScopeId body,
+                                    const support::SymbolId symbol) {
+                                    return scope_symbols_.named(body, symbol);
                                 })) {
                         output.referenced_name->overloads.assign(
                             1U, *parameter);
                         output.referenced_name->selected = *parameter;
+                        output.referenced_name->class_scoped = true;
                     }
                 }
                 // `blk.v` bound to the block's own `v` is that variable,
@@ -1738,7 +1763,8 @@ namespace {
             const frontend::SourceSpan& span)
         {
             const auto declaration_source = source(span);
-            for (const auto id : declarations_named(scope, declaration_name)) {
+            for (const auto id : scope_symbols_.named(
+                     scope, support::systemverilog_symbol(declaration_name))) {
                 auto* declaration = declaration_by_id(id);
                 if (declaration != nullptr && declaration->form == form
                     && declaration->source == declaration_source) {
@@ -1770,7 +1796,9 @@ namespace {
                 && choice.systemverilog_pattern
                     == frontend::SystemVerilogPatternKind::bind
                 && !choice.text.empty()
-                && declarations_named(scope, choice.text).empty()) {
+                && scope_symbols_.named(
+                       scope, support::systemverilog_symbol(choice.text))
+                       .empty()) {
                 const auto variable_source = source(choice.span);
                 const auto variable_origin
                     = origin(variable_source, parent, choice.text);
@@ -1785,6 +1813,7 @@ namespace {
                 output.source = variable_source;
                 output.origin = variable_origin;
                 output.pattern_variable = true;
+                output.symbol = support::systemverilog_symbol(output.name);
                 hir_.mutable_declarations().push_back(std::move(output));
             }
             // A bind may stand anywhere in the pattern: a tagged member's
@@ -1835,6 +1864,9 @@ namespace {
             if (input.initializer) {
                 output.initializer = expression(
                     *input.initializer, scope, variable_origin);
+            }
+            if (!output.symbol.valid() && !output.name.empty()) {
+                output.symbol = support::systemverilog_symbol(output.name);
             }
             hir_.mutable_declarations().push_back(std::move(output));
             return declaration_id;
@@ -3084,143 +3116,81 @@ namespace {
             // The generate regions are complete now.
             genvar_scopes_.reset();
             for (auto& item : hir_.mutable_expressions()) {
-                if (!item.referenced_name) {
+                if (!item.referenced_name || item.referenced_name->class_scoped) {
+                    // `C::T` resolved through the class's scope (8.23,
+                    // 8.25.1) when the builder made it.
                     continue;
                 }
-                const auto prior = item.referenced_name->selected;
-                item.referenced_name->selected.reset();
-                item.referenced_name->overloads.clear();
+                auto& name = *item.referenced_name;
+                if (!name.symbol.valid()) {
+                    name.symbol = support::systemverilog_symbol(name.spelling);
+                }
+                name.selected.reset();
+                name.overloads.clear();
                 auto visible_scope = std::optional<semantic::ScopeId> { item.scope };
-                bool genvar = false;
                 while (visible_scope) {
-                    const auto named = declarations_named(
-                        *visible_scope, item.referenced_name->spelling);
-                    item.referenced_name->overloads.insert(
-                        item.referenced_name->overloads.end(),
-                        named.begin(), named.end());
-                    if (!item.referenced_name->overloads.empty()) {
+                    const auto named = scope_symbols_.named(*visible_scope, name.symbol);
+                    name.overloads.insert(
+                        name.overloads.end(), named.begin(), named.end());
+                    if (!name.overloads.empty()) {
                         break;
                     }
                     // A loop-generate genvar hides outer declarations of its
                     // name (IEEE 1800-2017 27.4).
-                    if (genvar_scope(*visible_scope,
-                            item.referenced_name->spelling)) {
-                        genvar = true;
+                    if (genvar_scope(*visible_scope, name.symbol)) {
                         break;
                     }
                     if (append_imported_name_candidates(
-                            *item.referenced_name, *visible_scope,
-                            item.referenced_name->source_order)) {
+                            name, *visible_scope, name.source_order)) {
                         break;
                     }
                     visible_scope = parent_scope(*visible_scope);
                 }
-                if (genvar) {
-                    continue;
-                }
-                // `C::T` in C, which names T itself (IEEE 1800-2023
-                // 8.25.1): the builder resolved it from the name's
-                // components, which the spelling does not carry. It is a
-                // type parameter of a class whose body encloses the name.
-                if (item.referenced_name->overloads.empty() && prior) {
-                    const auto* const parameter = hir_.find_declaration(*prior);
-                    bool enclosing { };
-                    for (auto visible = std::optional<semantic::ScopeId> {
-                             item.scope };
-                        parameter != nullptr && visible && !enclosing;
-                        visible = parent_scope(*visible)) {
-                        enclosing = *visible == parameter->scope;
-                    }
-                    if (enclosing
-                        && parameter->form == sv::DeclarationForm::type_parameter
-                        && std::ranges::any_of(hir_.classes(),
-                            [&](const auto& declaration) {
-                                return declaration.scope == parameter->scope;
-                            })) {
-                        item.referenced_name->overloads.push_back(*prior);
-                    }
-                }
-                if (item.referenced_name->overloads.size() == 1) {
-                    item.referenced_name->selected = item.referenced_name->overloads.front();
+                if (name.overloads.size() == 1) {
+                    name.selected = name.overloads.front();
                 }
             }
-        }
-
-        // Declarations by scope (and name) and by id, extended over the
-        // declarations appended since the last lookup, in HIR order. The
-        // builders only append declarations and never rescope or rename
-        // one; a scan of every declaration per name made building
-        // quadratic in the design's declarations.
-        struct ScopeDeclarations {
-            std::vector<semantic::DeclarationId> all;
-            std::unordered_map<std::string,
-                std::vector<semantic::DeclarationId>,
-                TransparentStringHash, std::equal_to<>>
-                by_name;
-        };
-
-        void index_declarations()
-        {
-            const auto& declarations = hir_.declarations();
-            if (declarations.size() < indexed_declarations_) {
-                declarations_by_scope_.clear();
-                declaration_positions_.clear();
-                indexed_declarations_ = 0U;
-            }
-            for (; indexed_declarations_ < declarations.size();
-                ++indexed_declarations_) {
-                const auto& declaration = declarations[indexed_declarations_];
-                auto& scope = declarations_by_scope_[declaration.scope.value()];
-                scope.all.push_back(declaration.id);
-                scope.by_name[declaration.name].push_back(declaration.id);
-                declaration_positions_.try_emplace(
-                    declaration.id.value(), indexed_declarations_);
-            }
-        }
-
-        [[nodiscard]] std::span<const semantic::DeclarationId>
-        declarations_named(
-            const semantic::ScopeId scope, const std::string_view spelling)
-        {
-            index_declarations();
-            const auto in_scope = declarations_by_scope_.find(scope.value());
-            if (in_scope == declarations_by_scope_.end()) {
-                return { };
-            }
-            const auto found = in_scope->second.by_name.find(spelling);
-            return found == in_scope->second.by_name.end()
-                ? std::span<const semantic::DeclarationId> { }
-                : std::span<const semantic::DeclarationId> { found->second };
         }
 
         [[nodiscard]] std::span<const semantic::DeclarationId>
         declarations_in_scope(const semantic::ScopeId scope)
         {
-            index_declarations();
-            const auto found = declarations_by_scope_.find(scope.value());
-            return found == declarations_by_scope_.end()
-                ? std::span<const semantic::DeclarationId> { }
-                : std::span<const semantic::DeclarationId> {
-                      found->second.all };
+            return scope_symbols_.in_scope(scope);
         }
 
         [[nodiscard]] sv::Declaration* declaration_by_id(
             const semantic::DeclarationId id)
         {
-            index_declarations();
-            const auto found = declaration_positions_.find(id.value());
-            return found == declaration_positions_.end()
-                ? nullptr
-                : &hir_.mutable_declarations()[found->second];
+            return scope_symbols_.by_id(id);
+        }
+
+        // The interned name of a scope (IEEE 1800-2023 5.6), once per scope;
+        // no symbol for an unnamed one.
+        [[nodiscard]] support::SymbolId scope_symbol(const semantic::ScopeId scope)
+        {
+            if (scope_symbols_by_id_.size() <= scope.value()) {
+                scope_symbols_by_id_.resize(model_.scopes().size());
+            }
+            auto& symbol = scope_symbols_by_id_.at(scope.value());
+            if (!symbol.valid()) {
+                const auto& name = model_.scopes()[scope.value()].name;
+                if (!name.empty()) {
+                    symbol = support::systemverilog_symbol(name);
+                }
+            }
+            return symbol;
+        }
+
+        [[nodiscard]] support::SymbolId unit_symbol(const sv::Unit& unit) const
+        {
+            return scope_symbols_.unit_symbol(unit);
         }
 
         semantic::Model& model_;
         sv::Hir& hir_;
         systemverilog_hir_detail::SystemVerilogHirBuilder& type_builder_;
-        std::unordered_map<std::uint32_t, ScopeDeclarations>
-            declarations_by_scope_;
-        std::unordered_map<std::uint32_t, std::size_t> declaration_positions_;
-        std::size_t indexed_declarations_ { };
+        mutable systemverilog_hir_detail::SystemVerilogScopeSymbols scope_symbols_ { hir_ };
+        std::vector<support::SymbolId> scope_symbols_by_id_;
         std::map<semantic::ScopeId, std::vector<sv::Import>> block_imports_;
         // The assertion declarations of the unit or generate block whose
         // procedures and tasks are being converted, and the scope each
@@ -3262,7 +3232,7 @@ namespace {
             expect_property_scopes_;
         std::unordered_map<std::string, semantic::TypeId>
             anonymous_aggregate_types_;
-        std::optional<std::map<semantic::ScopeId, std::string>> genvar_scopes_;
+        std::optional<std::map<semantic::ScopeId, support::SymbolId>> genvar_scopes_;
         std::set<std::uint32_t> claimed_expressions_;
         std::optional<ExpressionCandidateIndex> expression_identity_candidate_index_;
         std::optional<ExpressionCandidateIndex> hir_expression_candidate_index_;

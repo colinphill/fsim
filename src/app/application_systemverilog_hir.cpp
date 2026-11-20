@@ -504,21 +504,17 @@ namespace systemverilog_hir_detail {
         const semantic::ScopeId scope,
         const std::uint64_t source_order)
     {
-        sv::Name result { std::string { spelling }, source(span), std::nullopt, { } };
+        auto result = systemverilog_name(std::string { spelling }, source(span));
         result.source_order = source_order;
         auto visible_scope = std::optional<semantic::ScopeId> { scope };
         while (visible_scope) {
-            for (const auto& declaration : hir_.declarations()) {
-                if (declaration.scope == *visible_scope
-                    && declaration.name == spelling) {
-                    result.overloads.push_back(declaration.id);
-                }
-            }
+            const auto named = scope_symbols_.named(*visible_scope, result.symbol);
+            result.overloads.assign(named.begin(), named.end());
             if (!result.overloads.empty()) {
                 break;
             }
             if (const auto genvar = genvar_scopes_.find(*visible_scope);
-                genvar != genvar_scopes_.end() && genvar->second == spelling) {
+                genvar != genvar_scopes_.end() && genvar->second == result.symbol) {
                 break;
             }
             visible_scope = model_.scopes()[visible_scope->value()].parent;
@@ -637,19 +633,25 @@ namespace systemverilog_hir_detail {
                         systemverilog_unadorned_class_scoped_name(input);
                     const auto parameter = scoped
                         ? systemverilog_hir_detail::
-                              systemverilog_own_class_type_parameter(
+                              systemverilog_enclosing_class_type_parameter(
                             scoped->first, scoped->second, scope, model_, hir_,
                             [&](const semantic::ScopeId candidate) {
                                 // Recorded when the class's body opens,
                                 // before its members are built.
-                                return std::ranges::any_of(class_scopes_,
-                                    [&](const auto& item) {
-                                        return item.second == candidate;
-                                    });
+                                const auto found
+                                    = class_body_symbols_.find(candidate.value());
+                                return found == class_body_symbols_.end()
+                                    ? support::SymbolId { }
+                                    : found->second;
+                            },
+                            [&](const semantic::ScopeId body,
+                                const support::SymbolId symbol) {
+                                return scope_symbols_.named(body, symbol);
                             })
                         : std::nullopt) {
                     output.referenced_name->overloads.assign(1U, *parameter);
                     output.referenced_name->selected = *parameter;
+                    output.referenced_name->class_scoped = true;
                 }
             }
         }
@@ -1321,7 +1323,8 @@ namespace systemverilog_hir_detail {
         output.iterator = input.variable;
         if (owns_scope && output.kind == sv::GenerateKind::iterative
             && !input.variable.empty()) {
-            genvar_scopes_.insert_or_assign(output.scope, input.variable);
+            genvar_scopes_.insert_or_assign(
+                output.scope, support::systemverilog_symbol(input.variable));
         }
         output.initial = expression(
             input.initial, output.scope, declaration_origin);
@@ -1684,11 +1687,13 @@ namespace systemverilog_hir_detail {
             }
         }
         for (const auto& input_modport : input.systemverilog_modports) {
+            const auto modport_symbol
+                = support::systemverilog_symbol(input_modport.name);
             const auto declaration_id = std::ranges::find_if(
                 hir_.declarations(), [&](const sv::Declaration& declaration) {
                     return declaration.scope == output.scope
                         && declaration.form == sv::DeclarationForm::modport
-                        && declaration.name == input_modport.name
+                        && declaration.symbol == modport_symbol
                         && declaration.source == source(input_modport.span);
                 })->id;
             sv::Modport modport;
@@ -1841,7 +1846,9 @@ semantic::sv::Hir build_systemverilog_hir(
         semantics, result, class_specializations
     };
     builder.add_design(parsed);
+    sv::intern_names(result);
     complete_systemverilog_executable_hir(parsed, semantics, result, builder);
+    sv::intern_names(result);
     for (auto& specialization : class_specializations) {
         specialization.constraint_modes.clear();
         const auto declaration = std::ranges::find(
