@@ -4492,7 +4492,7 @@ if(TARGET fsim_application)
     # Each release's matrix runs as four parts side by side: direct (its own
     # work directory), compile (the fixture whose object the optimization
     # parts elaborate), o0 and o2. Every part keeps the 7200-second limit.
-    function(fsim_add_uvm_phase_tlm_parts name root release)
+    function(fsim_add_uvm_phase_tlm_parts name release)
       set(work "${PROJECT_BINARY_DIR}/uvm-phase-tlm-example/${release}")
       foreach(part IN ITEMS direct compile o0 o2)
         set(part_work "${work}/staged")
@@ -4504,7 +4504,6 @@ if(TARGET fsim_application)
           COMMAND
             "${CMAKE_COMMAND}"
             "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim_uvm_phase_tlm_application_tests>"
-            "-DFSIM_UVM_ROOT=${root}"
             "-DFSIM_WORK_DIR=${part_work}"
             "-DFSIM_RELEASE=${release}"
             "-DFSIM_PHASE_TLM_PART=${part}"
@@ -4516,9 +4515,10 @@ if(TARGET fsim_application)
             TIMEOUT 7200
         )
       endforeach()
-      # Building the project from the UVM sources peaks near 2.5 GB, twice
-      # an elaboration or simulation stage (about 1.1 GB): those parts
-      # count as two processors against `ctest -j`.
+      # Compiling and building the project against the precompiled UVM
+      # library is the heaviest stage, twice an elaboration or simulation
+      # stage: the direct and compile parts count as two processors against
+      # `ctest -j` (the memory peak was not re-measured for the library).
       set_tests_properties(${name}.direct ${name}.compile
         PROPERTIES PROCESSORS 2)
       set_tests_properties(${name}.compile
@@ -4527,9 +4527,9 @@ if(TARGET fsim_application)
         PROPERTIES FIXTURES_REQUIRED ${name}.object)
     endfunction()
     fsim_add_uvm_phase_tlm_parts(fsim.application.uvm_phase_tlm.1_2
-      "${FSIM_UVM_1_2_SOURCE_DIR}" uvm-1.2)
+      uvm-1.2)
     fsim_add_uvm_phase_tlm_parts(fsim.application.uvm_phase_tlm.2020_3_1
-      "${FSIM_UVM_2020_3_1_SOURCE_DIR}" uvm-2020.3.1)
+      uvm-2020.3.1)
   endif()
 
   add_executable(

@@ -1608,6 +1608,29 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
   endforeach()
   file(CONFIGURE OUTPUT "${FSIM_STANDARD_LIBRARY_KEYS_DIR}/vhdl_standard_library_keys.inc"
     CONTENT "${FSIM_STANDARD_LIBRARY_KEYS}" @ONLY)
+  # Precompiled UVM libraries (gate BD build D2b): the key of each release is
+  # the SHA-256 of third_party/uvm-<release>/SHA256SUMS; empty when the build
+  # has no UVM sources (FSIM_UVM_SOURCE_MODE=OFF), so the runtime reports the
+  # library as unavailable (FSIM-UVM-LIBRARY-002).
+  set(FSIM_UVM_LIBRARY_KEYS "")
+  foreach(uvm_entry IN ITEMS
+      "uvm_1_2|1.2|${FSIM_UVM_1_2_SOURCE_DIR}"
+      "ieee_1800_2_2020_3_1|2020.3.1|${FSIM_UVM_2020_3_1_SOURCE_DIR}")
+    string(REPLACE "|" ";" uvm_entry "${uvm_entry}")
+    list(GET uvm_entry 0 uvm_enumerator)
+    list(GET uvm_entry 1 uvm_release)
+    list(GET uvm_entry 2 uvm_source_dir)
+    set(uvm_sums_digest "")
+    if(NOT uvm_source_dir STREQUAL "")
+      set(uvm_sums "${PROJECT_SOURCE_DIR}/third_party/uvm-${uvm_release}/SHA256SUMS")
+      file(SHA256 "${uvm_sums}" uvm_sums_digest)
+      set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${uvm_sums}")
+    endif()
+    string(APPEND FSIM_UVM_LIBRARY_KEYS
+      "FSIM_UVM_LIBRARY_SOURCES(${uvm_enumerator}, \"${uvm_sums_digest}\")\n")
+  endforeach()
+  file(CONFIGURE OUTPUT "${FSIM_STANDARD_LIBRARY_KEYS_DIR}/uvm_library_keys.inc"
+    CONTENT "${FSIM_UVM_LIBRARY_KEYS}" @ONLY)
   set_property(
     SOURCE src/app/application_standard_library_artifact.cpp
     APPEND PROPERTY COMPILE_DEFINITIONS
@@ -1728,6 +1751,39 @@ foreach(edition IN ITEMS 1987 1993 2000 2002 2008 2019)
     VERBATIM
   )
   list(APPEND FSIM_STANDARD_LIBRARY_ARTIFACTS "${artifact}")
+endforeach()
+# The precompiled UVM libraries (gate BD build D2b, library `uvm` per
+# release): one command per release whose kit is configured. Compiling a kit
+# peaks near 2.5 GB, so the commands are chained and never run together.
+set(FSIM_UVM_LIBRARY_PREVIOUS "")
+foreach(uvm_entry IN ITEMS
+    "1.2|${FSIM_UVM_1_2_SOURCE_DIR}"
+    "2020.3.1|${FSIM_UVM_2020_3_1_SOURCE_DIR}")
+  string(REPLACE "|" ";" uvm_entry "${uvm_entry}")
+  list(GET uvm_entry 0 uvm_release)
+  list(GET uvm_entry 1 uvm_source_dir)
+  if(uvm_source_dir STREQUAL "")
+    continue()
+  endif()
+  file(GLOB_RECURSE uvm_kit_sources CONFIGURE_DEPENDS "${uvm_source_dir}/src/*")
+  set(uvm_directory
+    "${FSIM_STANDARD_LIBRARY_BUILD_DIR}/systemverilog/uvm-${uvm_release}")
+  set(artifact "${uvm_directory}/standard-library.key")
+  add_custom_command(
+    OUTPUT "${artifact}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${uvm_directory}"
+    COMMAND fsim_standard_library_builder
+      --uvm-release uvm-${uvm_release}
+      --source-root "${uvm_source_dir}"
+      --output "${uvm_directory}"
+    DEPENDS fsim_standard_library_builder
+      "${PROJECT_SOURCE_DIR}/third_party/uvm-${uvm_release}/SHA256SUMS"
+      ${uvm_kit_sources} ${FSIM_UVM_LIBRARY_PREVIOUS}
+    COMMENT "Compiling the precompiled UVM ${uvm_release} library"
+    VERBATIM
+  )
+  list(APPEND FSIM_STANDARD_LIBRARY_ARTIFACTS "${artifact}")
+  set(FSIM_UVM_LIBRARY_PREVIOUS "${artifact}")
 endforeach()
 add_custom_target(fsim_standard_libraries ALL
   DEPENDS ${FSIM_STANDARD_LIBRARY_ARTIFACTS})

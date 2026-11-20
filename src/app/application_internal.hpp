@@ -1025,6 +1025,46 @@ using StandardLibraryLoader = std::function<std::optional<semantic::CompiledDesi
 load_precompiled_standard_libraries(frontend::VhdlStandard standard,
     std::span<const std::string> packages, diagnostic::Engine& diagnostics);
 
+// The precompiled UVM library (IEEE 1800.2) a SystemVerilog compile with a
+// UVM release maps (owner D2-Q9, gate BD build D2b): loaded only when a
+// source names one of its packages (ParsedDesign::systemverilog_scope_prefixes).
+struct UvmLibraryRequest {
+    project::SystemVerilogUvmRelease release {
+        project::SystemVerilogUvmRelease::none };
+    // The release's library root; empty when it is unavailable, with the
+    // reason (FSIM-UVM-LIBRARY-002) in `unavailable`.
+    std::filesystem::path root;
+    std::vector<diagnostic::Diagnostic> unavailable;
+    // The SystemVerilog packages the library declares (its catalog).
+    std::vector<std::string> packages;
+    // The library's key sources digest: the object provenance of the kit.
+    std::string identity;
+    // The compile's environment holds the library.
+    bool loaded { false };
+    // Set by the check: a source names one of `packages` and the
+    // environment does not hold the library.
+    bool needed { false };
+};
+
+// The request of `config`'s SystemVerilog source sets: nullopt when none
+// selects a UVM release.
+[[nodiscard]] std::optional<UvmLibraryRequest> uvm_library_request(
+    const project::Config& config);
+
+// The request of the precompiled UVM library of `release` (not none).
+[[nodiscard]] UvmLibraryRequest uvm_library_request(
+    project::SystemVerilogUvmRelease release);
+
+// The objects of the precompiled UVM library of `release` that objects
+// compiled against it are loaded with; empty (with FSIM-UVM-LIBRARY-002)
+// when the library is unavailable.
+[[nodiscard]] std::vector<std::filesystem::path> uvm_library_object_paths(
+    project::SystemVerilogUvmRelease release, diagnostic::Engine& diagnostics);
+
+// The whole precompiled UVM library of `request` (its root must be set).
+[[nodiscard]] std::optional<CompilationWorkspace> load_uvm_library(
+    const UvmLibraryRequest& request, diagnostic::Engine& diagnostics);
+
 void inject_vhdl_standard_libraries(
     CompilationWorkspace& checked,
     diagnostic::Engine& diagnostics,
@@ -1487,12 +1527,17 @@ bool compile_object(
 // packages of that edition (the build-time compile of the precompiled
 // libraries STD and IEEE): they are not checked against the precompiled
 // libraries, and the native intrinsics are stamped.
+// With `uvm_library`, the environment holds the precompiled UVM library when
+// its `loaded` is set; otherwise a source naming one of its packages sets its
+// `needed` and the check stops without diagnostics, so the caller loads the
+// library into the environment and checks again.
 std::optional<CompilationWorkspace> check_project_for_object(
     const project::Config& config,
     diagnostic::Engine& diagnostics,
     const semantic::CompiledDesign* imported = nullptr,
     std::span<const CompiledUnitAvailability> available_units = { },
-    std::optional<frontend::VhdlStandard> bootstrap_standard = std::nullopt);
+    std::optional<frontend::VhdlStandard> bootstrap_standard = std::nullopt,
+    UvmLibraryRequest* uvm_library = nullptr);
 
 int handle_compile(
     const cli::Invocation& invocation,

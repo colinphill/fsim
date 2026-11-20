@@ -558,6 +558,17 @@ namespace fsim::app::tcl_detail {
                 return TCL_ERROR;
             }
         }
+        for (const auto& library : uvm_library_locations()) {
+            Tcl_Obj* entry = Tcl_NewDictObj();
+            dict_put(interpreter, entry, "library", string_object(library.name));
+            dict_put(interpreter, entry, "path",
+                string_object(support::path_to_utf8(library.directory)));
+            dict_put(interpreter, entry, "mapped", Tcl_NewBooleanObj(1));
+            dict_put(interpreter, entry, "standard", string_object(library.label));
+            if (Tcl_ListObjAppendElement(interpreter, libraries, entry) != TCL_OK) {
+                return TCL_ERROR;
+            }
+        }
         for (const auto& location : *locations) {
             Tcl_Obj* entry = Tcl_NewDictObj();
             dict_put(interpreter, entry, "library", string_object(location.name));

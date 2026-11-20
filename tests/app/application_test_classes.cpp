@@ -30,6 +30,18 @@
 namespace fsim::test {
 namespace {
 
+// The class specializations of the design itself; the precompiled UVM
+// library (library uvm) contributes its own.
+template <typename Project>
+std::size_t design_class_specialization_count(const Project& project)
+{
+    return static_cast<std::size_t>(std::ranges::count_if(
+        project.compiled_systemverilog_class_specializations,
+        [](const auto& specialization) {
+            return !specialization.declaration_identity.starts_with("uvm::");
+        }));
+}
+
 template <typename Project>
 void assert_compiled_class_inventory(const Project& project)
 {
@@ -1444,8 +1456,9 @@ void ApplicationTestFixture::test_class_simulation_integration()
     sources.standard = "2023";
     sources.library = "work";
     sources.files.push_back(class_source);
-    // The fixture's uvm_pkg stands in for a governed UVM 1.2 library
-    // (--uvm-release), whose declarations carry their library roles.
+    // The fixture imports the real precompiled UVM 1.2 library (library
+    // `uvm`, selected by --uvm-release), whose declarations carry their
+    // library roles; the source set itself declares no uvm_pkg.
     sources.uvm_release = fsim::project::SystemVerilogUvmRelease::uvm_1_2;
     config.source_sets.push_back(std::move(sources));
 
@@ -2223,13 +2236,19 @@ void ApplicationTestFixture::test_class_simulation_integration()
             test_uvm_component_specialization);
         const auto param_item_wrapper = uvm_registry.wrapper_by_specialization(uvm_param_item_specialization);
         const auto factory_item_wrapper = uvm_registry.wrapper_by_specialization(uvm_factory_item_specialization);
-        if (uvm_registry.size() != 4) {
+        // The precompiled UVM library registers its own types (IEEE
+        // 1800.2-2020 8.2); the design registers exactly its four.
+        const auto design_registrations = std::ranges::count_if(
+            uvm_registry.types(), [](const auto& type) {
+                return !type.specialization_identity.starts_with("uvm::");
+            });
+        if (design_registrations != 4) {
             for (const auto& type : uvm_registry.types()) {
                 std::cerr << "uvm registry: " << type.type_name << " "
                           << type.specialization_identity << '\n';
             }
         }
-        assert(uvm_registry.size() == 4);
+        assert(design_registrations == 4);
         assert(item_wrapper != 0 && component_wrapper != 0 && param_item_wrapper != 0 && factory_item_wrapper != 0);
         assert(item_wrapper != component_wrapper && param_item_wrapper != item_wrapper && param_item_wrapper != component_wrapper);
         assert(uvm_registry.wrapper_by_name("UvmItem") == item_wrapper);
@@ -2478,7 +2497,7 @@ void ApplicationTestFixture::test_class_simulation_integration()
                     fsim::app::SimulationEngine::interpreter);
             };
             const auto assert_fresh_context = [&](const auto& context) {
-                assert(context.uvm_registry().size() == 4 && context.uvm_factory().type_overrides().empty() && context.uvm_factory().instance_overrides().empty() && context.uvm_resources().size() == 0 && context.uvm_config_db().entries().empty() && context.uvm_config_db().waiter_count() == 0 && context.uvm_command_line().settings().arguments.empty() && context.uvm_reports().default_verbosity() == 200 && context.uvm_reports().routed_count() == 0 && context.uvm_reports().filtered_count() == 0 && context.uvm_reports().handler_count() == 0 && context.uvm_reports().setting_count() == 0 && context.uvm_reports().catcher_count() == 0 && context.uvm_reports().catcher_invocations() == 0 && context.uvm_reports().caught_count(fsim::runtime::SystemVerilogUvmReportSeverity::Warning) == 0 && context.uvm_reports().server().severity_count(fsim::runtime::SystemVerilogUvmReportSeverity::Info) == 0 && context.uvm_components().roots().empty() && context.uvm_sequences().sequencers().empty() && context.uvm_sequences().sequences().empty() && context.uvm_sequences().items().empty() && context.uvm_sequences().roles().empty() && context.uvm_tlm1().endpoints().empty() && context.uvm_tlm2().sockets().empty() && context.uvm_phases().standard_schedule() && context.uvm_phases().domains().size() == 2 && context.uvm_phases().snapshot(context.uvm_phases().standard_schedule()->common_domain).roots.empty() && context.uvm_phases().snapshot(context.uvm_phases().standard_schedule()->runtime_domain).roots.empty());
+                assert(context.uvm_registry().size() == uvm_registry.size() && context.uvm_factory().type_overrides().empty() && context.uvm_factory().instance_overrides().empty() && context.uvm_resources().size() == 0 && context.uvm_config_db().entries().empty() && context.uvm_config_db().waiter_count() == 0 && context.uvm_command_line().settings().arguments.empty() && context.uvm_reports().default_verbosity() == 200 && context.uvm_reports().routed_count() == 0 && context.uvm_reports().filtered_count() == 0 && context.uvm_reports().handler_count() == 0 && context.uvm_reports().setting_count() == 0 && context.uvm_reports().catcher_count() == 0 && context.uvm_reports().catcher_invocations() == 0 && context.uvm_reports().caught_count(fsim::runtime::SystemVerilogUvmReportSeverity::Warning) == 0 && context.uvm_reports().server().severity_count(fsim::runtime::SystemVerilogUvmReportSeverity::Info) == 0 && context.uvm_components().roots().empty() && context.uvm_sequences().sequencers().empty() && context.uvm_sequences().sequences().empty() && context.uvm_sequences().items().empty() && context.uvm_sequences().roles().empty() && context.uvm_tlm1().endpoints().empty() && context.uvm_tlm2().sockets().empty() && context.uvm_phases().standard_schedule() && context.uvm_phases().domains().size() == 2 && context.uvm_phases().snapshot(context.uvm_phases().standard_schedule()->common_domain).roots.empty() && context.uvm_phases().snapshot(context.uvm_phases().standard_schedule()->runtime_domain).roots.empty());
             };
             std::size_t peer_callback_count { };
             {
@@ -3256,9 +3275,10 @@ void ApplicationTestFixture::test_class_simulation_integration()
         const auto compiled_classes = std::ranges::count(
             metadata.units, std::string { "class" },
             &fsim::library::UnitIndexEntry::kind);
-        // The fixture's uvm_pkg declares uvm_phase (IEEE 1800.2-2020 9.8),
-        // the type of the phase methods' argument, and UvmWaitComponent: 20.
-        assert(compiled_classes == 20);
+        // The work library holds only the fixture's own classes (the UVM
+        // library's classes live in library uvm): the eight application
+        // classes, LocalWaiter, and the five Uvm* fixture classes: 14.
+        assert(compiled_classes == 14);
         assert(std::ranges::all_of(
             metadata.units, [](const auto& entry) {
                 return entry.kind != "class"
@@ -3323,8 +3343,7 @@ void ApplicationTestFixture::test_class_simulation_integration()
     fsim::diagnostic::Engine standalone_diagnostics;
     auto standalone = fsim::app::load_design_artifact(relocated_design, standalone_diagnostics);
     assert(standalone);
-    assert(
-        standalone->compiled_systemverilog_class_specializations.size() == 20);
+    assert(design_class_specialization_count(*standalone) == 14);
     assert_compiled_class_inventory(*standalone);
     assert(std::ranges::any_of(
         standalone->compiled_systemverilog_class_specializations,
@@ -3337,7 +3356,12 @@ void ApplicationTestFixture::test_class_simulation_integration()
                         && property.type.executable_width == 137;
                 });
         }));
-    assert(standalone->systemverilog_hir.classes().size() == 20);
+    assert(std::ranges::count_if(standalone->systemverilog_hir.classes(),
+               [](const auto& declaration) {
+                   return !fsim::semantic::sv::class_declaration_identity(
+                       declaration).starts_with("uvm::");
+               })
+        == 14);
     const auto standalone_contract = std::ranges::find_if(
         standalone->compiled_systemverilog_class_specializations,
         [](const auto& specialization) {
@@ -3473,7 +3497,7 @@ void ApplicationTestFixture::test_class_simulation_integration()
     fsim::diagnostic::Engine mapped_diagnostics;
     auto mapped = fsim::app::build_project(mapped_config, mapped_diagnostics);
     assert(mapped);
-    assert(mapped->compiled_systemverilog_class_specializations.size() == 20);
+    assert(design_class_specialization_count(*mapped) == 14);
     assert_compiled_class_inventory(*mapped);
     assert(std::ranges::any_of(
         mapped->compiled_systemverilog_class_specializations,
@@ -3524,7 +3548,15 @@ void ApplicationTestFixture::test_class_simulation_integration()
             assert(signal);
             assert(multiple_simulation.read_signal(*signal).low_word().aval == 1);
         }
-        assert(multiple_simulation.class_heap().live_objects() == 2);
+        // The precompiled UVM library's static initializers construct
+        // its own objects; the design's two roots construct two.
+        const auto& multiple_heap = multiple_simulation.class_heap();
+        assert(std::ranges::count_if(multiple_heap.live_handles(),
+                   [&](const auto handle) {
+                       return !multiple_heap.object(handle)
+                                   .specialization_identity.starts_with("uvm::");
+                   })
+            == 2);
         const auto multi_base = std::ranges::find_if(
             multiple_simulation.class_specializations(),
             [](const auto& specialization) {

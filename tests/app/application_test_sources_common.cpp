@@ -262,142 +262,32 @@ class BrokenPostDerived extends AppDerived;
   endfunction
 endclass
 
-`define uvm_object_utils(TYPE) \
-  static function uvm_object_wrapper get_type(); \
-    return null; \
-  endfunction \
-  virtual function uvm_object_wrapper get_object_type(); \
-    return null; \
-  endfunction
-`define uvm_object_param_utils(TYPE) `uvm_object_utils(TYPE)
-`define uvm_component_utils(TYPE) `uvm_object_utils(TYPE)
-
-// The UVM library's declarations live in uvm_pkg (IEEE 1800.2).
-package uvm_pkg;
-class uvm_object_wrapper;
-endclass
-
-class uvm_object;
-  static function uvm_object_wrapper get_type();
-    return null;
-  endfunction
-  virtual function uvm_object_wrapper get_object_type();
-    return null;
-  endfunction
-  virtual function uvm_object clone();
-    return null;
-  endfunction
-  virtual function bit compare(
-      input uvm_object rhs,
-      input uvm_object comparer = null);
-    return 1'b0;
-  endfunction
-  function void copy(input uvm_object rhs);
-  endfunction
-  function void print(input uvm_object printer = null);
-  endfunction
-  function void record(input uvm_object recorder = null);
-  endfunction
-endclass
-
-class uvm_factory extends uvm_object;
-  virtual function void set_type_override_by_type(
-      uvm_object_wrapper original_type,
-      uvm_object_wrapper override_type,
-      bit replace = 1);
-  endfunction
-  virtual function uvm_object_wrapper find_override_by_type(
-      uvm_object_wrapper requested_type);
-    return null;
-  endfunction
-  virtual function uvm_object create_object_by_type(
-      uvm_object_wrapper requested_type);
-    return null;
-  endfunction
-  virtual function void print(int all_types = 1);
-  endfunction
-endclass
-
-class uvm_default_factory extends uvm_factory;
-endclass
-
-class uvm_phase extends uvm_object;
-endclass
-
-class uvm_component extends uvm_object;
-  function new(string name, uvm_component parent);
-  endfunction
-  virtual function uvm_component get_parent();
-    return null;
-  endfunction
-  virtual function int get_num_children();
-    return 0;
-  endfunction
-  virtual function void phase_started(uvm_phase phase);
-  endfunction
-  virtual function void phase_ready_to_end(uvm_phase phase);
-  endfunction
-  virtual function void phase_ended(uvm_phase phase);
-  endfunction
-  virtual function void build_phase(uvm_phase phase);
-  endfunction
-  virtual function void connect_phase(uvm_phase phase);
-  endfunction
-  virtual function void end_of_elaboration_phase(uvm_phase phase);
-  endfunction
-  virtual function void start_of_simulation_phase(uvm_phase phase);
-  endfunction
-  virtual function void extract_phase(uvm_phase phase);
-  endfunction
-  virtual function void check_phase(uvm_phase phase);
-  endfunction
-  virtual function void report_phase(uvm_phase phase);
-  endfunction
-  virtual function void final_phase(uvm_phase phase);
-  endfunction
-  virtual task run_phase(uvm_phase phase);
-  endtask
-  virtual task pre_reset_phase(uvm_phase phase);
-  endtask
-  virtual task reset_phase(uvm_phase phase);
-  endtask
-  virtual task post_reset_phase(uvm_phase phase);
-  endtask
-  virtual task pre_configure_phase(uvm_phase phase);
-  endtask
-  virtual task configure_phase(uvm_phase phase);
-  endtask
-  virtual task post_configure_phase(uvm_phase phase);
-  endtask
-  virtual task pre_main_phase(uvm_phase phase);
-  endtask
-  virtual task main_phase(uvm_phase phase);
-  endtask
-  virtual task post_main_phase(uvm_phase phase);
-  endtask
-  virtual task pre_shutdown_phase(uvm_phase phase);
-  endtask
-  virtual task shutdown_phase(uvm_phase phase);
-  endtask
-  virtual task post_shutdown_phase(uvm_phase phase);
-  endtask
-endclass
-endpackage
+// The governed UVM library (uvm_release) supplies uvm_pkg and its macros.
+`include "uvm_macros.svh"
 import uvm_pkg::*;
 
 class UvmItem extends uvm_object;
   logic [15:0] value;
   UvmItem child;
   `uvm_object_utils(UvmItem)
+  function new(string name = "");
+    super.new(name);
+  endfunction
 endclass
 
 class UvmParamItem #(int WIDTH = 8) extends uvm_object;
   logic [WIDTH-1:0] value;
   `uvm_object_param_utils(UvmParamItem)
+  function new(string name = "");
+    super.new(name);
+  endfunction
 endclass
 
 class UvmFactoryItem extends uvm_object;
   `uvm_object_utils(UvmFactoryItem)
+  function new(string name = "");
+    super.new(name);
+  endfunction
 endclass
 
 
@@ -894,7 +784,7 @@ module class_top;
     source_uvm_factory.set_type_override_by_type(
         source_uvm_item_type, source_uvm_param_type);
     source_uvm_factory_selected =
-        source_uvm_factory.find_override_by_type(source_uvm_item_type);
+        source_uvm_factory.find_override_by_type(source_uvm_item_type, "");
     source_uvm_factory_created =
         source_uvm_factory.create_object_by_type(source_uvm_item_type);
     source_uvm_factory_selected_override =

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "fsim/artifact/object.hpp"
+#include "application_workspace_internal.hpp"
 #include "application_vpi_foreign.hpp"
 #include "application_phase_profile.hpp"
 #include "application_compiled_environment_vhdl.hpp"
@@ -488,7 +490,12 @@ std::optional<BuiltProject> build_checked_project(
         }
     }
     for (const auto& source_set : config.source_sets) {
+        // A design the release governs (it uses the release's UVM library)
+        // is checked against the requested release; one using no UVM
+        // library is governed by none.
         if (source_set.uvm_release != project::SystemVerilogUvmRelease::none
+            && checked->systemverilog_uvm_provenance.release
+                != project::SystemVerilogUvmRelease::none
             && source_set.uvm_release
                 != checked->systemverilog_uvm_provenance.release) {
             diagnostics.error(
@@ -1265,8 +1272,33 @@ std::optional<BuiltProject> build_objects(
         checked = std::move(empty);
     } else {
         ScopedPhaseProfile decode_phase { "object_decode" };
+        // An object compiled against a precompiled UVM library (owner
+        // D2-Q9) loads with that library's objects.
+        std::vector<std::filesystem::path> inputs;
+        std::optional<project::SystemVerilogUvmRelease> uvm_release;
+        bool holds_uvm_library { };
+        for (const auto& object : objects) {
+            diagnostic::Engine ignored;
+            const auto metadata = artifact::load_object_metadata(object, ignored);
+            if (!metadata) {
+                continue;
+            }
+            holds_uvm_library = holds_uvm_library || metadata->library == uvm_library_name;
+            const auto release
+                = project::parse_systemverilog_uvm_release(metadata->uvm_release);
+            if (release && *release != project::SystemVerilogUvmRelease::none) {
+                uvm_release = *release;
+            }
+        }
+        if (uvm_release && !holds_uvm_library) {
+            inputs = uvm_library_object_paths(*uvm_release, diagnostics);
+            if (inputs.empty()) {
+                return std::nullopt;
+            }
+        }
+        inputs.insert(inputs.end(), objects.begin(), objects.end());
         checked = load_object_workspace(
-            objects, diagnostics, true, config.base_directory);
+            inputs, diagnostics, true, config.base_directory);
     }
     return build_checked_project(
         config, std::move(checked), systemc_plugins, diagnostics);

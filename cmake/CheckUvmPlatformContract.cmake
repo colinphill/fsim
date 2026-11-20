@@ -69,7 +69,7 @@ foreach(FSIM_TOKEN IN ITEMS
 endforeach()
 
 foreach(FSIM_TOKEN IN ITEMS
-    "std::filesystem::absolute(uvm_root)"
+    "parse_systemverilog_uvm_release(release).value()"
     "install_uvm_process_address_space_ceiling()"
     "platform_contract=source/abi/linux/windows/cdecl/filesystem")
   string(FIND "${FSIM_APPLICATION_CONTENTS}" "${FSIM_TOKEN}" FSIM_INDEX)

@@ -12,15 +12,14 @@ IEEE 1800.2-2020 kit version 2020.3.1. Choose one release for the complete
 source set. Do not combine package sources, objects, designs, caches, or
 checkpoints from different releases.
 
-## 1. Prepare a governed UVM source tree
+## 1. Use the precompiled UVM library
 
-Set `UVM_ROOT` to a validated extracted release. The required package and macro
-entry points are:
-
-```text
-$UVM_ROOT/src/uvm_pkg.sv
-$UVM_ROOT/src/uvm_macros.svh
-```
+Both releases are installed as precompiled libraries named `uvm`. A
+SystemVerilog source set maps UVM 2020.3.1 by default; no kit files, `-I` path
+or library mapping are needed, and `uvm_macros.svh` resolves from the
+library. `--uvm-release none` (or `compile.sv.uvm_release none`) opts out.
+Listing the kit's `uvm_pkg.sv` is FSIM-UVM-LIBRARY-001. `fsim library list`
+shows the rows `standard UVM-1.2` and `standard UVM-2020.3.1`.
 
 The repository's [source-provenance record](uvm-source-provenance.md) lists the
 reviewed archives and full-tree identities. Fsim does not download sources
@@ -92,8 +91,8 @@ module smoke_top;
 endmodule
 ```
 
-Keep the UVM package before user sources in one SystemVerilog-2017 source
-set. Include `$UVM_ROOT/src` so the macro include resolves to the selected kit.
+Compile the user sources as one SystemVerilog-2017 source set; the mapped
+`uvm` library supplies the package and macros.
 
 ## 3. Run through the reference engine
 
@@ -104,7 +103,7 @@ workers for the governed package:
 fsim compile --library work \
   --lang systemverilog --standard 2017 \
   --compilation-unit source-set --uvm-release "$UVM_RELEASE" -j 12 \
-  -I "$UVM_ROOT/src" "$UVM_ROOT/src/uvm_pkg.sv" smoke_test.sv
+  smoke_test.sv
 fsim elaborate work.smoke_top --snapshot smoke
 fsim simulate --snapshot smoke --engine interpreter
 ```
@@ -131,10 +130,9 @@ required; it calls the same simulation-owned UVM services.
 ## 5. Keep repeatable workspace commands
 
 For automation, retain the ordered compile, elaborate, and simulate commands in
-a shell or build-system script. Set `UVM_RELEASE` to `1.2` or `2020.3.1` and
-select the matching source tree with `UVM_ROOT`. fsim verifies the release
-against the parsed package API and retains the release and exact source
-identity in the library and snapshot. It does not load `fsim.toml`.
+a shell or build-system script. Set `UVM_RELEASE` to `1.2` or `2020.3.1`.
+fsim retains the release and exact source identity of the precompiled library
+in the library and snapshot. It does not load `fsim.toml`.
 
 ## 6. Reuse compiled libraries and snapshots
 
@@ -194,8 +192,9 @@ For a reliable pass, require all of the following:
 
 | Symptom | Check |
 |---|---|
-| Mixed-release or API-surface diagnostic | Make `--uvm-release`, `uvm_pkg.sv`, macro include, library, snapshot, cache, and checkpoint originate from one release |
-| Macro is undefined | Put `$UVM_ROOT/src` on the include path and compile `uvm_pkg.sv` before the user source in the same source set |
+| Mixed-release or API-surface diagnostic | Make `--uvm-release`, library, snapshot, cache, and checkpoint originate from one release |
+| `FSIM-UVM-LIBRARY-001` | Remove the kit's `uvm_pkg.sv` (or your own `uvm_pkg`) from the source set, or select `--uvm-release none` |
+| `FSIM-UVM-LIBRARY-002` | The release's precompiled UVM library is missing or this build has no UVM sources |
 | Test is not selected | Verify registration, the `run_test` name, and any `+UVM_TESTNAME` setting |
 | Configuration lookup misses | Enable `+UVM_CONFIG_DB_TRACE` and inspect the component-relative scope and nominal value type |
 | Run phase does not finish | Balance objections, inspect objection tracing, and check for suspended sequence/phase work without scheduler progress |

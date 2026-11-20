@@ -74,8 +74,8 @@ struct SnapshotRecord {
 class LibraryTransaction;
 class SnapshotTransaction;
 
-// Whether `name` is STD or IEEE (IEEE 1076-2019 13.2, 16): fsim's
-// precompiled standard libraries, which no workspace maps, compiles into or
+// Whether `name` is STD, IEEE (IEEE 1076-2019 13.2, 16) or UVM: fsim's
+// precompiled standard libraries (case-insensitive), which no workspace maps, compiles into or
 // changes (they are mapped into every workspace by default).
 [[nodiscard]] bool standard_library_name(std::string_view name) noexcept;
 // The message of refusing `action` on standard_library_name `name`.

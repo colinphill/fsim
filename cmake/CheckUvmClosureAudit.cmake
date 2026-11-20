@@ -95,9 +95,9 @@ string(REGEX MATCHALL "FSIM-UVM-[A-Z0-9-]+" FSIM_UVM_CODES
   "${FSIM_DIAGNOSTIC_CONTENTS}")
 list(REMOVE_DUPLICATES FSIM_UVM_CODES)
 list(LENGTH FSIM_UVM_CODES FSIM_UVM_CODE_COUNT)
-if(NOT FSIM_UVM_CODE_COUNT EQUAL 82)
+if(NOT FSIM_UVM_CODE_COUNT EQUAL 84)
   message(FATAL_ERROR
-    "UVM diagnostic inventory changed: expected 82, got ${FSIM_UVM_CODE_COUNT}")
+    "UVM diagnostic inventory changed: expected 84, got ${FSIM_UVM_CODE_COUNT}")
 endif()
 foreach(FSIM_CODE IN ITEMS
     FSIM-UVM-PHASE-008 FSIM-UVM-OBJ-004 FSIM-UVM-PHASE-007
@@ -134,7 +134,7 @@ foreach(FSIM_GATE IN ITEMS
     "${FSIM_GATE_OUTPUT}${FSIM_GATE_ERROR}\n")
 endforeach()
 foreach(FSIM_TOKEN IN ITEMS
-    "diagnostic catalog covers 3052 production codes"
+    "diagnostic catalog covers 3054 production codes"
     "Translation-unit structure checked: 0 forbidden .tpp files"
     "authored license inventory:"
     "source-package manifest:")
@@ -186,6 +186,6 @@ if(FSIM_RUNNER_INDEX EQUAL -1)
 endif()
 
 message(STATUS
-  "UVM closure audit: 21 release/behavior rows, 82 UVM diagnostics, 2983 "
+  "UVM closure audit: 21 release/behavior rows, 84 UVM diagnostics, 2983 "
   "catalog codes, 1510 bounded sources, 1813 SPDX files, retained memory/trace/"
   "artifact/cache provenance, and zero unresolved supported gaps")

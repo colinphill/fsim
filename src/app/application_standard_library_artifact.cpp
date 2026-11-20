@@ -87,6 +87,30 @@ std::filesystem::path running_executable()
     return path;
 }
 
+// SHA-256 of third_party/uvm-<release>/SHA256SUMS, recorded at configure
+// time; empty without UVM sources.
+std::string_view uvm_sources_digest(
+    const project::SystemVerilogUvmRelease release)
+{
+    switch (release) {
+#define FSIM_UVM_LIBRARY_SOURCES(name, digest)                                \
+    case project::SystemVerilogUvmRelease::name:                              \
+        return digest;
+#include "uvm_library_keys.inc"
+#undef FSIM_UVM_LIBRARY_SOURCES
+    default:
+        break;
+    }
+    return { };
+}
+
+constexpr std::string_view kUvmMagic = "FSIMUVML-KEY 1";
+
+constexpr std::array<project::SystemVerilogUvmRelease, 2> kUvmReleases {
+    project::SystemVerilogUvmRelease::uvm_1_2,
+    project::SystemVerilogUvmRelease::ieee_1800_2_2020_3_1,
+};
+
 std::string field_text(const std::string_view value)
 {
     constexpr std::size_t limit = 80;
@@ -133,6 +157,14 @@ std::optional<std::string_view> take_field(
         return std::nullopt;
     }
     return line->substr(name.size() + 1U);
+}
+
+void report_uvm(diagnostic::Engine& diagnostics,
+    const std::filesystem::path& path, const std::string_view reason)
+{
+    diagnostics.error("FSIM-UVM-LIBRARY-002",
+        "the precompiled UVM library '" + support::path_to_utf8(path)
+            + "' cannot be used: " + std::string { reason });
 }
 
 } // namespace
@@ -307,6 +339,158 @@ std::optional<std::filesystem::path> checked_standard_library_root(
     if (differs("cache_version", *cache_version, expected.cache_version)
         || differs("standard", *edition, edition_year(standard))
         || differs("sources_digest", *digest, expected.sources_digest)
+        || differs("natives_digest", *natives, expected.natives_digest)) {
+        return std::nullopt;
+    }
+    return root;
+}
+
+std::span<const project::SystemVerilogUvmRelease>
+uvm_library_releases() noexcept
+{
+    return kUvmReleases;
+}
+
+std::string uvm_library_compile_options()
+{
+    return "library:uvm;language:systemverilog;standard:2017;"
+           "compilation_unit:file;defines:";
+}
+
+UvmLibraryArtifactKey expected_uvm_library_artifact_key(
+    const project::SystemVerilogUvmRelease release)
+{
+    UvmLibraryArtifactKey key;
+    key.cache_version = std::string { standard_library_cache_version };
+    key.release = release;
+    key.sources_digest = std::string { uvm_sources_digest(release) };
+    key.options = uvm_library_compile_options();
+    key.natives_digest = std::string { semantic::vhdl_native_intrinsics_digest() };
+    return key;
+}
+
+std::string uvm_library_release_directory_name(
+    const project::SystemVerilogUvmRelease release)
+{
+    return "uvm-" + std::string { project::to_string(release) };
+}
+
+std::filesystem::path uvm_library_root(
+    const project::SystemVerilogUvmRelease release)
+{
+    return standard_library_artifact_directory() / "systemverilog"
+        / uvm_library_release_directory_name(release);
+}
+
+std::filesystem::path uvm_library_directory(const std::filesystem::path& root)
+{
+    return root / ".fsim" / "libraries" / "uvm";
+}
+
+std::filesystem::path uvm_library_include_directory(
+    const std::filesystem::path& root)
+{
+    return root / "src";
+}
+
+std::vector<UvmLibraryLocation> uvm_library_locations()
+{
+    std::vector<UvmLibraryLocation> result;
+    for (const auto release : kUvmReleases) {
+        const auto root = uvm_library_root(release);
+        result.push_back({ "uvm", release,
+            "UVM-" + std::string { project::to_string(release) },
+            uvm_library_directory(root), root });
+    }
+    return result;
+}
+
+bool write_uvm_library_key(const std::filesystem::path& directory,
+    const UvmLibraryArtifactKey& key, std::string& error)
+{
+    if (!plain_field(key.cache_version) || !plain_field(key.sources_digest)
+        || !plain_field(key.options) || !plain_field(key.natives_digest)) {
+        throw std::logic_error(
+            "a UVM library key field is empty or holds a line break or '='");
+    }
+    std::string bytes;
+    bytes += kUvmMagic;
+    bytes += "\ncache_version=" + key.cache_version;
+    bytes += "\nrelease=" + std::string { project::to_string(key.release) };
+    bytes += "\nsources_digest=" + key.sources_digest;
+    bytes += "\noptions=" + key.options;
+    bytes += "\nnatives_digest=" + key.natives_digest;
+    bytes += "\n";
+    const auto path = directory / std::string { standard_library_key_file_name };
+    auto output = support::native_fs::open_ofstream(
+        path, std::ios::binary | std::ios::trunc);
+    output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    output.close();
+    if (!output) {
+        error = "cannot write '" + support::path_to_utf8(path) + "'";
+        return false;
+    }
+    return true;
+}
+
+std::optional<std::filesystem::path> checked_uvm_library_root(
+    const project::SystemVerilogUvmRelease release,
+    diagnostic::Engine& diagnostics)
+{
+    const auto root = uvm_library_root(release);
+    const auto path = root / std::string { standard_library_key_file_name };
+    const auto expected = expected_uvm_library_artifact_key(release);
+    if (expected.sources_digest.empty()) {
+        report_uvm(diagnostics, path,
+            "this fsim was built without the UVM " + std::string { project::to_string(release) }
+                + " sources (FSIM_UVM_SOURCE_MODE=OFF)");
+        return std::nullopt;
+    }
+    std::error_code code;
+    if (!support::native_fs::is_regular_file(path, code)) {
+        report_uvm(diagnostics, path, "missing");
+        return std::nullopt;
+    }
+    auto input = support::native_fs::open_ifstream(path, std::ios::binary);
+    if (!input) {
+        report_uvm(diagnostics, path, "missing (cannot be opened)");
+        return std::nullopt;
+    }
+    const std::string content {
+        std::istreambuf_iterator<char> { input },
+        std::istreambuf_iterator<char> { }
+    };
+    std::string_view bytes { content };
+    const auto magic = take_line(bytes);
+    if (!magic || *magic != kUvmMagic) {
+        report_uvm(diagnostics, path, "corrupt: not an FSIMUVML-KEY 1 file");
+        return std::nullopt;
+    }
+    const auto cache_version = take_field(bytes, "cache_version");
+    const auto found_release = take_field(bytes, "release");
+    const auto digest = take_field(bytes, "sources_digest");
+    const auto options = take_field(bytes, "options");
+    const auto natives = take_field(bytes, "natives_digest");
+    if (!cache_version || !found_release || !digest || !options || !natives
+        || !bytes.empty()) {
+        report_uvm(diagnostics, path, "corrupt: malformed key");
+        return std::nullopt;
+    }
+    const auto differs = [&](const std::string_view name,
+                             const std::string_view found,
+                             const std::string_view wanted) {
+        if (found == wanted) {
+            return false;
+        }
+        report_uvm(diagnostics, path,
+            "key field " + std::string { name } + " differs: found "
+                + field_text(found) + ", expected " + field_text(wanted));
+        return true;
+    };
+    if (differs("cache_version", *cache_version, expected.cache_version)
+        || differs("release", *found_release, project::to_string(release))
+        || differs("sources_digest", *digest, expected.sources_digest)
+        || differs("options", *options, expected.options)
         || differs("natives_digest", *natives, expected.natives_digest)) {
         return std::nullopt;
     }

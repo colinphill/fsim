@@ -1048,12 +1048,18 @@ function(fsim_add_foreign_conformance_test FSIM_NAME FSIM_INTERFACE
   # simulate`; the case then runs on the debug
   # engine only. ENVIRONMENT lists NAME=value entries every step runs with,
   # and RERUN_ENVIRONMENT more entries for a second `fsim simulate` that must
-  # print the same trace. UVM_ROOT names a UVM 1.2 kit whose uvm_pkg compiles
-  # into library `uvm` before the sources, which see its src directory; the
-  # case is then labelled uvm.
+  # print the same trace. UVM_RELEASE selects a governed UVM release (`fsim compile
+  # --uvm-release`): the sources map fsim's precompiled UVM library of it
+  # (library `uvm`, which exists only when that release's source dir is
+  # configured) and see its macro include directory; the case is then
+  # labelled uvm.
   cmake_parse_arguments(PARSE_ARGV 9 FSIM_OPTION ""
-    "MESSAGE;SDF;ELABORATE_MESSAGE;COMPILE_MESSAGE;DPI_HEADER;ELABORATE_ARGS;COMPILE_ARGS;DEBUG_COMMANDS;TOP;UVM_ROOT"
+    "MESSAGE;SDF;ELABORATE_MESSAGE;COMPILE_MESSAGE;DPI_HEADER;ELABORATE_ARGS;COMPILE_ARGS;DEBUG_COMMANDS;TOP;UVM_RELEASE"
     "ENVIRONMENT;RERUN_ENVIRONMENT")
+  if(NOT "${FSIM_OPTION_UVM_RELEASE}" STREQUAL "")
+    string(APPEND FSIM_OPTION_COMPILE_ARGS
+      " --uvm-release ${FSIM_OPTION_UVM_RELEASE}")
+  endif()
   # TOP names the unit to elaborate (default `top`), e.g. a configuration.
   set(FSIM_TOP_UNIT top)
   if(NOT "${FSIM_OPTION_TOP}" STREQUAL "")
@@ -1103,13 +1109,12 @@ function(fsim_add_foreign_conformance_test FSIM_NAME FSIM_INTERFACE
         "-DFSIM_DEBUG_COMMANDS=${FSIM_DEBUG_COMMANDS_PATH}"
         "-DFSIM_ENVIRONMENT=${FSIM_ENVIRONMENT_TEXT}"
         "-DFSIM_RERUN_ENVIRONMENT=${FSIM_RERUN_ENVIRONMENT_TEXT}"
-        "-DFSIM_UVM_ROOT=${FSIM_OPTION_UVM_ROOT}"
         "-DFSIM_WORK_DIR=${PROJECT_BINARY_DIR}/tests/foreign/${FSIM_NAME}-${FSIM_ENGINE}"
         -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunForeignConformanceCase.cmake")
     set_tests_properties(
       fsim.foreign.${FSIM_NAME}.${FSIM_ENGINE}
       PROPERTIES LABELS "fast;foreign;${FSIM_INTERFACE};conformance;linux")
-    if(NOT "${FSIM_OPTION_UVM_ROOT}" STREQUAL "")
+    if(NOT "${FSIM_OPTION_UVM_RELEASE}" STREQUAL "")
       set_property(TEST fsim.foreign.${FSIM_NAME}.${FSIM_ENGINE}
         APPEND PROPERTY LABELS uvm)
     endif()
@@ -2428,14 +2433,14 @@ if(FSIM_UVM_1_2_SOURCE_DIR)
     vpi-frames-host vpi foreign_vpi_frames_host.sv
     foreign_vpi_frames_host.expected "--foreign-probes"
     fsim_foreign_vpi_frames_host_plugin "" "" ""
-    COMPILE_ARGS "--standard 2017 -I ${FSIM_UVM_1_2_SOURCE_DIR}/src"
-    UVM_ROOT "${FSIM_UVM_1_2_SOURCE_DIR}")
+    COMPILE_ARGS "--standard 2017"
+    UVM_RELEASE 1.2)
   fsim_add_foreign_conformance_test(
     vpi-frames-host-noprobe vpi foreign_vpi_frames_host.sv
     foreign_vpi_frames_host_noprobe.expected ""
     fsim_foreign_vpi_frames_host_plugin "" "" ""
-    COMPILE_ARGS "--standard 2017 -I ${FSIM_UVM_1_2_SOURCE_DIR}/src"
-    UVM_ROOT "${FSIM_UVM_1_2_SOURCE_DIR}")
+    COMPILE_ARGS "--standard 2017"
+    UVM_RELEASE 1.2)
 endif()
 # An automatic event triggered by a put, and the strings of the outer
 # activations of a recursive task (IEEE 1800-2023 37.43, 38.34).
@@ -3760,9 +3765,8 @@ endforeach()
 # A UVM testbench across $save, $restart and $reset (IEEE 1800-2023 D.8, D.9;
 # task #188). The services' state (components, phases, objections,
 # configuration, report counts, the sequencer handshake) is written in the
-# "app.uvm" section; the governed UVM library is compiled once per release, by
-# the release's uvm-shared-library fixture, into a library every test of that
-# release maps. The source saves at t=1 and t=18 of the run phase, with the
+# "app.uvm" section; the governed UVM library is the precompiled standard
+# library `uvm` of the release (--uvm-release), mapped automatically. The source saves at t=1 and t=18 of the run phase, with the
 # objection raised and the sequence running, and each restart must print the
 # rest of the uninterrupted run; the reset test restarts the whole test at t=18
 # and must print a fresh run's report.
@@ -3773,7 +3777,6 @@ function(fsim_add_uvm_save_restart_test FSIM_NAME FSIM_ENGINE FSIM_RELEASE
   list(JOIN FSIM_OPTION_RESTARTS "," FSIM_RESTARTS_TEXT)
   set(FSIM_TEST_NAME
     fsim.systemverilog.save-restart.${FSIM_NAME}-${FSIM_RELEASE}.${FSIM_ENGINE})
-  string(MAKE_C_IDENTIFIER "fsim_uvm_library_${FSIM_RELEASE}" FSIM_LIBRARY_FIXTURE)
   add_test(
     NAME ${FSIM_TEST_NAME}
     COMMAND
@@ -3789,14 +3792,11 @@ function(fsim_add_uvm_save_restart_test FSIM_NAME FSIM_ENGINE FSIM_RELEASE
       "-DFSIM_NORMALIZE_IDS=${FSIM_OPTION_NORMALIZE_IDS}"
       "-DFSIM_NO_EXECUTOR=${FSIM_OPTION_NO_EXECUTOR}"
       "-DFSIM_WORK_DIR=${PROJECT_BINARY_DIR}/tests/save-restart/${FSIM_NAME}-${FSIM_RELEASE}-${FSIM_ENGINE}"
-      "-DFSIM_UVM_LIBRARY_DIR=${PROJECT_BINARY_DIR}/tests/save-restart/uvm-shared-library-${FSIM_RELEASE}"
       -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunUvmSaveRestartCase.cmake")
   set_tests_properties(${FSIM_TEST_NAME}
-    PROPERTIES LABELS "slow;systemverilog;uvm;save-restart" TIMEOUT 1800
-      FIXTURES_REQUIRED "${FSIM_LIBRARY_FIXTURE}")
+    PROPERTIES LABELS "slow;systemverilog;uvm;save-restart" TIMEOUT 1800)
 endfunction()
-# Each governed release, with its library compiled on its own and mapped
-# (the separate-library flow of the corpus runner). The native services print
+# Each governed release, with its precompiled library `uvm`. The native services print
 # the report, so the expected text is the same for both releases.
 foreach(FSIM_UVM_RELEASE_NAME IN ITEMS 1.2 2020.3.1)
   if(FSIM_UVM_RELEASE_NAME STREQUAL "1.2")
@@ -3807,23 +3807,6 @@ foreach(FSIM_UVM_RELEASE_NAME IN ITEMS 1.2 2020.3.1)
   if(NOT FSIM_UVM_RELEASE_ROOT)
     continue()
   endif()
-  # The release's library, compiled once for all of its cases.
-  string(MAKE_C_IDENTIFIER "fsim_uvm_library_${FSIM_UVM_RELEASE_NAME}"
-    FSIM_LIBRARY_FIXTURE)
-  add_test(
-    NAME fsim.systemverilog.save-restart.uvm-shared-library-${FSIM_UVM_RELEASE_NAME}
-    COMMAND
-      "${CMAKE_COMMAND}"
-      "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
-      "-DFSIM_UVM_ROOT=${FSIM_UVM_RELEASE_ROOT}"
-      "-DFSIM_UVM_RELEASE=${FSIM_UVM_RELEASE_NAME}"
-      "-DFSIM_UVM_LIBRARY_ONLY=ON"
-      "-DFSIM_WORK_DIR=${PROJECT_BINARY_DIR}/tests/save-restart/uvm-shared-library-${FSIM_UVM_RELEASE_NAME}"
-      -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunUvmSaveRestartCase.cmake")
-  set_tests_properties(
-    fsim.systemverilog.save-restart.uvm-shared-library-${FSIM_UVM_RELEASE_NAME}
-    PROPERTIES LABELS "slow;systemverilog;uvm;save-restart" TIMEOUT 1800
-      FIXTURES_SETUP "${FSIM_LIBRARY_FIXTURE}")
   foreach(FSIM_ENGINE IN ITEMS v4 interpreter)
     fsim_add_uvm_save_restart_test(uvm ${FSIM_ENGINE}
       ${FSIM_UVM_RELEASE_NAME} "${FSIM_UVM_RELEASE_ROOT}"

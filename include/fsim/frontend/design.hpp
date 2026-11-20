@@ -2030,6 +2030,12 @@ struct ParsedDesign {
         systemverilog_covergroup_instances;
     std::vector<SystemVerilogCovergroupInstanceSyntax>
         systemverilog_covergroup_instance_syntax;
+    // The identifiers a SystemVerilog source names a scope by, `identifier
+    // ::` (IEEE 1800-2017 26.3 package_scope, 8.23 class_scope), sorted and
+    // unique: every package the source can reference, imported or by
+    // package-scoped name, is one of them. The compile loads a precompiled
+    // library's package (UVM, IEEE 1800.2) only when a source names it.
+    std::vector<std::string> systemverilog_scope_prefixes;
 
     // False when source recovery retained nodes after a construct exceeded
     // the selected VHDL revision. Normal application analysis already owns

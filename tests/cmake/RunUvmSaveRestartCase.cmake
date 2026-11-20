@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Save, restart and reset of a UVM testbench (IEEE 1800-2023 D.8, D.9; IEEE
-# 1800.2-2020). The governed UVM library (FSIM_UVM_ROOT, release FSIM_UVM_RELEASE, default 2020.3.1) is
-# compiled once into a library of its own, which the test workspace maps and
-# searches; then one SystemVerilog source is compiled and elaborated, and
+# 1800.2-2020). The governed UVM library of release FSIM_UVM_RELEASE (default
+# 2020.3.1) is the precompiled standard library `uvm`, mapped automatically
+# when the compile selects the release; its source directory is on the include
+# path. One SystemVerilog source is compiled and elaborated, and
 #
 #   1. `fsim simulate --engine ENGINE` runs it; the whole output, less the
 #      final "simulation stopped" or "simulation completed" line, must equal
@@ -24,10 +25,6 @@
 # A source that calls $reset needs no restarts: its expected output holds both
 # lives of the run.
 #
-# FSIM_UVM_LIBRARY_ONLY, when true, only compiles the UVM library into
-# FSIM_WORK_DIR: the fixture setup test that every case of one release shares,
-# as the corpus runner compiles the library once per run. A case given
-# FSIM_UVM_LIBRARY_DIR maps that compiled library instead of compiling its own.
 
 cmake_minimum_required(VERSION 3.25)
 
@@ -35,32 +32,8 @@ if(NOT DEFINED FSIM_UVM_RELEASE OR "${FSIM_UVM_RELEASE}" STREQUAL "")
   set(FSIM_UVM_RELEASE 2020.3.1)
 endif()
 
-if(FSIM_UVM_LIBRARY_ONLY)
-  foreach(FSIM_REQUIRED IN ITEMS FSIM_EXECUTABLE FSIM_WORK_DIR FSIM_UVM_ROOT)
-    if(NOT DEFINED ${FSIM_REQUIRED} OR "${${FSIM_REQUIRED}}" STREQUAL "")
-      message(FATAL_ERROR "${FSIM_REQUIRED} is required")
-    endif()
-  endforeach()
-  file(REMOVE_RECURSE "${FSIM_WORK_DIR}")
-  file(MAKE_DIRECTORY "${FSIM_WORK_DIR}")
-  execute_process(
-    COMMAND "${FSIM_EXECUTABLE}" compile -q --standard 2017 --library uvm
-      --uvm-release "${FSIM_UVM_RELEASE}" -I "${FSIM_UVM_ROOT}/src"
-      "${FSIM_UVM_ROOT}/src/uvm_pkg.sv"
-    WORKING_DIRECTORY "${FSIM_WORK_DIR}"
-    RESULT_VARIABLE FSIM_RESULT
-    OUTPUT_VARIABLE FSIM_OUTPUT
-    ERROR_VARIABLE FSIM_ERROR
-    TIMEOUT 1200)
-  if(NOT FSIM_RESULT EQUAL 0)
-    message(FATAL_ERROR
-      "fsim compile of the UVM library returned ${FSIM_RESULT}:\n${FSIM_OUTPUT}${FSIM_ERROR}")
-  endif()
-  return()
-endif()
-
 foreach(FSIM_REQUIRED IN ITEMS FSIM_EXECUTABLE FSIM_SOURCE FSIM_TOP
-    FSIM_ENGINE FSIM_WORK_DIR FSIM_EXPECTED FSIM_UVM_ROOT)
+    FSIM_ENGINE FSIM_WORK_DIR FSIM_EXPECTED)
   if(NOT DEFINED ${FSIM_REQUIRED} OR "${${FSIM_REQUIRED}}" STREQUAL "")
     message(FATAL_ERROR "${FSIM_REQUIRED} is required")
   endif()
@@ -73,10 +46,9 @@ foreach(FSIM_LIST IN ITEMS FSIM_SAVE_ARGS FSIM_RESTARTS)
   endif()
 endforeach()
 
-set(FSIM_LIBRARY_DIR "${FSIM_WORK_DIR}/uvm-library")
 set(FSIM_RUN_DIR "${FSIM_WORK_DIR}/run")
 file(REMOVE_RECURSE "${FSIM_WORK_DIR}")
-file(MAKE_DIRECTORY "${FSIM_LIBRARY_DIR}" "${FSIM_RUN_DIR}")
+file(MAKE_DIRECTORY "${FSIM_RUN_DIR}")
 get_filename_component(FSIM_SOURCE_NAME "${FSIM_SOURCE}" NAME)
 configure_file("${FSIM_SOURCE}" "${FSIM_RUN_DIR}/${FSIM_SOURCE_NAME}" COPYONLY)
 
@@ -116,22 +88,13 @@ function(fsim_compare FSIM_STEP_NAME FSIM_EXPECTED_FILE)
   endif()
 endfunction()
 
-# The library of the governed UVM release, as the corpus runner builds it:
-# the shared one of the release's fixture, or one of the case's own.
-if(DEFINED FSIM_UVM_LIBRARY_DIR AND NOT "${FSIM_UVM_LIBRARY_DIR}" STREQUAL "")
-  set(FSIM_LIBRARY_DIR "${FSIM_UVM_LIBRARY_DIR}")
-else()
-  fsim_step("${FSIM_LIBRARY_DIR}" "compile of the UVM library" 0
-    compile -q --standard 2017 --library uvm --uvm-release "${FSIM_UVM_RELEASE}"
-    -I "${FSIM_UVM_ROOT}/src" "${FSIM_UVM_ROOT}/src/uvm_pkg.sv")
-endif()
-fsim_step("${FSIM_RUN_DIR}" "library map" 0
-  library map uvm "${FSIM_LIBRARY_DIR}/.fsim/libraries/uvm")
+# No kit source, include directory or library mapping: the release selects the
+# precompiled library `uvm`.
 fsim_step("${FSIM_RUN_DIR}" "compile" 0
-  compile -q --lang systemverilog --standard 2017 --search-library uvm
-  -I "${FSIM_UVM_ROOT}/src" "${FSIM_SOURCE_NAME}")
+  compile -q --lang systemverilog --standard 2017
+  --uvm-release "${FSIM_UVM_RELEASE}" "${FSIM_SOURCE_NAME}")
 fsim_step("${FSIM_RUN_DIR}" "elaborate" 0
-  elaborate -q --no-aot --search-library uvm --top "${FSIM_TOP}")
+  elaborate -q --no-aot --top "${FSIM_TOP}")
 fsim_step("${FSIM_RUN_DIR}" "simulate" 0
   simulate --engine "${FSIM_ENGINE}" ${FSIM_SAVE_ARGS})
 fsim_compare("the saving run" "${FSIM_EXPECTED}")

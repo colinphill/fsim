@@ -238,15 +238,19 @@ bool standard_library_name(const std::string_view name) noexcept
                    return lower(left) == right;
                });
     };
-    return equals("std") || equals("ieee");
+    return equals("std") || equals("ieee") || equals("uvm");
 }
 
 std::string standard_library_refusal(
     const std::string_view name, const std::string_view action)
 {
-    return "library '" + std::string { name } + "' is fsim's precompiled VHDL "
-        "standard library (IEEE 1076-2019 13.2, 16), mapped into every "
-        "workspace; it cannot be " + std::string { action };
+    const bool is_uvm = name.size() == 3 && (name[0] == 'u' || name[0] == 'U')
+        && (name[1] == 'v' || name[1] == 'V') && (name[2] == 'm' || name[2] == 'M');
+    return "library '" + std::string { name } + "' is "
+        + (is_uvm ? std::string { "fsim's precompiled UVM standard library" }
+                  : std::string { "fsim's precompiled VHDL standard library "
+                                  "(IEEE 1076-2019 13.2, 16)" })
+        + ", mapped into every workspace; it cannot be " + std::string { action };
 }
 
 const std::filesystem::path& Store::root() const

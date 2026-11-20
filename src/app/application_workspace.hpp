@@ -32,6 +32,10 @@ int handle_workspace_compile(const cli::Invocation&, const project::Config&,
 int compile_standard_library(const cli::Invocation&, const project::Config&,
     diagnostic::Engine&, std::ostream&, std::ostream&,
     frontend::VhdlStandard standard);
+// The build-time compile of a release's precompiled UVM library (library
+// uvm): no UVM library is mapped, and the reserved library name is written.
+int compile_uvm_library(const cli::Invocation&, const project::Config&,
+    diagnostic::Engine&, std::ostream&, std::ostream&);
 int handle_workspace_elaborate(const cli::Invocation&, const project::Config&,
     diagnostic::Engine&, std::ostream&, std::ostream&);
 int handle_workspace_simulate(const cli::Invocation&, const project::Config&,

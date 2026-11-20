@@ -88,16 +88,17 @@ bool has_identity_diagnostic(
 
 int main()
 {
-    static_assert(fsim::library::kFormatVersion == 8);
+    static_assert(fsim::library::kFormatVersion == 9);
     static_assert(fsim::library::kPortableSchemaVersion == 16);
     static_assert(fsim::library::kCompiledHirSchemaVersion == 14);
     const auto expected = example_metadata();
     const auto serialized = fsim::library::serialize_metadata(expected);
     assert(serialized.starts_with(
-        "format = 8\nlibrary = \"vendor\"\nproducer = \"fsim 0.2.0-dev\"\n"));
+        "format = 9\nlibrary = \"vendor\"\nproducer = \"fsim 0.2.0-dev\"\n"));
     assert(serialized.find("compiled_hir_schema = 14")
         != std::string::npos);
     assert(serialized.find("trace_archive = \"\"") != std::string::npos);
+    assert(serialized.find("uvm_release = \"none\"") != std::string::npos);
     assert(serialized.find("[[dependency]]") != std::string::npos);
     assert(serialized.find("[[vhdl_package_dependency]]")
         != std::string::npos);
@@ -142,8 +143,8 @@ int main()
         }));
 
     auto legacy_text = serialized;
-    legacy_text.replace(legacy_text.find("format = 8"),
-        std::string { "format = 8" }.size(), "format = 7");
+    legacy_text.replace(legacy_text.find("format = 9"),
+        std::string { "format = 9" }.size(), "format = 8");
     legacy_text.replace(legacy_text.find("portable_schema = 16"),
         std::string { "portable_schema = 16" }.size(),
         "portable_schema = 15");
@@ -164,12 +165,12 @@ int main()
     assert(!fsim::library::parse_metadata(
         legacy_text, "legacy-v7.fsimlib", legacy_parse_diagnostics));
     assert(has_identity_diagnostic(legacy_parse_diagnostics, ".fsimlib",
-        "format 7", "format 8", ".fsimlib"));
+        "format 8", "format 9", ".fsimlib"));
     for (const auto [format, schema] : {
-             std::pair { 8U, 15U }, std::pair { 7U, 16U } }) {
+             std::pair { 9U, 15U }, std::pair { 8U, 16U } }) {
         auto mismatched_text = serialized;
-        mismatched_text.replace(mismatched_text.find("format = 8"),
-            std::string { "format = 8" }.size(),
+        mismatched_text.replace(mismatched_text.find("format = 9"),
+            std::string { "format = 9" }.size(),
             "format = " + std::to_string(format));
         mismatched_text.replace(mismatched_text.find("portable_schema = 16"),
             std::string { "portable_schema = 16" }.size(),
@@ -319,8 +320,8 @@ int main()
         stale_publication_diagnostics));
     assert(has_identity_diagnostic(
         stale_publication_diagnostics, ".fsimlib publication",
-        "format 7 and portable-unit schema 15 and compiled-HIR schema 14",
-        "format 8 and portable-unit schema 16 and compiled-HIR schema 14",
+        "format 8 and portable-unit schema 15 and compiled-HIR schema 14",
+        "format 9 and portable-unit schema 16 and compiled-HIR schema 14",
         ".fsimlib"));
     assert(!std::filesystem::exists(stale_publication));
     fsim::diagnostic::Engine publish_diagnostics;
@@ -447,28 +448,28 @@ int main()
 
     auto incompatible_text = serialized;
     incompatible_text.replace(
-        incompatible_text.find("format = 8"),
-        std::string { "format = 8" }.size(), "format = 99");
+        incompatible_text.find("format = 9"),
+        std::string { "format = 9" }.size(), "format = 99");
     fsim::diagnostic::Engine schema_diagnostics;
     assert(!fsim::library::parse_metadata(
         incompatible_text, "future.toml", schema_diagnostics));
     assert(has_identity_diagnostic(
-        schema_diagnostics, ".fsimlib", "format 99", "format 8",
+        schema_diagnostics, ".fsimlib", "format 99", "format 9",
         ".fsimlib"));
 
     for (std::uint32_t format = 0;
         format < fsim::library::kFormatVersion; ++format) {
         auto stale_text = serialized;
         stale_text.replace(
-            stale_text.find("format = 8"),
-            std::string { "format = 8" }.size(),
+            stale_text.find("format = 9"),
+            std::string { "format = 9" }.size(),
             "format = " + std::to_string(format));
         fsim::diagnostic::Engine stale_schema_diagnostics;
         assert(!fsim::library::parse_metadata(
             stale_text, "stale.toml", stale_schema_diagnostics));
         assert(has_identity_diagnostic(
             stale_schema_diagnostics, ".fsimlib",
-            "format " + std::to_string(format), "format 8", ".fsimlib"));
+            "format " + std::to_string(format), "format 9", ".fsimlib"));
     }
 
     for (std::uint32_t schema = 0;

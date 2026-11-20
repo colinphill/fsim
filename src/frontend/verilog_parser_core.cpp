@@ -207,6 +207,17 @@ ParseResult VerilogParser::run() {
         }
         token.symbol = support::systemverilog_symbol(token.text);
     }
+    if (language_ == Language::SystemVerilog2017) {
+        std::set<std::string> prefixes;
+        for (std::size_t index = 0U; index + 1U < tokens_.size(); ++index) {
+            if (tokens_[index].kind == TokenKind::Identifier
+                && tokens_[index + 1U].kind == TokenKind::Scope) {
+                prefixes.insert(tokens_[index].text);
+            }
+        }
+        design.systemverilog_scope_prefixes.assign(
+            prefixes.begin(), prefixes.end());
+    }
     // `this.super` names the base class object as `super` does (IEEE
     // 1800-2017 8.15).
     for (std::size_t index = 0U; index + 2U < tokens_.size(); ++index) {

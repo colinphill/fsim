@@ -91,7 +91,7 @@ foreach(FSIM_TOKEN IN ITEMS
     "format 8/schema 15"
     "format 18, runtime ABI 1"
     "fsim-code-coverage-foundation-v3"
-    "format 8, portable schema 16, compiled-HIR bundle 14"
+    "format 9, portable schema 16, compiled-HIR bundle 14"
     "format 2, runtime ABI 1, SystemC ABI 4"
     "runtime 137"
     "C++ SDK consumers must"

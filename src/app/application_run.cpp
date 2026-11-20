@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "application_workspace_internal.hpp"
 #include "application_internal.hpp"
 #include "application_compiled_hir_cache_revision.hpp"
 #include "application_trace_control.hpp"
@@ -791,6 +792,42 @@ make_specialization_cache_keys(
             : std::string { };
         const auto settings = settings_for(
             specialization, source_name, true);
+        // A unit of the precompiled UVM library the check loaded (owner
+        // D2-Q9) has no source set: its library's key (release, kit and
+        // compile options, in the UVM source identity) determines it.
+        if (!settings) {
+            const auto environment = compiled_source_identity(
+                specialization.language, source_name);
+            if (environment && !environment->compilation_unit.empty()
+                && environment->library == uvm_library_name
+                && !checked.systemverilog_uvm_provenance.source_identity.empty()) {
+                compiler::CacheKeyBuilder key;
+                key.add(
+                    "specialization-provenance-schema",
+                    "fsim-specialization-provenance-v10-uvm-library");
+                key.add("fsim-version", version);
+                key.add("standard-library", standard_library_cache_version);
+                key.add("delay-mode", project::to_string(config.run.delay_mode));
+                key.add("unit", specialization.name);
+                key.add("selected-logical-library", specialization.library);
+                key.add("source-content", environment->source->content_digest);
+                key.add("source-compilation-unit", environment->compilation_unit);
+                key.add("uvm-release",
+                    project::to_string(checked.systemverilog_uvm_provenance.release));
+                key.add("uvm-source-identity",
+                    checked.systemverilog_uvm_provenance.source_identity);
+                key.add("static-kernel-host", native_host_fingerprint);
+                for (const auto& parameter : specialization.parameters) {
+                    key.add("parameter-name", parameter.name);
+                    key.add("parameter-value", parameter.identity);
+                }
+                for (const auto& [label, value] : systemc_fields) {
+                    key.add(label, value);
+                }
+                result.push_back(key.finish());
+                continue;
+            }
+        }
         if (!settings) {
             diagnostics.error(
                 "FSIM-CACHE-0001",
@@ -928,6 +965,28 @@ make_specialization_cache_keys(
                         "semantic-dependency-compilation-unit", "file");
                     key.add(
                         "semantic-dependency-uvm-release", "none");
+                    continue;
+                }
+                // A source of the compiled environment (the precompiled UVM
+                // library): the identity it was compiled with.
+                if (const auto environment_source = compiled_source_identity(
+                        semantic::Language::system_verilog, dependency_source);
+                    environment_source
+                    && !environment_source->compilation_unit.empty()) {
+                    key.add("semantic-dependency-source-content",
+                        environment_source->source->content_digest);
+                    key.add("semantic-dependency-source-compilation-unit",
+                        environment_source->compilation_unit);
+                    key.add("semantic-dependency-language", "systemverilog");
+                    key.add("semantic-dependency-standard",
+                        environment_source->standard);
+                    key.add("semantic-dependency-compatibility-profile",
+                        environment_source->compatibility_profile);
+                    key.add("semantic-dependency-library",
+                        environment_source->library);
+                    key.add("semantic-dependency-uvm-release",
+                        project::to_string(
+                            checked.systemverilog_uvm_provenance.release));
                     continue;
                 }
                 diagnostics.error(

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
-foreach(required IN ITEMS FSIM_EXECUTABLE FSIM_UVM_ROOT FSIM_WORK_DIR FSIM_RELEASE)
+foreach(required IN ITEMS FSIM_EXECUTABLE FSIM_WORK_DIR FSIM_RELEASE)
   if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
     message(FATAL_ERROR "${required} is required")
   endif()
@@ -68,7 +68,7 @@ function(fsim_phase_tlm_part_selected part result)
   endif()
 endfunction()
 
-set(common "${FSIM_UVM_ROOT}" "${FSIM_WORK_DIR}" "${FSIM_RELEASE}")
+set(common "${FSIM_WORK_DIR}" "${FSIM_RELEASE}")
 fsim_phase_tlm_part_selected(direct selected)
 if(selected)
   run_stage(direct ${common})

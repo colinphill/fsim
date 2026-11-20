@@ -133,7 +133,10 @@ bool publish_workspace_object(
       : project::compatibility_profile(source_set.compatibility_switches);
   metadata.library = source_set.library;
   metadata.compilation_unit = source_set.compilation_unit;
-  metadata.uvm_release = std::string{project::to_string(source_set.uvm_release)};
+  // The release that governs the compiled design: none unless it uses the
+  // release's UVM library (check_project's provenance).
+  metadata.uvm_release = std::string{
+      project::to_string(checked.systemverilog_uvm_provenance.release)};
   const auto coverage_identity = artifact::make_code_coverage_artifact_identity(
       app::code_coverage_enabled(config));
   if (!coverage_identity.ok()) {

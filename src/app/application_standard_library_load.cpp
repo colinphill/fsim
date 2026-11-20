@@ -13,6 +13,7 @@
 #include "fsim/artifact/object.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
+#include "fsim/support/path.hpp"
 
 #include <set>
 #include <utility>
@@ -134,6 +135,156 @@ std::optional<semantic::CompiledDesign> load_precompiled_standard_libraries(
         return std::nullopt;
     }
     return design;
+}
+
+namespace {
+
+// The package of the UVM class library (IEEE 1800.2-2020 F.1: "uvm_pkg"),
+// named only to report a source that needs an unavailable library.
+constexpr std::string_view uvm_standard_package = "uvm_pkg";
+
+} // namespace
+
+std::optional<workspace::LibraryCatalog> uvm_library_catalog(
+    const std::filesystem::path& root, std::string& error)
+{
+    const workspace::Store store(root, workspace::StandardLibraryStore { });
+    return store.read_library(uvm_library_name, error);
+}
+
+void append_dependent_uvm_library_catalog(WorkspaceCatalogs& catalogs)
+{
+    if (std::ranges::any_of(catalogs, [](const workspace::LibraryCatalog& catalog) {
+            return catalog.location.name == uvm_library_name;
+        })) {
+        return;
+    }
+    std::set<std::string> fingerprints;
+    for (const auto& catalog : catalogs) {
+        for (const auto& artifact : catalog.artifacts) {
+            for (const auto& dependency : artifact.dependencies) {
+                if (dependency.library == uvm_library_name) {
+                    fingerprints.insert(dependency.fingerprint);
+                }
+            }
+        }
+    }
+    if (fingerprints.empty()) {
+        return;
+    }
+    for (const auto release : uvm_library_releases()) {
+        diagnostic::Engine ignored;
+        const auto root = checked_uvm_library_root(release, ignored);
+        if (!root) {
+            continue;
+        }
+        std::string error;
+        auto catalog = uvm_library_catalog(*root, error);
+        if (!catalog) {
+            continue;
+        }
+        const bool provides = std::ranges::any_of(catalog->artifacts,
+            [&](const workspace::ArtifactRecord& artifact) {
+                return fingerprints.contains(artifact.fingerprint);
+            });
+        if (provides) {
+            catalogs.push_back(std::move(*catalog));
+            return;
+        }
+    }
+}
+
+std::optional<UvmLibraryRequest> uvm_library_request(const project::Config& config)
+{
+    const auto source_set = std::ranges::find_if(config.source_sets,
+        [](const project::SourceSet& set) {
+            return set.language == project::Language::system_verilog
+                && set.uvm_release != project::SystemVerilogUvmRelease::none;
+        });
+    if (source_set == config.source_sets.end()) {
+        return std::nullopt;
+    }
+    return uvm_library_request(source_set->uvm_release);
+}
+
+UvmLibraryRequest uvm_library_request(const project::SystemVerilogUvmRelease release)
+{
+    UvmLibraryRequest request;
+    request.release = release;
+    diagnostic::Engine unavailable;
+    const auto root = checked_uvm_library_root(request.release, unavailable);
+    std::string error;
+    auto catalog = root ? uvm_library_catalog(*root, error) : std::nullopt;
+    if (root && !catalog) {
+        unavailable.error("FSIM-UVM-LIBRARY-002",
+            "the precompiled UVM library '" + support::path_to_utf8(*root)
+                + "' cannot be read: " + error);
+    }
+    if (!catalog) {
+        request.unavailable = unavailable.diagnostics();
+        request.packages.emplace_back(uvm_standard_package);
+        return request;
+    }
+    request.root = *root;
+    std::set<std::string> packages;
+    for (const auto& artifact : catalog->artifacts) {
+        for (const auto& owned : artifact.units) {
+            if (owned.unit.language == "systemverilog" && owned.unit.kind == "package") {
+                packages.insert(owned.unit.name);
+            }
+        }
+    }
+    request.packages.assign(packages.begin(), packages.end());
+    request.identity = expected_uvm_library_artifact_key(request.release).sources_digest;
+    return request;
+}
+
+std::vector<std::filesystem::path> uvm_library_object_paths(
+    const project::SystemVerilogUvmRelease release, diagnostic::Engine& diagnostics)
+{
+    const auto root = checked_uvm_library_root(release, diagnostics);
+    if (!root) {
+        return { };
+    }
+    const workspace::Store store(*root, workspace::StandardLibraryStore { });
+    std::string error;
+    const auto catalog = store.read_library(uvm_library_name, error);
+    if (!catalog) {
+        workspace_error(diagnostics, std::move(error));
+        return { };
+    }
+    std::vector<std::filesystem::path> paths;
+    for (const auto& artifact : catalog->artifacts) {
+        if (artifact.kind != workspace::ArtifactKind::Hdl) {
+            continue;
+        }
+        auto path = store.artifact_path(catalog->location, artifact, error);
+        if (!path) {
+            workspace_error(diagnostics, std::move(error));
+            return { };
+        }
+        paths.push_back(std::move(*path));
+    }
+    return paths;
+}
+
+std::optional<CompilationWorkspace> load_uvm_library(
+    const UvmLibraryRequest& request, diagnostic::Engine& diagnostics)
+{
+    const workspace::Store store(request.root, workspace::StandardLibraryStore { });
+    const auto catalogs = workspace_catalogs(store, nullptr, diagnostics);
+    if (!catalogs) {
+        return std::nullopt;
+    }
+    const auto selections
+        = workspace_object_selections(store, *catalogs, { }, { }, diagnostics);
+    if (diagnostics.has_error()) {
+        return std::nullopt;
+    }
+    // fsim's own checksummed objects, their fingerprints matching the
+    // catalog (as load_precompiled_standard_libraries).
+    const semantic::TrustedCompiledHirLoad trusted_objects;
+    return load_workspace_objects(selections, diagnostics, false, request.root);
 }
 
 } // namespace fsim::app::application_detail

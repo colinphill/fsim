@@ -10,6 +10,7 @@
 #include "../../src/app/application_workspace_objects.hpp"
 #include "../../src/app/application_workspace.hpp"
 #include "../../src/app/application_workspace_internal.hpp"
+#include "../../src/app/application_standard_library_artifact.hpp"
 #include "../../src/app/application_workspace_selection.hpp"
 #include "../../src/app/application_workspace_store.hpp"
 
@@ -408,38 +409,48 @@ void check_trace_replay_class_and_representative(
         }));
 }
 
-void mark_uvm_release(const detail::WorkspaceObjectSelection& object)
-{
-    fsim::diagnostic::Engine diagnostics;
-    auto metadata = fsim::artifact::load_object_metadata(object.path, diagnostics);
-    assert(metadata && !diagnostics.has_error());
-    metadata->uvm_release = fsim::project::to_string(
-        fsim::project::SystemVerilogUvmRelease::uvm_1_2);
-    metadata->compilation_digest
-        = fsim::artifact::compute_object_compilation_digest(*metadata);
-    republish_object(object.path, *metadata);
-}
-
 void check_split_uvm_environment(const std::filesystem::path& root)
 {
-    // The package is the governed release's library (--uvm-release), so its
-    // declarations carry their library roles; the consumer is marked with
-    // the release afterwards, as a unit compiled against that library is.
-    const auto package = compile(root, "uvm-package", R"(
-package uvm_pkg;
-  class uvm_object;
-  endclass
-endpackage
+    // The governed release's library is fsim's precompiled UVM library
+    // (library uvm, mapped by --uvm-release): its objects carry the library
+    // roles. The consumer is compiled against that library, so its object
+    // is marked with the release and depends on the library by fingerprint.
+    // A build without the UVM sources has no such library.
+    fsim::diagnostic::Engine library_diagnostics;
+    const auto library_root = fsim::app::checked_uvm_library_root(
+        fsim::project::SystemVerilogUvmRelease::uvm_1_2, library_diagnostics);
+    if (!library_root) {
+        std::cerr << "workspace objects: split UVM environment skipped, "
+                     "no precompiled UVM 1.2 library\n";
+        return;
+    }
+    const auto consumer = compile(root, "uvm-consumer", R"(
+import uvm_pkg::*;
+module uvm_consumer;
+  uvm_object item;
+endmodule
 )", fsim::project::SystemVerilogUvmRelease::uvm_1_2);
-    const auto consumer = compile(root, "uvm-consumer",
-        "module uvm_consumer; endmodule\n");
-    mark_uvm_release(consumer);
     fsim::diagnostic::Engine diagnostics;
+    const auto consumer_metadata
+        = fsim::artifact::load_object_metadata(consumer.path, diagnostics);
+    assert(consumer_metadata && !diagnostics.has_error());
+    assert(consumer_metadata->uvm_release
+        == fsim::project::to_string(
+            fsim::project::SystemVerilogUvmRelease::uvm_1_2));
     assert(!detail::load_object_workspace(std::array { consumer.path }, diagnostics));
     assert(diagnostics.has_error());
     diagnostics.clear();
-    auto loaded = detail::load_workspace_objects(
-        std::array { package, consumer }, diagnostics);
+    // The library's own objects, as a workspace reads a mapped library.
+    const workspace::Store library_store(
+        *library_root, workspace::StandardLibraryStore { });
+    const auto catalogs = detail::workspace_catalogs(
+        library_store, nullptr, diagnostics);
+    assert(catalogs && !diagnostics.has_error());
+    auto selections = detail::workspace_object_selections(
+        library_store, *catalogs, { }, { }, diagnostics);
+    assert(!diagnostics.has_error() && !selections.empty());
+    selections.push_back(consumer);
+    auto loaded = detail::load_workspace_objects(selections, diagnostics);
     if (!loaded) {
         fsim::diagnostic::print_text(std::cerr, diagnostics);
     }

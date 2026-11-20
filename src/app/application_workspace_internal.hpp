@@ -42,6 +42,18 @@ using WorkspaceCatalogs = std::vector<workspace::LibraryCatalog>;
 }
 
 bool workspace_error(diagnostic::Engine&, std::string);
+// The library name of every release's precompiled UVM library.
+inline constexpr std::string_view uvm_library_name = "uvm";
+
+// The catalog of the precompiled UVM library at `root` (uvm_library_root).
+[[nodiscard]] std::optional<workspace::LibraryCatalog> uvm_library_catalog(
+    const std::filesystem::path& root, std::string& error);
+
+// Adds the catalog of the precompiled UVM library the objects of `catalogs`
+// were compiled against (the release whose objects their dependencies on
+// library uvm name by fingerprint); nothing when none depends on uvm.
+void append_dependent_uvm_library_catalog(WorkspaceCatalogs& catalogs);
+
 [[nodiscard]] std::optional<WorkspaceCatalogs> workspace_catalogs(
     const workspace::Store&, const workspace::LibraryCatalog* target,
     diagnostic::Engine&);

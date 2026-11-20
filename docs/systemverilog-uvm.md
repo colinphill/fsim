@@ -27,20 +27,28 @@ code may include/import the corresponding `uvm_macros.svh` and `uvm_pkg` names.
 No simulator compatibility define or source rewrite is required for the
 implemented example.
 
-Select the UVM release explicitly during workspace compilation:
+UVM 1.2 and UVM 2020.3.1 are installed as precompiled managed libraries named
+`uvm` (one per release, listed by `fsim library list` as `standard UVM-1.2` and
+`standard UVM-2020.3.1`; `fsim library objects uvm` lists the objects of the
+selected release). A SystemVerilog source set maps UVM 2020.3.1 by default; no
+kit files, `-I` path or library mapping are needed:
 
 ```sh
 fsim compile --library work --lang systemverilog --standard 2017 \
-  --compilation-unit source-set --uvm-release 1.2 \
-  -I uvm/src uvm/src/uvm_pkg.sv tb.sv
+  --compilation-unit source-set tb.sv
 ```
 
-Use `--uvm-release 2020.3.1` with its matching source tree. fsim normalizes
-aliases, verifies the release against the parsed `uvm_pkg` API, and rejects
-mixed source/object releases before publishing compiled state.
+Select UVM 1.2 with `--uvm-release 1.2` (or `compile.sv.uvm_release uvm-1.2`).
+`--uvm-release none` (or `compile.sv.uvm_release none`) maps no UVM library; a
+`uvm_pkg` in the source set is then an ordinary package. Listing the kit's
+`uvm_pkg.sv` (or any package named `uvm_pkg`) while a release is mapped is
+FSIM-UVM-LIBRARY-001. The library name `uvm` is reserved (it cannot be mapped,
+unmapped, compiled into or deleted). A build without UVM sources, or a missing
+library, is FSIM-UVM-LIBRARY-002. fsim rejects mixed source/object releases
+before publishing compiled state.
 
 fsim identifies the library by the release, never by spelling. When a source
-set is compiled with `--uvm-release`, the package `uvm_pkg` it declares is the
+set maps a UVM release, the package `uvm_pkg` of its precompiled library is the
 governed library, and the compiler records once, on each of its classes,
 methods, properties, package functions, variables and types, the role it has
 in the library (IEEE 1800.2-2017, IEEE 1800.2-2020): `uvm_object`,
@@ -49,7 +57,7 @@ databases, the phase callbacks, the report functions, the printer knobs and so
 on. Every later stage (class resolution, lowering, elaboration and the native
 UVM services of the run) reads the recorded role, which compiled objects,
 libraries and design artifacts carry with the HIR. A method keeps its role in
-a class that overrides it. A `uvm_pkg` compiled without `--uvm-release` is an
+a class that overrides it. A `uvm_pkg` compiled with `--uvm-release none` is an
 ordinary user package: its declarations have no roles, so none of them is
 served natively and no diagnostic is issued; a user class named like a
 library class is likewise an ordinary class.
@@ -291,13 +299,12 @@ FSIM-UVM-PHASE-TLM-PASS phases=build/connect/eoe/sos/run/extract/check/report/fi
 
 ## Direct execution
 
-Assume `UVM_ROOT` names one validated extracted release root, `UVM_RELEASE`
-selects that release, and `example.sv` contains the source above:
+Assume `UVM_RELEASE` selects the release and `example.sv` contains the source above:
 
 ```sh
 fsim compile --library work --lang systemverilog --standard 2017 \
   --compilation-unit source-set --uvm-release "$UVM_RELEASE" -j 12 \
-  -I "$UVM_ROOT/src" "$UVM_ROOT/src/uvm_pkg.sv" example.sv
+  example.sv
 fsim elaborate work.example
 fsim simulate --engine interpreter
 fsim simulate --engine compiled -O O2

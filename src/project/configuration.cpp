@@ -237,8 +237,9 @@ constexpr std::array kKeys {
     KeyRule { { "compile.sv.timescale", text, "",
         "SystemVerilog default timescale (UNIT/PRECISION)" },
         valid_timescale },
-    KeyRule { { "compile.sv.uvm_release", text, "none",
-        "governed UVM release SystemVerilog sources compile against" },
+    KeyRule { { "compile.sv.uvm_release", text, "uvm-2020.3.1",
+        "precompiled UVM library SystemVerilog sources compile against: "
+        "none, uvm-1.2 or uvm-2020.3.1" },
         valid_uvm_release },
     KeyRule { { "compile.timescale", text, "",
         "default timescale (UNIT/PRECISION, 1ns/1ps) of Verilog and SystemVerilog "

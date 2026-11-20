@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "application_standard_library_artifact.hpp"
+#include "fsim/library/artifact.hpp"
 #include "application_compiled_environment.hpp"
 #include "application_compiled_environment_sv.hpp"
 #include "application_compiled_environment_vhdl.hpp"
@@ -90,13 +92,18 @@ std::optional<project::SystemVerilogUvmRelease> selected_uvm_release(
 
 std::string uvm_source_identity(
     const project::SystemVerilogUvmRelease release,
-    const std::span<const CheckedSource> sources) {
+    const std::span<const CheckedSource> sources,
+    const std::string& library_identity) {
   if (release == project::SystemVerilogUvmRelease::none) {
     return {};
   }
   compiler::CacheKeyBuilder key;
   key.add("uvm-provenance-schema", "fsim-uvm-source-v1");
   key.add("uvm-release", project::to_string(release));
+  // The precompiled library's kit (its key's sources digest).
+  if (!library_identity.empty()) {
+    key.add("uvm-library", library_identity);
+  }
   for (const auto& source : sources) {
     key.add("source-content", source.content_digest);
     key.add("source-compilation-unit", source.compilation_unit_digest);
@@ -362,7 +369,7 @@ bool validate_vhdl_type_mark_visibility(
 
 }  // namespace
 
-static std::optional<CompilationWorkspace> check_project_impl(
+static std::optional<CompilationWorkspace> check_project_pass(
     const project::Config& config,
     diagnostic::Engine& diagnostics,
     const bool complete_vhdl_environment = false,
@@ -374,7 +381,11 @@ static std::optional<CompilationWorkspace> check_project_impl(
     // neither injected nor checked against redeclaration, and the native
     // intrinsics are stamped as soon as the HIR exists.
     const std::optional<frontend::VhdlStandard> bootstrap_standard
-        = std::nullopt) {
+        = std::nullopt,
+    // The precompiled UVM library the SystemVerilog sources map (see
+    // check_project_for_object); null: none is mapped (the library's own
+    // build, or no source set selects a UVM release).
+    UvmLibraryRequest* uvm_library = nullptr) {
   const auto uvm_release = selected_uvm_release(config, diagnostics);
   if (!uvm_release) {
     return std::nullopt;
@@ -437,11 +448,20 @@ static std::optional<CompilationWorkspace> check_project_impl(
             vhdl_standard = frontend_vhdl_standard(*selected);
         }
     }
+    // The mapped UVM library's sources are the include root of its macros
+    // (`uvm_macros.svh`), searched after the source set's own directories.
+    auto include_directories = source_set.include_directories;
+    if (uvm_library != nullptr && !uvm_library->root.empty()
+        && source_set.language == project::Language::system_verilog
+        && source_set.uvm_release != project::SystemVerilogUvmRelease::none) {
+      include_directories.push_back(
+          uvm_library_include_directory(uvm_library->root));
+    }
     const auto append_files = [&](ParseGroup& group) {
         group.include_directories.insert(
             group.include_directories.end(),
-            source_set.include_directories.begin(),
-            source_set.include_directories.end());
+            include_directories.begin(),
+            include_directories.end());
         group.defines.insert(
             group.defines.end(),
             source_set.defines.begin(),
@@ -466,7 +486,7 @@ static std::optional<CompilationWorkspace> check_project_impl(
             group.standard = source_set.standard;
             group.compatibility_profile = compatibility_profile;
             group.base_directory = config.base_directory;
-            group.include_directories = source_set.include_directories;
+            group.include_directories = include_directories;
             group.defines = source_set.defines;
             group.default_timescale = source_set.default_timescale;
             if (source_set.uvm_release
@@ -636,6 +656,57 @@ static std::optional<CompilationWorkspace> check_project_impl(
   for (auto& worker : workers) {
     worker.get();
   }
+
+  // The mapped UVM library (owner D2-Q9): a source's unit of one of its
+  // packages duplicates it (FSIM-UVM-LIBRARY-001); a source naming one of
+  // its packages (`uvm_pkg::`, IEEE 1800-2017 26.3) while the environment
+  // lacks the library ends this pass, for the caller to load it.
+  if (uvm_library != nullptr) {
+    std::set<std::string> named;
+    for (const auto& input : parsed_inputs) {
+      if (!input) {
+        continue;
+      }
+      const auto& design = input->result.design;
+      for (const auto& unit : design.units) {
+        if (unit.kind == frontend::UnitKind::SystemVerilogPackage
+            && std::ranges::binary_search(uvm_library->packages, unit.name)) {
+          diagnostics.error("FSIM-UVM-LIBRARY-001",
+              "package '" + unit.name + "' is declared by fsim's precompiled "
+                  "UVM " + std::string { project::to_string(uvm_library->release) }
+                  + " library (library uvm), which a source set compiled with "
+                    "a UVM release maps; a source compiles its own only with "
+                    "UVM release none",
+              span(unit.span));
+        }
+      }
+      named.insert(design.systemverilog_scope_prefixes.begin(),
+          design.systemverilog_scope_prefixes.end());
+    }
+    if (diagnostics.has_error()) {
+      return std::nullopt;
+    }
+    const bool names_library = std::ranges::any_of(uvm_library->packages,
+        [&](const std::string& package) { return named.contains(package); });
+    if (names_library && !uvm_library->loaded) {
+      if (uvm_library->root.empty()) {
+        for (const auto& diagnostic : uvm_library->unavailable) {
+          diagnostics.report(diagnostic);
+        }
+        return std::nullopt;
+      }
+      uvm_library->needed = true;
+      return std::nullopt;
+    }
+  }
+  // The release governs the design when it uses the release's library (the
+  // environment holds it) or, with no library mapped, declares its own
+  // governed uvm_pkg (the library's build); otherwise none does.
+  // A loaded library governs with its own release: a design of mapped
+  // libraries alone has no source set naming it.
+  const auto governed_release = uvm_library == nullptr ? *uvm_release
+      : uvm_library->loaded ? uvm_library->release
+                            : project::SystemVerilogUvmRelease::none;
 
   CompilationWorkspace checked;
   checked.source_count = hdl_source_count + systemc_source_count;
@@ -1183,7 +1254,9 @@ static std::optional<CompilationWorkspace> check_project_impl(
   }
   checked.systemverilog_class_specializations =
       std::move(class_specializations.specializations);
-  if (!validate_uvm_api_release(*uvm_release, checked.parsed, diagnostics)) {
+  // A mapped library's API surface was validated when it was built.
+  if (uvm_library == nullptr
+      && !validate_uvm_api_release(*uvm_release, checked.parsed, diagnostics)) {
     return std::nullopt;
   }
   if (diagnostics.has_error()) {
@@ -1256,15 +1329,117 @@ static std::optional<CompilationWorkspace> check_project_impl(
   }
   semantic::stamp_vhdl_analysis(checked, checked.source_units);
   install_compiled_class_specializations(checked, diagnostics);
-  checked.systemverilog_uvm_provenance.release = *uvm_release;
+  checked.systemverilog_uvm_provenance.release = governed_release;
   checked.systemverilog_uvm_provenance.source_identity =
-      uvm_source_identity(*uvm_release, checked.hdl_sources);
+      uvm_source_identity(governed_release, checked.hdl_sources,
+          uvm_library != nullptr ? uvm_library->identity : std::string { });
   if (!application_detail::normalize_compiled_design_source_paths(
           checked, config.base_directory, diagnostics)) {
     return std::nullopt;
   }
   restore_compiled_references(checked, source_references);
   return checked;
+}
+
+// The UVM release the mapped libraries were compiled against (their
+// format-9 metadata): none when they name none; libraries naming different
+// releases cannot be combined (FSIM-UVM-VERSION-001).
+static std::optional<project::SystemVerilogUvmRelease> mapped_uvm_release(
+    const project::Config& config, diagnostic::Engine& diagnostics) {
+  auto selected = project::SystemVerilogUvmRelease::none;
+  for (const auto& mapping : config.library_mappings) {
+    // The mapped-library loader reports a library it cannot read.
+    diagnostic::Engine ignored;
+    const auto metadata
+        = library::load_metadata(mapping.path, mapping.library, ignored);
+    if (!metadata) {
+      continue;
+    }
+    const auto release
+        = project::parse_systemverilog_uvm_release(metadata->uvm_release);
+    if (!release) {
+      diagnostics.error("FSIM-LIB-0008",
+          "mapped library '" + mapping.library
+              + "' metadata names unsupported UVM release '"
+              + metadata->uvm_release + "'");
+      return std::nullopt;
+    }
+    if (*release == project::SystemVerilogUvmRelease::none) {
+      continue;
+    }
+    if (selected != project::SystemVerilogUvmRelease::none
+        && selected != *release) {
+      diagnostics.error("FSIM-UVM-VERSION-001",
+          "mapped libraries compiled against UVM "
+              + std::string { project::to_string(selected) } + " and "
+              + std::string { project::to_string(*release) }
+              + " are not transactionally compatible");
+      return std::nullopt;
+    }
+    selected = *release;
+  }
+  return selected;
+}
+
+// A check with no compiled environment of its own: a source naming a
+// package of the mapped UVM library loads the library as the environment
+// and checks again (owner D2-Q9). A mapped library compiled against a UVM
+// release loads that release's library with it.
+static std::optional<CompilationWorkspace> check_project_impl(
+    const project::Config& config,
+    diagnostic::Engine& diagnostics,
+    const bool complete_vhdl_environment = false,
+    const bool allow_external_vhdl_architecture_primary = false) {
+  auto request = uvm_library_request(config);
+  const auto mapped_release = mapped_uvm_release(config, diagnostics);
+  if (!mapped_release) {
+    return std::nullopt;
+  }
+  if (*mapped_release != project::SystemVerilogUvmRelease::none) {
+    if (request && request->release != *mapped_release) {
+      diagnostics.error("FSIM-UVM-VERSION-001",
+          "a mapped library compiled against UVM "
+              + std::string { project::to_string(*mapped_release) }
+              + " cannot be combined with source sets selecting UVM "
+              + std::string { project::to_string(request->release) });
+      return std::nullopt;
+    }
+    if (!request) {
+      request = uvm_library_request(*mapped_release);
+    }
+    request->needed = true;
+  }
+  if (!request) {
+    return check_project_pass(config, diagnostics, complete_vhdl_environment,
+        allow_external_vhdl_architecture_primary);
+  }
+  if (!request->needed) {
+    diagnostic::Engine attempt;
+    auto checked = check_project_pass(config, attempt,
+        complete_vhdl_environment, allow_external_vhdl_architecture_primary,
+        nullptr, { }, std::nullopt, &*request);
+    if (!request->needed) {
+      for (const auto& diagnostic : attempt.diagnostics()) {
+        diagnostics.report(diagnostic);
+      }
+      return checked;
+    }
+  }
+  if (request->root.empty()) {
+    for (const auto& diagnostic : request->unavailable) {
+      diagnostics.report(diagnostic);
+    }
+    return std::nullopt;
+  }
+  const auto library = load_uvm_library(*request, diagnostics);
+  if (!library) {
+    return std::nullopt;
+  }
+  request->loaded = true;
+  request->needed = false;
+  return check_project_pass(config, diagnostics, complete_vhdl_environment,
+      allow_external_vhdl_architecture_primary, &*library, { }, std::nullopt,
+      &*request);
 }
 
 std::optional<CheckedProject> check_project(
@@ -1284,10 +1459,17 @@ application_detail::check_project_for_object(
     diagnostic::Engine& diagnostics,
     const semantic::CompiledDesign* imported,
     const std::span<const CompiledUnitAvailability> available_units,
-    const std::optional<frontend::VhdlStandard> bootstrap_standard)
+    const std::optional<frontend::VhdlStandard> bootstrap_standard,
+    UvmLibraryRequest* uvm_library)
 {
-  return check_project_impl(config, diagnostics, false, true, imported,
-      available_units, bootstrap_standard);
+  // With no environment of the caller's, the check maps the UVM library
+  // itself, as check_project does.
+  if (uvm_library == nullptr && imported == nullptr && available_units.empty()
+      && !bootstrap_standard) {
+    return check_project_impl(config, diagnostics, false, true);
+  }
+  return check_project_pass(config, diagnostics, false, true, imported,
+      available_units, bootstrap_standard, uvm_library);
 }
 
 std::optional<application_detail::CompilationWorkspace>

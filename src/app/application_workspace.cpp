@@ -98,6 +98,9 @@ int handle_workspace_elaborate(const cli::Invocation& invocation, const project:
     if (!catalogs) {
         return 1;
     }
+    // The precompiled UVM library the workspace's objects were compiled
+    // against (owner D2-Q9), which elaboration reads as a mapped library.
+    append_dependent_uvm_library_catalog(*catalogs);
     auto selected_config = config;
     // Exported libraries the workspace maps are imported as elaboration
     // reads its own objects; the selection keeps those the design reaches.
@@ -293,6 +296,10 @@ int handle_workspace_library(const cli::Invocation& invocation, const project::C
             output << library.name << '\t' << support::path_to_utf8(library.directory)
                    << "\tstandard " << library.label << '\n';
         }
+        for (const auto& library : uvm_library_locations()) {
+            output << library.name << '\t' << support::path_to_utf8(library.directory)
+                   << "\tstandard " << library.label << '\n';
+        }
         for (const auto& library : *exported) {
             output << library.name << '\t' << support::path_to_utf8(library.path)
                    << "\texported\n";
@@ -332,6 +339,32 @@ int handle_workspace_library(const cli::Invocation& invocation, const project::C
             }
             catalog = workspace::Store(*root, workspace::StandardLibraryStore { })
                           .read_library(support::ascii_lower(name), error);
+        } else if (support::ascii_lower(name) == uvm_library_name) {
+            // UVM: the precompiled library of the selected release
+            // (--uvm-release, else the workspace's SystemVerilog source set,
+            // else UVM 2020.3.1).
+            auto release = project::SystemVerilogUvmRelease::ieee_1800_2_2020_3_1;
+            if (invocation.uvm_release) {
+                release = *invocation.uvm_release;
+            } else {
+                for (const auto& source_set : config.source_sets) {
+                    if (source_set.language == project::Language::system_verilog
+                        && source_set.uvm_release != project::SystemVerilogUvmRelease::none) {
+                        release = source_set.uvm_release;
+                        break;
+                    }
+                }
+            }
+            if (release == project::SystemVerilogUvmRelease::none) {
+                workspace_error(diagnostics,
+                    "--uvm-release none selects no precompiled UVM library");
+                return 1;
+            }
+            const auto root = checked_uvm_library_root(release, diagnostics);
+            if (!root) {
+                return 1;
+            }
+            catalog = uvm_library_catalog(*root, error);
         } else {
             catalog = store.read_library(name, error);
         }

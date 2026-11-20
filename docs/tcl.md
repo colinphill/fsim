@@ -161,7 +161,7 @@ to apply them.
 | `compile.sv.include_directories` | list |  | SystemVerilog include directories |
 | `compile.sv.standard` | text | `2017` | SystemVerilog standard |
 | `compile.sv.timescale` | text |  | SystemVerilog default timescale (UNIT/PRECISION) |
-| `compile.sv.uvm_release` | text | `none` | governed UVM release SystemVerilog sources compile against |
+| `compile.sv.uvm_release` | text | `uvm-2020.3.1` | precompiled UVM library SystemVerilog sources compile against: none, uvm-1.2 or uvm-2020.3.1 |
 | `compile.timescale` | text |  | default timescale (UNIT/PRECISION, 1ns/1ps) of Verilog and SystemVerilog design elements no `timescale applies to |
 | `compile.verilog.compatibility` | list |  | Verilog compatibility switches |
 | `compile.verilog.compilation_unit` | text | `source-set` | Verilog compilation unit |

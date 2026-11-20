@@ -13,7 +13,7 @@
 
 namespace fsim::library {
 
-inline constexpr std::uint32_t kFormatVersion = 8;
+inline constexpr std::uint32_t kFormatVersion = 9;
 inline constexpr std::uint32_t kPortableSchemaVersion = 16;
 inline constexpr std::uint32_t kCompiledHirSchemaVersion = 14;
 inline constexpr std::string_view kLibraryArtifactKind = "fsim-library";
@@ -133,6 +133,9 @@ struct Metadata {
   std::filesystem::path compiled_hir_artifact;
   std::string compiled_hir_checksum;
   std::string trace_archive;
+  // The precompiled UVM library release (library uvm) the library's units
+  // were compiled against; "none" when they use no UVM library (format 9).
+  std::string uvm_release{"none"};
   std::vector<LanguageStandard> standards;
   std::vector<VhdlPackageDependency> vhdl_package_dependencies;
   std::vector<std::string> dependencies;

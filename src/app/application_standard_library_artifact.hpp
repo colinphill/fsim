@@ -8,6 +8,7 @@
 
 #include "fsim/diagnostic/diagnostic.hpp"
 #include "fsim/frontend/token.hpp"
+#include "fsim/project/project.hpp"
 #include "fsim/semantic/compiled_design.hpp"
 
 #include <cstdint>
@@ -97,5 +98,84 @@ inline constexpr std::string_view standard_library_key_file_name
 [[nodiscard]] std::optional<std::filesystem::path>
 checked_standard_library_root(
     frontend::VhdlStandard standard, diagnostic::Engine& diagnostics);
+
+
+// ---- Precompiled UVM libraries (gate BD build D2b) ----------------------
+
+/// What a precompiled UVM library was built from. A library whose key differs
+/// from the one this build expects is never used (FSIM-UVM-LIBRARY-002).
+struct UvmLibraryArtifactKey {
+    /// fsim::standard_library_cache_version.
+    std::string cache_version;
+    project::SystemVerilogUvmRelease release { project::SystemVerilogUvmRelease::none };
+    /// SHA-256 (hex) of third_party/uvm-<release>/SHA256SUMS, recorded at
+    /// configure time (the generated uvm_library_keys.inc); empty when this
+    /// build has no UVM sources (FSIM_UVM_SOURCE_MODE=OFF).
+    std::string sources_digest;
+    /// The options the kit is compiled with (uvm_library_compile_options()).
+    std::string options;
+    /// semantic::vhdl_native_intrinsics_digest().
+    std::string natives_digest;
+
+    friend bool operator==(const UvmLibraryArtifactKey&,
+        const UvmLibraryArtifactKey&) = default;
+};
+
+/// The two releases with a library: uvm_1_2 and ieee_1800_2_2020_3_1.
+[[nodiscard]] std::span<const project::SystemVerilogUvmRelease>
+uvm_library_releases() noexcept;
+
+/// The compile options recorded in the key: library, SystemVerilog standard,
+/// compilation unit and defines, e.g. "library:uvm;standard:2017;defines:".
+[[nodiscard]] std::string uvm_library_compile_options();
+
+/// The key this build expects for `release` (not none).
+[[nodiscard]] UvmLibraryArtifactKey expected_uvm_library_artifact_key(
+    project::SystemVerilogUvmRelease release);
+
+/// The directory name of `release`'s precompiled library: uvm-1.2,
+/// uvm-2020.3.1 (not none).
+[[nodiscard]] std::string uvm_library_release_directory_name(
+    project::SystemVerilogUvmRelease release);
+
+/// <standard_library_artifact_directory()>/systemverilog/uvm-<release>: the
+/// release's directory (key file, src/, .fsim/libraries/uvm), whether or not
+/// it exists or is valid.
+[[nodiscard]] std::filesystem::path uvm_library_root(
+    project::SystemVerilogUvmRelease release);
+
+/// root/.fsim/libraries/uvm: the managed library of a uvm_library_root.
+[[nodiscard]] std::filesystem::path uvm_library_directory(
+    const std::filesystem::path& root);
+
+/// root/src: the kit's source tree, the include root of uvm_macros.svh.
+[[nodiscard]] std::filesystem::path uvm_library_include_directory(
+    const std::filesystem::path& root);
+
+/// One precompiled UVM library as workspace library commands list it.
+struct UvmLibraryLocation {
+    std::string name;       // "uvm"
+    project::SystemVerilogUvmRelease release { project::SystemVerilogUvmRelease::none };
+    std::string label;      // "UVM-1.2"
+    std::filesystem::path directory; // uvm_library_directory(root)
+    std::filesystem::path root;
+};
+
+/// The library of every release, in release order.
+[[nodiscard]] std::vector<UvmLibraryLocation> uvm_library_locations();
+
+/// Writes `key` to `directory`/standard-library.key; false (with the reason
+/// in `error`) when the file cannot be written.
+[[nodiscard]] bool write_uvm_library_key(
+    const std::filesystem::path& directory,
+    const UvmLibraryArtifactKey& key, std::string& error);
+
+/// The directory (uvm_library_root) of `release`'s precompiled UVM library.
+/// A missing directory or key file, a key different from
+/// expected_uvm_library_artifact_key(release), or a build without UVM sources
+/// is FSIM-UVM-LIBRARY-002 naming the path and the reason; nullopt then.
+/// `release` must not be none.
+[[nodiscard]] std::optional<std::filesystem::path> checked_uvm_library_root(
+    project::SystemVerilogUvmRelease release, diagnostic::Engine& diagnostics);
 
 } // namespace fsim::app

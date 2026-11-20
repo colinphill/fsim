@@ -13,6 +13,16 @@
 //
 //   fsim_standard_library_builder --edition <1987|1993|2000|2002|2008|2019>
 //       --source-root <fsim source dir> --output <directory>
+//
+// With --uvm-release (gate BD build D2b) it instead compiles one UVM kit
+// (<source-root> is the kit directory, e.g. third_party/uvm-1.2/kit) into the
+// managed library `uvm` of <output>: the kit's src tree is copied to
+// <output>/src (the include root of uvm_macros.svh), <output>/src/uvm_pkg.sv
+// is compiled as SystemVerilog 1800-2017 with no defines and the source
+// set's uvm_release, so the UVM roles are stamped.
+//
+//   fsim_standard_library_builder --uvm-release <uvm-1.2|uvm-2020.3.1>
+//       --source-root <kit directory> --output <directory>
 #include "application_internal.hpp"
 #include "application_standard_library_artifact.hpp"
 #include "application_workspace.hpp"
@@ -82,6 +92,9 @@ int usage(const std::string_view message)
     std::cerr << "fsim_standard_library_builder: " << message << '\n'
               << "usage: fsim_standard_library_builder --edition "
                  "<1987|1993|2000|2002|2008|2019> --source-root <dir> "
+                 "--output <directory>\n"
+                 "       fsim_standard_library_builder --uvm-release "
+                 "<uvm-1.2|uvm-2020.3.1> --source-root <kit dir> "
                  "--output <directory>\n";
     return 2;
 }
@@ -97,11 +110,153 @@ std::optional<std::string> read_bytes(const fs::path& path)
         std::istreambuf_iterator<char> { } };
 }
 
+// The UVM mode (see the file comment).
+int build_uvm(const std::string_view release_text,
+    const std::string& root_text, const std::string& output_text)
+{
+    using fsim::project::SystemVerilogUvmRelease;
+    SystemVerilogUvmRelease release { SystemVerilogUvmRelease::none };
+    if (release_text == "uvm-1.2") {
+        release = SystemVerilogUvmRelease::uvm_1_2;
+    } else if (release_text == "uvm-2020.3.1") {
+        release = SystemVerilogUvmRelease::ieee_1800_2_2020_3_1;
+    } else {
+        return usage("unknown UVM release '" + std::string { release_text } + "'");
+    }
+    const auto root = fs::absolute(fsim::support::path_from_utf8(root_text))
+                          .lexically_normal();
+    const auto output = fs::absolute(fsim::support::path_from_utf8(output_text))
+                            .lexically_normal();
+    fsim::diagnostic::Engine diagnostics;
+    const auto fail = [&](const std::string_view message) {
+        fsim::diagnostic::print_text(std::cerr, diagnostics);
+        std::cerr << "fsim_standard_library_builder: " << message << '\n';
+        return 1;
+    };
+    {
+        // Every build starts from nothing (key first, so a failed build
+        // leaves no key).
+        std::error_code code;
+        fsim::support::native_fs::remove(
+            output / std::string { fsim::app::standard_library_key_file_name }, code);
+        fsim::support::native_fs::remove_all(output / ".fsim", code);
+        fsim::support::native_fs::remove_all(output / "src", code);
+        if (code) {
+            return fail("cannot clear '" + fsim::support::path_to_utf8(output) + "'");
+        }
+    }
+    // The kit's src tree becomes <output>/src.
+    const auto kit_src = root / "src";
+    std::error_code code;
+    if (!fsim::support::native_fs::is_regular_file(kit_src / "uvm_pkg.sv", code)) {
+        return fail("'" + fsim::support::path_to_utf8(kit_src / "uvm_pkg.sv")
+            + "' is not a file");
+    }
+    for (auto entry = fsim::support::native_fs::recursive_directory_iterator(
+             kit_src, code);
+         !code && entry != fs::recursive_directory_iterator { };
+         entry.increment(code)) {
+        if (!entry->is_regular_file()) {
+            continue;
+        }
+        const auto bytes = read_bytes(entry->path());
+        if (!bytes) {
+            return fail("cannot read '" + fsim::support::path_to_utf8(entry->path()) + "'");
+        }
+        const auto copy = output / "src"
+            / entry->path().lexically_relative(kit_src);
+        std::error_code create;
+        fsim::support::native_fs::create_directories(copy.parent_path(), create);
+        auto stream = fsim::support::native_fs::open_ofstream(
+            copy, std::ios::binary | std::ios::trunc);
+        stream.write(bytes->data(), static_cast<std::streamsize>(bytes->size()));
+        stream.close();
+        if (!stream) {
+            return fail("cannot write '" + fsim::support::path_to_utf8(copy) + "'");
+        }
+    }
+    if (code) {
+        return fail("cannot list '" + fsim::support::path_to_utf8(kit_src) + "'");
+    }
+
+    // The same compile `fsim compile --library uvm --uvm-release R
+    // -I <kit>/src <kit>/src/uvm_pkg.sv` does (the corpus and tests pass no
+    // defines); uvm_release stamps the UVM roles.
+    fsim::project::Config config;
+    config.base_directory = output;
+    fsim::project::SourceSet set;
+    set.language = fsim::project::Language::system_verilog;
+    set.standard = "2017";
+    set.library = "uvm";
+    set.uvm_release = release;
+    set.include_directories.push_back(output / "src");
+    set.files.push_back(output / "src" / "uvm_pkg.sv");
+    config.source_sets.push_back(std::move(set));
+    fsim::cli::Invocation invocation;
+    invocation.verbosity = fsim::cli::Verbosity::quiet;
+    std::ostringstream ignored;
+    if (fsim::app::application_detail::compile_uvm_library(
+            invocation, config, diagnostics, ignored, ignored)
+            != 0
+        || diagnostics.has_error()) {
+        return fail("compiling the library UVM failed");
+    }
+
+    // The library loads as any mapped library does.
+    const fsim::app::workspace::Store store(
+        output, fsim::app::workspace::StandardLibraryStore { });
+    const auto catalogs = fsim::app::application_detail::workspace_catalogs(
+        store, nullptr, diagnostics);
+    if (!catalogs) {
+        return fail("the compiled library's catalogs cannot be read");
+    }
+    const auto selections
+        = fsim::app::application_detail::workspace_object_selections(
+            store, *catalogs, { }, { }, diagnostics);
+    const auto loaded = fsim::app::application_detail::load_workspace_objects(
+        selections, diagnostics, false, output);
+    if (!loaded || diagnostics.has_error()) {
+        return fail("the compiled library does not load");
+    }
+
+    // No absolute path may reach the objects: they are installed.
+    for (auto entry = fsim::support::native_fs::recursive_directory_iterator(
+             output / ".fsim", code);
+         !code && entry != fs::recursive_directory_iterator { };
+         entry.increment(code)) {
+        if (!entry->is_regular_file() || entry->path().extension() != ".fsimobj") {
+            continue;
+        }
+        const auto bytes = read_bytes(entry->path());
+        if (!bytes) {
+            return fail("cannot read '" + fsim::support::path_to_utf8(entry->path()) + "'");
+        }
+        for (const auto& absolute : { fsim::support::path_to_utf8(root),
+                 fsim::support::path_to_utf8(output) }) {
+            if (bytes->find(absolute) != std::string::npos) {
+                return fail("'" + fsim::support::path_to_utf8(entry->path())
+                    + "' holds the absolute path '" + absolute + "'");
+            }
+        }
+    }
+    if (code) {
+        return fail("cannot list '" + fsim::support::path_to_utf8(output / ".fsim") + "'");
+    }
+
+    std::string error;
+    if (!fsim::app::write_uvm_library_key(output,
+            fsim::app::expected_uvm_library_artifact_key(release), error)) {
+        return fail(error);
+    }
+    return 0;
+}
+
 } // namespace
 
 int main(const int argc, const char* const* const argv)
 {
     std::string edition_text;
+    std::string uvm_text;
     std::string root_text;
     std::string output_text;
     for (int index = 1; index < argc; ++index) {
@@ -112,6 +267,8 @@ int main(const int argc, const char* const* const argv)
         const std::string value { argv[++index] };
         if (option == "--edition") {
             edition_text = value;
+        } else if (option == "--uvm-release") {
+            uvm_text = value;
         } else if (option == "--source-root") {
             root_text = value;
         } else if (option == "--output") {
@@ -119,6 +276,13 @@ int main(const int argc, const char* const* const argv)
         } else {
             return usage("unknown option '" + std::string { option } + "'");
         }
+    }
+    if (!uvm_text.empty()) {
+        if (!edition_text.empty() || root_text.empty() || output_text.empty()) {
+            return usage("--uvm-release takes --source-root and --output, "
+                         "and not --edition");
+        }
+        return build_uvm(uvm_text, root_text, output_text);
     }
     if (edition_text.empty() || root_text.empty() || output_text.empty()) {
         return usage("--edition, --source-root and --output are required");

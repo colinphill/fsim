@@ -127,9 +127,7 @@ public:
                 prefix += "@" + declaration.compilation_unit_identity;
             collect_class(declaration, prefix);
         }
-        for (auto& unit : parsed.units) {
-            if (unit.language != frontend::Language::SystemVerilog2017)
-                continue;
+        const auto unit_scope = [&](frontend::DesignUnit& unit) {
             SourceScope scope;
             scope.unit = &unit;
             scope.library = effective_library(unit.library);
@@ -140,6 +138,41 @@ public:
                     && declaration.compilation_unit_identity == unit.compilation_unit_identity)
                     scope.local_classes.insert(declaration.name);
             }
+            return scope;
+        };
+        const auto compilation_unit_scope
+            = [&](const frontend::SystemVerilogClassDeclaration& declaration) {
+            SourceScope scope;
+            scope.library = effective_library(declaration.library);
+            scope.imports = &declaration.compilation_unit_imports;
+            // The typedefs of the compilation unit the class is declared in
+            // (IEEE 1800-2023 3.12.1, 6.18).
+            for (const auto& unit : parsed.units) {
+                if (unit.language != frontend::Language::SystemVerilog2017
+                    || unit.compilation_unit_identity
+                        != declaration.compilation_unit_identity)
+                    continue;
+                for (const auto& alias : unit.type_aliases)
+                    scope.aliases.insert_or_assign(alias.name, &alias.type);
+            }
+            return scope;
+        };
+        // Every class's base and interface classes first: a statement of
+        // any unit that calls through a handle of a class finds what the
+        // class inherits from a compiled class (IEEE 1800-2023 8.13, 8.26).
+        for (auto& unit : parsed.units) {
+            if (unit.language != frontend::Language::SystemVerilog2017)
+                continue;
+            const auto scope = unit_scope(unit);
+            for (auto& declaration : unit.systemverilog_classes)
+                relate_class(declaration, scope);
+        }
+        for (auto& declaration : parsed.systemverilog_classes)
+            relate_class(declaration, compilation_unit_scope(declaration));
+        for (auto& unit : parsed.units) {
+            if (unit.language != frontend::Language::SystemVerilog2017)
+                continue;
+            SourceScope scope = unit_scope(unit);
             check_profiles(unit);
             declarations(unit.parameters, scope);
             aliases(unit.type_aliases, scope);
@@ -158,22 +191,8 @@ public:
             for (auto& region : unit.generate_regions)
                 generate(region, scope);
         }
-        for (auto& declaration : parsed.systemverilog_classes) {
-            SourceScope scope;
-            scope.library = effective_library(declaration.library);
-            scope.imports = &declaration.compilation_unit_imports;
-            // The typedefs of the compilation unit the class is declared in
-            // (IEEE 1800-2023 3.12.1, 6.18).
-            for (const auto& unit : parsed.units) {
-                if (unit.language != frontend::Language::SystemVerilog2017
-                    || unit.compilation_unit_identity
-                        != declaration.compilation_unit_identity)
-                    continue;
-                for (const auto& alias : unit.type_aliases)
-                    scope.aliases.insert_or_assign(alias.name, &alias.type);
-            }
-            prepare_class(declaration, scope);
-        }
+        for (auto& declaration : parsed.systemverilog_classes)
+            prepare_class(declaration, compilation_unit_scope(declaration));
         return !diagnostics_.has_error();
     }
 
@@ -799,17 +818,35 @@ private:
             collect_class(nested, declaration.canonical_identity);
     }
 
-    void prepare_class(frontend::SystemVerilogClassDeclaration& declaration,
+    // The classes a source class extends or implements (IEEE 1800-2023
+    // 8.13, 8.26): a compiled class, else a source class that leads the
+    // chain on to a library class.
+    void relate_class(frontend::SystemVerilogClassDeclaration& declaration,
         SourceScope scope)
     {
         scope.class_identity = declaration.canonical_identity;
         const auto relation = [&](frontend::SystemVerilogClassBase& base) {
             if (const auto* selected = named_class(base.name, scope, base.span))
                 base.declaration_identity = selected->canonical_identity;
-            // A source base leads the chain on to a library class.
             else if (const auto* local = source_class(base.name, scope);
                 local != nullptr && base.declaration_identity.empty())
                 base.declaration_identity = local->canonical_identity;
+        };
+        if (declaration.base)
+            relation(*declaration.base);
+        for (auto& base : declaration.extended_interfaces)
+            relation(base);
+        for (auto& base : declaration.implemented_interfaces)
+            relation(base);
+        for (auto& nested : declaration.nested_classes)
+            relate_class(nested, scope);
+    }
+
+    void prepare_class(frontend::SystemVerilogClassDeclaration& declaration,
+        SourceScope scope)
+    {
+        scope.class_identity = declaration.canonical_identity;
+        const auto relation = [&](frontend::SystemVerilogClassBase& base) {
             for (auto& actual : base.parameter_actuals) {
                 if (actual.type_actual)
                     source_type(*actual.type_actual, scope);

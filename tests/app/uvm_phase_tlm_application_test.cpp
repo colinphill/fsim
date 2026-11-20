@@ -125,8 +125,7 @@ void require_release_rejection(const std::filesystem::path &work) {
   const auto source = work / "uvm-release-probe.sv";
   {
     std::ofstream output(source);
-    output << "package uvm_pkg; class uvm_object; endclass "
-              "class uvm_policy; endclass endpackage\n";
+    output << "package uvm_pkg; class uvm_object; endclass endpackage\n";
   }
   fsim::project::SourceSet source_set;
   source_set.language = fsim::project::Language::system_verilog;
@@ -136,15 +135,17 @@ void require_release_rejection(const std::filesystem::path &work) {
   source_set.uvm_release =
       fsim::project::SystemVerilogUvmRelease::uvm_1_2;
 
-  fsim::project::Config mismatch;
-  mismatch.base_directory = work;
-  mismatch.source_sets = {source_set};
-  fsim::diagnostic::Engine mismatch_diagnostics;
-  const auto mismatched =
-      fsim::app::check_project(mismatch, mismatch_diagnostics);
-  assert(!mismatched && std::ranges::any_of(
-      mismatch_diagnostics.diagnostics(), [](const auto &diagnostic) {
-        return diagnostic.code == "FSIM-UVM-VERSION-002";
+  // A source set that declares uvm_pkg while a UVM release maps fsim's
+  // precompiled UVM library duplicates it (IEEE 1800.2-2020 F.1).
+  fsim::project::Config duplicate;
+  duplicate.base_directory = work;
+  duplicate.source_sets = {source_set};
+  fsim::diagnostic::Engine duplicate_diagnostics;
+  const auto duplicated =
+      fsim::app::check_project(duplicate, duplicate_diagnostics);
+  assert(!duplicated && std::ranges::any_of(
+      duplicate_diagnostics.diagnostics(), [](const auto &diagnostic) {
+        return diagnostic.code == "FSIM-UVM-LIBRARY-001";
       }));
 
   auto second = source_set;
@@ -162,12 +163,10 @@ void require_release_rejection(const std::filesystem::path &work) {
 }
 
 fsim::project::Config
-make_config(const std::filesystem::path &uvm_root,
-            const std::filesystem::path &work,
+make_config(const std::filesystem::path &work,
             const fsim::project::Optimization optimization,
             const std::string_view release) {
   fsim::project::Config config;
-  const auto absolute_uvm_root = std::filesystem::absolute(uvm_root);
   config.base_directory = work;
   config.project.name = "uvm-phase-tlm-example";
   config.project.time_resolution = "1ns";
@@ -183,9 +182,9 @@ make_config(const std::filesystem::path &uvm_root,
   sources.compilation_unit = "source-set";
   sources.uvm_release =
       fsim::project::parse_systemverilog_uvm_release(release).value();
-  sources.include_directories = {absolute_uvm_root / "src"};
-  sources.files = {absolute_uvm_root / "src" / "uvm_pkg.sv",
-                   std::filesystem::path{FSIM_TEST_SOURCE_DIR} /
+  // The precompiled UVM library of the release supplies uvm_pkg and its
+  // include directory; no kit source is listed.
+  sources.files = {std::filesystem::path{FSIM_TEST_SOURCE_DIR} /
                        "tests/fixtures/systemverilog/uvm_core_smoke_probe.sv",
                    std::filesystem::path{FSIM_TEST_SOURCE_DIR} /
                        "tests/fixtures/systemverilog/uvm_phase_tlm_example.sv",
@@ -1154,17 +1153,16 @@ fsim::app::SimulationEngine parse_engine(const std::string_view value) {
 
 int main(int argc, char **argv) {
   fsim::tests::app::install_uvm_process_address_space_ceiling();
-  if (argc < 5) {
+  if (argc < 4) {
     std::cerr << "usage: " << argv[0]
               << " <direct|compile|elaborate|simulate|release-negative> "
-                 "<uvm-root> <work-dir>"
-                 " <release> [optimization] [engine] [trace-suffix]\n";
+                 "<work-dir> <release> [optimization] [engine] "
+                 "[trace-suffix]\n";
     return 2;
   }
   const std::string_view mode{argv[1]};
-  const std::filesystem::path uvm_root{argv[2]};
-  const std::filesystem::path work{argv[3]};
-  const std::string release{argv[4]};
+  const std::filesystem::path work{argv[2]};
+  const std::string release{argv[3]};
   std::error_code cleanup_error;
   // The first stage of a work directory starts it empty: direct, and
   // compile, which the elaborate and simulate stages of the same work
@@ -1188,7 +1186,7 @@ int main(int argc, char **argv) {
     require_release_rejection(work / "release-negative");
     auto config =
         make_config(
-            uvm_root, work / "direct", fsim::project::Optimization::o2,
+            work / "direct", fsim::project::Optimization::o2,
             release);
     fsim::diagnostic::Engine diagnostics;
     auto project = fsim::app::build_project(config, diagnostics);
@@ -1207,7 +1205,7 @@ int main(int argc, char **argv) {
   const auto object = work / "phase-tlm.fsimobj";
   if (mode == "compile") {
     auto config = make_config(
-        uvm_root, work / "compile", fsim::project::Optimization::o2,
+        work / "compile", fsim::project::Optimization::o2,
         release);
     fsim::diagnostic::Engine diagnostics;
     const auto compiled =
@@ -1223,14 +1221,14 @@ int main(int argc, char **argv) {
     return 0;
   }
 
-  if (argc < 6) {
+  if (argc < 5) {
     std::cerr << "elaborate/simulate requires an optimization\n";
     return 2;
   }
-  const std::string optimization_name{argv[5]};
+  const std::string optimization_name{argv[4]};
   const auto optimization = parse_optimization(optimization_name);
   auto config = make_config(
-      uvm_root, work / optimization_name, optimization, release);
+      work / optimization_name, optimization, release);
   const auto design = work / (optimization_name + ".fsimdesign");
   if (mode == "elaborate") {
     config.source_sets.clear();
@@ -1238,8 +1236,8 @@ int main(int argc, char **argv) {
     // `elaborate --aot`: the static kernel builds its code into the
     // optimization's cache (<work>/<optimization>/cache), set up as the
     // compiled simulation below sets it up, so that run starts from it.
-    const bool aot = argc == 7 && std::string_view{argv[6]} == "--aot";
-    if (argc != 6 && !aot) {
+    const bool aot = argc == 6 && std::string_view{argv[5]} == "--aot";
+    if (argc != 5 && !aot) {
       std::cerr << "elaborate accepts only --aot after the optimization\n";
       return 2;
     }
@@ -1283,8 +1281,8 @@ int main(int argc, char **argv) {
     return 0;
   }
 
-  if (mode == "simulate" && argc == 8) {
-    const auto engine = parse_engine(argv[6]);
+  if (mode == "simulate" && argc == 7) {
+    const auto engine = parse_engine(argv[5]);
     fsim::diagnostic::Engine diagnostics;
     auto loaded = fsim::app::load_design_artifact(design, diagnostics);
     if (!loaded || diagnostics.has_error())
@@ -1294,7 +1292,7 @@ int main(int argc, char **argv) {
     // from the configuration.
     loaded->cache_path = config.build.cache_path;
     const auto result = exercise(std::move(*loaded), engine,
-                                 work / (optimization_name + '-' + argv[7]),
+                                 work / (optimization_name + '-' + argv[6]),
                                  release);
     assert(result.transcript == kExpectedTranscript);
     // The cold run has no ahead-of-time build to restore code from: it
@@ -1302,12 +1300,12 @@ int main(int argc, char **argv) {
     // `elaborate --aot`, loads every template and automaton from the build's
     // index and compiles none (Simulation::native_cache_statistics).
     if (engine == fsim::app::SimulationEngine::compiled &&
-        std::string_view{argv[7]} == "cold.fst") {
+        std::string_view{argv[6]} == "cold.fst") {
       assert(result.cache.hits == 0);
       assert(result.cache.stores == 0);
     }
     if (engine == fsim::app::SimulationEngine::compiled &&
-        std::string_view{argv[7]} == "warm.fst") {
+        std::string_view{argv[6]} == "warm.fst") {
       assert(result.cache.hits > 0);
       assert(result.cache.misses == 0);
       assert(result.cache.stores == 0);
@@ -1316,7 +1314,7 @@ int main(int argc, char **argv) {
     }
     std::cout << result.transcript << " release=" << release
               << " stage=simulate optimization=" << optimization_name
-              << " engine=" << argv[6] << " trace=" << argv[7] << '\n';
+              << " engine=" << argv[5] << " trace=" << argv[6] << '\n';
     return 0;
   }
   std::cerr << "unknown mode or invalid mode arguments\n";

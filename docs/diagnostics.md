@@ -3075,7 +3075,9 @@ scheduler.
 | `FSIM-UVM-STATE-001` | error | A versioned UVM artifact has an invalid schema, ABI, provenance, phase graph, objection/drain, TLM connection/FIFO/transaction record, or contains a nonportable process object. |
 | `FSIM-UVM-STATE-002` | error | Portable UVM checkpoint construction or capture exceeded a configured record, root, identity, text, payload, callback-summary, or scheduler-state resource ceiling. |
 | `FSIM-UVM-VERSION-001` | error | Governed UVM release selection is invalid, applies to a non-SystemVerilog source set, mixes UVM 1.2 with UVM 2020-3.1 sources or objects, or disagrees with checked artifact provenance. |
-| `FSIM-UVM-VERSION-002` | error | The selected or retained governed UVM release disagrees with the parsed or portable `uvm_pkg` API surface. |
+| `FSIM-UVM-VERSION-002` | error | The UVM kit being built into a precompiled library, or a retained governed UVM release, disagrees with the parsed or portable `uvm_pkg` API surface. |
+| `FSIM-UVM-LIBRARY-001` | error | A source-set package named `uvm_pkg` duplicates the package of the mapped precompiled UVM library; list no kit files, or select `uvm_release none`. |
+| `FSIM-UVM-LIBRARY-002` | error | The selected release's precompiled UVM library is missing, has another key, or this build has no UVM sources. |
 | `FSIM-RUN-ASSERT-0001` | assertion severity | A false HDL assertion stopped a CLI simulation; the diagnostic retains its source location and message. |
 | `FSIM-HDL-REPORT` | report severity | A VHDL report or SystemVerilog severity task was emitted through a command or Tcl output stream. |
 | `FSIM-RUN-DELTA-0001` | error | Simulation exceeded `max_deltas`; the message includes pending processes and recent signals. |

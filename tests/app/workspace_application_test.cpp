@@ -401,11 +401,13 @@ bool only_standard_libraries(const std::string& listing)
             continue;
         }
         ++rows;
-        if (line.find("\tstandard VHDL-") == std::string::npos) {
+        if (line.find("\tstandard VHDL-") == std::string::npos
+            && line.find("\tstandard UVM-") == std::string::npos) {
             return false;
         }
     }
-    return rows == 12U;
+    // STD and IEEE of six editions, and UVM 1.2 and 2020.3.1.
+    return rows == 14U;
 }
 
 void test_external_library_mapping_and_current_directory()

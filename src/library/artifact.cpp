@@ -219,7 +219,8 @@ std::string serialize_metadata(const Metadata& metadata) {
          << "\"\n"
          << "compiled_hir_checksum = \""
          << escape(metadata.compiled_hir_checksum) << "\"\n"
-         << "trace_archive = \"" << escape(metadata.trace_archive) << "\"\n";
+         << "trace_archive = \"" << escape(metadata.trace_archive) << "\"\n"
+         << "uvm_release = \"" << escape(metadata.uvm_release) << "\"\n";
   for (const auto& dependency : metadata.dependencies) {
     output << "\n[[dependency]]\n"
            << "library = \"" << escape(dependency) << "\"\n";
@@ -445,7 +446,8 @@ std::optional<Metadata> parse_metadata(
       } else if ((key == "library" || key == "producer"
                      || key == "compiled_hir_artifact"
                      || key == "compiled_hir_checksum"
-                     || key == "trace_archive")
+                     || key == "trace_archive"
+                     || key == "uvm_release")
                  && text.has_value()) {
         if (key == "library")
           metadata.library = *text;
@@ -456,6 +458,8 @@ std::optional<Metadata> parse_metadata(
               = fsim::support::path_from_utf8(*text);
         else if (key == "compiled_hir_checksum")
           metadata.compiled_hir_checksum = *text;
+        else if (key == "uvm_release")
+          metadata.uvm_release = *text;
         else
           metadata.trace_archive = *text;
       } else {

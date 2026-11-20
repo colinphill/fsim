@@ -1066,6 +1066,14 @@ namespace {
                     return TCL_ERROR;
                 }
             }
+            for (const auto& library : uvm_library_locations()) {
+                Tcl_Obj* entry = library_object(interpreter,
+                    { library.name, library.directory, true });
+                dict_put(interpreter, entry, "standard", string_object(library.label));
+                if (!list_append(interpreter, result, entry)) {
+                    return TCL_ERROR;
+                }
+            }
             for (const auto& location : *locations) {
                 if (!list_append(interpreter, result,
                         library_object(interpreter, location))) {

@@ -259,6 +259,10 @@ bool export_library(
         metadata.standards.push_back({ language, revision });
     }
     metadata.vhdl_package_dependencies = application_detail::vhdl_package_dependencies(*checked);
+    // The precompiled UVM library the units were compiled against (owner
+    // D2-Q9); an importer loads the same release with them.
+    metadata.uvm_release = std::string { project::to_string(
+        checked->systemverilog_uvm_provenance.release) };
 
     std::vector<library::PortablePayload> payloads;
     std::vector<library::SourceNameMapping> source_mappings;

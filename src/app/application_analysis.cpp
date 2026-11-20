@@ -557,6 +557,8 @@ void append_snapshot(ParsedSnapshot& into, ParsedSnapshot&& part)
       added.systemverilog_covergroup_instances);
   append(design.systemverilog_covergroup_instance_syntax,
       added.systemverilog_covergroup_instance_syntax);
+  append(design.systemverilog_scope_prefixes,
+      added.systemverilog_scope_prefixes);
   design.vhdl_profile_compatible
       = design.vhdl_profile_compatible && added.vhdl_profile_compatible;
   append(into.result.diagnostics, part.result.diagnostics);

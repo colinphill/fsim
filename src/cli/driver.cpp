@@ -646,7 +646,8 @@ namespace {
             << "      --vhdl-compatibility PROFILE\n"
             << "                           VHDL: legacy-unprotected-shared-variable\n"
             << "      --uvm-release VERSION\n"
-            << "                           Governed SystemVerilog UVM release: 1.2 or 2020.3.1\n"
+            << "                           SystemVerilog UVM release: none|1.2|2020.3.1\n"
+            << "                           (default 2020.3.1; precompiled library uvm)\n"
             << "      --compilation-unit file|source-set\n"
             << "                           Compile files separately or as one unit\n"
             << "      --library NAME       Library for direct source files (default: work)\n"
@@ -1243,11 +1244,9 @@ std::optional<Invocation> parse_arguments(
                 invocation.uvm_release = value.has_value()
                     ? project::parse_systemverilog_uvm_release(*value)
                     : std::nullopt;
-                if (!invocation.uvm_release
-                    || *invocation.uvm_release
-                        == project::SystemVerilogUvmRelease::none) {
-                    argument_error(
-                        diagnostics, "--uvm-release must be 1.2 or 2020.3.1");
+                if (!invocation.uvm_release) {
+                    argument_error(diagnostics,
+                        "--uvm-release must be none, 1.2 or 2020.3.1");
                     return std::nullopt;
                 }
             } else if (is_option(argument, "", "--compilation-unit")) {
@@ -2435,8 +2434,12 @@ std::optional<project::SourceSet> make_source_set(const Invocation& invocation,
                 && language != project::Language::vhdl
             ? "source-set"
             : "file";
+    // A SystemVerilog source set maps UVM 2020.3.1 (IEEE 1800.2-2020) unless
+    // it selects another release or none (owner D2-Q9).
     source_set.uvm_release = invocation.uvm_release.value_or(
-        project::SystemVerilogUvmRelease::none);
+        language == project::Language::system_verilog
+            ? project::SystemVerilogUvmRelease::ieee_1800_2_2020_3_1
+            : project::SystemVerilogUvmRelease::none);
     if (!invocation.uvm_release && language == project::Language::system_verilog) {
         if (const auto* values = configured("uvm_release")) {
             source_set.uvm_release

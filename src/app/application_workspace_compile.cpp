@@ -692,7 +692,8 @@ std::optional<std::vector<WorkspaceCompiledObject>> partition_workspace_objects(
 
 static int workspace_compile(const cli::Invocation& invocation, const project::Config& config,
     diagnostic::Engine& diagnostics, std::ostream& output,
-    const std::optional<frontend::VhdlStandard> bootstrap_standard)
+    const std::optional<frontend::VhdlStandard> bootstrap_standard,
+    const bool uvm_library_build = false)
 {
     // Workspace objects and libraries are checksummed compiled HIR; the new
     // object's state is still checked when it is serialized.
@@ -709,6 +710,11 @@ static int workspace_compile(const cli::Invocation& invocation, const project::C
             || sources.language == project::Language::system_verilog)) {
         frontend::PreprocessorOptions options;
         options.include_directories = sources.include_directories;
+        if (const auto uvm_library = uvm_library_request(config);
+            uvm_library && !uvm_library->root.empty()) {
+            options.include_directories.push_back(
+                uvm_library_include_directory(uvm_library->root));
+        }
         options.defines = sources.defines;
         options.default_timescale = sources.default_timescale;
         const auto result = frontend::preprocess_verilog_compilation_unit(
@@ -724,7 +730,7 @@ static int workspace_compile(const cli::Invocation& invocation, const project::C
         }
         return result.ok() ? 0 : 1;
     }
-    const auto store = bootstrap_standard
+    const auto store = bootstrap_standard || uvm_library_build
         ? workspace::Store(config.base_directory, workspace::StandardLibraryStore { })
         : workspace::Store(config.base_directory);
     std::string error;
@@ -768,15 +774,59 @@ static int workspace_compile(const cli::Invocation& invocation, const project::C
     // of the environment (its units too) and is rebuilt when its own sources
     // are recompiled. Outdated objects are looked for only after a failed
     // load, so a current workspace reads no payload twice.
+    // The precompiled UVM library the source set's release maps (owner
+    // D2-Q9): its catalog joins the workspace's, so objects compiled against
+    // it are current; its objects join the environment only when a source
+    // names one of its packages or an environment object depends on it.
+    auto uvm_library = bootstrap_standard || uvm_library_build
+        ? std::nullopt : uvm_library_request(config);
+    bool load_uvm = false;
+    if (uvm_library && !uvm_library->root.empty()
+        && std::ranges::none_of(*catalogs, [](const workspace::LibraryCatalog& catalog) {
+               return catalog.location.name == uvm_library_name;
+           })) {
+        std::string uvm_error;
+        auto catalog = uvm_library_catalog(uvm_library->root, uvm_error);
+        if (!catalog) {
+            workspace_error(diagnostics, std::move(uvm_error));
+            return 1;
+        }
+        load_uvm = std::ranges::any_of(*catalogs, [](const workspace::LibraryCatalog& other) {
+            return std::ranges::any_of(other.artifacts, [](const workspace::ArtifactRecord& artifact) {
+                return std::ranges::any_of(artifact.dependencies,
+                    [](const workspace::UnitDependency& dependency) {
+                        return dependency.library == uvm_library_name;
+                    });
+            });
+        });
+        catalogs->push_back(std::move(*catalog));
+    } else {
+        append_dependent_uvm_library_catalog(*catalogs);
+        load_uvm = !uvm_library;
+    }
     std::vector<OutdatedObject> outdated;
     std::vector<CompiledUnitAvailability> available_units;
     std::vector<WorkspaceObjectSelection> objects;
     std::optional<CompilationWorkspace> imported;
+    const auto report_skipped = [&] {
+        for (const auto& object : outdated) {
+            report_outdated_object(diagnostics, object, true);
+        }
+    };
+    std::optional<CompilationWorkspace> checked_workspace;
+    for (;;) {
+    outdated.clear();
+    imported.reset();
     for (;;) {
         diagnostic::Engine attempt;
         available_units.clear();
-        const auto imported_catalogs = compile_environment_catalogs(*catalogs, sources,
+        auto imported_catalogs = compile_environment_catalogs(*catalogs, sources,
             replaced_sources, available_units);
+        if (!load_uvm) {
+            std::erase_if(imported_catalogs, [](const workspace::LibraryCatalog& catalog) {
+                return catalog.location.name == uvm_library_name;
+            });
+        }
         objects = workspace_object_selections(store, imported_catalogs, sources.library,
             replaced_sources, attempt);
         if (!attempt.has_error()) {
@@ -812,11 +862,6 @@ static int workspace_compile(const cli::Invocation& invocation, const project::C
             outdated.push_back(std::move(object));
         }
     }
-    const auto report_skipped = [&] {
-        for (const auto& object : outdated) {
-            report_outdated_object(diagnostics, object, true);
-        }
-    };
     if (!imported) {
         report_skipped();
         return 1;
@@ -826,8 +871,30 @@ static int workspace_compile(const cli::Invocation& invocation, const project::C
                << catalogs->size() << " library/libraries\n"
                << "  standard: " << sources.standard << '\n';
     }
-    auto checked_workspace = check_project_for_object(config, diagnostics, &*imported,
-        available_units, bootstrap_standard);
+    if (uvm_library) {
+        uvm_library->loaded = load_uvm;
+        uvm_library->needed = false;
+    }
+    if (uvm_library && !load_uvm) {
+        // A pass that ends because a source names the library reports
+        // nothing; any other result's diagnostics are the compile's.
+        diagnostic::Engine pass;
+        checked_workspace = check_project_for_object(config, pass, &*imported,
+            available_units, bootstrap_standard, &*uvm_library);
+        if (uvm_library->needed) {
+            load_uvm = true;
+            continue;
+        }
+        for (const auto& diagnostic : pass.diagnostics()) {
+            diagnostics.report(diagnostic);
+        }
+    } else {
+        checked_workspace = check_project_for_object(config, diagnostics, &*imported,
+            available_units, bootstrap_standard,
+            uvm_library ? &*uvm_library : nullptr);
+    }
+    break;
+    }
     if (!checked_workspace) {
         // A unit only a skipped object provides is reported as missing.
         report_skipped();
@@ -1001,6 +1068,12 @@ int compile_standard_library(const cli::Invocation& invocation, const project::C
     const frontend::VhdlStandard standard)
 {
     return workspace_compile(invocation, config, diagnostics, output, standard);
+}
+
+int compile_uvm_library(const cli::Invocation& invocation, const project::Config& config,
+    diagnostic::Engine& diagnostics, std::ostream& output, std::ostream&)
+{
+    return workspace_compile(invocation, config, diagnostics, output, std::nullopt, true);
 }
 
 } // namespace fsim::app::application_detail
