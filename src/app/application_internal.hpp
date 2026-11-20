@@ -979,7 +979,9 @@ void validate_vhdl_analysis_order(
     const semantic::CompiledDesign* imported = nullptr,
     std::span<const CompiledUnitAvailability> available_units = { });
 
-void validate_vhdl_source_visibility(
+/// FSIM-ELAB-VHACCESS-034: an implicitly dereferenced procedure formal of
+/// mode out before VHDL-2008 (IEEE 1076-1993 6.1).
+void validate_vhdl_access_prefix_reads(
     const semantic::CompiledDesign& design,
     diagnostic::Engine& diagnostics);
 

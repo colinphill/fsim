@@ -1105,7 +1105,10 @@ void VhdlHirBuilder::add_generate_body(
         guard.name = "guard";
         guard.type.spelling = "boolean";
         guard.type.domain = frontend::ValueDomain::Boolean;
+        // Declared before the guard condition, which drives it (11.2): in
+        // force from the condition's start.
         guard.span = input.condition.span;
+        guard.span.end = guard.span.begin;
         output.declarations.push_back(add_signal(
             guard, output.scope, declaration_origin));
     }
@@ -1314,6 +1317,7 @@ void VhdlHirBuilder::add_unit(
         input.vhdl_predefined_environment.attributes};
     output.standard_package_revision = input.standard_package_revision;
     output.standard_package_form = input.standard_package_form;
+    output.package_instance_expansion = input.vhdl_package_instance_expansion;
     output.standard_package_declarations
         = input.standard_package_declarations;
     output.standard_package_operator_profiles

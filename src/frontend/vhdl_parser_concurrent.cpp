@@ -1552,7 +1552,14 @@ void VhdlParser::rewrite_vhdl_formal_conversions(DesignUnit& unit,
         SignalDeclaration signal;
         signal.name = implicit;
         signal.type = port->type;
-        signal.span = span;
+        // The port's subtype is copied from the entity, where its type mark
+        // was written and is resolved; it is not a name of this unit.
+        signal.type.vhdl_written_type_mark.clear();
+        // The instance statement declares the implicit signal (IEEE
+        // 1076-1993 4.3.2): it is visible from the start of the statement,
+        // before the port map that names it.
+        signal.span = instance.span;
+        signal.span.end = instance.span.begin;
         // The converted port's driving value starts at its default (IEEE
         // 1076-1993 4.3.2, 12.6.1).
         signal.default_value = port->default_value;

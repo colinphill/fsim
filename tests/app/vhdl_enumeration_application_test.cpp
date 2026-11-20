@@ -392,7 +392,7 @@ entity Enumeration_Top is
   );
 end entity;
 
-use work.state_types.all;
+use work.state_types, work.state_types.all;
 architecture rtl of enumeration_top is
   signal source : Active_T;
   signal result : State_T;

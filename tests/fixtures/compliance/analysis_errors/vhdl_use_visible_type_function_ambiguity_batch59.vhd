@@ -1,4 +1,4 @@
--- fsim-expect: FSIM-ELAB-VHTYPE-006 std=1993
+-- fsim-expect: FSIM-VHDL-NAME-002 std=1993
 -- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-1993 12.3: a type mark is ambiguous when same-named type and
 -- function declarations are potentially visible from separate packages.

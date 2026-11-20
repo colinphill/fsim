@@ -647,7 +647,7 @@ write_unused_package("unused revision 1");
 {
   std::ofstream output(package_constant_user_source);
   output << R"(
-library ieee;
+library ieee, support;
 use ieee.numeric_std.all;
 
 entity package_constant_user is

@@ -678,6 +678,11 @@ struct ElementConstraint {
 
 struct SubtypeIndication {
     TypeReference type_mark;
+    /// The type mark as written (6.3: a simple or expanded name; for
+    /// T'BASE / O'SUBTYPE the prefix), resolved by visibility at analysis
+    /// (12.3, 12.4); absent for an unspecified interface type and for a
+    /// subtype the front end made up.
+    std::optional<Name> written_type_mark;
     ValueDomain domain { ValueDomain::unknown };
     std::optional<std::uint64_t> executable_width;
     Name resolution_function;
@@ -960,6 +965,10 @@ struct Declaration {
     bool deferred { };
     std::optional<DeclarationId> completion;
     std::optional<SourceSpanId> completion_source;
+    // A full type declaration that completes an incomplete type declaration
+    // (IEEE 1076-2019 5.4.2): the incomplete declaration's source, from which
+    // the type is visible (12.3).
+    std::optional<SourceSpanId> incomplete_source;
     std::vector<DeclarationId> children;
     std::vector<StatementId> statements;
     // A guarded signal's kind: 1 for bus, 2 for register (6.4.2.3).
@@ -1295,6 +1304,10 @@ struct Unit {
     support::VhdlStandardPackageForm standard_package_form { };
     std::vector<std::string> standard_package_declarations;
     std::vector<std::string> standard_package_operator_profiles;
+    // A package or body expanded from a design-unit package instantiation
+    // (4.9): compile-time name analysis leaves its copied names to BD2's
+    // re-analysis of instances (V4).
+    bool package_instance_expansion { };
     // False when parsing retained a recovery node for syntax unavailable in
     // this unit's selected VHDL revision. Such HIR is inspectable and
     // serializable, but elaboration must not make it executable.

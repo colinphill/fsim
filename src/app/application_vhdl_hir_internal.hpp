@@ -162,6 +162,12 @@ private:
         const frontend::SourceSpan& fallback,
         const semantic::ScopeId scope,
         const semantic::OriginId parent);
+    // subtype() without the written type mark.
+    [[nodiscard]] vh::SubtypeIndication subtype_indication(
+        const frontend::Type& type,
+        const frontend::SourceSpan& fallback,
+        const semantic::ScopeId scope,
+        const semantic::OriginId parent);
 
     [[nodiscard]] vh::AliasSignature signature(
         const frontend::VhdlAliasSignature& input,

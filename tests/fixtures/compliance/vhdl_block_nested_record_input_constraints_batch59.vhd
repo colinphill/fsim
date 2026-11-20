@@ -40,7 +40,9 @@ package b59_block_identity_control_pkg is
   constant package_payload : bit_vector(0 to 2) := "101";
 end package;
 
-use work.b59_block_nested_record_pkg.all;
+-- The package name itself is visible only through `use work.P;` (IEEE
+-- 1076-2019 12.4): the architecture selects b59_block_nested_record_pkg.X.
+use work.b59_block_nested_record_pkg, work.b59_block_nested_record_pkg.all;
 entity vhdl_block_nested_record_input_constraints_batch59 is
 end entity;
 

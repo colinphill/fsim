@@ -2,6 +2,7 @@
 #include "application_internal.hpp"
 #include "application_standard_library_artifact.hpp"
 #include "fsim/library/artifact.hpp"
+#include "fsim/semantic/compiled_design_vhdl_analysis.hpp"
 #include "application_compiled_environment.hpp"
 #include "application_compiled_environment_sv.hpp"
 #include "application_compiled_environment_vhdl.hpp"
@@ -1269,6 +1270,10 @@ static std::optional<CompilationWorkspace> check_project_pass(
       checked.standard_sources,
       compiled_assertion_sources->files);
   checked.vhdl_hir = build_vhdl_hir(checked.parsed, checked.semantics);
+  // The new VHDL units stay unfolded through the links below until their
+  // names are resolved by visibility (analyze_vhdl_names).
+  std::optional<semantic::VhdlFoldingDeferral> vhdl_folding_deferral;
+  vhdl_folding_deferral.emplace();
   if (bootstrap_standard) {
     // Before link and resolution: the packages' own formals resolve against
     // the hidden natives exactly as user code will see them.
@@ -1314,10 +1319,45 @@ static std::optional<CompilationWorkspace> check_project_pass(
   }
   semantic::refresh_compiled_design_metadata(checked);
   remember_compiled_references(checked, source_references);
-  validate_vhdl_source_visibility(checked, diagnostics);
+  validate_vhdl_access_prefix_reads(checked, diagnostics);
   if (diagnostics.has_error()) {
     return std::nullopt;
   }
+  // Every name of the analyzed VHDL units is resolved by visibility once,
+  // here (IEEE 1076-2019 12.3, 12.4, 8.3; gate BD build D3).
+  // VHDL primary units of the environment's libraries compiled in another
+  // edition: known by metadata only, still denoted by expanded names (13.1).
+  std::vector<semantic::VhdlAvailablePrimary> available_primaries;
+  for (const auto& available : available_units) {
+    const auto& unit = available.unit;
+    const bool primary = unit.kind == "entity" || unit.kind == "configuration"
+        || unit.kind == "context"
+        || (unit.kind == "package" && unit.primary_name.empty());
+    if (unit.language != "vhdl" || !primary
+        || unit.name_form == library::VhdlIdentifierForm::unknown) {
+      continue;
+    }
+    available_primaries.push_back({
+        support::vhdl_symbol(available.library.empty()
+                ? std::string { "work" }
+                : support::canonical_vhdl_spelling(available.library)),
+        support::vhdl_symbol(support::encode_vhdl_identifier(unit.name,
+            unit.name_form == library::VhdlIdentifierForm::extended)),
+    });
+  }
+  // Instance labels that project bindings rebind (the last path part).
+  std::vector<support::SymbolId> bound_labels;
+  for (const auto& binding : config.bindings) {
+    const auto dot = binding.instance.rfind('.');
+    bound_labels.push_back(support::vhdl_symbol(support::canonical_vhdl_spelling(
+        dot == std::string::npos ? binding.instance
+                                 : binding.instance.substr(dot + 1U))));
+  }
+  if (!semantic::analyze_vhdl_names(checked, checked.source_units,
+          diagnostics, available_primaries, bound_labels)) {
+    return std::nullopt;
+  }
+  vhdl_folding_deferral.reset();
   if (!semantic::normalize_compiled_design(checked)) {
     diagnostics.error(
         "FSIM-SEM-0002",

@@ -246,13 +246,21 @@ ParseResult VhdlParser::run()
             continue;
         } else if (match_keyword("package", true)) {
             const auto start = previous();
+            const auto start_index = position() - 1U;
+            const auto expanded = std::ranges::any_of(
+                expanded_package_instances_, [&](const auto& instance) {
+                    return start_index >= instance.begin
+                        && start_index < instance.end;
+                });
             const auto context = pending_context;
             if (match_keyword("body", true)) {
                 auto unit = parse_package(start, true);
+                unit.vhdl_package_instance_expansion = expanded;
                 attach_context(unit);
                 design.units.push_back(std::move(unit));
             } else {
                 auto unit = parse_package(start);
+                unit.vhdl_package_instance_expansion = expanded;
                 attach_context(unit);
                 for (const auto& [instance, template_name] :
                     ieee_intrinsic_package_instances_) {
@@ -1355,6 +1363,30 @@ Type VhdlParser::parse_vhdl_unspecified_type(const Token &start) {
 
 Type VhdlParser::parse_vhdl_type(const bool allow_integer,
     const bool /*runtime_base_integer_only*/)
+{
+    const auto begin = position();
+    auto type = parse_vhdl_type_mark_and_constraint(allow_integer);
+    // The type mark as written: the selected name at the start (6.3).
+    if (!type.vhdl_unspecified && begin < tokens_.size()
+        && tokens_[begin].kind == TokenKind::Identifier) {
+        const auto end = position();
+        auto written = vhdl_name(tokens_[begin].text);
+        auto last = tokens_[begin].span;
+        for (auto index = begin + 1U; index + 1U < end
+             && tokens_[index].kind == TokenKind::Dot
+             && tokens_[index + 1U].kind == TokenKind::Identifier;
+             index += 2U) {
+            written += '.';
+            written += vhdl_name(tokens_[index + 1U].text);
+            last = tokens_[index + 1U].span;
+        }
+        type.vhdl_written_type_mark = std::move(written);
+        type.vhdl_written_type_mark_span = cover(tokens_[begin].span, last);
+    }
+    return type;
+}
+
+Type VhdlParser::parse_vhdl_type_mark_and_constraint(const bool allow_integer)
 {
     if (match_keyword("type", true)) {
         const auto start = previous();

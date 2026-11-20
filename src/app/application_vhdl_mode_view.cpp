@@ -434,6 +434,11 @@ private:
             if (!profile.explicit_subtype
                 && profile.form == vh::ModeViewElementForm::record_view) {
                 interface.subtype = view->mode_view->record_subtype;
+                // The interface writes no type mark of its own (6.5.2): the
+                // view's is resolved at the view declaration.
+                if (interface.subtype) {
+                    interface.subtype->written_type_mark.reset();
+                }
             }
             if (!interface.subtype) {
                 profile.composition = vh::ModeViewCompositionState::invalid;

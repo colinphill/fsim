@@ -238,6 +238,7 @@ private:
 
   Type parse_vhdl_type(const bool allow_integer = false,
                        const bool /*runtime_base_integer_only*/ = false);
+  Type parse_vhdl_type_mark_and_constraint(bool allow_integer);
 
   // A range in a range constraint (`L to R`, `L downto R`, or a range
   // attribute such as `x'range`) or, with allow_subtype_name, a discrete

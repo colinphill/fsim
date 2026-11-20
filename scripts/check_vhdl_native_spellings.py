@@ -143,7 +143,7 @@ RE_PRED = re.compile(r"\b(?:{})\s*\(".format("|".join(PREDICATE_NAMES)))
 # Today's counts (generated with --update).
 CEILINGS: dict[str, int] = {
     "src/app/application_analysis.cpp": 1,
-    "src/app/application_vhdl_analysis.cpp": 4,
+    "src/app/application_vhdl_analysis.cpp": 3,
     "src/app/application_vhdl_executable_hir.cpp": 4,
     "src/app/application_vhdl_hir_projection.cpp": 2,
     "src/app/application_workspace_compile.cpp": 4,

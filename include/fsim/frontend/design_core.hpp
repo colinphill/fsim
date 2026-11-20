@@ -171,6 +171,11 @@ struct Expression {
     // Exact token spelling for a VHDL selected name containing an extended
     // identifier. `text` remains the decoded lowering spelling.
     std::optional<std::string> vhdl_selected_name_spelling;
+    // A VHDL node the parser made that is not a name of the source though
+    // its kind would say so: the conditional form `?:` (9.2.9 / 10.5.3), the
+    // reserved word `open` as an actual (6.5.7). Its HIR carries no
+    // referenced name.
+    bool vhdl_not_a_name { };
     GeneratedTextKind generated_text { GeneratedTextKind::none };
     SystemVerilogPatternKind systemverilog_pattern {
         SystemVerilogPatternKind::none
@@ -782,6 +787,12 @@ struct Type {
     // is selected and is used for source/cache provenance rather than type
     // compatibility.
     std::string vhdl_type_declaration;
+    // The type mark of a VHDL subtype indication as written (IEEE 1076-2019
+    // 6.3: a simple or expanded name; the prefix of 'BASE or 'SUBTYPE), each
+    // identifier canonical, with its span; empty for an unspecified interface
+    // type. Name analysis resolves it by visibility (12.3, 12.4).
+    std::string vhdl_written_type_mark;
+    SourceSpan vhdl_written_type_mark_span;
     // `vhdl_type_declaration` names a predefined type the tool supplies and
     // holds its plain name.
     bool builtin_declaration { };
@@ -1173,6 +1184,9 @@ struct TypeAliasDeclaration {
     // It is kept as a subtype of INTEGER or REAL for execution but declares
     // a distinct type (IEEE 1076-2008 5.2.3).
     bool vhdl_scalar_type { };
+    // A VHDL full type declaration completing an incomplete one (5.4.2):
+    // the incomplete declaration's span (the type is declared from there).
+    std::optional<SourceSpan> vhdl_incomplete_span { };
 };
 
 struct VhdlAttributeDeclaration {

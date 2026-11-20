@@ -508,28 +508,78 @@ PackageInstantiation VhdlParser::parse_vhdl_package_instantiation(
 
 std::vector<std::string> vhdl_ieee_intrinsic_package_declarations(
     const std::string_view package) {
+  // IEEE 1076-2019 G.4: the types of fixed_float_types (the vendored
+  // ieee-derived/2008/ieee/fixed_float_types.vhdl).
+  if (package == "fixed_float_types") {
+    return {
+        "fixed_round_style_type", "fixed_round", "fixed_truncate",
+        "fixed_overflow_style_type", "fixed_saturate", "fixed_wrap",
+        "round_type", "round_nearest", "round_inf", "round_neginf",
+        "round_zero",
+    };
+  }
   if (package == "fixed_generic_pkg" || package == "fixed_pkg") {
+    // The generics and the fixed_float_types names it has always listed,
+    // then the declarations of the vendored ieee-derived/2008 text (IEEE
+    // 1076-2019 G.4, G.5).
     return {
         "ufixed", "sfixed", "fixed_round_style", "fixed_overflow_style",
         "fixed_round", "fixed_truncate", "fixed_saturate", "fixed_wrap",
-        "to_ufixed", "to_sfixed", "resize", "from_string",
-        "from_bstring", "from_binary_string", "to_real", "to_integer",
-        "shift_left", "shift_right", "ufixed_high", "ufixed_low",
-        "sfixed_high", "sfixed_low", "+", "-", "*", "/", "rem",
-        "mod", "=", "/=", "<", "<=", ">", ">=",
+        "to_ufixed", "to_sfixed", "resize", "from_string", "from_bstring",
+        "from_binary_string", "to_real", "to_integer", "shift_left",
+        "shift_right", "ufixed_high", "ufixed_low", "sfixed_high",
+        "sfixed_low", "+", "-", "*", "/", "rem", "mod", "=", "/=", "<", "<=",
+        ">", ">=", "?/=", "?<", "?<=", "?=", "?>", "?>=", "abs", "add_carry",
+        "and", "binary_read", "binary_write", "bread", "bwrite",
+        "copyrightnotice", "divide", "find_leftmost", "find_rightmost",
+        "from_hex_string", "from_hstring", "from_octal_string",
+        "from_ostring", "hex_read", "hex_write", "hread", "hwrite",
+        "is_negative", "is_x", "maximum", "minimum", "modulo", "nand", "nor",
+        "not", "octal_read", "octal_write", "or", "oread", "owrite", "read",
+        "reciprocal", "remainder", "rol", "ror", "saturate", "scalb",
+        "sfix_high", "sfix_low", "sla", "sll", "sra", "srl", "std_match",
+        "to_01", "to_binary_string", "to_bstring", "to_hex_string",
+        "to_hstring", "to_octal_string", "to_ostring", "to_sfix", "to_signed",
+        "to_slv", "to_std_logic_vector", "to_std_ulogic_vector",
+        "to_stdlogicvector", "to_stdulogicvector", "to_string", "to_sulv",
+        "to_ufix", "to_unsigned", "to_ux01", "to_x01", "to_x01z", "u_sfixed",
+        "u_ufixed", "ufix_high", "ufix_low", "unresolved_sfixed",
+        "unresolved_ufixed", "write", "xnor", "xor",
     };
   }
   if (package == "float_generic_pkg" || package == "float_pkg") {
+    // The generics and the fixed_float_types names it has always listed,
+    // then the declarations of the vendored ieee-derived/2008 text (IEEE
+    // 1076-2019 G.4, G.5).
     return {
         "float", "unresolved_float", "float32", "valid_fpstate",
-        "float_exponent_width", "float_fraction_width",
-        "float_round_style", "float_denormalize", "float_check_error",
-        "to_float", "to_slv", "to_integer", "classfp", "finite", "isnan",
-        "unordered", "is_negative", "zerofp", "neg_zerofp", "nanfp",
-        "qnanfp", "pos_inffp", "neg_inffp", "add", "subtract",
-        "multiply", "divide", "sqrt", "eq", "ne", "lt", "le", "gt", "ge",
-        "to_real", "abs", "resize", "+", "-", "*", "/", "=", "/=", "<", "<=", ">",
-        ">=",
+        "float_exponent_width", "float_fraction_width", "float_round_style",
+        "float_denormalize", "float_check_error", "to_float", "to_slv",
+        "to_integer", "classfp", "finite", "isnan", "unordered",
+        "is_negative", "zerofp", "neg_zerofp", "nanfp", "qnanfp", "pos_inffp",
+        "neg_inffp", "add", "subtract", "multiply", "divide", "sqrt", "eq",
+        "ne", "lt", "le", "gt", "ge", "to_real", "abs", "resize", "+", "-",
+        "*", "/", "=", "/=", "<", "<=", ">", ">=", "?/=", "?<", "?<=", "?=",
+        "?>", "?>=", "and", "binary_read", "binary_write", "bitstoreal",
+        "bread", "break_number", "bwrite", "copyrightnotice", "copysign",
+        "dividebyp2", "find_leftmost", "find_rightmost", "float128",
+        "float64", "fphdlsynth_or_real", "from_binary_string", "from_bstring",
+        "from_hex_string", "from_hstring", "from_octal_string",
+        "from_ostring", "from_string", "hex_read", "hex_write", "hread",
+        "hwrite", "is_x", "isx", "logb", "mac", "maximum", "minimum", "mod",
+        "modulo", "nan", "nand", "neg_denormal", "neg_inf", "neg_normal",
+        "neg_zero", "nextafter", "nor", "normalize", "not", "octal_read",
+        "octal_write", "or", "oread", "owrite", "pos_denormal", "pos_inf",
+        "pos_normal", "pos_zero", "quiet_nan", "read", "realtobits",
+        "reciprocal", "rem", "remainder", "scalb", "std_match", "to_01",
+        "to_binary_string", "to_bstring", "to_float128", "to_float32",
+        "to_float64", "to_hex_string", "to_hstring", "to_octal_string",
+        "to_ostring", "to_sfixed", "to_signed", "to_std_logic_vector",
+        "to_std_ulogic_vector", "to_stdlogicvector", "to_stdulogicvector",
+        "to_string", "to_sulv", "to_ufixed", "to_unsigned", "to_ux01",
+        "to_x01", "to_x01z", "u_float", "u_float128", "u_float32",
+        "u_float64", "unresolved_float128", "unresolved_float32",
+        "unresolved_float64", "write", "xnor", "xor",
     };
   }
   return { };

@@ -730,7 +730,8 @@ end architecture;
         directory.path,
         "later-local-function-use",
         { later_local_function },
-        "FSIM-ELAB-VHNAME-001");
+        // Not yet declared at the call (12.3): no visible declaration.
+        "FSIM-VHDL-NAME-001");
 
     const Source earlier_local_function {
         "earlier_local_function.vhd", "libb", R"(
@@ -804,7 +805,8 @@ end package body;
         directory.path,
         "sibling-subprogram-name",
         { sibling_subprogram_name },
-        "FSIM-ELAB-VHNAME-002");
+        // C of FA is not visible in FB (12.1, 12.3).
+        "FSIM-VHDL-NAME-001");
 
     const Source package_visibility_controls {
         "package_visibility_controls.vhd", "libb", R"(

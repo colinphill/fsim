@@ -1,4 +1,4 @@
--- fsim-expect: FSIM-ELAB-VHNAME-002 std=1993
+-- fsim-expect: FSIM-VHDL-NAME-001 std=1993
 -- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-2008 12.2: a loop parameter is visible only within its loop.
 entity loop_parameter_scope is

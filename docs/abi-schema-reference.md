@@ -208,8 +208,11 @@ model `none`; enabled foundation coverage uses
 rejected directly.
 
 The compiled-HIR bundle is schema 14 and embeds semantic schema 9,
-SystemVerilog HIR schema 46, and VHDL HIR schema 22. VHDL HIR schema 22
-records how a compiler-served standard library unit was made
+SystemVerilog HIR schema 46, and VHDL HIR schema 23. VHDL HIR schema 23
+keeps the type mark of a subtype indication as written
+(`SubtypeIndication::written_type_mark`, IEEE 1076-2019 6.3), which
+compile-time name analysis resolves by visibility (12.3, 12.4). VHDL HIR
+schema 22 records how a compiler-served standard library unit was made
 (`Unit::standard_package_form`: analyzed into a precompiled standard
 library artifact, or projected by the compiler) and the native
 implementation of a standard package declaration

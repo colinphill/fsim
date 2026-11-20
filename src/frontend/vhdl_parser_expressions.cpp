@@ -1217,8 +1217,17 @@ Expression VhdlParser::parse_primary()
                     std::move(result) },
                 span
             };
+            result.vhdl_not_a_name = true;
         }
         return result;
+    }
+    // The reserved word `open` as an actual (6.5.7.1): not a name.
+    if (at(TokenKind::Identifier) && keyword("open", 0, true)) {
+        const auto keyword_token = advance();
+        Expression open { ExpressionKind::Identifier, "open", { },
+            keyword_token.span };
+        open.vhdl_not_a_name = true;
+        return open;
     }
     if (at(TokenKind::Identifier)) {
         const auto name_index = index_;

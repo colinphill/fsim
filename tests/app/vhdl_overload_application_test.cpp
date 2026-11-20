@@ -722,7 +722,7 @@ end package body;
     output << R"(
 library ieee; use ieee.std_logic_1164.all; entity overload_app is
 end entity;
-use work.overload_pkg.all;
+use work.overload_pkg, work.overload_pkg.all;
 architecture rtl of overload_app is
   signal integer_input : integer;
   signal boolean_input : boolean;

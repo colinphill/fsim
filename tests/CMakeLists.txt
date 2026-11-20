@@ -10330,3 +10330,214 @@ if(WIN32)
   fsim_configure_windows_test_runtime("${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
 
+
+# VHDL name analysis at compile time (IEEE 1076-2019 12.3, 12.4, 8.3, 13.2):
+# every name of a compiled unit resolves by visibility, whether or not the code
+# is executed; FSIM-VHDL-NAME-001/002/003 are reported by `fsim compile`.
+if(TARGET fsim)
+  set(vhdl_name_analysis_dir
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/name_analysis")
+  add_test(
+    NAME fsim.vhdl-name-analysis.undeclared-call-uncalled-subprogram
+    COMMAND "${CMAKE_COMMAND}"
+      "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+      "-DFSIM_FIXTURE=${vhdl_name_analysis_dir}/n01_undeclared_call_in_uncalled_subprogram.vhd"
+      "-DFSIM_STANDARD=2008"
+      "-DFSIM_EXPECT_CODE=FSIM-VHDL-NAME-001"
+      "-DFSIM_EXPECT_LINE=9"
+      -P "${vhdl_name_analysis_dir}/run_name_case.cmake")
+  set_tests_properties(
+    fsim.vhdl-name-analysis.undeclared-call-uncalled-subprogram PROPERTIES
+    LABELS "application;compliance;vhdl"
+    TIMEOUT 120)
+  add_test(
+    NAME fsim.vhdl-name-analysis.process-use-sibling
+    COMMAND "${CMAKE_COMMAND}"
+      "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+      "-DFSIM_FIXTURE=${vhdl_name_analysis_dir}/n02_process_use_scope.vhd"
+      "-DFSIM_STANDARD=2008"
+      "-DFSIM_EXPECT_CODE=FSIM-VHDL-NAME-001"
+      "-DFSIM_EXPECT_LINE=18"
+      -P "${vhdl_name_analysis_dir}/run_name_case.cmake")
+  set_tests_properties(
+    fsim.vhdl-name-analysis.process-use-sibling PROPERTIES
+    LABELS "application;compliance;vhdl"
+    TIMEOUT 120)
+  add_test(
+    NAME fsim.vhdl-name-analysis.process-use-own-process
+    COMMAND "${CMAKE_COMMAND}"
+      "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+      "-DFSIM_FIXTURE=${vhdl_name_analysis_dir}/n02_process_use_scope_legal.vhd"
+      "-DFSIM_STANDARD=2008"
+      -P "${vhdl_name_analysis_dir}/run_name_case.cmake")
+  set_tests_properties(
+    fsim.vhdl-name-analysis.process-use-own-process PROPERTIES
+    LABELS "application;compliance;vhdl"
+    TIMEOUT 120)
+  add_test(
+    NAME fsim.vhdl-name-analysis.use-before-clause
+    COMMAND "${CMAKE_COMMAND}"
+      "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+      "-DFSIM_FIXTURE=${vhdl_name_analysis_dir}/n03_use_effective_after.vhd"
+      "-DFSIM_STANDARD=2008"
+      "-DFSIM_EXPECT_CODE=FSIM-VHDL-NAME-001"
+      "-DFSIM_EXPECT_LINE=10"
+      -P "${vhdl_name_analysis_dir}/run_name_case.cmake")
+  set_tests_properties(
+    fsim.vhdl-name-analysis.use-before-clause PROPERTIES
+    LABELS "application;compliance;vhdl"
+    TIMEOUT 120)
+  add_test(
+    NAME fsim.vhdl-name-analysis.use-after-clause
+    COMMAND "${CMAKE_COMMAND}"
+      "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+      "-DFSIM_FIXTURE=${vhdl_name_analysis_dir}/n03_use_effective_after_legal.vhd"
+      "-DFSIM_STANDARD=2008"
+      -P "${vhdl_name_analysis_dir}/run_name_case.cmake")
+  set_tests_properties(
+    fsim.vhdl-name-analysis.use-after-clause PROPERTIES
+    LABELS "application;compliance;vhdl"
+    TIMEOUT 120)
+  add_test(
+    NAME fsim.vhdl-name-analysis.use-ambiguous-constant
+    COMMAND "${CMAKE_COMMAND}"
+      "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+      "-DFSIM_FIXTURE=${vhdl_name_analysis_dir}/n04_ambiguous.vhd"
+      "-DFSIM_STANDARD=2008"
+      "-DFSIM_EXPECT_CODE=FSIM-VHDL-NAME-002"
+      "-DFSIM_EXPECT_LINE=15"
+      -P "${vhdl_name_analysis_dir}/run_name_case.cmake")
+  set_tests_properties(
+    fsim.vhdl-name-analysis.use-ambiguous-constant PROPERTIES
+    LABELS "application;compliance;vhdl"
+    TIMEOUT 120)
+  add_test(
+    NAME fsim.vhdl-name-analysis.local-hides-use-visible
+    COMMAND "${CMAKE_COMMAND}"
+      "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+      "-DFSIM_FIXTURE=${vhdl_name_analysis_dir}/n04_hidden_legal.vhd"
+      "-DFSIM_STANDARD=2008"
+      -P "${vhdl_name_analysis_dir}/run_name_case.cmake")
+  set_tests_properties(
+    fsim.vhdl-name-analysis.local-hides-use-visible PROPERTIES
+    LABELS "application;compliance;vhdl"
+    TIMEOUT 120)
+  add_test(
+    NAME fsim.vhdl-name-analysis.expanded-selects-one
+    COMMAND "${CMAKE_COMMAND}"
+      "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+      "-DFSIM_FIXTURE=${vhdl_name_analysis_dir}/n04_expanded_legal.vhd"
+      "-DFSIM_STANDARD=2008"
+      -P "${vhdl_name_analysis_dir}/run_name_case.cmake")
+  set_tests_properties(
+    fsim.vhdl-name-analysis.expanded-selects-one PROPERTIES
+    LABELS "application;compliance;vhdl"
+    TIMEOUT 120)
+  add_test(
+    NAME fsim.vhdl-name-analysis.overloadable-homographs
+    COMMAND "${CMAKE_COMMAND}"
+      "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+      "-DFSIM_FIXTURE=${vhdl_name_analysis_dir}/n05_overload_homographs_legal.vhd"
+      "-DFSIM_STANDARD=2008"
+      -P "${vhdl_name_analysis_dir}/run_name_case.cmake")
+  set_tests_properties(
+    fsim.vhdl-name-analysis.overloadable-homographs PROPERTIES
+    LABELS "application;compliance;vhdl"
+    TIMEOUT 120)
+  add_test(
+    NAME fsim.vhdl-name-analysis.expanded-missing-member
+    COMMAND "${CMAKE_COMMAND}"
+      "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+      "-DFSIM_FIXTURE=${vhdl_name_analysis_dir}/n06_expanded_missing.vhd"
+      "-DFSIM_STANDARD=2008"
+      "-DFSIM_EXPECT_CODE=FSIM-VHDL-NAME-003"
+      "-DFSIM_EXPECT_LINE=10"
+      -P "${vhdl_name_analysis_dir}/run_name_case.cmake")
+  set_tests_properties(
+    fsim.vhdl-name-analysis.expanded-missing-member PROPERTIES
+    LABELS "application;compliance;vhdl"
+    TIMEOUT 120)
+  add_test(
+    NAME fsim.vhdl-name-analysis.expanded-prefix-forms
+    COMMAND "${CMAKE_COMMAND}"
+      "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+      "-DFSIM_FIXTURE=${vhdl_name_analysis_dir}/n06_expanded_legal.vhd"
+      "-DFSIM_STANDARD=2008"
+      -P "${vhdl_name_analysis_dir}/run_name_case.cmake")
+  set_tests_properties(
+    fsim.vhdl-name-analysis.expanded-prefix-forms PROPERTIES
+    LABELS "application;compliance;vhdl"
+    TIMEOUT 120)
+  add_test(
+    NAME fsim.vhdl-name-analysis.visible-after-declaration
+    COMMAND "${CMAKE_COMMAND}"
+      "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+      "-DFSIM_FIXTURE=${vhdl_name_analysis_dir}/n07_visible_after_declaration.vhd"
+      "-DFSIM_STANDARD=2008"
+      "-DFSIM_EXPECT_CODE=FSIM-VHDL-NAME-001"
+      "-DFSIM_EXPECT_LINE=7"
+      -P "${vhdl_name_analysis_dir}/run_name_case.cmake")
+  set_tests_properties(
+    fsim.vhdl-name-analysis.visible-after-declaration PROPERTIES
+    LABELS "application;compliance;vhdl"
+    TIMEOUT 120)
+  add_test(
+    NAME fsim.vhdl-name-analysis.to-string-2008
+    COMMAND "${CMAKE_COMMAND}"
+      "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+      "-DFSIM_FIXTURE=${vhdl_name_analysis_dir}/n08_to_string.vhd"
+      "-DFSIM_STANDARD=2008"
+      -P "${vhdl_name_analysis_dir}/run_name_case.cmake")
+  set_tests_properties(
+    fsim.vhdl-name-analysis.to-string-2008 PROPERTIES
+    LABELS "application;compliance;vhdl"
+    TIMEOUT 120)
+  add_test(
+    NAME fsim.vhdl-name-analysis.to-string-1993
+    COMMAND "${CMAKE_COMMAND}"
+      "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+      "-DFSIM_FIXTURE=${vhdl_name_analysis_dir}/n08_to_string.vhd"
+      "-DFSIM_STANDARD=1993"
+      "-DFSIM_EXPECT_CODE=FSIM-VHDL-NAME-001"
+      "-DFSIM_EXPECT_LINE=7"
+      -P "${vhdl_name_analysis_dir}/run_name_case.cmake")
+  set_tests_properties(
+    fsim.vhdl-name-analysis.to-string-1993 PROPERTIES
+    LABELS "application;compliance;vhdl"
+    TIMEOUT 120)
+  add_test(
+    NAME fsim.vhdl-name-analysis.user-equality-hides-predefined
+    COMMAND "${CMAKE_COMMAND}"
+      "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+      "-DFSIM_FIXTURE=${vhdl_name_analysis_dir}/n09_user_equality_hides_predefined.vhd"
+      "-DFSIM_STANDARD=2008"
+      -P "${vhdl_name_analysis_dir}/run_name_case.cmake")
+  set_tests_properties(
+    fsim.vhdl-name-analysis.user-equality-hides-predefined PROPERTIES
+    LABELS "application;compliance;vhdl"
+    TIMEOUT 120)
+  add_test(
+    NAME fsim.vhdl-name-analysis.ieee-without-library-clause
+    COMMAND "${CMAKE_COMMAND}"
+      "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+      "-DFSIM_FIXTURE=${vhdl_name_analysis_dir}/n10_ieee_without_library_clause.vhd"
+      "-DFSIM_STANDARD=2008"
+      "-DFSIM_EXPECT_CODE=FSIM-VHDL-NAME-001"
+      "-DFSIM_EXPECT_LINE=7"
+      -P "${vhdl_name_analysis_dir}/run_name_case.cmake")
+  set_tests_properties(
+    fsim.vhdl-name-analysis.ieee-without-library-clause PROPERTIES
+    LABELS "application;compliance;vhdl"
+    TIMEOUT 120)
+  add_test(
+    NAME fsim.vhdl-name-analysis.ieee-with-library-clause
+    COMMAND "${CMAKE_COMMAND}"
+      "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+      "-DFSIM_FIXTURE=${vhdl_name_analysis_dir}/n10_ieee_with_library_clause_legal.vhd"
+      "-DFSIM_STANDARD=2008"
+      -P "${vhdl_name_analysis_dir}/run_name_case.cmake")
+  set_tests_properties(
+    fsim.vhdl-name-analysis.ieee-with-library-clause PROPERTIES
+    LABELS "application;compliance;vhdl"
+    TIMEOUT 120)
+endif()

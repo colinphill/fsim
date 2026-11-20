@@ -274,7 +274,7 @@ use work.packet_types.packet_t;
 entity Record_Aggregate_Top is
 end entity;
 
-use work.packet_types.packet_t;
+use work.packet_types, work.packet_types.packet_t;
 architecture rtl of record_aggregate_top is
   signal source : packet_t;
   signal result : packet_types.packet_t;

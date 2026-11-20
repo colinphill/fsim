@@ -244,7 +244,7 @@ use work.packet_types.packet_t;
 entity Package_Record_Top is
 end entity;
 
-use work.packet_types.packet_t;
+use work.packet_types, work.packet_types.packet_t;
 architecture rtl of package_record_top is
   signal source : packet_t;
   signal result : packet_types.packet_t;

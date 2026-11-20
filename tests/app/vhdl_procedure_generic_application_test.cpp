@@ -344,30 +344,6 @@ begin
   end process;
 end architecture;
 
-entity named_leaf is
-  generic (
-    procedure selected(
-      source : in integer;
-      variable destination : out integer;
-      variable accumulator : inout integer) is exchange);
-  port (
-    input_value : in integer;
-    output_value : out integer;
-    total_value : inout integer);
-end entity;
-architecture rtl of named_leaf is
-begin
-  process(input_value)
-    variable destination : integer;
-    variable accumulator : integer;
-  begin
-    accumulator := total_value;
-    selected(input_value, destination, accumulator);
-    output_value <= destination;
-    total_value <= accumulator;
-  end process;
-end architecture;
-
 entity procedure_wrapper is
   generic (
     procedure forwarded(
@@ -413,6 +389,53 @@ end architecture;
             top_source,
             std::ios::binary | std::ios::trunc);
         output << R"(
+-- A named interface subprogram default denotes the subprogram its name
+-- denotes where it is written (IEEE 1076-2019 6.5.6.2, 12.3): EXCHANGE of
+-- this package, rewritten with the top.
+package named_defaults is
+  procedure exchange(
+    source : in integer;
+    variable destination : out integer;
+    variable accumulator : inout integer);
+end package;
+package body named_defaults is
+  procedure exchange(
+    source : in integer;
+    variable destination : out integer;
+    variable accumulator : inout integer) is
+    variable temporary : integer := source;
+  begin
+    destination := temporary + )"
+               << increment << R"(;
+    accumulator := accumulator + destination;
+  end procedure;
+end package body;
+
+use work.named_defaults.all;
+entity named_leaf is
+  generic (
+    procedure selected(
+      source : in integer;
+      variable destination : out integer;
+      variable accumulator : inout integer) is exchange);
+  port (
+    input_value : in integer;
+    output_value : out integer;
+    total_value : inout integer);
+end entity;
+architecture rtl of named_leaf is
+begin
+  process(input_value)
+    variable destination : integer;
+    variable accumulator : integer;
+  begin
+    accumulator := total_value;
+    selected(input_value, destination, accumulator);
+    output_value <= destination;
+    total_value <= accumulator;
+  end process;
+end architecture;
+
 entity procedure_top is
 end entity;
 architecture rtl of procedure_top is

@@ -1761,7 +1761,7 @@ Expression VhdlParser::parse_conditional_assignment_value() {
     expect_keyword("else", true, "FSIM-VHDL-PARSE-115");
     auto when_false = parse_conditional_assignment_value();
     const auto span = cover(begin_span, when_false.span);
-    return Expression {
+    Expression conditional {
         ExpressionKind::Call,
         "?:",
         { std::move(condition),
@@ -1769,6 +1769,8 @@ Expression VhdlParser::parse_conditional_assignment_value() {
             std::move(when_false) },
         span
     };
+    conditional.vhdl_not_a_name = true;
+    return conditional;
 }
 
 Delay VhdlParser::parse_vhdl_delay(const Token& start) {
@@ -1795,6 +1797,16 @@ Expression VhdlParser::parse_lvalue() {
   const auto name = expect_identifier("assignment target");
   Expression expression{ExpressionKind::Identifier, vhdl_name(name.text),
                         {}, name.span};
+  // As parse_primary does: the source spelling of a name with an extended
+  // identifier, which its decoded text cannot tell from a basic one.
+  std::string selected_spelling { name.text };
+  const auto attach_selected_spelling = [&](Expression& target) {
+    if (target.kind == ExpressionKind::Identifier
+        && selected_spelling.find('\\') != std::string::npos) {
+      target.vhdl_selected_name_spelling = selected_spelling;
+    }
+  };
+  attach_selected_spelling(expression);
   // An indexed or selected name rooted at an access object implicitly
   // dereferences it (IEEE 1076-2008 8.3), matching parse_primary(). Keep an
   // explicit `.all` suffix on the existing path below.
@@ -1818,6 +1830,9 @@ Expression VhdlParser::parse_lvalue() {
       expression.text += '.';
       expression.text += canonical_member;
       expression.span = cover(expression.span, member.span);
+      selected_spelling += '.';
+      selected_spelling += member.text;
+      attach_selected_spelling(expression);
     } else {
       expression = marked_expression(
           support::ExpressionMarker::vhdl_member, canonical_member,

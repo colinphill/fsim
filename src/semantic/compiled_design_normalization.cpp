@@ -153,6 +153,34 @@ struct NormalizationIndexes {
     std::unordered_set<std::string> specparam_locals;
 };
 thread_local const NormalizationIndexes* normalization_indexes = nullptr;
+// The depth of live VhdlFoldingDeferral instances of this thread.
+thread_local unsigned vhdl_folding_deferrals = 0U;
+
+// The scopes (by value) of the VHDL units whose names are not resolved yet,
+// while a VhdlFoldingDeferral is alive; empty otherwise.
+std::vector<bool> deferred_vhdl_scopes(const CompiledDesign& design)
+{
+    std::vector<bool> deferred;
+    if (vhdl_folding_deferrals == 0U) {
+        return deferred;
+    }
+    std::unordered_set<std::uint32_t> pending;
+    for (const auto& unit : design.vhdl_hir.units()) {
+        if (!unit.analyzed && unit.id.valid()) {
+            pending.insert(unit.id.value());
+        }
+    }
+    if (pending.empty()) {
+        return deferred;
+    }
+    const auto& scopes = design.semantics.scopes();
+    deferred.resize(scopes.size());
+    for (std::size_t index { }; index < scopes.size(); ++index) {
+        deferred[index] = scopes[index].unit.valid()
+            && pending.contains(scopes[index].unit.value());
+    }
+    return deferred;
+}
 
 std::string specparam_local_key(const ScopeId scope, const std::string& name)
 {
@@ -1865,6 +1893,17 @@ bool annotate_expressions(const CompiledDesign& design,
         // expression nodes, then discard them with this annotation pass.
         vhdl_guard_cache.emplace(design, expressions);
     }
+    // VHDL units awaiting name analysis keep their expressions as written
+    // (VhdlFoldingDeferral).
+    std::vector<bool> deferred_scopes;
+    if constexpr (std::is_same_v<Expression, vhdl::Expression>) {
+        deferred_scopes = deferred_vhdl_scopes(design);
+    }
+    const auto deferred = [&](const Expression& expression) {
+        return !deferred_scopes.empty() && expression.scope.valid()
+            && expression.scope.value() < deferred_scopes.size()
+            && deferred_scopes[expression.scope.value()];
+    };
     std::set<decltype(std::declval<Expression>().id)>
         named_path_attribute_prefixes;
     if constexpr (std::is_same_v<Expression, vhdl::Expression>) {
@@ -1914,6 +1953,7 @@ bool annotate_expressions(const CompiledDesign& design,
                 return false;
             }();
             const bool rewritten = !named_path_attribute_prefix
+                && !deferred(expression)
                 && nested_folded
                 && (dependency_free(dependencies)
                     || rewrite_with_residual_name
@@ -2731,6 +2771,16 @@ bool vhdl_operator_overloaded_by_design(
     const CompiledDesign& design, const std::string_view operation)
 {
     return vhdl_user_operator_overloads(design).contains(lowercase(operation));
+}
+
+VhdlFoldingDeferral::VhdlFoldingDeferral() noexcept
+{
+    ++vhdl_folding_deferrals;
+}
+
+VhdlFoldingDeferral::~VhdlFoldingDeferral()
+{
+    --vhdl_folding_deferrals;
 }
 
 } // namespace fsim::semantic

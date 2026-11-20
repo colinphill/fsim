@@ -431,7 +431,28 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
     }
     return;
   }
+  // The full declaration completing an incomplete one records where the
+  // type was first declared (IEEE 1076-2019 5.4.2), however it is stored.
+  struct CompletedIncomplete {
+    DesignUnit& unit;
+    const std::string& name;
+    std::optional<SourceSpan> span;
+    ~CompletedIncomplete() {
+      if (!span) {
+        return;
+      }
+      const auto full = std::find_if(unit.type_aliases.rbegin(),
+          unit.type_aliases.rend(),
+          [&](const TypeAliasDeclaration &declaration) {
+            return declaration.name == name;
+          });
+      if (full != unit.type_aliases.rend()) {
+        full->vhdl_incomplete_span = span;
+      }
+    }
+  } completed_incomplete { unit, canonical_name, std::nullopt };
   if (completing_incomplete) {
+    completed_incomplete.span = prior_declaration->span;
     unit.type_aliases.erase(prior_declaration);
   }
   expect_keyword("is", true, "FSIM-VHDL-PARSE-127");

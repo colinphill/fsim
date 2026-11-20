@@ -179,11 +179,12 @@ class VhdlExecutableBuilder final {
               input.operands[1].call_result_domain);
       }
       output.decoded_string = input.decoded_string;
-      if (input.kind == frontend::ExpressionKind::Identifier
-          || input.kind == frontend::ExpressionKind::LogicLiteral
-          || input.kind == frontend::ExpressionKind::Call
-          || input.kind == frontend::ExpressionKind::Unary
-          || input.kind == frontend::ExpressionKind::Binary) {
+      if (!input.vhdl_not_a_name
+          && (input.kind == frontend::ExpressionKind::Identifier
+              || input.kind == frontend::ExpressionKind::LogicLiteral
+              || input.kind == frontend::ExpressionKind::Call
+              || input.kind == frontend::ExpressionKind::Unary
+              || input.kind == frontend::ExpressionKind::Binary)) {
           // A qualified expression T'(e) names its type mark T (9.3.5).
           auto spelling
               = input.marker == support::ExpressionMarker::vhdl_qualified

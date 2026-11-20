@@ -82,6 +82,9 @@ namespace fsim::app::application_detail {
         input.span,
         parent);
     auto& output = declaration(id);
+    if (input.vhdl_incomplete_span) {
+        output.incomplete_source = source(*input.vhdl_incomplete_span);
+    }
     auto declared_subtype = input.type;
     auto declaration_identity = support::canonical_vhdl_spelling(
         declared_subtype.vhdl_type_declaration);

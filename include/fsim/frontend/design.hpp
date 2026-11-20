@@ -1879,6 +1879,9 @@ struct DesignUnit {
     // lowering. The exact upstream files remain source dependencies.
     std::string standard_package_revision;
     support::VhdlStandardPackageForm standard_package_form { };
+    // A VHDL package or package body the parser expanded from a design-unit
+    // package instantiation (IEEE 1076-2019 4.9) by copying its template.
+    bool vhdl_package_instance_expansion { };
     std::vector<std::string> standard_package_declarations;
     std::vector<std::string> standard_package_operator_profiles;
     // Verilog/SystemVerilog compilation-unit timing context. Empty when no

@@ -33,71 +33,6 @@ namespace {
 using frontend::DesignUnit;
 namespace vh = semantic::vhdl;
 
-using semantic::same_physical_source;
-
-[[nodiscard]] bool same_preceding_subprogram_specification(
-    const semantic::CompiledDesign& design,
-    const vh::Name& name,
-    const vh::Declaration& selected,
-    const vh::Expression& use)
-{
-    if (!selected.callable
-        || selected.callable->specification_lexemes.empty()) {
-        return false;
-    }
-    const auto* const use_span = semantic::find_source_span(
-        design.semantics, use.source);
-    if (use_span == nullptr) {
-        return false;
-    }
-    for (const auto candidate_id : name.overloads) {
-        if (candidate_id == selected.id) {
-            continue;
-        }
-        const auto candidate = design.find_declaration(candidate_id);
-        if (!candidate || candidate->vhdl == nullptr) {
-            continue;
-        }
-        const auto& declaration = *candidate->vhdl;
-        if (declaration.scope != selected.scope
-            || !declaration.callable || declaration.callable->defined
-            || declaration.callable->function
-                != selected.callable->function
-            || declaration.callable->specification_lexemes
-                != selected.callable->specification_lexemes
-            || !same_physical_source(
-                design.semantics, declaration.source, use.source)) {
-            continue;
-        }
-        const auto* const declaration_span = semantic::find_source_span(
-            design.semantics, declaration.source);
-        if (declaration_span != nullptr
-            && declaration_span->begin.offset < use_span->begin.offset) {
-            return true;
-        }
-    }
-    return false;
-}
-
-[[nodiscard]] bool compiler_predefined_name(
-    const vh::Unit& unit,
-    const std::string_view canonical_name)
-{
-    const auto contains = [&](const std::vector<std::string>& names) {
-        return std::ranges::any_of(names, [&](const std::string& name) {
-            return support::canonical_vhdl_spelling(name) == canonical_name;
-        });
-    };
-    return contains(unit.predefined_environment.declarations)
-        || contains(unit.predefined_environment.time_units);
-}
-
-[[nodiscard]] bool subprogram_scope_declaration(
-    const vh::Declaration& declaration)
-{
-    return declaration.callable.has_value()
-        && declaration.nested_scope.has_value();
-}
 
 [[nodiscard]] bool vhdl_type_denotes_access(
     const semantic::CompiledDesign& design,
@@ -178,164 +113,6 @@ void validate_out_access_prefix_read(
         "an access-typed VHDL name prefix denotes a procedure formal "
         "of mode out before VHDL-2008 (IEEE 1076-1993 6.1)",
         compiled_source_span(design.semantics, expression.source));
-}
-
-void validate_vhdl_source_visibility_impl(
-    const semantic::CompiledDesign& design,
-    diagnostic::Engine& diagnostics)
-{
-    const auto& model = design.semantics;
-    const auto& hir = design.vhdl_hir;
-    const auto& declarations = hir.declarations();
-    const auto& scopes = model.scopes();
-
-    for (const auto& expression : hir.expressions()) {
-        validate_out_access_prefix_read(design, expression, diagnostics);
-        const auto* const use_span = semantic::find_source_span(
-            model, expression.source);
-        const auto* const use_file = use_span == nullptr
-            ? nullptr
-            : semantic::find_source_file(model, *use_span);
-        if (!expression.referenced_name || !expression.scope.valid()) {
-            continue;
-        }
-        const auto& name = *expression.referenced_name;
-        if (use_span == nullptr || use_file == nullptr) {
-            continue;
-        }
-
-        // HIR projection retains the exact selected local callable identity.
-        // Check source order only when that same-scope declaration comes from
-        // this physical source; package and compiler-owned declarations remain
-        // governed by normal name resolution.
-        if (expression.kind == vh::ExpressionKind::call && name.selected) {
-            const auto selected = design.find_declaration(*name.selected);
-            if (selected && selected->vhdl != nullptr
-                && selected->vhdl->scope == expression.scope
-                && selected->vhdl->callable
-                && selected->vhdl->callable->function
-                && same_physical_source(
-                    model, selected->vhdl->source, expression.source)) {
-                const auto* const declaration_span = semantic::find_source_span(
-                    model, selected->vhdl->source);
-                if (declaration_span != nullptr
-                    && declaration_span->begin.offset
-                        > use_span->begin.offset
-                    && !same_preceding_subprogram_specification(
-                        design, name, *selected->vhdl, expression)) {
-                    diagnostics.error(
-                        "FSIM-ELAB-VHNAME-001",
-                        "VHDL subprogram '" + name.spelling
-                            + "' is referenced before its declaration in the "
-                              "same declarative region (IEEE 1076-2008 12.3)",
-                        compiled_source_span(model, expression.source));
-                    continue;
-                }
-            }
-        }
-
-        // A bare value name in a package-body subprogram can be unresolved
-        // because a same-spelled object exists only in a sibling subprogram.
-        // Use the resolver first, then require an actual sibling callable and
-        // local constant identity in this package unit and source file.
-        if (expression.kind != vh::ExpressionKind::name
-            || name.selected || !name.overloads.empty()) {
-            continue;
-        }
-        const bool extended_identifier
-            = support::is_extended_vhdl_identifier(name.spelling);
-        if (!extended_identifier
-            && name.spelling.find('.') != std::string::npos) {
-            continue;
-        }
-        if (expression.scope.value() >= scopes.size()) {
-            continue;
-        }
-        const auto owner = design.find_unit(
-            scopes[expression.scope.value()].unit);
-        if (!owner || owner->identity == nullptr
-            || owner->vhdl == nullptr
-            || owner->vhdl->kind != vh::UnitKind::package) {
-            continue;
-        }
-        semantic::CompiledDesignResolver resolver {
-            design, owner->identity->id };
-        const auto resolution = resolver.resolve_vhdl(
-            name, expression.scope);
-        if (resolution.status != semantic::CompiledResolutionStatus::not_found
-            || resolver.vhdl_standard_package_member_visible(
-                name, expression.scope)
-            || compiler_predefined_name(*owner->vhdl,
-                support::canonical_vhdl_spelling(name.spelling))) {
-            continue;
-        }
-
-        const vh::Declaration* enclosing_callable { };
-        auto visible_scope = expression.scope;
-        for (std::size_t depth { };
-             visible_scope.valid() && visible_scope.value() < scopes.size()
-                 && depth <= scopes.size();
-             ++depth) {
-            const auto callable = std::ranges::find_if(
-                declarations, [&](const vh::Declaration& declaration) {
-                    return subprogram_scope_declaration(declaration)
-                        && declaration.nested_scope == visible_scope;
-                });
-            if (callable != declarations.end()) {
-                enclosing_callable = &*callable;
-                break;
-            }
-            const auto& scope = scopes[visible_scope.value()];
-            if (!scope.parent) {
-                break;
-            }
-            visible_scope = *scope.parent;
-        }
-        if (enclosing_callable == nullptr
-            || !enclosing_callable->callable->function
-            || !same_physical_source(
-                model, enclosing_callable->source, expression.source)) {
-            continue;
-        }
-
-        const auto canonical_name
-            = support::canonical_vhdl_spelling(name.spelling);
-        std::string sibling_name;
-        bool sibling_constant_exists { };
-        for (const auto& sibling : declarations) {
-            if (&sibling == enclosing_callable
-                || !subprogram_scope_declaration(sibling)
-                || sibling.scope != enclosing_callable->scope
-                || sibling.nested_scope == enclosing_callable->nested_scope
-                || !same_physical_source(
-                    model, sibling.source, expression.source)) {
-                continue;
-            }
-            const auto local_constant = std::ranges::find_if(
-                declarations, [&](const vh::Declaration& candidate) {
-                    return candidate.form == vh::DeclarationForm::constant
-                        && candidate.scope == *sibling.nested_scope
-                        && support::canonical_vhdl_spelling(candidate.name)
-                            == canonical_name
-                        && same_physical_source(
-                            model, candidate.source, expression.source);
-                });
-            if (local_constant != declarations.end()) {
-                sibling_name = sibling.name;
-                sibling_constant_exists = true;
-                break;
-            }
-        }
-        if (sibling_constant_exists) {
-            diagnostics.error(
-                "FSIM-ELAB-VHNAME-002",
-                "VHDL name '" + name.spelling
-                    + "' is not visible here; the matching constant is "
-                      "declared only in sibling subprogram '"
-                    + sibling_name + "' (IEEE 1076-2008 12.3)",
-                compiled_source_span(model, expression.source));
-        }
-    }
 }
 
 std::string library_of(const DesignUnit& unit) {
@@ -1074,11 +851,15 @@ void validate_vhdl_analysis_order(
       available_units}.run(units);
 }
 
-void validate_vhdl_source_visibility(
+void validate_vhdl_access_prefix_reads(
     const semantic::CompiledDesign& design,
     diagnostic::Engine& diagnostics)
 {
-    validate_vhdl_source_visibility_impl(design, diagnostics);
+    // Visibility (12.3, 12.4) is analyze_vhdl_names' (gate BD D3); the
+    // implicit dereference this checks moves with expression typing (D4).
+    for (const auto& expression : design.vhdl_hir.expressions()) {
+        validate_out_access_prefix_read(design, expression, diagnostics);
+    }
 }
 
 void validate_vhdl_simulator_api(

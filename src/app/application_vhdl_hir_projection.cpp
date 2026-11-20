@@ -126,11 +126,12 @@ std::optional<std::int64_t> VhdlHirBuilder::static_integer(
             value.operands[1].call_result_domain);
     }
     output.decoded_string = value.decoded_string;
-    if (value.kind == frontend::ExpressionKind::Identifier
-        || value.kind == frontend::ExpressionKind::LogicLiteral
-        || value.kind == frontend::ExpressionKind::Call
-        || value.kind == frontend::ExpressionKind::Unary
-        || value.kind == frontend::ExpressionKind::Binary) {
+    if (!value.vhdl_not_a_name
+        && (value.kind == frontend::ExpressionKind::Identifier
+            || value.kind == frontend::ExpressionKind::LogicLiteral
+            || value.kind == frontend::ExpressionKind::Call
+            || value.kind == frontend::ExpressionKind::Unary
+            || value.kind == frontend::ExpressionKind::Binary)) {
         // A qualified expression T'(e) names its type mark T (9.3.5).
         auto spelling
             = value.marker == support::ExpressionMarker::vhdl_qualified
@@ -1011,6 +1012,21 @@ predefined_subtype_attribute(
 }
 
 [[nodiscard]] vh::SubtypeIndication VhdlHirBuilder::subtype(
+    const frontend::Type& type,
+    const frontend::SourceSpan& fallback,
+    const semantic::ScopeId scope,
+    const semantic::OriginId parent)
+{
+    auto result = subtype_indication(type, fallback, scope, parent);
+    if (!type.vhdl_written_type_mark.empty()) {
+        result.written_type_mark = vh::Name { type.vhdl_written_type_mark,
+            support::canonical_vhdl_spelling(type.vhdl_written_type_mark),
+            source(type.vhdl_written_type_mark_span), std::nullopt, { } };
+    }
+    return result;
+}
+
+[[nodiscard]] vh::SubtypeIndication VhdlHirBuilder::subtype_indication(
     const frontend::Type& type,
     const frontend::SourceSpan& fallback,
     const semantic::ScopeId scope,

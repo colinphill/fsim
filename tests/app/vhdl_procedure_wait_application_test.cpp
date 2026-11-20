@@ -486,7 +486,9 @@ begin
   process begin wait for missing_time; end process;
 end architecture;
 )",
-        "FSIM-ELAB-VHTIME-001");
+        // An undeclared delay name is a compile-time name error (IEEE
+        // 1076-2019 12.3) before any time check.
+        "FSIM-VHDL-NAME-001");
     std::cout << "VHDL procedure wait application tests passed\n";
     return 0;
 }
