@@ -685,6 +685,9 @@ namespace codec_detail {
         } else if constexpr (std::same_as<T, semantic::vhdl::AnchoredSlot>) {
             return value >= semantic::vhdl::AnchoredSlot::expression_resolved_declaration
                 && value <= semantic::vhdl::AnchoredSlot::statement_resolved_procedure;
+        } else if constexpr (std::same_as<T, support::VhdlStandardPackageForm>) {
+            return value >= support::VhdlStandardPackageForm::none
+                && value <= support::VhdlStandardPackageForm::projection;
         } else if constexpr (std::same_as<T, semantic::vhdl::AnchorSpace>) {
             return value >= semantic::vhdl::AnchorSpace::declarations
                 && value <= semantic::vhdl::AnchorSpace::types;

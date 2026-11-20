@@ -3,6 +3,7 @@
 #include "fsim/app/built_project.hpp"
 #include "fsim/semantic/vhdl_hir.hpp"
 #include "fsim/runtime/simir.hpp"
+#include "fsim/support/vhdl_identifier.hpp"
 
 #include "governed_process_limits.hpp"
 
@@ -95,7 +96,6 @@ Capture run_once(
 void verify_package(
     const fsim::project::Config& config,
     const std::string_view package,
-    const std::size_t source_count,
     const fsim::frontend::ValueDomain domain)
 {
     fsim::diagnostic::Engine diagnostics;
@@ -104,23 +104,15 @@ void verify_package(
     assert(!diagnostics.has_error());
     assert(checked->source_count == 1);
     assert(checked->hdl_sources.size() == 1);
-    assert(checked->standard_sources.size() == source_count);
-    const auto declaration_hash = package == "numeric_std"
-        ? "fcb9b1d05f8d98cd068e464bf20804d432a234128b253218524901bc96d19631"
-        : "e54a257a6da6141ef2fb0b51dccbde127a665e474e4e8e354f28e720b5d440be";
-    const auto body_hash = package == "numeric_std"
-        ? "10e8bdc4fedc881a972f5900abe833d24397d686e07b566479c47495acf39721"
-        : "21fc27ef3d7ff0932ebb6c92a4d5f10865b1867ce392a008c2de1d6fde3e11ab";
-    assert(std::ranges::any_of(
-        checked->standard_sources,
-        [&](const fsim::app::CheckedSource& source) {
-            return source.content_digest == declaration_hash;
-        }));
-    assert(std::ranges::any_of(
-        checked->standard_sources,
-        [&](const fsim::app::CheckedSource& source) {
-            return source.content_digest == body_hash;
-        }));
+    // The package comes from the precompiled standard library (owner 11-19,
+    // gate BD D2): no projected source, one precompiled dependency.
+    assert(checked->standard_sources.empty());
+    const auto expanded = "ieee." + std::string { package };
+    const auto dependency = std::ranges::find(
+        checked->precompiled_vhdl_package_dependencies, expanded,
+        &fsim::library::VhdlPackageDependency::package);
+    assert(dependency != checked->precompiled_vhdl_package_dependencies.end());
+    assert(dependency->revision.starts_with("fsim-stdlib:"));
     const auto& hir = checked->vhdl_hir;
     const auto declaration = std::ranges::find_if(
         hir.units(),
@@ -130,12 +122,13 @@ void verify_package(
                 && unit.primary_name.empty();
         });
     assert(declaration != hir.units().end());
-    assert(
-        declaration->standard_package_revision
-        == "ieee-p1076:1076-2019:16a012320947d378611cc7457f64ed76cb52bac4");
-    assert(std::ranges::find(
-               declaration->standard_package_declarations, "resize")
-        != declaration->standard_package_declarations.end());
+    assert(declaration->standard_package_revision == dependency->revision);
+    // RESIZE is a real declaration of the package (IEEE 1076-2019 16.8.3).
+    assert(std::ranges::any_of(declaration->declarations, [&](const auto id) {
+        const auto* item = hir.find_declaration(id);
+        return item != nullptr
+            && fsim::support::ascii_lower(item->name) == "resize";
+    }));
     const auto entity = std::ranges::find_if(
         hir.units(),
         [](const fsim::semantic::vhdl::Unit& unit) {
@@ -272,7 +265,7 @@ begin
   s <= to_signed(-5, 8);
   add_u <= u + to_unsigned(3, 8);
   sub_u <= u - to_unsigned(3, 8);
-  mul_u <= u * to_unsigned(3, 8);
+  mul_u <= resize(u * to_unsigned(3, 8), 8);
   div_u <= u / to_unsigned(3, 8);
   mod_u <= u mod to_unsigned(3, 8);
   add_s <= s + to_signed(2, 8);
@@ -740,7 +733,7 @@ end architecture;
             directory.path, numeric_std, "numeric_std_app", "numeric-std",
             optimization);
         verify_package(
-            std_config, "numeric_std", 4, fsim::frontend::ValueDomain::Logic9);
+            std_config, "numeric_std", fsim::frontend::ValueDomain::Logic9);
         verify_runs(
             std_config,
             {
@@ -802,7 +795,7 @@ end architecture;
             directory.path, numeric_bit, "numeric_bit_app", "numeric-bit",
             optimization);
         verify_package(
-            bit_config, "numeric_bit", 2, fsim::frontend::ValueDomain::Bit2);
+            bit_config, "numeric_bit", fsim::frontend::ValueDomain::Bit2);
         verify_runs(
             bit_config,
             {

@@ -588,6 +588,14 @@ public:
     [[nodiscard]] bool vhdl_standard_package_member_visible(
         const vhdl::Name&, ScopeId use_scope) const;
 
+    /// Whether the name denotes a member that a projected standard package
+    /// (fixed, float, Synopsys, VITAL: VhdlStandardPackageForm::projection)
+    /// exports without a declaration in the HIR. The overloads such a use
+    /// clause makes visible are then not all enumerable here (gate BD2
+    /// gives those packages real declarations).
+    [[nodiscard]] bool vhdl_projected_package_member_visible(
+        const vhdl::Name&, ScopeId use_scope) const;
+
     /// Whether a name denotes `member` of the compiler-provided package
     /// `library.package` where it is written (IEEE 1076-2019 12.3, 12.4):
     /// its expanded name `library.package.member`, `package.member` where
@@ -723,6 +731,8 @@ public:
         std::string_view name) const;
 
 private:
+    [[nodiscard]] bool vhdl_standard_package_member_visible_in(
+        const vhdl::Name&, ScopeId use_scope, bool projected_only) const;
     [[nodiscard]] std::optional<sv::TypeReference> systemverilog_type(
         const sv::TypeReference&, ScopeId use_scope, bool keep_renaming) const;
     [[nodiscard]] std::optional<bool> vhdl_array_shapes_match(

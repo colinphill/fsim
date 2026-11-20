@@ -396,11 +396,11 @@ inline void require_same_type(
     return value;
 }
 
-[[nodiscard]] inline const std::string& associative_string_key(
+[[nodiscard]] inline std::string_view associative_string_key(
     const ProcessId process,
     const InstructionIndex instruction,
     const ContainerType& type,
-    const std::string& value)
+    const std::string_view value)
 {
     if (!type.associative || !type.string_indices) {
         container_error(
@@ -490,7 +490,7 @@ public:
         impl_.get_register(process_, id) = std::move(value);
     }
 
-    [[nodiscard]] const std::string& read_string(
+    [[nodiscard]] std::string_view read_string(
         const StringRegisterId id) override
     {
         return impl_.get_string_register(process_, id);

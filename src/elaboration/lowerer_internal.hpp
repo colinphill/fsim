@@ -14,6 +14,7 @@
 #include "fsim/elaboration/coverage_hir_points.hpp"
 #include "fsim/frontend/parser.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
+#include "fsim/semantic/vhdl_native_identity.hpp"
 #include "fsim/support/vhdl_standard_enumeration.hpp"
 
 #include <array>
@@ -309,6 +310,12 @@ vhdl_logic_string_function_name(std::string_view spelling) noexcept;
     const semantic::SpecializedHirUnit&,
     const semantic::vhdl::SubtypeIndication&,
     semantic::ScopeId use_scope);
+// An access type of the precompiled standard library: STD.TEXTIO.LINE
+// (native) or one STD.ENV declares (DIRECTORY_ITEMS, CALL_PATH_VECTOR_PTR,
+// IEEE 1076-2019 16.5), whose values fsim's native operations build.
+[[nodiscard]] bool vhdl_standard_library_access_type(
+    const semantic::SpecializedHirUnit&,
+    const semantic::vhdl::TypeDefinition&);
 [[nodiscard]] bool hir_vhdl_unshadowed_integer_vector(
     const semantic::SpecializedHirUnit&,
     const semantic::vhdl::SubtypeIndication&,
@@ -2829,11 +2836,27 @@ private:
     };
     struct HirVhdlStandardFunctionProfile {
         HirVhdlStandardFunctionKind kind;
-        std::string_view name;
+        semantic::VhdlNativeName name;
         std::size_t width { };
         frontend::ValueDomain domain { frontend::ValueDomain::Unknown };
         bool signed_value { };
         bool invalid_numeric_size { };
+        // The designator of a projected Synopsys or std_logic_misc
+        // function (CONV_INTEGER, AND_REDUCE, SHL, ...), which has no
+        // native declaration; empty for a native function, which `name`
+        // identifies.
+        std::string_view projected { };
+        // The native declaration `name` identifies (null for a projected
+        // function).
+        const semantic::VhdlNativeIntrinsic* native { };
+
+        // The designator for diagnostics and generated names: the
+        // projected designator or the native one (never for identity).
+        [[nodiscard]] std::string_view designator() const noexcept
+        {
+            return native != nullptr ? semantic::vhdl_native_designator(*native)
+                                     : projected;
+        }
     };
     [[nodiscard]] std::optional<HirVhdlStandardFunctionProfile>
     hir_vhdl_standard_function_profile(
@@ -3535,10 +3558,6 @@ private:
     convert_hir_vhdl_closely_related_value(RegisterId value,
         const semantic::vhdl::SubtypeIndication& operand,
         const semantic::vhdl::SubtypeIndication& target);
-    // The value of the IEEE.MATH_REAL constant (MATH_PI, ...) a VHDL name
-    // denotes.
-    [[nodiscard]] std::optional<double> hir_vhdl_math_real_constant(
-        semantic::ExpressionId expression) const;
     // IEEE.MATH_REAL.UNIFORM (IEEE 1076.2-1996): the procedure call's
     // outcome when it names that procedure, nullopt otherwise.
     [[nodiscard]] std::optional<bool> lower_hir_vhdl_math_real_uniform(
@@ -3927,6 +3946,11 @@ private:
     [[nodiscard]] bool hir_vhdl_is_predefined_string_concat(
         semantic::ExpressionId expression,
         semantic::ScopeId process_scope) const;
+    // Reports FSIM-ELAB-VHENUM-004 for the first literal within the
+    // expression that resolution found to fit more than one overload of
+    // its call (IEEE 1076-2019 12.5); false when there is none.
+    [[nodiscard]] bool report_hir_vhdl_ambiguous_literal_within(
+        semantic::ExpressionId expression);
     [[nodiscard]] bool can_lower_hir_string_expression(
         semantic::ExpressionId expression,
         semantic::ScopeId process_scope,
@@ -4065,6 +4089,17 @@ private:
     [[nodiscard]] std::optional<semantic::DeclarationId>
     hir_referenced_declaration(
         semantic::ExpressionId expression) const;
+    // The native entry of the declaration `expression` resolved to (a call
+    // or operator of a precompiled standard package, IEEE 1076-2019 16);
+    // null for an ordinary declaration or none.
+    [[nodiscard]] const semantic::VhdlNativeIntrinsic*
+    hir_vhdl_native_callee(semantic::ExpressionId expression) const;
+    // RISING_EDGE, FALLING_EDGE or IS_X (IEEE 1076-2019 16.7) when the call
+    // denotes IEEE.STD_LOGIC_1164's native function, or the predefined
+    // 2008 STD.STANDARD RISING_EDGE/FALLING_EDGE of a BIT or BOOLEAN
+    // operand (no declaration, 5.2.6); nullopt otherwise.
+    [[nodiscard]] std::optional<semantic::VhdlNativeName>
+    hir_vhdl_edge_function(semantic::ExpressionId expression) const;
     // The package instance through which an object of a generic package
     // was last named (`p2.s`), by the object's template declaration.
     // hir_runtime_binding binds the template object to that instance's own
@@ -5270,6 +5305,12 @@ private:
         std::size_t contextual_width) const;
     [[nodiscard]] std::optional<HirCallableResolution>
     compute_hir_vhdl_function_call(
+        semantic::ExpressionId expression,
+        semantic::ScopeId process_scope,
+        std::size_t contextual_width) const;
+    // compute_hir_vhdl_function_call, less a native callee (no body).
+    [[nodiscard]] std::optional<HirCallableResolution>
+    native_filtered_hir_vhdl_function_call(
         semantic::ExpressionId expression,
         semantic::ScopeId process_scope,
         std::size_t contextual_width) const;

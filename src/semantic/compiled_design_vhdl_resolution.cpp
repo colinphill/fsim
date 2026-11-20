@@ -2,6 +2,7 @@
 #include "fsim/semantic/compiled_design_vhdl_resolution.hpp"
 
 #include "fsim/semantic/compiled_design_resolver.hpp"
+#include "fsim/semantic/vhdl_native_identity.hpp"
 #include "fsim/support/vhdl_standard_enumeration.hpp"
 #include "fsim/support/vhdl_time.hpp"
 
@@ -72,8 +73,8 @@ struct TypeKey {
 constexpr std::string_view universal_integer { "universal_integer" };
 constexpr std::string_view universal_real { "universal_real" };
 
-// The predefined types named by STD.STANDARD and IEEE.STD_LOGIC_1164. A
-// subtype names its base type (5.2.6, 16.3, 16.7).
+// The predefined types named by STD.STANDARD. A subtype names its base type
+// (5.2.6, 16.3).
 [[nodiscard]] std::string predefined_base(const std::string_view name)
 {
     if (name == "natural" || name == "positive") {
@@ -81,14 +82,6 @@ constexpr std::string_view universal_real { "universal_real" };
     }
     if (name == "delay_length") {
         return "time";
-    }
-    if (name == "std_logic") {
-        return "std_ulogic";
-    }
-    // The IEEE library's STD_LOGIC_VECTOR is a resolved subtype of
-    // STD_ULOGIC_VECTOR (IEEE 1076-2008 16.7).
-    if (name == "std_logic_vector") {
-        return "std_ulogic_vector";
     }
     return std::string { name };
 }
@@ -105,15 +98,35 @@ constexpr std::string_view universal_real { "universal_real" };
         std::string_view { "boolean_vector" },
         std::string_view { "integer_vector" },
         std::string_view { "real_vector" }, std::string_view { "time_vector" },
-        std::string_view { "std_ulogic" }, std::string_view { "std_logic" },
-        std::string_view { "std_ulogic_vector" },
-        std::string_view { "std_logic_vector" },
-        // IEEE.NUMERIC_STD (16.8.5), whose declarations a design may not
-        // retain.
-        std::string_view { "unsigned" }, std::string_view { "signed" },
     };
     return std::ranges::find(names, name) != names.end()
         || support::find_vhdl_standard_enumeration(name) != nullptr;
+}
+
+// The key this pass gives the type a native declaration of IEEE.STD_LOGIC_1164,
+// IEEE.NUMERIC_STD, IEEE.NUMERIC_BIT or STD.TEXTIO denotes; a resolved
+// subtype and its unresolved type share one (16.7, 16.8.5); empty for any
+// other native entry.
+[[nodiscard]] std::string_view native_type_key(const VhdlNativeIntrinsic& entry)
+{
+    switch (vhdl_native_provided_type(entry)) {
+    case vhdl::ProvidedType::std_ulogic:
+    case vhdl::ProvidedType::std_logic: return "std_ulogic";
+    case vhdl::ProvidedType::std_ulogic_vector:
+    case vhdl::ProvidedType::std_logic_vector: return "std_ulogic_vector";
+    case vhdl::ProvidedType::numeric_std_unsigned: return "unsigned";
+    case vhdl::ProvidedType::numeric_std_signed: return "signed";
+    case vhdl::ProvidedType::numeric_bit_unsigned: return "bit_unsigned";
+    case vhdl::ProvidedType::numeric_bit_signed: return "bit_signed";
+    case vhdl::ProvidedType::textio_line: return "std.textio.line";
+    case vhdl::ProvidedType::textio_text: return "std.textio.text";
+    case vhdl::ProvidedType::textio_side: return "std.textio.side";
+    // WIDTH is a subtype of NATURAL (16.4): its type is INTEGER.
+    case vhdl::ProvidedType::textio_width: return "integer";
+    case vhdl::ProvidedType::textio_line_vector:
+        return "std.textio.line_vector";
+    default: return { };
+    }
 }
 
 [[nodiscard]] std::string_view predefined_element(const std::string_view name)
@@ -927,6 +940,14 @@ private:
 
     [[nodiscard]] TypeKey type_key(const TypeId id)
     {
+        // A type or subtype of a native declaration of a compiler-served
+        // package has that declaration's identity (6.3, 16.7).
+        if (const auto* entry = vhdl_native_type_of(design_, id);
+            entry != nullptr) {
+            if (const auto key = native_type_key(*entry); !key.empty()) {
+                return builtin(key);
+            }
+        }
         const auto root = vhdl_root_type(design_, id);
         const auto* definition = type(root);
         if (definition == nullptr) {
@@ -941,18 +962,14 @@ private:
                 ? TypeKey { }
                 : subtype_key(definition->base, owner->scope);
         }
-        // A predefined type declared in STD.STANDARD or IEEE.STD_LOGIC_1164
-        // keeps the identity it has where those packages are not retained.
+        // A predefined type declared in STD.STANDARD keeps the identity it
+        // has where that package is not retained.
         const auto name = lowered(definition->name);
         if (predefined_name(name)) {
             if (const auto* owner = declaration(definition->declaration)) {
                 if (const auto* unit = design_.vhdl_scope_unit(owner->scope);
-                    unit != nullptr
-                    && ((lowered(unit->library) == "std"
-                            && lowered(unit->name) == "standard")
-                        || (lowered(unit->library) == "ieee"
-                            && (lowered(unit->name) == "std_logic_1164"
-                                || lowered(unit->name) == "numeric_std")))) {
+                    unit != nullptr && lowered(unit->library) == "std"
+                    && lowered(unit->name) == "standard") {
                     return builtin(name);
                 }
             }
@@ -993,47 +1010,11 @@ private:
                     vhdl_standard_scalar_declaration_name(
                         identity.standard_scalar_type));
             }
-            // A type of a compiler-provided package the name denotes at the
-            // use: through its expanded name, or a use clause that no
-            // declaration hides (IEEE 1076-2019 12.3, 12.4, 16.4, 16.7,
-            // 16.8.5).
+            // A predefined enumeration type of STD.STANDARD the name denotes
+            // at the use (IEEE 1076-2019 12.3, 12.4, 16.3).
             if (const auto intrinsic
                 = lookup->resolve_vhdl_intrinsic_enumeration(spelling, scope)) {
                 return builtin(intrinsic_type_name(*intrinsic));
-            }
-            const auto provided = [&](const std::string_view library,
-                                      const std::string_view package,
-                                      const std::string_view member) {
-                return lookup->vhdl_denotes_provided_package_member(
-                    spelling, library, package, member, scope);
-            };
-            for (const std::string_view member :
-                { "std_ulogic_vector", "std_logic_vector" }) {
-                if (provided("ieee", "std_logic_1164", member)) {
-                    return builtin(member);
-                }
-            }
-            // NUMERIC_BIT's UNSIGNED and SIGNED are array types of BIT,
-            // distinct from NUMERIC_STD's of STD_ULOGIC (16.8.5); both
-            // made visible by use clauses hide each other (12.4).
-            for (const std::string_view member : { "unsigned", "signed" }) {
-                const bool standard_logic
-                    = provided("ieee", "numeric_std", member);
-                const bool standard_bit = provided("ieee", "numeric_bit", member);
-                if (standard_logic != standard_bit) {
-                    return standard_logic
-                        ? builtin(member)
-                        : builtin(member == "unsigned" ? "bit_unsigned"
-                                                       : "bit_signed");
-                }
-            }
-            // A type of STD.TEXTIO that is not retained, distinct from any
-            // other type of its simple name (5.1, 16.4).
-            for (const std::string_view member :
-                { "line", "line_vector", "text", "side", "width" }) {
-                if (provided("std", "textio", member)) {
-                    return builtin("std.textio." + std::string { member });
-                }
             }
         }
         const auto name = simple_name(spelling);
@@ -1639,6 +1620,42 @@ private:
         if (record.operands.empty()) {
             return { };
         }
+        // A'LEFT[(N)], A'RIGHT, A'LOW and A'HIGH of an array prefix have
+        // the type of its Nth index range (16.2.3); of a scalar prefix, the
+        // prefix's type (16.2.2). Every predefined and IEEE vector type is
+        // indexed by NATURAL or POSITIVE, whose base type is INTEGER.
+        const bool index_bound = attribute == "low" || attribute == "high"
+            || attribute == "left" || attribute == "right";
+        const auto dimension = [&]() -> std::size_t {
+            if (record.operands.size() < 2U) {
+                return 0U;
+            }
+            const auto* argument = expression(record.operands[1]);
+            if (argument == nullptr
+                || argument->kind != ExpressionKind::integer_literal
+                || argument->text.empty()
+                || !std::ranges::all_of(argument->text, [](const char c) {
+                       return c >= '0' && c <= '9';
+                   })) {
+                return 0U;
+            }
+            const auto value = std::stoull(argument->text);
+            return value == 0U ? 0U : static_cast<std::size_t>(value - 1U);
+        };
+        const auto result_of = [&](const TypeKey& key) -> std::vector<TypeKey> {
+            if (!key.known()) {
+                return { };
+            }
+            if (!index_bound || !array_class(key)) {
+                return { key };
+            }
+            if (!key.builtin.empty()) {
+                return { builtin("integer") };
+            }
+            const auto index = index_key(key, dimension());
+            return index.known() ? std::vector { index }
+                                 : std::vector<TypeKey> { };
+        };
         // The prefix is a type mark or an object of the type.
         const auto* prefix = expression(record.operands.front());
         if (prefix == nullptr || !prefix->referenced_name) {
@@ -1650,16 +1667,26 @@ private:
                 declared != nullptr && declared->declared_type
                 && (declared->form == vhdl::DeclarationForm::type
                     || declared->form == vhdl::DeclarationForm::subtype)) {
-                const auto key = type_key(*declared->declared_type);
-                return key.known() ? std::vector { key }
-                                   : std::vector<TypeKey> { };
+                return result_of(type_key(*declared->declared_type));
             }
         }
         const auto named = named_type_key(name.spelling, prefix->scope);
         if (named.known()) {
-            return { named };
+            return result_of(named);
         }
-        return candidates(record.operands.front());
+        auto prefix_types = candidates(record.operands.front());
+        if (!index_bound) {
+            return prefix_types;
+        }
+        std::vector<TypeKey> result;
+        for (const auto& key : prefix_types) {
+            for (auto& bound : result_of(key)) {
+                if (std::ranges::find(result, bound) == result.end()) {
+                    result.push_back(std::move(bound));
+                }
+            }
+        }
+        return result;
     }
 
     /// The types of a name: its declarations' types, or for `obj.m1.m2`
@@ -1729,17 +1756,14 @@ private:
             if (record->referenced_name) {
                 result = declaration_types(*record->referenced_name);
             }
-            // CHARACTER and BIT need no retained declarations (16.3), nor
-            // STD_ULOGIC, which this pass treats as predefined too (16.7).
+            // CHARACTER and BIT need no retained declarations (16.3);
+            // STD_ULOGIC is a candidate through the declared literals the
+            // name denotes (16.7).
             add(result, builtin("character"));
             const auto text = std::string_view { record->text };
             if (text == "'0'" || text == "'1'" || text == "0"
                 || text == "1") {
                 add(result, builtin("bit"));
-            }
-            if (support::vhdl_intrinsic_enumeration_position(
-                    support::VhdlIntrinsicEnumeration::std_ulogic, text)) {
-                add(result, builtin("std_ulogic"));
             }
             return result;
         }
@@ -1819,15 +1843,6 @@ private:
                 }
             }
             if (visible.empty()) {
-                // A call of a compiler-owned subprogram has the result type
-                // of the overloads its actuals fit (12.5).
-                if (const auto signatures
-                    = fitting_intrinsic_signatures(*record, std::nullopt)) {
-                    for (const auto* signature : *signatures) {
-                        add(result, intrinsic_result(*signature));
-                    }
-                    return result;
-                }
                 // An object name with an actual part is an indexed name, or
                 // a slice when its argument is a range (8.4, 8.5).
                 const auto prefix = name_types(*record);
@@ -1980,7 +1995,13 @@ private:
     {
         for (std::size_t index = 0; index < record.operands.size(); ++index) {
             const auto operand = record.operands[index];
-            if (!is_character_literal(operand) || chosen.empty()) {
+            // A string literal is a value of every one-dimensional array
+            // type of character elements its formal can be (9.3.2): the
+            // array formal types of the overloads that apply are its
+            // candidates.
+            const bool string_actual = is_string_literal(operand);
+            if ((!is_character_literal(operand) && !string_actual)
+                || chosen.empty()) {
                 resolve(operand, std::nullopt);
                 continue;
             }
@@ -1994,7 +2015,8 @@ private:
                 }
                 const auto key = formal_key(
                     (*associated)[index], callable->instance);
-                if (std::ranges::find(own, key) != own.end()) {
+                if (string_actual ? array_class(key)
+                                  : std::ranges::find(own, key) != own.end()) {
                     add(formal_types, key);
                 }
             }
@@ -2081,202 +2103,6 @@ private:
         }
     }
 
-    /// The compiler-owned subprograms of IEEE.STD_LOGIC_1164 and
-    /// IEEE.NUMERIC_STD that take scalar actuals, with their scalar formal
-    /// types ('s' STD_ULOGIC, 'b' BIT, 'a' an array) and result type ('s',
-    /// 'b', 'B' BOOLEAN or 'i' INTEGER), one entry per overload. The design retains no declaration
-    /// of them, so these signatures give a literal actual its type (IEEE
-    /// 1076-2019 12.5). The BIT overloads of TO_X01, TO_X01Z, TO_UX01 and
-    /// TO_01 return STD_ULOGIC subtypes (IEEE.STD_LOGIC_1164, 16.8).
-    struct IntrinsicSignature {
-        std::string_view name;
-        std::string_view formals;
-        char result;
-    };
-    static constexpr std::array<IntrinsicSignature, 36U> intrinsic_signatures {{
-        { "to_bit", "s", 'b' }, { "to_bit", "sb", 'b' },
-        { "to_stdulogic", "b", 's' }, { "to_x01", "s", 's' },
-        { "to_x01", "b", 's' }, { "to_x01z", "s", 's' },
-        { "to_x01z", "b", 's' }, { "to_ux01", "s", 's' },
-        { "to_ux01", "b", 's' }, { "is_x", "s", 'B' },
-        { "rising_edge", "s", 'B' }, { "falling_edge", "s", 'B' },
-        { "std_match", "ss", 'B' }, { "to_01", "s", 's' },
-        { "to_01", "b", 's' }, { "to_01", "ss", 's' },
-        { "to_01", "bs", 's' },
-        { "find_leftmost", "as", 'i' }, { "find_rightmost", "as", 'i' },
-        // The vector overloads ('v' STD_ULOGIC_VECTOR, which STD_LOGIC_VECTOR
-        // subtypes, 'w' BIT_VECTOR; results 'v' and 'V' BIT_VECTOR).
-        { "to_x01", "v", 'v' }, { "to_x01", "w", 'v' },
-        { "to_x01z", "v", 'v' }, { "to_x01z", "w", 'v' },
-        { "to_ux01", "v", 'v' }, { "to_ux01", "w", 'v' },
-        { "to_01", "v", 'v' }, { "to_01", "w", 'v' },
-        { "to_01", "vs", 'v' }, { "to_01", "ws", 'v' },
-        { "to_bitvector", "v", 'V' }, { "to_bitvector", "vb", 'V' },
-        { "to_stdlogicvector", "v", 'v' }, { "to_stdlogicvector", "w", 'v' },
-        { "to_stdulogicvector", "v", 'v' }, { "to_stdulogicvector", "w", 'v' },
-        { "is_x", "v", 'B' },
-    }};
-
-    /// Types the literal actuals of a call to a compiler-owned subprogram
-    /// from the overloads of `intrinsic_signatures` that the actuals fit
-    /// (12.5, 9.3.2); false when the call is not one. A literal that fits
-    /// the formals of more than one overload, and whose context (the call's
-    /// result type) does not choose, is ambiguous: it is recorded as such,
-    /// so that no homograph is taken for it and the lowering reports it.
-    /// The overloads of `intrinsic_signatures` that a call of a
-    /// compiler-owned subprogram fits, or none when the call is not one.
-    [[nodiscard]] std::optional<std::vector<const IntrinsicSignature*>>
-    fitting_intrinsic_signatures(const vhdl::Expression& record,
-        const std::optional<TypeKey>& expected)
-    {
-        if (!function_call(record) || !functions(record).empty()
-            || record.operands.empty()) {
-            return std::nullopt;
-        }
-        const auto name = lowered(simple_name(record.text));
-        const auto* lookup = resolver(record.scope);
-        if (lookup == nullptr) {
-            return std::nullopt;
-        }
-        const bool logic = lookup->vhdl_builtin_package_member_imported(
-            "ieee", "std_logic_1164", "std_ulogic", record.scope);
-        const bool numeric = lookup->vhdl_builtin_package_member_imported(
-            "ieee", "numeric_std", "unsigned", record.scope);
-        if (!logic
-            && !(numeric
-                && (name == "std_match" || name == "find_leftmost"
-                    || name == "find_rightmost"))) {
-            return std::nullopt;
-        }
-        const auto formal_key_of = [&](const char formal) {
-            return builtin(formal == 's' ? "std_ulogic"
-                    : formal == 'v'      ? "std_ulogic_vector"
-                    : formal == 'w'      ? "bit_vector"
-                                         : "bit");
-        };
-        const auto is_literal = [&](const ExpressionId id) {
-            const auto* operand = expression(id);
-            return operand != nullptr
-                && operand->kind == ExpressionKind::logic_literal;
-        };
-        std::vector<const IntrinsicSignature*> fitting;
-        bool known_name { };
-        for (const auto& signature : intrinsic_signatures) {
-            if (signature.name != name) {
-                continue;
-            }
-            known_name = true;
-            if (signature.formals.size() != record.operands.size()) {
-                continue;
-            }
-            bool fits = true;
-            for (std::size_t index = 0; fits && index < record.operands.size();
-                 ++index) {
-                if (signature.formals[index] == 'a') {
-                    // An array actual (UNSIGNED or SIGNED) is never a literal.
-                    fits = !is_literal(record.operands[index]);
-                    continue;
-                }
-                // A string literal is a value of whichever array type its
-                // context gives it (9.3.2), so it fits every vector formal.
-                if (const auto* operand = expression(record.operands[index]);
-                    operand != nullptr
-                    && operand->kind == ExpressionKind::string_literal) {
-                    fits = signature.formals[index] == 'v'
-                        || signature.formals[index] == 'w';
-                    continue;
-                }
-                const auto& actual = candidates(record.operands[index]);
-                const auto formal = formal_key_of(signature.formals[index]);
-                const bool present
-                    = std::ranges::find(actual, formal) != actual.end();
-                fits = is_literal(record.operands[index])
-                    ? present
-                    : (actual.empty() || present);
-            }
-            // The context of the call selects among overloads by result
-            // type (12.5).
-            if (fits && expected) {
-                fits = compatible(*expected, intrinsic_result(signature));
-            }
-            if (fits) {
-                fitting.push_back(&signature);
-            }
-        }
-        if (!known_name) {
-            return std::nullopt;
-        }
-        return fitting;
-    }
-
-    [[nodiscard]] TypeKey intrinsic_result(const IntrinsicSignature& signature)
-    {
-        return signature.result == 's' ? builtin("std_ulogic")
-            : signature.result == 'v' ? builtin("std_ulogic_vector")
-            : signature.result == 'V' ? builtin("bit_vector")
-            : signature.result == 'b' ? builtin("bit")
-            : signature.result == 'i' ? builtin("integer")
-                                      : builtin("boolean");
-    }
-
-    [[nodiscard]] bool resolve_intrinsic_call(const vhdl::Expression& record,
-        const std::optional<TypeKey>& expected)
-    {
-        const auto signatures = fitting_intrinsic_signatures(record, expected);
-        if (!signatures) {
-            return false;
-        }
-        const auto formal_key_of = [&](const char formal) {
-            return builtin(formal == 's' ? "std_ulogic"
-                    : formal == 'v'      ? "std_ulogic_vector"
-                    : formal == 'w'      ? "bit_vector"
-                                         : "bit");
-        };
-        // A string literal has no type of its own either: its context alone
-        // gives one (9.3.2), so one that fits the vector formals of several
-        // overloads is ambiguous (12.5).
-        const auto is_literal = [&](const ExpressionId id) {
-            const auto* operand = expression(id);
-            return operand != nullptr
-                && operand->kind == ExpressionKind::logic_literal;
-        };
-        const auto is_string = [&](const ExpressionId id) {
-            const auto* operand = expression(id);
-            return operand != nullptr
-                && operand->kind == ExpressionKind::string_literal;
-        };
-        std::vector<std::string_view> fitting;
-        for (const auto* signature : *signatures) {
-            fitting.push_back(signature->formals);
-        }
-        for (std::size_t index = 0; index < record.operands.size(); ++index) {
-            const auto operand = record.operands[index];
-            std::set<char> formals;
-            for (const auto candidate : fitting) {
-                formals.insert(candidate[index]);
-            }
-            formals.erase('a');
-            if (is_string(operand) && formals.contains('v')
-                && formals.contains('w')) {
-                annotate_type(operand, pseudo_type(PseudoType::ambiguous_literal));
-                resolve(operand, std::nullopt);
-                continue;
-            }
-            if (!is_literal(operand) || formals.empty()) {
-                resolve(operand, std::nullopt);
-                continue;
-            }
-            if (formals.size() == 1U) {
-                resolve(operand, formal_key_of(*formals.begin()));
-                continue;
-            }
-            // Fits more than one overload: ambiguous (12.5).
-            annotate_type(operand, pseudo_type(PseudoType::ambiguous_literal));
-            resolve(operand, std::nullopt);
-        }
-        return true;
-    }
-
     /// The operand of the condition operator `??` (9.2.9) is a literal of
     /// BIT or STD_ULOGIC, the types it is defined for. A literal that is a
     /// value of both is ambiguous (12.5); it is recorded as such, and the
@@ -2284,15 +2110,14 @@ private:
     void resolve_condition_literal(const vhdl::Expression& record)
     {
         const auto id = record.operands.front();
-        const auto* lookup = resolver(record.scope);
+        // The candidate types are those of the enumeration literals visible
+        // at the use (12.4), so STD_ULOGIC is one only where the declared
+        // STD_ULOGIC of IEEE.STD_LOGIC_1164 (whose "??" it has, 16.7) is.
         const auto& types = candidates(id);
-        const bool logic = lookup != nullptr
-            && lookup->vhdl_builtin_package_member_imported(
-                "ieee", "std_logic_1164", "std_ulogic", record.scope);
         const bool is_bit = std::ranges::find(types, builtin("bit"))
             != types.end();
-        const bool is_logic = logic
-            && std::ranges::find(types, builtin("std_ulogic")) != types.end();
+        const bool is_logic
+            = std::ranges::find(types, builtin("std_ulogic")) != types.end();
         if (is_bit && is_logic) {
             annotate_type(id, pseudo_type(PseudoType::ambiguous_literal));
         } else if (is_logic) {
@@ -2402,9 +2227,6 @@ private:
         case ExpressionKind::call:
             if (function_call(*record) && !functions(*record).empty()) {
                 resolve_call(*record, known_expected);
-                return;
-            }
-            if (resolve_intrinsic_call(*record, known_expected)) {
                 return;
             }
             // The argument of T'IMAGE, T'POS, T'SUCC, T'PRED, T'LEFTOF and
@@ -2640,18 +2462,25 @@ private:
         if (!user_overloads) {
             resolve_operator_operands(record, op, expected, left, right);
         }
+        // The operator overload that alone applies (a native operator of a
+        // standard package or a user one) is the one selected, so that
+        // lowering reaches it by identity (12.5).
+        std::vector<const Callable*> chosen;
+        if (user_overloads) {
+            for (const auto& callable : functions(record)) {
+                if (applicable(callable, record, expected)) {
+                    chosen.push_back(&callable);
+                }
+            }
+            if (chosen.size() == 1U) {
+                annotate(record.id, chosen.front()->key, "operator");
+            }
+        }
         // A character literal operand takes the formal type of the
         // retained operator overloads that apply (12.5).
         if (user_overloads
             && (is_character_literal(record.operands.front())
                 || is_character_literal(record.operands.back()))) {
-            std::vector<const Callable*> chosen;
-            const auto& visible = functions(record);
-            for (const auto& callable : visible) {
-                if (applicable(callable, record, expected)) {
-                    chosen.push_back(&callable);
-                }
-            }
             if (!chosen.empty()) {
                 resolve_literal_actuals(record, chosen);
                 return;
@@ -2679,6 +2508,13 @@ private:
             result = key;
         }
         return result;
+    }
+
+    [[nodiscard]] bool is_string_literal(const ExpressionId id) const
+    {
+        const auto* operand = expression(id);
+        return operand != nullptr
+            && operand->kind == ExpressionKind::string_literal;
     }
 
     [[nodiscard]] bool is_character_literal(const ExpressionId id) const
@@ -2933,6 +2769,20 @@ private:
                     types.size(),
                     types.empty() ? "" : types.front().builtin.c_str(),
                     types.empty() ? 0U : types.front().id.value());
+            }
+            for (const auto& callable : visible) {
+                std::fprintf(stderr,
+                    "FSIM_VHDL_RESOLVE   candidate=%u (%s) declaration=%u\n",
+                    callable.key.value(), callable.declaration->name.c_str(),
+                    callable.declaration->id.value());
+                for (const auto formal :
+                    callable.declaration->callable->formals) {
+                    const auto key = formal_key(formal, callable.instance);
+                    std::fprintf(stderr,
+                        "FSIM_VHDL_RESOLVE     formal=%u type=%s/%u\n",
+                        formal.value(), key.builtin.c_str(),
+                        key.id.value());
+                }
             }
         }
         if (chosen.size() != 1U

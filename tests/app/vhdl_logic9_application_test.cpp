@@ -2,6 +2,8 @@
 #include "fsim/app/application.hpp"
 #include "fsim/app/built_project.hpp"
 #include "fsim/semantic/vhdl_hir.hpp"
+#include "fsim/semantic/vhdl_native_identity.hpp"
+#include "fsim/support/vhdl_standard_package_form.hpp"
 #include "fsim/runtime/simir.hpp"
 
 #include "fsim/runtime/vcd_writer.hpp"
@@ -1698,19 +1700,22 @@ end architecture;
         assert(!diagnostics.has_error());
         assert(checked->source_count == 1);
         assert(checked->hdl_sources.size() == 1);
-        assert(checked->standard_sources.size() == 2);
-        assert(
-            checked->standard_sources[0].content_digest
-            == "2a34c7d7b2c8ba21b1e91153741399cf2cd23c8b04028dcf53765efeea76de55");
-        assert(
-            checked->standard_sources[1].content_digest
-            == "6534fe4842c1133199db93725e36a9e973ea8e2ab03890433c013af813d5ce2c");
-        assert(
-            checked->standard_sources[0].path.filename()
-            == "std_logic_1164.vhdl");
-        assert(
-            checked->standard_sources[1].path.filename()
-            == "std_logic_1164-body.vhdl");
+        // STD_LOGIC_1164 comes from the precompiled standard library
+        // (owner 11-19, gate BD D2): no projected source, one precompiled
+        // dependency on the 2008 edition's artifact.
+        assert(std::ranges::none_of(checked->standard_sources,
+            [](const fsim::app::CheckedSource& source) {
+                return source.path.filename() == "std_logic_1164.vhdl"
+                    || source.path.filename() == "std_logic_1164-body.vhdl";
+            }));
+        const auto logic_dependency = std::ranges::find(
+            checked->precompiled_vhdl_package_dependencies,
+            std::string { "ieee.std_logic_1164" },
+            &fsim::library::VhdlPackageDependency::package);
+        assert(logic_dependency
+            != checked->precompiled_vhdl_package_dependencies.end());
+        assert(logic_dependency->standard == "2008");
+        assert(logic_dependency->revision.starts_with("fsim-stdlib:"));
         const auto& hir = checked->vhdl_hir;
         const auto package = std::ranges::find_if(
             hir.units(),
@@ -1721,41 +1726,40 @@ end architecture;
                     && unit.primary_name.empty();
             });
         assert(package != hir.units().end());
-        // The intrinsic types stay intrinsic; only the resolved subtypes X01,
-        // X01Z, UX01 and UX01Z of STD_ULOGIC are declared (IEEE 1076-2019
-        // 16.7), so their objects start at their 'LEFT.
+        assert(package->standard_package_form
+            == fsim::support::VhdlStandardPackageForm::artifact);
+        assert(package->standard_package_revision
+            == logic_dependency->revision);
+        // The real declarations (IEEE 1076-2019 16.7): STD_ULOGIC is an
+        // ordinary enumeration type carrying its native identity, and the
+        // resolved subtypes are declared.
+        const auto declared = [&](const std::string_view name,
+                                  const fsim::semantic::vhdl::DeclarationForm form) {
+            return std::ranges::any_of(package->declarations,
+                [&](const auto id) {
+                    const auto* declaration = hir.find_declaration(id);
+                    return declaration != nullptr && declaration->form == form
+                        && fsim::support::ascii_lower(declaration->name)
+                            == name;
+                });
+        };
+        using Form = fsim::semantic::vhdl::DeclarationForm;
+        assert(declared("std_ulogic", Form::type));
+        assert(declared("std_logic", Form::subtype));
+        assert(declared("std_logic_vector", Form::subtype));
+        assert(declared("x01", Form::subtype));
+        assert(declared("ux01z", Form::subtype));
+        assert(std::ranges::any_of(package->declarations, [&](const auto id) {
+            const auto* declaration = hir.find_declaration(id);
+            const auto* native = declaration != nullptr
+                ? fsim::semantic::vhdl_native_of(*declaration)
+                : nullptr;
+            return native != nullptr
+                && native->name == fsim::semantic::VhdlNativeName::std_ulogic;
+        }));
+        // The package body stays in the precompiled library until
+        // elaboration links it (lazy load): the checked HIR holds none.
         assert(std::ranges::none_of(
-            package->declarations, [&](const auto id) {
-                const auto& declaration = hir.declarations()[id.value()];
-                const auto form = declaration.form;
-                if (form == fsim::semantic::vhdl::DeclarationForm::subtype) {
-                    const auto name = fsim::support::ascii_lower(
-                        declaration.name);
-                    return name != "x01" && name != "x01z" && name != "ux01"
-                        && name != "ux01z";
-                }
-                return form == fsim::semantic::vhdl::DeclarationForm::type;
-            }));
-        assert(std::ranges::count_if(package->declarations, [&](const auto id) {
-            return hir.declarations()[id.value()].form
-                == fsim::semantic::vhdl::DeclarationForm::subtype;
-        }) == 4);
-        assert(
-            package->standard_package_revision
-            == "ieee-p1076:1076-2019:16a012320947d378611cc7457f64ed76cb52bac4");
-        assert(std::ranges::find(
-                   package->standard_package_declarations, "std_ulogic")
-            != package->standard_package_declarations.end());
-        assert(std::ranges::find(
-                   package->standard_package_declarations, "std_logic_vector")
-            != package->standard_package_declarations.end());
-        assert(std::ranges::find(
-                   package->standard_package_declarations, "resolved")
-            != package->standard_package_declarations.end());
-        assert(std::ranges::find(
-                   package->standard_package_declarations, "rising_edge")
-            != package->standard_package_declarations.end());
-        assert(std::ranges::any_of(
             hir.units(),
             [](const fsim::semantic::vhdl::Unit& unit) {
                 return unit.kind == fsim::semantic::vhdl::UnitKind::package
@@ -1812,7 +1816,9 @@ end entity;
         const auto checked = fsim::app::check_project(config, diagnostics);
         assert(checked);
         assert(!diagnostics.has_error());
-        assert(checked->standard_sources.size() == 3);
+        // STD_LOGIC_1164 and TEXTIO are precompiled (owner 11-19, gate BD
+        // D2); only the projected STD_LOGIC_TEXTIO source remains.
+        assert(checked->standard_sources.size() == 1);
         assert(std::ranges::any_of(
             checked->standard_sources,
             [](const fsim::app::CheckedSource& candidate) {

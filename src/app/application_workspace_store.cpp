@@ -5,6 +5,7 @@
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 
+#include <algorithm>
 #include <sstream>
 
 namespace fsim::app::workspace {
@@ -218,6 +219,36 @@ Store::Store(std::filesystem::path workspace)
 {
 }
 
+Store::Store(std::filesystem::path workspace, StandardLibraryStore)
+    : Store(std::move(workspace))
+{
+    standard_library_store_ = true;
+}
+
+bool standard_library_name(const std::string_view name) noexcept
+{
+    const auto lower = [](const char character) {
+        return character >= 'A' && character <= 'Z'
+            ? static_cast<char>(character - 'A' + 'a')
+            : character;
+    };
+    const auto equals = [&](const std::string_view reserved) {
+        return name.size() == reserved.size()
+            && std::ranges::equal(name, reserved, [&](const char left, const char right) {
+                   return lower(left) == right;
+               });
+    };
+    return equals("std") || equals("ieee");
+}
+
+std::string standard_library_refusal(
+    const std::string_view name, const std::string_view action)
+{
+    return "library '" + std::string { name } + "' is fsim's precompiled VHDL "
+        "standard library (IEEE 1076-2019 13.2, 16), mapped into every "
+        "workspace; it cannot be " + std::string { action };
+}
+
 const std::filesystem::path& Store::root() const
 {
     return root_;
@@ -264,6 +295,16 @@ std::optional<std::vector<LibraryLocation>> Store::library_locations(
     if (code) {
         error = "cannot enumerate workspace libraries: " + code.message();
         return std::nullopt;
+    }
+    if (!standard_library_store_) {
+        for (const auto& name : names) {
+            if (standard_library_name(name)) {
+                error = standard_library_refusal(name,
+                    "a workspace library (remove its mapping or .fsim/libraries/"
+                    + name + ")");
+                return std::nullopt;
+            }
+        }
     }
     std::vector<LibraryLocation> result;
     for (const auto& name : names) {
@@ -327,6 +368,10 @@ bool Store::map_library(const std::string_view name,
     const std::filesystem::path& path, std::string& error) const
 {
     error.clear();
+    if (standard_library_name(name)) {
+        error = standard_library_refusal(name, "mapped");
+        return false;
+    }
     if (!valid_name(name) || path.empty()) {
         error = "library mapping requires a valid name and a directory or .fsimlib file";
         return false;
@@ -400,6 +445,10 @@ std::optional<std::vector<ExportedLibrary>> Store::exported_libraries(
 bool Store::unmap_library(const std::string_view name, std::string& error) const
 {
     error.clear();
+    if (standard_library_name(name)) {
+        error = standard_library_refusal(name, "unmapped");
+        return false;
+    }
     if (!valid_name(name) || !ensure_workspace(*this, error)) {
         if (error.empty())
             error = "invalid logical library name";

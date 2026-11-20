@@ -2043,8 +2043,11 @@ std::optional<Invocation> parse_arguments(
     if (invocation.library_name) {
         const auto& name = *invocation.library_name;
         const auto normalized = lowercase(name);
-        if (!project::valid_library_name(name) || normalized == "std"
-            || normalized == "ieee" || normalized == "fsim") {
+        // STD and IEEE are fsim's precompiled standard libraries: their
+        // objects can be listed, nothing else (IEEE 1076-2019 13.2, 16).
+        const bool standard_library = normalized == "std" || normalized == "ieee";
+        if (!project::valid_library_name(name) || normalized == "fsim"
+            || (standard_library && invocation.command != Command::library_objects)) {
             argument_error(diagnostics,
                 "library commands require a safe, non-reserved library name");
             return std::nullopt;
@@ -2087,8 +2090,15 @@ std::optional<Invocation> parse_arguments(
         argument_error(diagnostics, "--top is available only with elaborate");
         return std::nullopt;
     }
+    // `library objects std|ieee --standard X` lists edition X's precompiled
+    // standard library.
+    const bool standard_library_listing
+        = invocation.command == Command::library_objects
+        && invocation.library_name
+        && (lowercase(*invocation.library_name) == "std"
+            || lowercase(*invocation.library_name) == "ieee");
     const bool hdl_option = invocation.language.has_value()
-        || invocation.standard.has_value()
+        || (invocation.standard.has_value() && !standard_library_listing)
         || !invocation.compatibility_switches.empty()
         || invocation.vhdl_compatibility.has_value()
         || invocation.compilation_unit.has_value()

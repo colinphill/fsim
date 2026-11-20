@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Checks of the derived per-standard IEEE package sources.
+"""Checks of the derived per-standard IEEE and STD package sources (the
+ieee/ and std/ directories of each derived tree).
 
   sources  ROOT TABLE REWRITES DERIVED
                                   byte reproduction, that every change is
@@ -55,16 +56,21 @@ def check_sources(root, table_path, rewrites_path, derived):
     problems = []
     used_rows = set()
     for standard in derive.STANDARDS:
-        files, unmatched, extra = derive.derive(root, table, rewrites,
-                                                standard)
+        entries, unmatched, extra = derive.tree_files(root, table, rewrites,
+                                                      standard)
+        files = {tree_name: data for tree_name, _, _, data in entries}
+        origin = {tree_name: (name, deriving)
+                  for tree_name, name, deriving, _ in entries}
         for row in unmatched:
             problems.append("table line %d matches nothing (%s %s)" %
                             (row.line, row.standard, row.package))
         for package in sorted(extra):
             problems.append("rows for %s package %s, which that standard "
                             "does not have" % (standard, package))
-        tree = Path(derived) / standard / "ieee"
-        present = sorted(p.name for p in tree.glob("*.vhdl"))
+        tree = Path(derived) / standard
+        present = sorted("%s/%s" % (library, p.name)
+                         for library in ("ieee", "std")
+                         for p in (tree / library).glob("*.vhdl"))
         if present != sorted(files):
             problems.append("%s: files %s differ from the generator's %s" %
                             (standard, present, sorted(files)))
@@ -75,9 +81,10 @@ def check_sources(root, table_path, rewrites_path, derived):
                 problems.append("%s/%s is not the generator output" %
                                 (standard, name))
                 continue
-            package = name.replace("-body", "")[:-len(".vhdl")]
+            original, deriving = origin[name]
+            package = derive.unit_name(original)
             for problem in derive.check_traceability(
-                    root, table, rewrites, standard, package, name, data):
+                    root, table, rewrites, deriving, package, original, data):
                 problems.append("%s/%s: %s" % (standard, name, problem))
             if standard != "2008":
                 later = later_name_problems(derive.split_header(data)[1])
@@ -92,7 +99,7 @@ def check_sources(root, table_path, rewrites_path, derived):
             problems.append("%s/README.md is stale" % standard)
     # The checker must catch each kind of tampering.
     files, _, _ = derive.derive(root, table, rewrites, "1993")
-    name = "std_logic_1164.vhdl"
+    name = "ieee/std_logic_1164.vhdl"
     original = files[name]
     header, body = derive.split_header(original)
     lines = body.split("\n")
@@ -111,6 +118,23 @@ def check_sources(root, table_path, rewrites_path, derived):
     if derive.check_traceability(root, table, rewrites, "1993",
                                  "std_logic_1164", name, original):
         problems.append("the traceability check rejects the generator output")
+    # The same for a file of library STD (a removal row of std/textio.vhdl).
+    files, _, _ = derive.derive(root, table, rewrites, "1993")
+    name = "std/textio.vhdl"
+    original = files[name]
+    header, body = derive.split_header(original)
+    lines = body.split("\n")
+    start = [i for i, line in enumerate(lines)
+             if line.startswith("  procedure WRITELINE")][0] - 2
+    if not derive.check_traceability(
+            root, table, rewrites, "1993", "textio", name,
+            (header + "\n".join(lines[:start + 2] + lines[start + 3:])
+             ).encode("latin-1")):
+        problems.append("the traceability check missed an unlisted removal "
+                        "in std/textio.vhdl")
+    if derive.check_traceability(root, table, rewrites, "1993", "textio",
+                                 name, original):
+        problems.append("the traceability check rejects std/textio.vhdl")
     if later_name_problems("x := MAXIMUM(1, 2);") != ["maximum"]:
         problems.append("the later-standard name check does not work")
     return problems
@@ -128,8 +152,9 @@ def check_analysis(fsim, findings_path, derived, work):
             expected[(standard, package)] = code
     problems = []
     seen = set()
-    for standard in derive.STANDARDS:
-        tree = Path(derived) / standard / "ieee"
+    for standard, library in [(s, lib) for s in derive.STANDARDS
+                              for lib in ("ieee", "std")]:
+        tree = Path(derived) / standard / library
         packages = sorted({p.name.replace("-body", "")[:-len(".vhdl")]
                            for p in tree.glob("*.vhdl")})
         for package in packages:
@@ -140,8 +165,11 @@ def check_analysis(fsim, findings_path, derived, work):
                     files.append(tree / (name + "-body.vhdl"))
             workdir = Path(work)
             workdir.mkdir(parents=True, exist_ok=True)
+            # An overlay's file (textio-2000) is a file of its own standard.
+            checked = next((o for o in derive.OVERLAYS
+                            if package.endswith("-" + o)), standard)
             result = subprocess.run(
-                [fsim, "check", "--standard", standard] + [str(f) for f in files],
+                [fsim, "check", "--standard", checked] + [str(f) for f in files],
                 capture_output=True, text=True, cwd=workdir, timeout=600)
             output = result.stdout + result.stderr
             codes = FINDING.findall(output)
@@ -160,7 +188,8 @@ def check_analysis(fsim, findings_path, derived, work):
                         key + (codes[:1], expected[key])))
     for key in expected:
         if key not in seen and key not in [
-                (s, p) for s in derive.STANDARDS for p in derive.PACKAGES[s]]:
+                (s, p) for s in derive.STANDARDS
+                for p in derive.packages_of(s)]:
             problems.append("pinned finding for unknown file %s" % (key,))
     return problems
 

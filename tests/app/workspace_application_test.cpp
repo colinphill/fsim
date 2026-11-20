@@ -390,6 +390,24 @@ endmodule
     assert_output(run, "SECOND_VALUE=2");
 }
 
+// Every workspace lists the read-only standard std/ieee libraries of each VHDL
+// edition (owner 11-19); a listing with no other row has no library of its own.
+bool only_standard_libraries(const std::string& listing)
+{
+    std::istringstream lines { listing };
+    std::size_t rows { };
+    for (std::string line; std::getline(lines, line);) {
+        if (line.empty()) {
+            continue;
+        }
+        ++rows;
+        if (line.find("\tstandard VHDL-") == std::string::npos) {
+            return false;
+        }
+    }
+    return rows == 12U;
+}
+
 void test_external_library_mapping_and_current_directory()
 {
     Directory directory;
@@ -422,7 +440,7 @@ void test_external_library_mapping_and_current_directory()
     const auto nested = consumer / "nested";
     fs::create_directory(nested);
     fs::current_path(nested);
-    assert(invoke({ "library", "list" }).output.empty());
+    assert(only_standard_libraries(invoke({ "library", "list" }).output));
     elaborate({ "mapped_top" }, "default", false);
     invoke({ "simulate", "--engine", "interpreter" }, false);
     assert(!fs::exists(nested / ".fsim"));
@@ -431,7 +449,7 @@ void test_external_library_mapping_and_current_directory()
     invoke({ "library", "delete", "support" });
     assert(fs::exists(external / "unrelated.txt"));
     assert(!fs::exists(external / "library.sqlite3"));
-    assert(invoke({ "library", "list" }).output.empty());
+    assert(only_standard_libraries(invoke({ "library", "list" }).output));
     assert(unit_names(catalog(consumer_store, "support")).empty());
     assert_output(invoke({ "simulate" }), "WORKSPACE_MAPPED");
 }

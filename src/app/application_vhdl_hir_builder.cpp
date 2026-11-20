@@ -1313,6 +1313,7 @@ void VhdlHirBuilder::add_unit(
         input.vhdl_predefined_environment.default_time_unit,
         input.vhdl_predefined_environment.attributes};
     output.standard_package_revision = input.standard_package_revision;
+    output.standard_package_form = input.standard_package_form;
     output.standard_package_declarations
         = input.standard_package_declarations;
     output.standard_package_operator_profiles

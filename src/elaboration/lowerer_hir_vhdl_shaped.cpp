@@ -2547,6 +2547,8 @@ bool Lowerer::hir_vhdl_shaped_active() const
             const auto type = specialized_hir_unit_->find_type(stored.id);
             if (type && type->vhdl != nullptr
                 && type->vhdl->form == semantic::vhdl::TypeForm::access
+                && !vhdl_standard_library_access_type(
+                    *specialized_hir_unit_, *type->vhdl)
                 && hir_vhdl_shaped_heap_profile(*type->vhdl)) {
                 hir_vhdl_shaped_active_types_ = true;
                 break;

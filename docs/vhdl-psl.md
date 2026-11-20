@@ -56,7 +56,7 @@ through objects, mapped libraries, ordinary compilation caches, and standalone
 designs. Load rejects incompatible schema, checksum, trailing bytes, enum
 values, duplicate identities, invalid semantic links, or cross-payload
 inconsistency before publishing a project. Cache keys include the compiler
-IEEE identity `ieee-1076-2019-16a01232-vhdl-psl-wide-v2`.
+IEEE identity `vhdl-stdlib-artifacts-v1`.
 
 ## Resource and platform contract
 

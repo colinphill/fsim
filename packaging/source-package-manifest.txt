@@ -546,6 +546,8 @@ include/fsim/semantic/systemverilog_type_state.hpp
 include/fsim/semantic/vhdl_block_guard.hpp
 include/fsim/semantic/vhdl_hir.hpp
 include/fsim/semantic/vhdl_intrinsic_signatures.hpp
+include/fsim/semantic/vhdl_native_identity.hpp
+include/fsim/semantic/vhdl_native_intrinsics.hpp
 include/fsim/semantic/vhdl_standard_catalog.hpp
 include/fsim/semantic/vhdl_standard_catalog.inc
 include/fsim/semantic/vhdl_standard_declaration.hpp
@@ -589,6 +591,7 @@ include/fsim/support/vhdl_identifier.hpp
 include/fsim/support/vhdl_standard_declaration.hpp
 include/fsim/support/vhdl_standard_declaration.inc
 include/fsim/support/vhdl_standard_enumeration.hpp
+include/fsim/support/vhdl_standard_package_form.hpp
 include/fsim/support/vhdl_time.hpp
 include/fsim/support/vhdl_tool_identity.hpp
 include/fsim/systemc.hpp
@@ -645,6 +648,7 @@ packaging/v3-supply-chain-inventory.tsv
 scripts/audit_msvc_test_strings.py
 scripts/check_ieee_derived_sources.py
 scripts/check_run_state_classification.py
+scripts/check_vhdl_native_spellings.py
 scripts/cocotb_exclusions.tsv
 scripts/cocotb_suite.py
 scripts/create_deterministic_zip.py
@@ -652,6 +656,7 @@ scripts/derive_ieee_packages.py
 scripts/derive_intrinsic_revisions.py
 scripts/gen_vhdl_standard_catalog.py
 scripts/generate_intrinsic_signatures.py
+scripts/generate_vhdl_native_intrinsics.py
 scripts/lrm_corpus.py
 scripts/lrm_corpus/vunit_shim.vhd
 scripts/lrm_corpus_include/dpi.h
@@ -791,6 +796,10 @@ src/app/application_simulation_impl_uvm.cpp
 src/app/application_simulation_internal.hpp
 src/app/application_simulation_scalar.cpp
 src/app/application_standard_library.cpp
+src/app/application_standard_library_artifact.cpp
+src/app/application_standard_library_artifact.hpp
+src/app/application_standard_library_artifact_internal.hpp
+src/app/application_standard_library_load.cpp
 src/app/application_standard_library_vital.cpp
 src/app/application_standard_package.cpp
 src/app/application_systemc_trace.cpp
@@ -1401,6 +1410,8 @@ src/semantic/systemverilog_hir.cpp
 src/semantic/systemverilog_structure_image.cpp
 src/semantic/systemverilog_type_descriptor.cpp
 src/semantic/vhdl_hir.cpp
+src/semantic/vhdl_native_identity.cpp
+src/semantic/vhdl_native_intrinsic_stamp.cpp
 src/semantic/vhdl_standard_catalog.cpp
 src/semantic/vhdl_standard_declaration.cpp
 src/support/allocation_hooks.cpp
@@ -1448,6 +1459,7 @@ src/systemc/scv_smart_ptr.cpp
 src/systemc/systemc_exports.cpp
 src/systemc/tlm1_backend.cpp
 src/systemc/tlm2_backend.cpp
+src/tools/fsim_standard_library_builder.cpp
 tests/CMakeLists.txt
 tests/allocation_hook_forwarding.hpp
 tests/api/api_abi_c_test.c
@@ -1920,6 +1932,7 @@ tests/fixtures/compliance/analysis_errors/vhdl_component_configuration_different
 tests/fixtures/compliance/analysis_errors/vhdl_function_integer_array_rejects_physical_literals_batch59.vhd
 tests/fixtures/compliance/analysis_errors/vhdl_function_signal_formal_constant_actual_rejected_batch59.vhd
 tests/fixtures/compliance/analysis_errors/vhdl_function_signal_formal_variable_actual_rejected_batch59.vhd
+tests/fixtures/compliance/analysis_errors/vhdl_function_signal_formal_variable_record_element_rejected_bd2.vhd
 tests/fixtures/compliance/analysis_errors/vhdl_mode_in_variable_expression_actual_rejected_batch58.vhd
 tests/fixtures/compliance/analysis_errors/vhdl_mode_inout_expression_actual_rejected_batch58.vhd
 tests/fixtures/compliance/analysis_errors/vhdl_mode_out_expression_actual_rejected_batch58.vhd
@@ -3210,6 +3223,7 @@ tests/fixtures/systemverilog/delta_collapse/delta_collapse_dut.vhd
 tests/fixtures/systemverilog/delta_collapse/run_delta_collapse.cmake
 tests/fixtures/systemverilog/kernel_coverage/kernel_coverage.sv
 tests/fixtures/systemverilog/kernel_coverage/kernel_coverage.vhd
+tests/fixtures/systemverilog/kernel_coverage/kernel_coverage_resized.vhd
 tests/fixtures/systemverilog/kernel_coverage/run_kernel_coverage.cmake
 tests/fixtures/systemverilog/kernel_format/kernel_format.sv
 tests/fixtures/systemverilog/kernel_format/kernel_format.vhd
@@ -4843,6 +4857,7 @@ third_party/ieee-derived/1987/README.md
 third_party/ieee-derived/1987/SHA256SUMS
 third_party/ieee-derived/1987/ieee/std_logic_1164-body.vhdl
 third_party/ieee-derived/1987/ieee/std_logic_1164.vhdl
+third_party/ieee-derived/1987/std/textio.vhdl
 third_party/ieee-derived/1993/README.md
 third_party/ieee-derived/1993/SHA256SUMS
 third_party/ieee-derived/1993/ieee/math_complex-body.vhdl
@@ -4855,6 +4870,7 @@ third_party/ieee-derived/1993/ieee/numeric_std-body.vhdl
 third_party/ieee-derived/1993/ieee/numeric_std.vhdl
 third_party/ieee-derived/1993/ieee/std_logic_1164-body.vhdl
 third_party/ieee-derived/1993/ieee/std_logic_1164.vhdl
+third_party/ieee-derived/1993/std/textio.vhdl
 third_party/ieee-derived/2002/README.md
 third_party/ieee-derived/2002/SHA256SUMS
 third_party/ieee-derived/2002/ieee/math_complex-body.vhdl
@@ -4867,6 +4883,8 @@ third_party/ieee-derived/2002/ieee/numeric_std-body.vhdl
 third_party/ieee-derived/2002/ieee/numeric_std.vhdl
 third_party/ieee-derived/2002/ieee/std_logic_1164-body.vhdl
 third_party/ieee-derived/2002/ieee/std_logic_1164.vhdl
+third_party/ieee-derived/2002/std/textio-2000.vhdl
+third_party/ieee-derived/2002/std/textio.vhdl
 third_party/ieee-derived/2008/README.md
 third_party/ieee-derived/2008/SHA256SUMS
 third_party/ieee-derived/2008/ieee/fixed_float_types.vhdl
@@ -4891,6 +4909,8 @@ third_party/ieee-derived/2008/ieee/numeric_std_unsigned.vhdl
 third_party/ieee-derived/2008/ieee/std_logic_1164-body.vhdl
 third_party/ieee-derived/2008/ieee/std_logic_1164.vhdl
 third_party/ieee-derived/2008/ieee/std_logic_textio.vhdl
+third_party/ieee-derived/2008/std/env.vhdl
+third_party/ieee-derived/2008/std/textio.vhdl
 third_party/isocline/LICENSE
 third_party/isocline/PROVENANCE.md
 third_party/isocline/include/isocline.h

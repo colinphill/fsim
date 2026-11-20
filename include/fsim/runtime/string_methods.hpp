@@ -53,6 +53,19 @@ void string_putc(
 // text has no such form.
 [[nodiscard]] std::optional<std::vector<std::string>>
 vhdl_composite_value_elements(std::string_view text, bool character_string);
+/// Whether a string method changes its source (putc and the *toa
+/// methods, IEEE 1800-2023 6.16): only those need the string itself.
+[[nodiscard]] bool string_method_changes_source(
+    StringMethodOperator operation) noexcept;
+/// A method that only reads its source (every other method).
+[[nodiscard]] StringMethodResult execute_string_method(
+    StringMethodOperator operation,
+    std::string_view source,
+    std::string_view argument,
+    std::optional<std::int32_t> first,
+    std::optional<std::int32_t> second,
+    std::optional<std::uint64_t> first_bits = std::nullopt,
+    std::uint64_t resolution_femtoseconds = 0U);
 [[nodiscard]] StringMethodResult execute_string_method(
     StringMethodOperator operation,
     std::string& source,

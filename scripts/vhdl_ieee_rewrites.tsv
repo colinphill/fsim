@@ -8,8 +8,10 @@
 # from= with the subst= identifiers old:new replaced), duplicate (a copy of the
 # item with subst= follows it), substitute (identifiers replaced in the item or
 # the whole file), drop_end_kind (the kind keyword after end is dropped),
-# omit_file (the file is not shipped).  No rewrite adds text that is not a copy
-# of 2019 text with identifiers replaced.
+# omit_file (the file is not shipped), insert_text (fsim-authored text= precedes
+# the item; `\n` separates lines).  No rewrite adds text that is not a copy of
+# 2019 text with identifiers replaced, except replace_text and insert_text rows,
+# which each cite the older standard's clause.
 1987	std_logic_1164	decl	copy_as	type|std_logic_vector	from=type|std_ulogic_vector;subst=std_ulogic_vector:std_logic_vector,std_ulogic:std_logic	IEEE Std 1164-1993; IEEE Std 1076-2008 6.3	STD_LOGIC_VECTOR is a type of STD_LOGIC elements in this standard; the 2019 subtype with an element resolution indication is a VHDL-2008 form. The array definition is copied from the STD_ULOGIC_VECTOR declaration with the element subtype STD_LOGIC.
 1987	std_logic_1164	both	duplicate	function|"and"(std_ulogic_vector,std_ulogic_vector)->std_ulogic_vector	subst=std_ulogic_vector:std_logic_vector	IEEE Std 1164-1993	STD_LOGIC_VECTOR is a type distinct from STD_ULOGIC_VECTOR in this standard (in 2019 a subtype of it), so the STD_ULOGIC_VECTOR overload is repeated for STD_LOGIC_VECTOR; the copy replaces the identifier STD_ULOGIC_VECTOR by STD_LOGIC_VECTOR.
 1987	std_logic_1164	both	duplicate	function|"nand"(std_ulogic_vector,std_ulogic_vector)->std_ulogic_vector	subst=std_ulogic_vector:std_logic_vector	IEEE Std 1164-1993	STD_LOGIC_VECTOR is a type distinct from STD_ULOGIC_VECTOR in this standard (in 2019 a subtype of it), so the STD_ULOGIC_VECTOR overload is repeated for STD_LOGIC_VECTOR; the copy replaces the identifier STD_ULOGIC_VECTOR by STD_LOGIC_VECTOR.
@@ -76,3 +78,22 @@
 2002	numeric_std	body	substitute	*	subst=maximum:max,minimum:min	IEEE Std 1076.3-1997; IEEE Std 1076-2008 5.2.6	MINIMUM and MAXIMUM of two scalars are predefined only from VHDL-2008; this standard needs the helper functions MIN and MAX, whose declarations are inserted from 2019 text by the rows below, so the calls name them.
 2002	numeric_std	body	insert_before	constant|nau	from=function|realmax(real,real)->real;file=math_real-body.vhdl;subst=realmax:max,real:integer	IEEE Std 1076.2-1996 (REALMAX, REALMIN); IEEE Std 1076.3-1997	The function MAX is a copy of the 2019 body of REALMAX of MATH_REAL with the type REAL replaced by INTEGER; it precedes the first use.
 2002	numeric_std	body	insert_before	constant|nau	from=function|realmin(real,real)->real;file=math_real-body.vhdl;subst=realmin:min,real:integer	IEEE Std 1076.2-1996 (REALMAX, REALMIN); IEEE Std 1076.3-1997	The function MIN is a copy of the 2019 body of REALMIN of MATH_REAL with the type REAL replaced by INTEGER; it precedes the first use.
+# ---- STD library packages (1987 only): the file declaration form of IEEE Std 1076-1987 ----
+1987	textio	decl	replace_text	file|input	old=open READ_MODE is "STD_INPUT";new=is in "STD_INPUT"	IEEE Std 1076-1987 4.3.2, 14.3	VHDL-1987 declares a file with `is mode string_expression`; the `open file_open_kind_expression is` form is VHDL-1993 (IEEE Std 1076-1993 4.3.1.4). The 2019 text `open READ_MODE is` becomes `is in`; this rewrite replaces literal text and is not a copy of 2019 text.
+1987	textio	decl	replace_text	file|output	old=open WRITE_MODE is "STD_OUTPUT";new=is out "STD_OUTPUT"	IEEE Std 1076-1987 4.3.2, 14.3	VHDL-1987 declares a file with `is mode string_expression`; the `open file_open_kind_expression is` form is VHDL-1993 (IEEE Std 1076-1993 4.3.1.4). The 2019 text `open WRITE_MODE is` becomes `is out`; this rewrite replaces literal text and is not a copy of 2019 text.
+1987	textio	decl	drop_end_kind	*		IEEE Std 1076-1993 2.5; IEEE Std 1076-1987 2.5	VHDL-1987 has no kind keyword (package) after end; the keyword is dropped.
+# ENDLINE (owner decision D2-Q2 11-19): IEEE Std 1076-1987 14.3 declares function ENDLINE(L: in LINE) return BOOLEAN,
+# which no 2019 text contains; the insert_text row below adds the declaration as fsim-authored text (its native
+# implementation is fsim's, like every TEXTIO subprogram).
+1987	textio	decl	insert_text	procedure|writeline(text,line)	text=  function ENDLINE (L: in LINE) return BOOLEAN;	IEEE Std 1076-1987 14.3	VHDL-1987 TEXTIO declares ENDLINE (removed by IEEE Std 1076-1993); the 2019 text has no ENDLINE, so the declaration is fsim-authored text (owner decision D2-Q2).
+# READLINE and WRITELINE profiles of the older editions (checked against the editions' texts 11-19):
+# 1076-1987 14.3 prints READLINE (F: in TEXT; L: out LINE) and WRITELINE (F: out TEXT; L in LINE); 1987 has
+# no `file` interface class (4.3.3 interface declarations). The printed WRITELINE `L in LINE` lacks its
+# colon and contradicts the same clause's prose (WRITELINE returns with L designating a null string, so L is
+# updated): owner decision 11-19, L is inout as in 1993. 1076-1993 and 1076-2000 14.3 print READLINE with
+# L: out LINE; 1076-2002 14.3 made it inout.
+1987	textio	decl	replace_text	procedure|readline(text,line)	old=(file F: TEXT;new=(F: in TEXT	IEEE Std 1076-1987 4.3.3, 14.3	VHDL-1987 READLINE takes F: in TEXT (no file interface class in 1987)
+1987	textio	decl	replace_text	procedure|readline(text,line)	old=L: inout LINE);new=L: out LINE)	IEEE Std 1076-1987 14.3	VHDL-1987 READLINE takes L: out LINE
+1987	textio	decl	replace_text	procedure|writeline(text,line)	old=(file F: TEXT;new=(F: out TEXT	IEEE Std 1076-1987 4.3.3, 14.3	VHDL-1987 WRITELINE takes F: out TEXT (no file interface class in 1987); L stays inout (owner 11-19: the printed `L in LINE` is a misprint, the prose updates L)
+1993	textio	decl	replace_text	procedure|readline(text,line)	old=L: inout LINE);new=L: out LINE)	IEEE Std 1076-1993 14.3	VHDL-1993 READLINE takes L: out LINE (IEEE Std 1076-2002 made it inout)
+2000	textio	decl	replace_text	procedure|readline(text,line)	old=L: inout LINE);new=L: out LINE)	IEEE Std 1076-2000 14.3	VHDL-2000 READLINE takes L: out LINE (IEEE Std 1076-2002 made it inout); applies over the 2002 rows to std/textio-2000.vhdl

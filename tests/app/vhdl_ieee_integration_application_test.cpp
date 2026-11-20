@@ -2,6 +2,8 @@
 #include "fsim/app/application.hpp"
 #include "fsim/app/built_project.hpp"
 #include "fsim/semantic/vhdl_hir.hpp"
+#include "fsim/support/vhdl_identifier.hpp"
+#include "fsim/support/vhdl_standard_package_form.hpp"
 #include "fsim/runtime/simir.hpp"
 #include "fsim/app/artifact_phase.hpp"
 #include "fsim/app/design_artifact.hpp"
@@ -195,7 +197,10 @@ void verify_analysis(const fsim::project::Config& config)
     assert(!diagnostics.has_error());
     assert(checked->source_count == 3);
     assert(checked->hdl_sources.size() == 3);
-    assert(checked->standard_sources.size() == 19);
+    // STD_LOGIC_1164, NUMERIC_BIT, NUMERIC_STD and MATH_REAL come from the
+    // precompiled standard library (owner 11-19, gate BD D2): their eight
+    // declaration and body sources are no longer projected.
+    assert(checked->standard_sources.size() == 11);
     for (const auto& source : checked->standard_sources) {
         assert(source.path.generic_string().starts_with("fsim-standard/ieee/"));
         if (source.path.filename() == "vital_timing.vhdl"
@@ -216,9 +221,22 @@ void verify_analysis(const fsim::project::Config& config)
             packages.push_back(unit.name);
         }
     }
-    assert((packages == std::vector<std::string> { "std_logic_1164", "std_logic_textio", "numeric_bit", "numeric_std", "math_real", "fixed_float_types", "fixed_generic_pkg", "fixed_pkg", "float_generic_pkg", "float_pkg", "vital_timing", "vital_primitives", "vital_memory" }));
+    std::ranges::sort(packages);
+    assert((packages == std::vector<std::string> { "fixed_float_types", "fixed_generic_pkg", "fixed_pkg", "float_generic_pkg", "float_pkg", "math_real", "numeric_bit", "numeric_std", "std_logic_1164", "std_logic_textio", "vital_memory", "vital_primitives", "vital_timing" }));
     for (const std::string_view package : {
-             "std_logic_1164", "numeric_bit", "numeric_std", "math_real",
+             "std_logic_1164", "numeric_bit", "numeric_std", "math_real" }) {
+        const auto declaration = std::ranges::find_if(
+            hir.units(),
+            [&](const fsim::semantic::vhdl::Unit& unit) {
+                return unit.kind == fsim::semantic::vhdl::UnitKind::package
+                    && unit.library == "ieee" && unit.name == package
+                    && unit.primary_name.empty();
+            });
+        assert(declaration != hir.units().end());
+        assert(declaration->standard_package_form
+            == fsim::support::VhdlStandardPackageForm::artifact);
+    }
+    for (const std::string_view package : {
              "fixed_generic_pkg", "float_generic_pkg" }) {
         const auto declaration = std::ranges::find_if(
             hir.units(),
@@ -426,15 +444,14 @@ void verify_revision_environments(const std::filesystem::path& directory)
         std::size_t declarations;
         std::size_t operators;
         std::size_t attributes;
-        std::size_t logic_operators;
     };
     for (const auto& expected : std::array {
-             Expected { "1987", 13, 28, 15, 8 },
-             Expected { "1993", 16, 36, 30, 14 },
-             Expected { "2000", 16, 36, 30, 14 },
-             Expected { "2002", 16, 36, 30, 14 },
-             Expected { "2008", 20, 45, 32, 17 },
-             Expected { "2019", 21, 45, 35, 17 } }) {
+             Expected { "1987", 13, 28, 15 },
+             Expected { "1993", 16, 36, 30 },
+             Expected { "2000", 16, 36, 30 },
+             Expected { "2002", 16, 36, 30 },
+             Expected { "2008", 20, 45, 32 },
+             Expected { "2019", 21, 45, 35 } }) {
         const auto source = directory / ("environment-" + std::string { expected.year } + ".vhd");
         const auto unit_name = "environment_" + std::string { expected.year };
         {
@@ -523,12 +540,29 @@ void verify_revision_environments(const std::filesystem::path& directory)
             });
         assert(logic_package != hir.units().end());
         assert(logic_package->standard == architecture->standard);
-        assert(logic_package->standard_package_operator_profiles.size()
-            == expected.logic_operators);
+        // STD_LOGIC_1164 is the edition's precompiled package (owner 11-19,
+        // gate BD D2): its real declarations, not a projected export list.
+        assert(logic_package->standard_package_form
+            == fsim::support::VhdlStandardPackageForm::artifact);
+        assert(logic_package->standard_package_revision.starts_with(
+            "fsim-stdlib:"));
+        assert(logic_package->standard_package_revision.find(
+                   ":" + std::string { expected.year } + ":")
+            != std::string::npos);
         const auto has_export = [&](const std::string_view name) {
-            return std::ranges::find(
-                       logic_package->standard_package_declarations, name)
-                != logic_package->standard_package_declarations.end();
+            return std::ranges::any_of(logic_package->declarations,
+                [&](const auto id) {
+                    const auto* declaration = hir.find_declaration(id);
+                    if (declaration == nullptr) {
+                        return false;
+                    }
+                    auto declared = fsim::support::ascii_lower(declaration->name);
+                    if (declared.size() > 2U && declared.front() == '"'
+                        && declared.back() == '"') {
+                        declared = declared.substr(1U, declared.size() - 2U);
+                    }
+                    return declared == name;
+                });
         };
         assert(has_export("std_logic_vector"));
         assert(has_export("xnor") == (expected.year != "1987"));

@@ -6,6 +6,7 @@
 #include "fsim/support/design_library.hpp"
 #include "fsim/support/payload_checksum.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
+#include "fsim/support/vhdl_standard_package_form.hpp"
 
 #include <algorithm>
 #include <array>
@@ -33,11 +34,14 @@
 // a digest of those items. A link rebinds every anchor by position before
 // the resolution pass runs; nothing inside the target is found by name.
 //
-// A result that names a declaration of a compiler-served package (a stub,
-// standard_package_revision set; gate BD D2 replaces them) or of no VHDL
-// library unit gets no anchor: the stamp lists the slot in
-// vhdl::Unit::recomputed and every resolution pass computes it again, as it
-// did before the stamp existed.
+// The compiler-served packages that precompiled standard library artifacts
+// carry (standard_package_form artifact; gate BD D2) are analyzed from the
+// standard's sources like user units: results that name their declarations
+// are anchored, and the artifact units are stamped. A result that names a
+// declaration of a package the compiler still projects (standard_package_form
+// projection) or of no VHDL library unit gets no anchor: the stamp lists the
+// slot in vhdl::Unit::recomputed and every resolution pass computes it
+// again, as it did before the stamp existed.
 namespace fsim::semantic {
 namespace {
 
@@ -265,7 +269,9 @@ private:
             return { };
         }
         const auto* target = vhdl_unit(design_, unit);
-        if (target == nullptr || !target->standard_package_revision.empty()) {
+        if (target == nullptr
+            || target->standard_package_form
+                == support::VhdlStandardPackageForm::projection) {
             return { Target::Kind::recomputed };
         }
         const auto& items = unit_items(design_, *target);
@@ -662,7 +668,9 @@ void stamp_vhdl_analysis(
     const auto primary_units = primary_unit_keys(design);
     for (std::size_t position { }; position < units.size(); ++position) {
         const auto& unit = units[position];
-        if (!unit.analyzed && unit.standard_package_revision.empty()
+        if (!unit.analyzed
+            && unit.standard_package_form
+                != support::VhdlStandardPackageForm::projection
             && unit.id.valid() && sources.contains(unit.id.value())
             && analysis_context_present(design, unit, primary_units)) {
             positions.push_back(position);
@@ -689,6 +697,42 @@ void stamp_vhdl_analysis(
         unit.recomputed = std::move(stamp.recomputed);
     }
     // The stamp changes no field the lookup indexes read.
+    design.refresh_lookup_indexes();
+}
+
+void unstamp_vhdl_units_anchored_to(CompiledDesign& design,
+    const std::span<const std::string> omitted_packages)
+{
+    if (omitted_packages.empty()) {
+        return;
+    }
+    std::unordered_set<std::string> omitted;
+    for (const auto& package : omitted_packages) {
+        omitted.insert(support::ascii_lower(package));
+    }
+    const auto anchored_to_omitted = [&](const vhdl::Unit& unit) {
+        return unit.analyzed
+            && std::ranges::any_of(unit.anchors,
+                [&](const vhdl::DeclarationAnchor& anchor) {
+                    return !anchor.extended_primary
+                        && omitted.contains(
+                            support::ascii_lower(
+                                support::normalized_library(anchor.library))
+                            + "." + support::ascii_lower(anchor.primary));
+                });
+    };
+    if (std::ranges::none_of(design.vhdl_hir.units(), anchored_to_omitted)) {
+        return;
+    }
+    for (auto& unit : design.vhdl_hir.mutable_units()) {
+        if (!anchored_to_omitted(unit)) {
+            continue;
+        }
+        unit.analyzed = false;
+        unit.anchors.clear();
+        unit.anchored.clear();
+        unit.recomputed.clear();
+    }
     design.refresh_lookup_indexes();
 }
 

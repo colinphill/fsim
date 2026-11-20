@@ -18,6 +18,7 @@
 #include "fsim/systemc/hierarchy.hpp"
 #include "fsim/systemc/plugin_compiler.hpp"
 
+#include <functional>
 #include <array>
 #include <atomic>
 #include <cctype>
@@ -712,6 +713,8 @@ struct ParseGroup {
     };
     std::string standard;
     std::string compatibility_profile { "none" };
+    // False for a standard library artifact's sources (SourceText).
+    bool vhdl_psl_comments { true };
     std::vector<ParseInput> inputs;
     std::vector<std::filesystem::path> include_directories;
     std::vector<std::string> defines;
@@ -1009,9 +1012,23 @@ void validate_vhdl_package_body_subprograms(
     const frontend::ParsedDesign& parsed,
     diagnostic::Engine& diagnostics);
 
+// Loads the precompiled libraries STD and IEEE of an edition: the objects of
+// `packages` ("library.package", lower case) and those they depend on.
+using StandardLibraryLoader = std::function<std::optional<semantic::CompiledDesign>(
+    frontend::VhdlStandard standard, std::span<const std::string> packages,
+    diagnostic::Engine& diagnostics)>;
+
+// The loader of the precompiled standard libraries (gate BD build D2):
+// checked_standard_library_root's key check, then the selected objects of
+// the edition's managed libraries.
+[[nodiscard]] std::optional<semantic::CompiledDesign>
+load_precompiled_standard_libraries(frontend::VhdlStandard standard,
+    std::span<const std::string> packages, diagnostic::Engine& diagnostics);
+
 void inject_vhdl_standard_libraries(
     CompilationWorkspace& checked,
     diagnostic::Engine& diagnostics,
+    const StandardLibraryLoader& load_standard_libraries,
     bool complete_environment = false);
 
 [[nodiscard]] std::vector<library::VhdlPackageDependency>
@@ -1466,11 +1483,16 @@ bool compile_object(
     const std::filesystem::path& destination,
     diagnostic::Engine& diagnostics);
 
+// With `bootstrap_standard`, the sources are the standard libraries' own
+// packages of that edition (the build-time compile of the precompiled
+// libraries STD and IEEE): they are not checked against the precompiled
+// libraries, and the native intrinsics are stamped.
 std::optional<CompilationWorkspace> check_project_for_object(
     const project::Config& config,
     diagnostic::Engine& diagnostics,
     const semantic::CompiledDesign* imported = nullptr,
-    std::span<const CompiledUnitAvailability> available_units = { });
+    std::span<const CompiledUnitAvailability> available_units = { },
+    std::optional<frontend::VhdlStandard> bootstrap_standard = std::nullopt);
 
 int handle_compile(
     const cli::Invocation& invocation,

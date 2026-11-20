@@ -164,7 +164,16 @@ set expected_directory [file normalize [file join [pwd] .fsim]]
 if {$managed_directory ne $expected_directory} {
   error "bad managed directory: $managed_directory != $expected_directory"
 }
-set libraries [dict get $workspace libraries]
+proc user_libraries {libraries} {
+  # The read-only standard std/ieee rows of each VHDL edition are in every
+  # workspace (owner 11-19); a workspace's own libraries are the others.
+  set user {}
+  foreach library $libraries {
+    if {![dict exists $library standard]} {lappend user $library}
+  }
+  return $user
+}
+set libraries [user_libraries [dict get $workspace libraries]]
 if {[llength $libraries] != 1 || [dict get [lindex $libraries 0] library] ne "work"} {
   error "compiled library is missing"
 }
@@ -295,7 +304,16 @@ puts "verilog-standard-profiles-ok"
         std::ostringstream error;
         const int result = run_cli(
             { "fsim", "tcl", "--snapshot", "mapped-display", "-c", R"tcl(
-set libraries [dict get [fsim::get_workspace] libraries]
+proc user_libraries {libraries} {
+  # The read-only standard std/ieee rows of each VHDL edition are in every
+  # workspace (owner 11-19); a workspace's own libraries are the others.
+  set user {}
+  foreach library $libraries {
+    if {![dict exists $library standard]} {lappend user $library}
+  }
+  return $user
+}
+set libraries [user_libraries [dict get [fsim::get_workspace] libraries]]
 if {[llength $libraries] != 1} {error "bad mapping count"}
 set mapped [lindex $libraries 0]
 if {[dict get $mapped library] ne "work" || ![dict get $mapped mapped]} {

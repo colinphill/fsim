@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "fsim/semantic/vhdl_native_identity.hpp"
+#include "fsim/semantic/vhdl_native_intrinsics.hpp"
 #include "elaborator_test_support.hpp"
 #include "fsim/runtime/simir_interpreter.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
@@ -746,11 +748,24 @@ end architecture;
     const auto user_overload_candidates
         = user_overload_resolver.resolve_vhdl_callables(
             *user_overload_call.referenced_name, user_overload_call.scope);
+    // The package's own TO_INTEGER is a candidate beside NUMERIC_STD's
+    // (gate BD D2: real IEEE declarations). Use-clause homograph hiding
+    // (IEEE 1076-2019 12.4) that leaves NUMERIC_STD's TO_INTEGER(SIGNED)
+    // alone is gate BD D3's.
     assert(user_overload_candidates.status
-        == fsim::semantic::CompiledResolutionStatus::unique);
-    assert(user_overload_candidates.candidates.size() == 1U);
+            == fsim::semantic::CompiledResolutionStatus::unique
+        || user_overload_candidates.status
+            == fsim::semantic::CompiledResolutionStatus::ambiguous);
+    const auto own_candidate = std::ranges::find_if(
+        user_overload_candidates.candidates, [&](const auto& candidate) {
+            const auto declaration
+                = linked.design->find_declaration(candidate.body);
+            return declaration && declaration->vhdl != nullptr
+                && declaration->vhdl->native_intrinsic == 0U;
+        });
+    assert(own_candidate != user_overload_candidates.candidates.end());
     const auto user_overload = linked.design->find_declaration(
-        user_overload_candidates.candidates.front().body);
+        own_candidate->body);
     assert(user_overload && user_overload->vhdl != nullptr
         && user_overload->vhdl->callable
         && user_overload->vhdl->callable->pure);
@@ -769,8 +784,21 @@ end architecture;
         && user_overload_owner->vhdl != nullptr
         && user_overload_owner->vhdl->name
             == "local_integer_user_overload_pkg");
-    assert(user_overload_resolver.vhdl_builtin_package_member_imported(
-        "ieee", "numeric_std", "to_integer", user_overload_call.scope));
+    // NUMERIC_STD's TO_INTEGER is visible through the use clause, by its
+    // native identity (gate BD D2).
+    assert(std::ranges::any_of(user_overload_candidates.candidates,
+        [&](const auto& candidate) {
+            const auto declaration
+                = linked.design->find_declaration(candidate.key);
+            const auto* native = declaration && declaration->vhdl != nullptr
+                ? fsim::semantic::vhdl_native_of(*declaration->vhdl)
+                : nullptr;
+            return native != nullptr
+                && native->package_id
+                    == fsim::semantic::VhdlNativePackage::ieee_numeric_std
+                && native->name
+                    == fsim::semantic::VhdlNativeName::to_integer;
+        }));
 
     const auto& user_type_shadow_call = find_package_call(
         "local_integer_user_type_shadow_pkg");
@@ -810,8 +838,16 @@ end architecture;
     assert(visible_user_types.candidates.size() == 1U);
     assert(visible_user_types.candidates.front()
         == user_unsigned_type->vhdl->declaration);
-    assert(user_type_shadow_resolver.vhdl_builtin_package_member_imported(
-        "ieee", "numeric_std", "unsigned", user_type_shadow_call.scope));
+    // NUMERIC_STD's UNSIGNED (native identity, gate BD D2) is in the
+    // design; the local type above hides it (IEEE 1076-2019 12.3).
+    assert(std::ranges::any_of(linked.design->vhdl_hir.declarations(),
+        [](const auto& declaration) {
+            const auto* native = fsim::semantic::vhdl_native_of(declaration);
+            return native != nullptr
+                && native->package_id
+                    == fsim::semantic::VhdlNativePackage::ieee_numeric_std
+                && native->name == fsim::semantic::VhdlNativeName::unsigned_;
+        }));
 
     const auto rejected_user_overload = fsim::elaboration::elaborate(
         *linked.design,
@@ -1007,6 +1043,37 @@ end architecture;
         "vhdl:work.distinct_rom_initializer(rtl)");
     assert(!rejected_nominal.ok());
     assert(has_diagnostic(rejected_nominal, "FSIM-ELAB-VHINIT-002"));
+
+    // RISING_EDGE's formal S is a signal (IEEE 1076-2019 16.7): a record
+    // element of a variable is not a signal name (8.3, 4.2.2.2), so the
+    // native edge predicate rejects it, as on bd1. A record element of a
+    // signal (`rec.clk`) is accepted (fixtures/vhdl/inline_ops/history_paths).
+    const auto variable_edge = fsim::frontend::parse_text(
+        "vhdl-rising-edge-variable-record-element-negative.vhd",
+        R"(
+library ieee;
+use ieee.std_logic_1164.all;
+entity variable_edge is end entity;
+architecture rtl of variable_edge is
+  type pins is record
+    clk : std_logic;
+    d : std_logic;
+  end record;
+begin
+  check : process
+    variable local_pins : pins := ('0', '0');
+  begin
+    assert not rising_edge(local_pins.clk) severity failure;
+    wait;
+  end process;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(variable_edge.ok());
+    const auto rejected_variable_edge = compile_and_elaborate(
+        variable_edge.design, "vhdl:work.variable_edge(rtl)");
+    assert(!rejected_variable_edge.ok());
+    assert(has_diagnostic(rejected_variable_edge, "FSIM-ELAB-045"));
 
     const auto constrained_mismatch = fsim::frontend::parse_text(
         "vhdl-packed-array-signal-initializer-bounds-negative.vhd",
@@ -1398,11 +1465,11 @@ end architecture;
                         == fsim::semantic::vhdl::ExpressionKind::call;
             });
         assert(expression != design.vhdl_hir.expressions().end());
+        // A package body's operator denotes the native logical operators
+        // of NUMERIC_STD made visible by its use clause (IEEE 1076-2019
+        // 12.4; gate BD D2 binds package-body names at link).
         assert(expression->builtin_operator
-            == fsim::semantic::vhdl::BuiltinOperatorIdentity::none);
-        assert(!expression->referenced_name
-            || (!expression->referenced_name->selected
-                && expression->referenced_name->overloads.empty()));
+            != fsim::semantic::vhdl::BuiltinOperatorIdentity::none);
     }
     const auto package = design.find_unit(
         fsim::semantic::UnitKind::vhdl_package,

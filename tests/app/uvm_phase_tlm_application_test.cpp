@@ -1166,7 +1166,11 @@ int main(int argc, char **argv) {
   const std::filesystem::path work{argv[3]};
   const std::string release{argv[4]};
   std::error_code cleanup_error;
-  if (mode == "direct" &&
+  // The first stage of a work directory starts it empty: direct, and
+  // compile, which the elaborate and simulate stages of the same work
+  // directory follow (the CTest parts give direct a work directory of its
+  // own).
+  if ((mode == "direct" || mode == "compile") &&
       !fsim::support::environment_variable("FSIM_TEST_REUSE_WORK")) {
     make_tree_writable(work);
     std::filesystem::remove_all(work, cleanup_error);

@@ -425,6 +425,52 @@ void relocate_generated_text(
     }
 }
 
+// A VHDL declaration identity is `<source>:<offset>[...]` (the parser's
+// vhdl_declaration_identity): the source is a producer path and is relocated
+// with the spans. Only a prefix that is a mapped producer path, followed by
+// `:` and the offset's digits, is rewritten.
+void relocate_vhdl_identity(
+    std::string& value, const SourceMappingIndex& mappings)
+{
+    for (std::size_t colon = value.find(':'); colon != std::string::npos;
+         colon = value.find(':', colon + 1U)) {
+        if (colon + 1U >= value.size() || value[colon + 1U] < '0'
+            || value[colon + 1U] > '9') {
+            continue;
+        }
+        const auto found = mappings.producers.find(
+            normalized_source_name(std::string_view { value }.substr(0U, colon)));
+        if (found != mappings.producers.end()) {
+            value.replace(0U, colon, found->second);
+            return;
+        }
+    }
+}
+
+template <typename Value>
+void relocate_vhdl_identities(Value& value, const SourceMappingIndex& mappings)
+{
+    using Type = std::remove_cvref_t<Value>;
+    if constexpr (std::same_as<Type, std::string>) {
+        relocate_vhdl_identity(value, mappings);
+    } else if constexpr (IsVector<Type>::value) {
+        for (auto& item : value) {
+            relocate_vhdl_identities(item, mappings);
+        }
+    } else if constexpr (IsOptional<Type>::value) {
+        if (value) {
+            relocate_vhdl_identities(*value, mappings);
+        }
+    } else if constexpr (IsPair<Type>::value) {
+        relocate_vhdl_identities(value.first, mappings);
+        relocate_vhdl_identities(value.second, mappings);
+    } else if constexpr (std::is_aggregate_v<Type>) {
+        boost::pfr::for_each_field(value, [&](auto& field) {
+            relocate_vhdl_identities(field, mappings);
+        });
+    }
+}
+
 bool relocate_embedded_source_names(
     std::string& name,
     const SourceMappingIndex& mappings)
@@ -1250,6 +1296,15 @@ bool relocate_compiled_design_sources(
         relocate_generated_text(collection, producer_source_names,
             records.source_spans, valid);
     };
+    auto& vhdl = design.mutable_vhdl();
+    relocate_vhdl_identities(vhdl.mutable_units(), *mapping_index);
+    relocate_vhdl_identities(vhdl.mutable_declarations(), *mapping_index);
+    relocate_vhdl_identities(vhdl.mutable_types(), *mapping_index);
+    relocate_vhdl_identities(vhdl.mutable_overload_sets(), *mapping_index);
+    relocate_vhdl_identities(vhdl.mutable_expressions(), *mapping_index);
+    relocate_vhdl_identities(vhdl.mutable_statements(), *mapping_index);
+    relocate_vhdl_identities(vhdl.mutable_processes(), *mapping_index);
+    relocate_vhdl_identities(vhdl.mutable_instances(), *mapping_index);
     auto& systemverilog = design.mutable_systemverilog();
     relocate_generated_collection(systemverilog.mutable_units());
     relocate_generated_collection(systemverilog.mutable_declarations());

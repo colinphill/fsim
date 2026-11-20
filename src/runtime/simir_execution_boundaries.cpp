@@ -900,7 +900,7 @@ const char* Interpreter::Impl::run_class_operation(
             && operation.constructor_actual_kinds[index] == 1U;
         actuals.push_back(string_actual ? PackedLogic4(64) : access.read(actual));
         string_actuals.push_back(
-            string_actual ? access.read_string(actual) : std::string { });
+            string_actual ? std::string { access.read_string(actual) } : std::string { });
     }
     // The object's random seed (IEEE 1800-2023 18.14.1) is the next two
     // draws of the allocating process's stream.
@@ -1052,7 +1052,7 @@ const char* Interpreter::Impl::run_class_operation(
                 ? PackedLogic4(64)
                 : access.read(operation.actuals[index]));
         string_actuals.push_back(string_actual
-                ? access.read_string(operation.actuals[index])
+                ? std::string { access.read_string(operation.actuals[index]) }
                 : std::string { });
     }
     const auto handle = access.read(operation.receiver).low_word().aval;
@@ -1178,7 +1178,7 @@ const char* Interpreter::Impl::run_class_operation(
                 ? bit_stream_value(access.read_container(actual))
                 : access.read(actual));
         string_actuals.push_back(
-            string_actual ? access.read_string(actual)
+            string_actual ? std::string { access.read_string(actual) }
             : strings_actual
             ? encode_dpi_string_array(
                   dense_container_image(access.read_container(actual))

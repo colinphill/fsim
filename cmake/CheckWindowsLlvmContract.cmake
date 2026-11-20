@@ -145,7 +145,7 @@ endforeach()
 
 foreach(FSIM_JOB_POLICY IN ITEMS
     "windows-llvm-mingw:"
-    "timeout-minutes: 180"
+    "timeout-minutes: 240"
     "configuration: Debug"
     "configuration: Release"
     "llvm_mode:"

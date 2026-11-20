@@ -1255,7 +1255,8 @@ std::optional<BuiltProject> build_objects(
     std::optional<CompilationWorkspace> checked;
     if (objects.empty()) {
         CompilationWorkspace empty;
-        inject_vhdl_standard_libraries(empty, diagnostics);
+        inject_vhdl_standard_libraries(
+            empty, diagnostics, load_precompiled_standard_libraries);
         empty.semantics = build_semantic_model(
             empty.parsed, empty.hdl_sources, empty.systemc_sources,
             empty.standard_sources);

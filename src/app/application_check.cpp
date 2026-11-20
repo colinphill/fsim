@@ -14,6 +14,9 @@
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 #include "application_compiled_source.hpp"
+#include "application_standard_library_artifact_internal.hpp"
+#include "fsim/semantic/vhdl_native_intrinsics.hpp"
+#include "fsim/support/vhdl_standard_package_form.hpp"
 #include "fsim/app/built_project.hpp"
 #include "fsim/compiler/object_cache.hpp"
 #include "fsim/frontend/class_specialization.hpp"
@@ -365,7 +368,13 @@ static std::optional<CompilationWorkspace> check_project_impl(
     const bool complete_vhdl_environment = false,
     const bool allow_external_vhdl_architecture_primary = false,
     const semantic::CompiledDesign* imported = nullptr,
-    const std::span<const CompiledUnitAvailability> available_units = { }) {
+    const std::span<const CompiledUnitAvailability> available_units = { },
+    // Building a standard library artifact (IEEE 1076-2019 16): the sources
+    // are the standard libraries' own packages of this edition, so they are
+    // neither injected nor checked against redeclaration, and the native
+    // intrinsics are stamped as soon as the HIR exists.
+    const std::optional<frontend::VhdlStandard> bootstrap_standard
+        = std::nullopt) {
   const auto uvm_release = selected_uvm_release(config, diagnostics);
   if (!uvm_release) {
     return std::nullopt;
@@ -506,6 +515,11 @@ static std::optional<CompilationWorkspace> check_project_impl(
   }
   if (diagnostics.has_error()) {
     return std::nullopt;
+  }
+  if (bootstrap_standard) {
+    for (auto& group : groups) {
+      group.vhdl_psl_comments = false;
+    }
   }
 
   // The files of compiled sequences and properties the groups parse again.
@@ -1097,8 +1111,21 @@ static std::optional<CompilationWorkspace> check_project_impl(
   }
   (void)validate_vhdl_profile_compatibility(
       checked.parsed, diagnostics);
-  inject_vhdl_standard_libraries(
-      checked, diagnostics, complete_vhdl_environment);
+  if (bootstrap_standard) {
+    stamp_vhdl_predefined_context(checked.parsed);
+    const auto revision
+        = standard_library_package_revision(*bootstrap_standard);
+    for (auto& unit : checked.parsed.units) {
+      if (unit.language != frontend::Language::Vhdl2008) {
+        continue;
+      }
+      unit.standard_package_form = support::VhdlStandardPackageForm::artifact;
+      unit.standard_package_revision = revision;
+    }
+  } else {
+    inject_vhdl_standard_libraries(checked, diagnostics,
+        load_precompiled_standard_libraries, complete_vhdl_environment);
+  }
   for (const auto& mapped : checked.mapped_libraries) {
     if (!validate_vhdl_package_dependencies(
             mapped.vhdl_package_dependencies,
@@ -1114,8 +1141,11 @@ static std::optional<CompilationWorkspace> check_project_impl(
   validate_vhdl_mode_view_interfaces(checked.parsed.units, diagnostics);
   validate_vhdl_port_association_modes(checked.parsed.units, diagnostics);
   validate_vhdl_package_body_subprograms(checked.parsed.units, diagnostics);
+  // A standard library artifact's packages have no bodies: fsim implements
+  // them (IEEE 1076-2019 16; the package bodies of STD and IEEE are the
+  // tool's), so their deferred constants complete natively.
   validate_vhdl_package_declarations(checked.parsed.units, diagnostics,
-      allow_external_vhdl_architecture_primary);
+      allow_external_vhdl_architecture_primary || bootstrap_standard.has_value());
   // Sources compiled without a library bind their names as they do against
   // an empty one, so every flow gives a declaration the same type: a
   // typedef of a class names that class wherever it is used, and
@@ -1166,6 +1196,11 @@ static std::optional<CompilationWorkspace> check_project_impl(
       checked.standard_sources,
       compiled_assertion_sources->files);
   checked.vhdl_hir = build_vhdl_hir(checked.parsed, checked.semantics);
+  if (bootstrap_standard) {
+    // Before link and resolution: the packages' own formals resolve against
+    // the hidden natives exactly as user code will see them.
+    semantic::stamp_vhdl_native_intrinsics(checked, *bootstrap_standard);
+  }
   checked.systemverilog_hir = build_systemverilog_hir(
       checked.parsed,
       checked.semantics,
@@ -1248,9 +1283,11 @@ application_detail::check_project_for_object(
     const project::Config& config,
     diagnostic::Engine& diagnostics,
     const semantic::CompiledDesign* imported,
-    const std::span<const CompiledUnitAvailability> available_units)
+    const std::span<const CompiledUnitAvailability> available_units,
+    const std::optional<frontend::VhdlStandard> bootstrap_standard)
 {
-  return check_project_impl(config, diagnostics, false, true, imported, available_units);
+  return check_project_impl(config, diagnostics, false, true, imported,
+      available_units, bootstrap_standard);
 }
 
 std::optional<application_detail::CompilationWorkspace>
@@ -1262,6 +1299,7 @@ application_detail::check_project_workspace(
   return check_project_impl(
       config, diagnostics, complete_vhdl_environment);
 }
+
 
 CheckedProject application_detail::release_compiled_project(
     CompilationWorkspace&& workspace)

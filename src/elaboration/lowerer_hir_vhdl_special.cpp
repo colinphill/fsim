@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "lowerer_internal.hpp"
+#include "fsim/semantic/vhdl_native_identity.hpp"
 #include "fsim/frontend/parser.hpp"
 #include "fsim/support/stack_growth.hpp"
 
@@ -2868,18 +2869,34 @@ bool Lowerer::lower_hir_vhdl_environment_directory_statement(
             ? hir_runtime_binding(
                   *declaration_id, hir_process_scope_, true)
             : std::nullopt;
-        const auto status_kind = api == Api::dir_createdir
-            ? Api::dir_create_status
-            : api == Api::dir_deletedir ? Api::dir_delete_status
-            : api == Api::dir_deletefile ? Api::file_delete_status
-                                         : Api::dir_open_status;
+        // The STATUS formal of the native procedure the call resolved to
+        // (IEEE 1076-2019 16.5.6) gives the status type, by identity.
+        const auto status_formal = [&]()
+            -> std::optional<semantic::vhdl::SubtypeIndication> {
+            const auto callee = source.resolved_procedure
+                ? specialized_hir_unit_->find_declaration(
+                      *source.resolved_procedure)
+                : std::nullopt;
+            if (!callee || callee->vhdl == nullptr
+                || !callee->vhdl->callable
+                || callee->vhdl->callable->formals.empty()
+                || semantic::vhdl_native_of(*callee->vhdl) == nullptr) {
+                return std::nullopt;
+            }
+            const auto formal = specialized_hir_unit_->find_declaration(
+                callee->vhdl->callable->formals.back());
+            return formal && formal->vhdl != nullptr
+                ? formal->vhdl->subtype
+                : std::nullopt;
+        }();
         const auto status_type = [&](const auto& self,
                                      const semantic::vhdl::SubtypeIndication&
                                          subtype,
                                      std::unordered_set<std::uint32_t>&
                                          visiting) -> bool {
-            if (vhdl_environment_type_api(
-                    subtype.type_mark.spelling) == status_kind) {
+            if (status_formal && subtype.type_mark.target.valid()
+                && subtype.type_mark.target
+                    == status_formal->type_mark.target) {
                 return true;
             }
             if (!subtype.type_mark.target.valid()
@@ -2893,15 +2910,23 @@ bool Lowerer::lower_hir_vhdl_environment_directory_statement(
                 && self(self, type->vhdl->base, visiting);
         };
         std::unordered_set<std::uint32_t> visiting;
+        // A type mark written as an expanded name is linked through the
+        // effective subtype.
+        const auto variable_subtype = declaration
+                && declaration->vhdl != nullptr
+                && declaration->vhdl->subtype
+            ? (declaration->vhdl->subtype->type_mark.target.valid()
+                    ? declaration->vhdl->subtype
+                    : hir_effective_vhdl_subtype(*declaration->vhdl->subtype))
+            : std::nullopt;
         const bool matching_type = declaration
             && declaration->vhdl != nullptr
             && declaration->vhdl->object_class
                 == semantic::vhdl::ObjectClass::variable
-            && declaration->vhdl->subtype
-            && status_type(
-                status_type, *declaration->vhdl->subtype, visiting);
+            && variable_subtype
+            && status_type(status_type, *variable_subtype, visiting);
         if (!matching_type || !binding || !binding->local
-            || binding->width != 3U) {
+            || binding->width == 0U || binding->width > 3U) {
             report(
                 "FSIM-ELAB-VHENV-006",
                 "STD.ENV directory STATUS must be a writable matching status variable",
@@ -2912,6 +2937,13 @@ bool Lowerer::lower_hir_vhdl_environment_directory_statement(
         }
         status = *binding->local;
     }
+    // The operation writes the status position in three bits; a STATUS
+    // variable of a four-literal status type takes it through a
+    // temporary.
+    const auto status_variable = status;
+    if (status && register_width(*status) != 3U) {
+        status = allocate_register(3U, frontend::ValueDomain::Bit2);
+    }
     using Kind = VhdlEnvironmentDirectoryKind;
     const auto kind = api == Api::dir_open ? Kind::open
         : api == Api::dir_close ? Kind::close
@@ -2921,6 +2953,11 @@ bool Lowerer::lower_hir_vhdl_environment_directory_statement(
                                      : Kind::delete_file;
     process_.operations.emplace_back(VhdlEnvironmentDirectory {
         kind, status, std::nullopt, directory, path, option });
+    if (status != status_variable) {
+        process_.operations.emplace_back(CopyRegister {
+            *status_variable,
+            resize_register(*status, register_width(*status_variable), false) });
+    }
     return true;
 }
 
@@ -3396,9 +3433,23 @@ bool Lowerer::is_hir_vhdl_environment_expression(
         return source.kind == semantic::vhdl::ExpressionKind::call
             || source.kind == semantic::vhdl::ExpressionKind::name;
     }
-    // TIME_RECORD arithmetic is the predefined STD.ENV operators, which
-    // have no declaration: an operator the design resolved to a declared
-    // function, or to another predefined operator, is not one.
+    // TIME_RECORD arithmetic is the STD.ENV "+" and "-" (IEEE 1076-2019
+    // 16.5.5): the precompiled package declares them as native functions,
+    // known by their intrinsic identity.
+    if (source.kind == semantic::vhdl::ExpressionKind::binary
+        && source.resolved_declaration) {
+        const auto declared = specialized_hir_unit_->find_declaration(
+            *source.resolved_declaration);
+        const auto* native = declared && declared->vhdl != nullptr
+            ? semantic::vhdl_native_of(*declared->vhdl)
+            : nullptr;
+        return native != nullptr
+            && native->package_id == semantic::VhdlNativePackage::std_env
+            && (native->name == semantic::VhdlNativeName::op_plus
+                || native->name == semantic::VhdlNativeName::op_minus);
+    }
+    // Without a stored resolution, an operator the design resolved to
+    // another predefined operator is not one.
     if (source.kind != semantic::vhdl::ExpressionKind::binary
         || (source.text != "+" && source.text != "-")
         || source.operands.size() != 2U || source.resolved_declaration
@@ -3568,8 +3619,25 @@ Lowerer::lower_hir_vhdl_environment_expression(
         }
         const bool boolean_result = api == Api::dir_itemexists
             || api == Api::dir_itemisdir || api == Api::dir_itemisfile;
+        // The status types are the ordinary enumerations STD.ENV declares
+        // (IEEE 1076-2019 16.5.6): four or five literals, whose position the
+        // operation writes in three bits; the context's enumeration width
+        // takes it.
         const auto result_width = boolean_result ? 1U : 3U;
-        if (expected_width != 0U && expected_width != result_width) {
+        // The call resolved to the native function by identity, so its
+        // context is the status type the function returns.
+        const bool native_callee = [&] {
+            const auto callee = source.resolved_declaration
+                ? specialized_hir_unit_->find_declaration(
+                      *source.resolved_declaration)
+                : std::nullopt;
+            return callee && callee->vhdl != nullptr
+                && semantic::vhdl_native_of(*callee->vhdl) != nullptr;
+        }();
+        const bool status_width = !boolean_result && native_callee
+            && expected_width != 0U && expected_width <= result_width;
+        if (expected_width != 0U && expected_width != result_width
+            && !status_width) {
             report(
                 "FSIM-ELAB-VHENV-004",
                 "STD.ENV directory result is incompatible with its context",
@@ -3591,7 +3659,9 @@ Lowerer::lower_hir_vhdl_environment_expression(
                            : frontend::ValueDomain::Bit2);
         process_.operations.emplace_back(VhdlEnvironmentDirectory {
             kind, destination, std::nullopt, directory, path, option });
-        return destination;
+        return status_width && expected_width != result_width
+            ? resize_register(destination, expected_width, false)
+            : destination;
     }
     const auto require_width = [&](const std::size_t width) {
         if (expected_width == 0U || expected_width == width) {

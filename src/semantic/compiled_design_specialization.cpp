@@ -11,6 +11,8 @@
 #include "fsim/support/vhdl_time.hpp"
 #include "fsim/semantic/compiled_design_normalization.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
+#include "fsim/semantic/vhdl_native_identity.hpp"
+#include "fsim/semantic/vhdl_native_intrinsics.hpp"
 #include "resolution_memo.hpp"
 #include "../diagnostic/thread_cpu_clock.hpp"
 #include "integral_identity_memo.hpp"
@@ -3347,6 +3349,21 @@ private:
         return std::nullopt;
     }
 
+    // A logic vector of the IEEE packages (STD_ULOGIC_VECTOR,
+    // STD_LOGIC_VECTOR, NUMERIC_STD's and NUMERIC_BIT's UNSIGNED and SIGNED,
+    // and their subtypes) is a packed value in this evaluator, by its native
+    // identity (gate BD D2): its elements are its bits, not array elements.
+    [[nodiscard]] bool vhdl_native_logic_vector(
+        const vhdl::SubtypeIndication& subtype) const
+    {
+        const auto* native
+            = vhdl_native_type_of(unit_, subtype.type_mark.target);
+        return native != nullptr
+            && vhdl_native_domain(*native) != VhdlNativeDomain::none
+            && vhdl_native_provided_type(*native) != vhdl::ProvidedType::std_ulogic
+            && vhdl_native_provided_type(*native) != vhdl::ProvidedType::std_logic;
+    }
+
     [[nodiscard]] std::optional<vhdl::SubtypeIndication>
     vhdl_array_element_subtype(
         const vhdl::SubtypeIndication& subtype)
@@ -3357,6 +3374,9 @@ private:
         };
         if (!type_id.valid()) {
             return fail("type-target-missing");
+        }
+        if (vhdl_native_logic_vector(subtype)) {
+            return fail("native-logic-vector");
         }
         std::set<TypeId> visited;
         while (type_id.valid() && visited.insert(type_id).second) {
@@ -3409,6 +3429,9 @@ private:
     [[nodiscard]] std::optional<TypeId> vhdl_array_base_type(
         const vhdl::SubtypeIndication& subtype)
     {
+        if (vhdl_native_logic_vector(subtype)) {
+            return std::nullopt;
+        }
         auto type_id = subtype.type_mark.target;
         std::set<TypeId> visited;
         while (type_id.valid() && visited.insert(type_id).second) {
@@ -5453,10 +5476,10 @@ private:
                 }
                 const auto callable = callable_declaration(expression);
                 if (callable
-                    && !vhdl_callable_in_standard_package(
-                        *callable, "ieee", "std_logic_1164", operation)
-                    && !vhdl_callable_in_standard_package(
-                        *callable, "ieee", "numeric_std", operation)) {
+                    && !vhdl_native_logical_operator(*callable,
+                        VhdlNativePackage::ieee_std_logic_1164)
+                    && !vhdl_native_logical_operator(
+                        *callable, VhdlNativePackage::ieee_numeric_std)) {
                     return evaluate_vhdl_callable(expression);
                 }
                 return std::nullopt;
@@ -6441,34 +6464,77 @@ private:
         return std::nullopt;
     }
 
-    [[nodiscard]] bool vhdl_callable_in_standard_package(
-        const DeclarationId id, const std::string_view library,
-        const std::string_view package,
-        const std::string_view member) const
-    {
-        const auto declaration = unit_.find_declaration(id);
-        if (!declaration || declaration->vhdl == nullptr
-            || !support::equal_ignoring_ascii_case(
-                declaration->vhdl->name, member)) {
-            return false;
-        }
-        return unit_.design().vhdl_scope_in_package(
-            declaration->vhdl->scope, library, package);
-    }
-
-    [[nodiscard]] bool vhdl_numeric_std_callable(
-        const DeclarationId id, const std::string_view member) const
-    {
-        return vhdl_callable_in_standard_package(
-            id, "ieee", "numeric_std", member);
-    }
-
-    [[nodiscard]] bool vhdl_numeric_std_callable(
+    // The native subprogram entry of a declaration (gate BD D2): the
+    // precompiled standard library's declaration carries its identity.
+    [[nodiscard]] const VhdlNativeIntrinsic* vhdl_native_subprogram(
         const DeclarationId id) const
     {
-        return vhdl_numeric_std_callable(id, "to_integer");
+        const auto declaration = unit_.find_declaration(id);
+        if (!declaration || declaration->vhdl == nullptr) {
+            return nullptr;
+        }
+        const auto* entry = vhdl_native_of(*declaration->vhdl);
+        return entry != nullptr
+                && (entry->kind == VhdlNativeKind::function
+                    || entry->kind == VhdlNativeKind::procedure)
+            ? entry
+            : nullptr;
     }
 
+    // Whether `id` is the native function `name` of IEEE.NUMERIC_STD.
+    [[nodiscard]] bool vhdl_numeric_std_callable(
+        const DeclarationId id, const VhdlNativeName name) const
+    {
+        const auto* entry = vhdl_native_subprogram(id);
+        return entry != nullptr
+            && entry->package_id == VhdlNativePackage::ieee_numeric_std
+            && entry->name == name;
+    }
+
+    // Whether `id` is a native logical operator of `package`
+    // (IEEE.STD_LOGIC_1164 or IEEE.NUMERIC_STD).
+    [[nodiscard]] bool vhdl_native_logical_operator(
+        const DeclarationId id, const VhdlNativePackage package) const
+    {
+        const auto* entry = vhdl_native_subprogram(id);
+        return entry != nullptr && entry->package_id == package
+            && vhdl_native_operator(*entry)
+                != vhdl::BuiltinOperatorIdentity::none;
+    }
+
+    // The native IEEE.NUMERIC_STD function a call denotes: every
+    // declaration its name denotes is that one native function (its
+    // overloads differ by profile only, IEEE 1076-2019 4.5.1).
+    [[nodiscard]] std::optional<VhdlNativeName> vhdl_numeric_std_call(
+        const vhdl::Expression& expression) const
+    {
+        if (!expression.referenced_name) {
+            return std::nullopt;
+        }
+        const auto& name = *expression.referenced_name;
+        std::vector<DeclarationId> denoted;
+        if (name.selected) {
+            denoted.push_back(*name.selected);
+        } else {
+            denoted = name.overloads;
+        }
+        std::optional<VhdlNativeName> result;
+        for (const auto declaration : denoted) {
+            const auto* entry = vhdl_native_subprogram(declaration);
+            if (entry == nullptr
+                || entry->package_id != VhdlNativePackage::ieee_numeric_std
+                || entry->kind != VhdlNativeKind::function
+                || (result && *result != entry->name)) {
+                return std::nullopt;
+            }
+            result = entry->name;
+        }
+        return result;
+    }
+
+    // Whether a subtype is of IEEE.NUMERIC_STD's SIGNED (true) or UNSIGNED
+    // (false) family, by the native identity of its type (16.8.5): the
+    // resolved subtypes and the UNRESOLVED_ types alike.
     [[nodiscard]] std::optional<bool> vhdl_numeric_std_vector_signedness(
         const vhdl::SubtypeIndication& subtype,
         const ScopeId use_scope) const
@@ -6476,63 +6542,20 @@ private:
         const auto resolver = CompiledDesignResolver { unit_ };
         const auto effective = resolver.effective_vhdl_subtype(
             subtype, use_scope);
-        if (!effective
-            || effective->domain != vhdl::ValueDomain::logic9) {
+        if (!effective || !effective->type_mark.target.valid()) {
             return std::nullopt;
         }
-        if (!effective->type_mark.target.valid()) {
-            const auto& spelling = effective->type_mark.spelling;
-            const bool signed_type
-                = support::equal_ignoring_ascii_case(spelling, "signed");
-            const bool unsigned_type = support::equal_ignoring_ascii_case(
-                spelling, "unsigned");
-            if ((signed_type || unsigned_type)
-                && resolver.vhdl_builtin_package_member_imported(
-                    "ieee", "numeric_std", spelling, use_scope)) {
-                return signed_type;
-            }
+        const auto* entry
+            = vhdl_native_type_of(unit_, effective->type_mark.target);
+        if (entry == nullptr
+            || entry->package_id != VhdlNativePackage::ieee_numeric_std) {
             return std::nullopt;
         }
-        auto type_id = std::optional { effective->type_mark.target };
-        std::set<TypeId> visited;
-        while (type_id && visited.insert(*type_id).second) {
-            const auto type = unit_.find_type(*type_id);
-            if (!type || type->vhdl == nullptr) {
-                return std::nullopt;
-            }
-            const auto& definition = *type->vhdl;
-            if (definition.form == vhdl::TypeForm::array) {
-                const auto type_declaration = unit_.find_declaration(
-                    definition.declaration);
-                if (!type_declaration || type_declaration->vhdl == nullptr
-                    || (!support::equal_ignoring_ascii_case(
-                            definition.name, "unresolved_signed")
-                        && !support::equal_ignoring_ascii_case(
-                            definition.name, "unresolved_unsigned"))
-                    || definition.array_dimensions.size() != 1U
-                    || !definition.element_subtype
-                    || definition.element_subtype->domain
-                        != vhdl::ValueDomain::logic9) {
-                    return std::nullopt;
-                }
-                if (!unit_.design().vhdl_scope_in_package(
-                        type_declaration->vhdl->scope, "ieee", "numeric_std")) {
-                    return std::nullopt;
-                }
-                return support::equal_ignoring_ascii_case(
-                           definition.name, "unresolved_signed")
-                    ? std::optional<bool> { true }
-                    : std::optional<bool> { false };
-            }
-            if (definition.form != vhdl::TypeForm::subtype
-                && definition.form != vhdl::TypeForm::alias) {
-                return std::nullopt;
-            }
-            type_id = definition.base.type_mark.target.valid()
-                ? std::optional { definition.base.type_mark.target }
-                : std::nullopt;
+        switch (vhdl_native_provided_type(*entry)) {
+        case vhdl::ProvidedType::numeric_std_signed: return true;
+        case vhdl::ProvidedType::numeric_std_unsigned: return false;
+        default: return std::nullopt;
         }
-        return std::nullopt;
     }
 
     [[nodiscard]] static vhdl::Name vhdl_operator_name(
@@ -6618,12 +6641,12 @@ private:
                         ieee_std_logic_1164_xnor);
         const auto name = vhdl_operator_name(expression);
         const auto classify = [&](const DeclarationId declaration) {
-            if (vhdl_callable_in_standard_package(
-                    declaration, "ieee", "std_logic_1164", operation)) {
+            if (vhdl_native_logical_operator(
+                    declaration, VhdlNativePackage::ieee_std_logic_1164)) {
                 return VhdlPackedBitwiseTarget::ieee_std_logic_1164;
             }
-            if (vhdl_callable_in_standard_package(
-                    declaration, "ieee", "numeric_std", operation)) {
+            if (vhdl_native_logical_operator(
+                    declaration, VhdlNativePackage::ieee_numeric_std)) {
                 return VhdlPackedBitwiseTarget::ieee_numeric_std;
             }
             return VhdlPackedBitwiseTarget::none;
@@ -6726,16 +6749,6 @@ private:
             return VhdlPackedBitwiseTarget::ieee_numeric_std;
         }
         if (std_logic_operands && has_std_logic_1164_operator) {
-            return VhdlPackedBitwiseTarget::ieee_std_logic_1164;
-        }
-        if (numeric_std_operands
-            && resolver.vhdl_builtin_package_member_imported(
-                "ieee", "numeric_std", operation, expression.scope)) {
-            return VhdlPackedBitwiseTarget::ieee_numeric_std;
-        }
-        if (std_logic_operands
-            && resolver.vhdl_builtin_package_member_imported(
-                "ieee", "std_logic_1164", operation, expression.scope)) {
             return VhdlPackedBitwiseTarget::ieee_std_logic_1164;
         }
         return VhdlPackedBitwiseTarget::none;
@@ -6893,100 +6906,19 @@ private:
         const auto resolver = CompiledDesignResolver { unit_ };
         const auto resolutions = resolver.resolve_vhdl_callables(
             name, expression.scope);
+        // NUMERIC_STD's TO_INTEGER by the native identity of the declarations
+        // the call denotes (gate BD D2; IEEE 1076-2019 16.8.5).
         const auto is_standard_candidate = [&](const auto& candidate) {
-            return vhdl_numeric_std_callable(candidate.key)
-                && vhdl_numeric_std_callable(candidate.body);
+            return vhdl_numeric_std_callable(
+                candidate.key, VhdlNativeName::to_integer);
         };
-        recognized = (name.selected
-                && vhdl_numeric_std_callable(*name.selected))
-            || std::ranges::any_of(name.overloads,
-                [&](const DeclarationId declaration) {
-                    return vhdl_numeric_std_callable(declaration);
-                })
-                || std::ranges::any_of(resolutions.candidates,
-                    [&](const auto& candidate) {
-                        return vhdl_numeric_std_callable(candidate.key)
-                            || vhdl_numeric_std_callable(candidate.body);
-                    });
-        if (!resolver.vhdl_builtin_package_member_imported(
-                  "ieee", "numeric_std", "to_integer", expression.scope)) {
+        recognized = vhdl_numeric_std_call(expression)
+            == VhdlNativeName::to_integer;
+        if (!recognized) {
             return fail();
         }
         const auto operand = vhdl_expression_subtype(
             expression.operands.front());
-
-        if (!recognized) {
-            if (name.selected || !name.overloads.empty()
-                || resolutions.status
-                    != CompiledResolutionStatus::not_found
-                || !resolutions.candidates.empty() || !operand) {
-                return fail();
-            }
-            const auto effective_operand = resolver.effective_vhdl_subtype(
-                *operand, expression.scope);
-            if (!effective_operand
-                || effective_operand->domain != vhdl::ValueDomain::logic9
-                || effective_operand->type_mark.target.valid()
-                || operand->type_mark.target.valid()) {
-                return fail();
-            }
-            const auto& type_name = effective_operand->type_mark.spelling;
-            const bool signed_value
-                = support::equal_ignoring_ascii_case(type_name, "signed");
-            if ((!signed_value
-                    && !support::equal_ignoring_ascii_case(
-                        type_name, "unsigned"))
-                || !support::equal_ignoring_ascii_case(
-                    operand->type_mark.spelling, type_name)
-                || !resolver.vhdl_builtin_package_member_imported(
-                    "ieee", "numeric_std", type_name, expression.scope)) {
-                return fail();
-            }
-            vhdl::Name type_reference;
-            type_reference.spelling = type_name;
-            type_reference.canonical = type_name;
-            const auto visible_type_declarations = resolver.resolve_vhdl(
-                type_reference, expression.scope, [](const auto& declaration) {
-                    if (declaration.vhdl == nullptr) {
-                        return false;
-                    }
-                    const auto form = declaration.vhdl->form;
-                    return form == vhdl::DeclarationForm::type
-                        || form == vhdl::DeclarationForm::subtype
-                        || form == vhdl::DeclarationForm::generic_type
-                        || form == vhdl::DeclarationForm::alias;
-                });
-            if (visible_type_declarations.status
-                    != CompiledResolutionStatus::not_found
-                || !visible_type_declarations.candidates.empty()
-                || resolver.resolve_vhdl_named_type(
-                    type_name, expression.scope)) {
-                return fail();
-            }
-            vhdl::SubtypeIndication integer_result;
-            integer_result.type_mark.spelling = "integer";
-            const auto effective_result = resolver.effective_vhdl_subtype(
-                integer_result, expression.scope);
-            if (!effective_result
-                || effective_result->domain != vhdl::ValueDomain::integer) {
-                return fail();
-            }
-            const auto integer_width
-                = effective_result->integer_storage_width != 0U
-                ? static_cast<std::size_t>(
-                      effective_result->integer_storage_width)
-                : effective_result->executable_width
-                ? static_cast<std::size_t>(
-                      *effective_result->executable_width)
-                : 0U;
-            if (integer_width < 2U || integer_width > 64U) {
-                return fail();
-            }
-            recognized = true;
-            return VhdlNumericStdIntegerProfile {
-                signed_value, integer_width
-            };
-        }
 
         if (resolutions.candidates.size() != 2U
             || !std::ranges::all_of(
@@ -7025,7 +6957,9 @@ private:
         bool saw_signed { };
         bool saw_unsigned { };
         for (const auto& candidate : resolutions.candidates) {
-            const auto callable = unit_.find_declaration(candidate.body);
+            // The profile is the specification's (a native subprogram has
+            // no VHDL body).
+            const auto callable = unit_.find_declaration(candidate.key);
             if (!callable || callable->vhdl == nullptr
                 || !callable->vhdl->callable
                 || !callable->vhdl->callable->function
@@ -7077,165 +7011,6 @@ private:
             return fail();
         }
         return matching_profile;
-    }
-
-    [[nodiscard]] std::optional<DeclarationId>
-    vhdl_numeric_std_integer_size_conversion_callable(
-        const vhdl::Expression& expression, const std::string_view member,
-        const bool expected_signed_result, bool& recognized,
-        bool& compiler_contract_only) const
-    {
-        recognized = false;
-        compiler_contract_only = false;
-        if (!expression.referenced_name) {
-            return std::nullopt;
-        }
-        const auto& name = *expression.referenced_name;
-        const auto resolver = CompiledDesignResolver { unit_ };
-        const auto resolutions = resolver.resolve_vhdl_callables(
-            name, expression.scope);
-        const auto is_standard_candidate = [&](const auto& candidate) {
-            return vhdl_numeric_std_callable(candidate.key, member)
-                && vhdl_numeric_std_callable(candidate.body, member);
-        };
-        recognized = name.selected
-            ? vhdl_numeric_std_callable(*name.selected, member)
-            : std::ranges::any_of(name.overloads,
-                  [&](const DeclarationId declaration) {
-                      return vhdl_numeric_std_callable(declaration, member);
-                  })
-                || std::ranges::any_of(resolutions.candidates,
-                    [&](const auto& candidate) {
-                        return vhdl_numeric_std_callable(
-                                   candidate.key, member)
-                            || vhdl_numeric_std_callable(
-                                candidate.body, member);
-                    });
-        if (!recognized) {
-            // Some compiled objects omit the optional IEEE callable body
-            // payload entirely. In that case, use only the compiler-owned
-            // package export plus its exact linked import, and require both
-            // callable and all-declaration resolution to prove that no user
-            // homonym or overload can shadow the implicit standard member.
-            const auto visible_declarations = resolver.resolve_vhdl(
-                name, expression.scope);
-            if (name.selected || !name.overloads.empty()
-                || resolutions.status
-                    != CompiledResolutionStatus::not_found
-                || !resolutions.candidates.empty()
-                || visible_declarations.status
-                    != CompiledResolutionStatus::not_found
-                || !visible_declarations.candidates.empty()
-                || !resolver.vhdl_builtin_package_member_imported(
-                    "ieee", "numeric_std", member, expression.scope)) {
-                return std::nullopt;
-            }
-            recognized = true;
-            compiler_contract_only = true;
-            return std::nullopt;
-        }
-        if (!resolver.vhdl_standard_package_member_visible(
-                name, expression.scope)) {
-            return std::nullopt;
-        }
-        std::vector<const CompiledVhdlCallableResolution*>
-            callable_candidates;
-        if (name.selected) {
-            for (const auto& candidate : resolutions.candidates) {
-                if (candidate.key == *name.selected
-                    || candidate.body == *name.selected) {
-                    if (!is_standard_candidate(candidate)) {
-                        return std::nullopt;
-                    }
-                    callable_candidates.push_back(&candidate);
-                }
-            }
-            if (callable_candidates.size() != 1U) {
-                return std::nullopt;
-            }
-        } else {
-            if (resolutions.candidates.size() != 2U
-                || !std::ranges::all_of(
-                    resolutions.candidates, is_standard_candidate)
-                || name.overloads.size()
-                    != resolutions.candidates.size()
-                || std::ranges::any_of(
-                    resolutions.candidates, [&](const auto& candidate) {
-                        return std::ranges::count_if(
-                                   name.overloads,
-                                   [&](const DeclarationId declaration) {
-                                       return candidate.key == declaration
-                                           || candidate.body == declaration;
-                                   })
-                            != 1;
-                    })) {
-                return std::nullopt;
-            }
-            for (const auto& candidate : resolutions.candidates) {
-                callable_candidates.push_back(&candidate);
-            }
-        }
-
-        std::vector<DeclarationId> scalar_integer_profiles;
-        for (const auto* candidate_view : callable_candidates) {
-            const auto& candidate = *candidate_view;
-            const auto callable = unit_.find_declaration(candidate.body);
-            if (!callable || callable->vhdl == nullptr
-                || !callable->vhdl->callable
-                || !callable->vhdl->callable->function
-                || !callable->vhdl->callable->pure
-                || callable->vhdl->callable->formals.size() != 2U
-                || !callable->vhdl->callable->return_type) {
-                return std::nullopt;
-            }
-            const auto first_formal = unit_.find_declaration(
-                callable->vhdl->callable->formals[0U]);
-            const auto second_formal = unit_.find_declaration(
-                callable->vhdl->callable->formals[1U]);
-            const auto first_subtype = first_formal
-                    && first_formal->vhdl != nullptr
-                ? vhdl_declaration_subtype(*first_formal->vhdl)
-                : std::nullopt;
-            const auto second_subtype = second_formal
-                    && second_formal->vhdl != nullptr
-                ? vhdl_declaration_subtype(*second_formal->vhdl)
-                : std::nullopt;
-            const auto first_effective = first_subtype
-                ? resolver.effective_vhdl_subtype(
-                      *first_subtype, first_formal->vhdl->scope)
-                : std::nullopt;
-            const auto second_effective = second_subtype
-                ? resolver.effective_vhdl_subtype(
-                      *second_subtype, second_formal->vhdl->scope)
-                : std::nullopt;
-            const auto signed_result
-                = vhdl_numeric_std_vector_signedness(
-                    *callable->vhdl->callable->return_type,
-                    callable->vhdl->scope);
-            if (!first_effective || !second_effective || !signed_result
-                || first_effective->domain != vhdl::ValueDomain::integer
-                || *signed_result != expected_signed_result) {
-                return std::nullopt;
-            }
-            if (second_effective->domain == vhdl::ValueDomain::integer) {
-                scalar_integer_profiles.push_back(candidate.body);
-            } else if (second_effective->domain
-                    != vhdl::ValueDomain::logic9
-                || vhdl_numeric_std_vector_signedness(
-                       *second_subtype, second_formal->vhdl->scope)
-                    != std::optional<bool> { expected_signed_result }) {
-                return std::nullopt;
-            }
-        }
-        if (scalar_integer_profiles.size() != 1U) {
-            return std::nullopt;
-        }
-        const auto scalar_profile = scalar_integer_profiles.front();
-        if (name.selected
-            && callable_candidates.front()->body != scalar_profile) {
-            return std::nullopt;
-        }
-        return scalar_profile;
     }
 
     [[nodiscard]] std::optional<std::int64_t>
@@ -7697,7 +7472,7 @@ private:
                 }
             }
         }
-        if (name == "tointeger") {
+        if (vhdl_numeric_std_call(expression) == VhdlNativeName::to_integer) {
             bool standard_callable { };
             const auto profile = vhdl_numeric_std_to_integer_profile(
                 expression, standard_callable);
@@ -7718,7 +7493,9 @@ private:
                     : std::nullopt;
             }
         }
-        if (name == "tounsigned") {
+        // NUMERIC_STD's TO_UNSIGNED(ARG, SIZE: NATURAL), a native function,
+        // folds from its integer actuals (IEEE 1076-2019 16.8.5).
+        if (vhdl_numeric_std_call(expression) == VhdlNativeName::to_unsigned) {
             if (expression.operands.size() != 2U) {
                 return std::nullopt;
             }
@@ -7746,155 +7523,39 @@ private:
             }
             return vhdl_packed_value(std::move(bits), *width - 1, 0);
         }
-        if (name == "tosigned") {
-            bool standard_callable { };
-            bool compiler_contract_only { };
-            const auto callable
-                = vhdl_numeric_std_integer_size_conversion_callable(
-                    expression, "to_signed", true, standard_callable,
-                    compiler_contract_only);
-            if (standard_callable) {
-                if (!callable && !compiler_contract_only) {
-                    return std::nullopt;
-                }
-                const auto has_predefined_integer_unary_identity =
-                    [&](const vhdl::Expression& unary) {
-                        if (unary.text != "+" && unary.text != "-") {
-                            return false;
-                        }
-                        vhdl::Name implicit_name;
-                        implicit_name.spelling = unary.text;
-                        implicit_name.canonical = unary.text;
-                        const auto& name = unary.referenced_name
-                            ? *unary.referenced_name : implicit_name;
-                        const auto is_standard_operator = [&](
-                                                              const DeclarationId id) {
-                            return vhdl_callable_in_standard_package(
-                                id, "std", "standard", unary.text);
-                        };
-                        if ((name.selected
-                                && !is_standard_operator(*name.selected))
-                            || std::ranges::any_of(name.overloads,
-                                [&](const DeclarationId id) {
-                                    return !is_standard_operator(id);
-                                })) {
-                            return false;
-                        }
-                        const auto resolver = CompiledDesignResolver { unit_ };
-                        const auto callable_resolution
-                            = resolver.resolve_vhdl_callables(
-                                name, unary.scope);
-                        const bool callable_resolution_consistent
-                            = callable_resolution.status
-                                == CompiledResolutionStatus::not_found
-                            ? callable_resolution.candidates.empty()
-                            : (callable_resolution.status
-                                      == CompiledResolutionStatus::unique
-                                  || callable_resolution.status
-                                      == CompiledResolutionStatus::ambiguous)
-                                && !callable_resolution.candidates.empty();
-                        if (!callable_resolution_consistent
-                            || std::ranges::any_of(
-                                callable_resolution.candidates,
-                                [&](const auto& candidate) {
-                                    return !is_standard_operator(candidate.key)
-                                        || !is_standard_operator(candidate.body);
-                                })) {
-                            return false;
-                        }
-                        const auto declaration_resolution = resolver.resolve_vhdl(
-                            name, unary.scope);
-                        const bool declaration_resolution_consistent
-                            = declaration_resolution.status
-                                == CompiledResolutionStatus::not_found
-                            ? declaration_resolution.candidates.empty()
-                            : (declaration_resolution.status
-                                      == CompiledResolutionStatus::unique
-                                  || declaration_resolution.status
-                                      == CompiledResolutionStatus::ambiguous)
-                                && !declaration_resolution.candidates.empty();
-                        return declaration_resolution_consistent
-                            && std::ranges::all_of(
-                                declaration_resolution.candidates,
-                                is_standard_operator);
-                    };
-                const auto is_universal_integer_expression =
-                    [&](const auto& self, const ExpressionId operand) -> bool {
-                    const auto view = unit_.find_expression(operand);
-                    if (!view || view->vhdl == nullptr
-                        || (!view->vhdl->nominal_type.empty()
-                            && !(view->vhdl->builtin_nominal
-                                && view->vhdl->nominal_type == "integer"))) {
-                        return false;
-                    }
-                    if (view->vhdl->kind
-                        == vhdl::ExpressionKind::integer_literal) {
-                        return !view->vhdl->referenced_name
-                            && view->vhdl->operands.empty();
-                    }
-                    return view->vhdl->kind
-                        == vhdl::ExpressionKind::unary
-                        && (view->vhdl->text == "+"
-                            || view->vhdl->text == "-")
-                        && view->vhdl->operands.size() == 1U
-                        && has_predefined_integer_unary_identity(
-                            *view->vhdl)
-                        && self(self, view->vhdl->operands.front());
-                };
-                if (expression.operands.size() != 2U
-                    || std::ranges::any_of(
-                        expression.argument_names,
-                        [](const std::string& argument) {
-                            return !argument.empty();
-                        })) {
-                    return std::nullopt;
-                }
-                const bool literal_actuals
-                    = is_universal_integer_expression(
-                          is_universal_integer_expression,
-                          expression.operands[0U])
-                    && is_universal_integer_expression(
-                        is_universal_integer_expression,
-                        expression.operands[1U]);
-                if (!literal_actuals && callable && !compiler_contract_only) {
-                    // With retained IEEE bodies, preserve the existing pure
-                    // function evaluator for typed constants and other legal
-                    // actual expressions.
-                    return evaluate_vhdl_callable(expression, *callable);
-                }
-                if (!literal_actuals && !compiler_contract_only) {
-                    return std::nullopt;
-                }
-                // The bodyless compiler contract has no homonym in scope.
-                // Both of its overloads take an INTEGER value, and only the
-                // one with a NATURAL size has an integer second actual, so
-                // integer-valued actuals select TO_SIGNED(INTEGER, NATURAL)
-                // (IEEE 1076.3 numeric_std).
-                const auto value = vhdl_integer_expression(
-                    expression.operands[0U]);
-                const auto width = vhdl_integer_expression(
-                    expression.operands[1U]);
-                if (!value || !width || *width <= 0
-                    || static_cast<std::uint64_t>(*width)
-                        > maximum_systemverilog_constant_work_units
-                    || !consume_constant_work_unit(
-                        static_cast<std::uint64_t>(*width))) {
-                    return std::nullopt;
-                }
-                std::string bits(static_cast<std::size_t>(*width),
-                    *value < 0 ? '1' : '0');
-                const auto raw = static_cast<std::uint64_t>(*value);
-                constexpr auto integer_bits = static_cast<std::size_t>(
-                    std::numeric_limits<std::uint64_t>::digits);
-                const auto low_bits = std::min(
-                    bits.size(), integer_bits);
-                for (std::size_t index { }; index < low_bits; ++index) {
-                    bits[bits.size() - 1U - index]
-                        = ((raw >> index) & 1U) != 0U ? '1' : '0';
-                }
-                return vhdl_packed_value(
-                    std::move(bits), *width - 1, 0);
+        // NUMERIC_STD's TO_SIGNED(ARG: INTEGER; SIZE: NATURAL), a native
+        // function, folds from its integer actuals: ARG in SIZE bits, two's
+        // complement (IEEE 1076-2019 16.8.5; gate BD D2 native identity).
+        if (vhdl_numeric_std_call(expression) == VhdlNativeName::to_signed) {
+            if (expression.operands.size() != 2U
+                || std::ranges::any_of(expression.argument_names,
+                    [](const std::string& argument) {
+                        return !argument.empty();
+                    })) {
+                return std::nullopt;
             }
+            const auto value = vhdl_integer_expression(
+                expression.operands[0U]);
+            const auto width = vhdl_integer_expression(
+                expression.operands[1U]);
+            if (!value || !width || *width <= 0
+                || static_cast<std::uint64_t>(*width)
+                    > maximum_systemverilog_constant_work_units
+                || !consume_constant_work_unit(
+                    static_cast<std::uint64_t>(*width))) {
+                return std::nullopt;
+            }
+            std::string bits(static_cast<std::size_t>(*width),
+                *value < 0 ? '1' : '0');
+            const auto raw = static_cast<std::uint64_t>(*value);
+            constexpr auto integer_bits = static_cast<std::size_t>(
+                std::numeric_limits<std::uint64_t>::digits);
+            const auto low_bits = std::min(bits.size(), integer_bits);
+            for (std::size_t index { }; index < low_bits; ++index) {
+                bits[bits.size() - 1U - index]
+                    = ((raw >> index) & 1U) != 0U ? '1' : '0';
+            }
+            return vhdl_packed_value(std::move(bits), *width - 1, 0);
         }
         if ((name == "signed" || name == "unsigned"
                 || name == "stdlogicvector"
@@ -8175,6 +7836,28 @@ private:
                 } else {
                     local_value = std::move(*initialized);
                 }
+            } else if (local_subtype
+                && vhdl_native_logic_vector(*local_subtype)) {
+                // The default value is the element type's leftmost value in
+                // every element: 'U' for STD_ULOGIC, '0' for BIT (IEEE
+                // 1076-2019 6.4.2.3, 5.3.2.2).
+                const auto bounds = vhdl_packed_bounds(*local_subtype);
+                const auto width = bounds
+                    ? vhdl_range_width(bounds->first, bounds->second)
+                    : std::nullopt;
+                if (!width || *width == 0U
+                    || *width > maximum_systemverilog_constant_work_units
+                    || !consume_constant_work_unit(*width)) {
+                    call_frames_.pop_back();
+                    return std::nullopt;
+                }
+                const auto* native = vhdl_native_type_of(
+                    unit_, local_subtype->type_mark.target);
+                local_value = vhdl_packed_value(std::string(*width,
+                        vhdl_native_domain(*native) == VhdlNativeDomain::bit2
+                            ? '0'
+                            : 'U'),
+                    bounds->first, bounds->second);
             } else if (local_subtype
                 && vhdl_array_element_subtype(*local_subtype)) {
                 const auto initialized = vhdl_array_value(*local_subtype);

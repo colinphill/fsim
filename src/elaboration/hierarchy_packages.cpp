@@ -37,6 +37,7 @@
 #include "fsim/semantic/model.hpp"
 #include "fsim/semantic/systemverilog_hir.hpp"
 #include "fsim/semantic/vhdl_hir.hpp"
+#include "fsim/semantic/vhdl_native_identity.hpp"
 #include "fsim/support/index_distance.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
 #include "fsim/support/vhdl_time.hpp"
@@ -2033,26 +2034,68 @@ namespace {
             : 32U;
     }
 
-    std::optional<semantic::vhdl::Name> compiled_vhdl_resolution_function(
+    // The native standard-package declaration (IEEE 1076-2019 16) of a type
+    // definition itself, not of its subtype chain: a user subtype of a native
+    // type keeps its own constraints. Null for an ordinary type or a native
+    // item that is not a type.
+    const semantic::VhdlNativeIntrinsic* compiled_vhdl_native_type_entry(
+        const semantic::SpecializedHirUnit& specialization,
+        const semantic::vhdl::TypeDefinition& definition)
+    {
+        if (!definition.declaration.valid()) {
+            return nullptr;
+        }
+        const auto declaration
+            = specialization.find_declaration(definition.declaration);
+        if (!declaration || declaration->vhdl == nullptr) {
+            return nullptr;
+        }
+        const auto* entry = semantic::vhdl_native_of(*declaration->vhdl);
+        return entry != nullptr && entry->kind == semantic::VhdlNativeKind::type
+            ? entry
+            : nullptr;
+    }
+
+    // A resolution function name and the scope of the subtype indication
+    // that writes it, where the name is looked up (IEEE 1076-2019 6.3, 12.3):
+    // `resolved` in NUMERIC_STD's SIGNED denotes STD_LOGIC_1164.RESOLVED
+    // even where only NUMERIC_STD is visible.
+    struct CompiledVhdlResolutionName {
+        semantic::vhdl::Name name;
+        std::optional<semantic::ScopeId> scope;
+    };
+
+    std::optional<CompiledVhdlResolutionName> compiled_vhdl_resolution_function(
         const semantic::SpecializedHirUnit& specialization,
         const semantic::vhdl::SubtypeIndication& root,
         const std::optional<semantic::ScopeId> owner_scope = std::nullopt)
     {
         std::unordered_set<std::uint32_t> visiting;
         const auto resolve = [&](const auto& self,
-                                 const semantic::vhdl::SubtypeIndication& input)
-            -> std::optional<semantic::vhdl::Name> {
-            const auto subtype = compiled_vhdl_link_subtype(
-                specialization, input, owner_scope);
-            if (!subtype.resolution_function.canonical.empty()
-                || !subtype.resolution_function.spelling.empty()) {
-                return subtype.resolution_function;
+                                 const semantic::vhdl::SubtypeIndication& input,
+                                 const std::optional<semantic::ScopeId> scope)
+            -> std::optional<CompiledVhdlResolutionName> {
+            const auto named = [](const semantic::vhdl::Name& name) {
+                return !name.canonical.empty() || !name.spelling.empty();
+            };
+            // The name as written in this indication: the linked subtype
+            // also carries the names its type mark's declaration writes,
+            // which are looked up in that declaration's scope below.
+            if (named(input.resolution_function)) {
+                return CompiledVhdlResolutionName {
+                    input.resolution_function, scope
+                };
             }
+            const auto subtype = compiled_vhdl_link_subtype(
+                specialization, input, scope);
             if (!subtype.type_mark.target.valid()
                 || !visiting.insert(
                                 subtype.type_mark.target.value())
                     .second) {
-                return std::nullopt;
+                return named(subtype.resolution_function)
+                    ? std::optional { CompiledVhdlResolutionName {
+                          subtype.resolution_function, scope } }
+                    : std::nullopt;
             }
             const auto type = specialization.find_type(
                 subtype.type_mark.target);
@@ -2060,18 +2103,31 @@ namespace {
                 return std::nullopt;
             }
             const auto& definition = *type->vhdl;
+            const auto declaration = specialization.find_declaration(
+                definition.declaration);
+            const auto definition_scope = declaration
+                    && declaration->vhdl != nullptr
+                ? std::optional<semantic::ScopeId> { declaration->vhdl->scope }
+                : scope;
             if (definition.form == semantic::vhdl::TypeForm::array
                 && definition.element_subtype) {
-                return self(self, *definition.element_subtype);
+                return self(self, *definition.element_subtype,
+                    definition_scope);
             }
             if (definition.form == semantic::vhdl::TypeForm::subtype
                 || definition.form == semantic::vhdl::TypeForm::alias
                 || definition.form == semantic::vhdl::TypeForm::scalar) {
-                return self(self, definition.base);
+                if (auto found = self(self, definition.base,
+                        definition_scope)) {
+                    return found;
+                }
             }
-            return std::nullopt;
+            return named(subtype.resolution_function)
+                ? std::optional { CompiledVhdlResolutionName {
+                      subtype.resolution_function, scope } }
+                : std::nullopt;
         };
-        return resolve(resolve, root);
+        return resolve(resolve, root, owner_scope);
     }
 
     // A subtype whose type mark chain reaches STD_LOGIC or STD_LOGIC_VECTOR
@@ -2089,10 +2145,23 @@ namespace {
                                 const std::size_t depth) -> bool {
             const auto subtype = compiled_vhdl_link_subtype(
                 specialization, input, scope);
-            const auto name = simple_name_of(subtype.type_mark.spelling);
-            if (compiled_vhdl_name_equal(name, "std_logic")
-                || compiled_vhdl_name_equal(name, "std_logic_vector")) {
-                return true;
+            if (subtype.type_mark.target.valid()) {
+                // STD_LOGIC and STD_LOGIC_VECTOR are the native declarations
+                // of IEEE.STD_LOGIC_1164, never recognized by spelling.
+                const auto native_type = specialization.find_type(
+                    subtype.type_mark.target);
+                const auto* native = native_type && native_type->vhdl != nullptr
+                    ? compiled_vhdl_native_type_entry(
+                          specialization, *native_type->vhdl)
+                    : nullptr;
+                if (native != nullptr
+                    && native->package_id
+                        == semantic::VhdlNativePackage::ieee_std_logic_1164
+                    && (native->name == semantic::VhdlNativeName::std_logic
+                        || native->name
+                            == semantic::VhdlNativeName::std_logic_vector)) {
+                    return true;
+                }
             }
             if (!subtype.type_mark.target.valid()
                 || !subtype.resolution_function.spelling.empty()) {
@@ -2154,12 +2223,6 @@ namespace {
                     1U, frontend::ValueDomain::Bit2
                 };
             }
-            if (compiled_vhdl_name_equal(name, "std_logic")
-                || compiled_vhdl_name_equal(name, "std_ulogic")) {
-                return CompiledVhdlSignalLayout {
-                    1U, frontend::ValueDomain::Logic9
-                };
-            }
             if (compiled_vhdl_name_equal(name, "boolean")) {
                 return CompiledVhdlSignalLayout {
                     1U, frontend::ValueDomain::Boolean
@@ -2205,14 +2268,6 @@ namespace {
             if (compiled_vhdl_name_equal(name, "bit_vector")) {
                 return CompiledVhdlSignalLayout {
                     1U, frontend::ValueDomain::Bit2
-                };
-            }
-            if (compiled_vhdl_name_equal(name, "std_logic_vector")
-                || compiled_vhdl_name_equal(name, "std_ulogic_vector")
-                || compiled_vhdl_name_equal(name, "signed")
-                || compiled_vhdl_name_equal(name, "unsigned")) {
-                return CompiledVhdlSignalLayout {
-                    1U, frontend::ValueDomain::Logic9
                 };
             }
             if (compiled_vhdl_name_equal(name, "string")) {
@@ -2824,6 +2879,20 @@ namespace {
                 }
                 if (!result && actual->actual_declaration) {
                     result = resolve_declaration(*actual->actual_declaration);
+                }
+            }
+            // IEEE.STD_LOGIC_1164.STD_ULOGIC is one Logic9 scalar whatever
+            // its enumeration literals are (IEEE 1076-2019 16.7).
+            if (!result) {
+                if (const auto* native = compiled_vhdl_native_type_entry(
+                        specialization, definition);
+                    native != nullptr
+                    && native->package_id
+                        == semantic::VhdlNativePackage::ieee_std_logic_1164
+                    && native->name == semantic::VhdlNativeName::std_ulogic) {
+                    result = CompiledVhdlSignalLayout {
+                        1U, frontend::ValueDomain::Logic9
+                    };
                 }
             }
             if (!result
@@ -4169,6 +4238,25 @@ namespace {
                     return self(self, linked);
                 }
             }
+            // The nearest native declaration is the type mark's own one: a
+            // user subtype of a native type keeps its own constraints.
+            const semantic::VhdlNativeIntrinsic* native_entry = nullptr;
+            if (subtype.type_mark.target.valid()) {
+                if (const auto native_type = specialization.find_type(
+                        subtype.type_mark.target);
+                    native_type && native_type->vhdl != nullptr) {
+                    const auto* entry = compiled_vhdl_native_type_entry(
+                        specialization, *native_type->vhdl);
+                    if (entry != nullptr
+                        && semantic::vhdl_native_domain(*entry)
+                            != semantic::VhdlNativeDomain::none) {
+                        native_entry = entry;
+                    }
+                }
+            }
+            const auto native_domain = native_entry != nullptr
+                ? semantic::vhdl_native_domain(*native_entry)
+                : semantic::VhdlNativeDomain::none;
             PackedTypeMetadata result;
             result.spelling = subtype.type_mark.spelling;
             result.domain = vhdl_value_domain(subtype.domain);
@@ -4215,50 +4303,43 @@ namespace {
                         *left, *right, constraint.descending };
                 }
             }
-            if (!subtype.type_mark.target.valid()) {
-                const auto identity
-                    = type_resolver.resolve_vhdl_type_identity(
-                        subtype.type_mark.spelling, owner_scope);
-                // A selected source declaration stays nominal and follows
-                // the ordinary HIR metadata path. The resolver reports a
-                // Standard builtin only for a true source lookup miss in the
-                // owning unit's active predefined environment.
-                if (identity.status
-                        == semantic::CompiledResolutionStatus::unique
-                    && identity.type) {
-                    auto selected_type = subtype;
-                    selected_type.type_mark.target = *identity.type;
-                    return self(self, selected_type);
-                }
-                auto builtin_identity
-                    = identity.status
+            if (!subtype.type_mark.target.valid() || native_entry != nullptr) {
+                auto builtin_identity = semantic::vhdl::BuiltinTypeIdentity::none;
+                if (native_entry != nullptr) {
+                    // A native standard-package type (IEEE 1164, NUMERIC_STD,
+                    // NUMERIC_BIT): its vectors are the builtin vector
+                    // metadata, its UNSIGNED/SIGNED packed vectors, its
+                    // STD_ULOGIC a Logic9 scalar (IEEE 1076-2019 16.7).
+                    builtin_identity
+                        = semantic::vhdl_native_builtin_type(*native_entry);
+                    result.domain = native_domain == semantic::VhdlNativeDomain::bit2
+                        ? frontend::ValueDomain::Bit2
+                        : frontend::ValueDomain::Logic9;
+                    const auto provided
+                        = semantic::vhdl_native_provided_type(*native_entry);
+                    result.is_signed
+                        = provided == semantic::vhdl::ProvidedType::numeric_std_signed
+                        || provided
+                            == semantic::vhdl::ProvidedType::numeric_bit_signed;
+                } else {
+                    const auto identity
+                        = type_resolver.resolve_vhdl_type_identity(
+                            subtype.type_mark.spelling, owner_scope);
+                    // A selected source declaration stays nominal and follows
+                    // the ordinary HIR metadata path. The resolver reports a
+                    // Standard builtin only for a true source lookup miss in
+                    // the owning unit's active predefined environment.
+                    if (identity.status
                             == semantic::CompiledResolutionStatus::unique
-                            && !identity.type
-                    ? identity.builtin_type
-                    : semantic::vhdl::BuiltinTypeIdentity::none;
-                if (builtin_identity
-                        == semantic::vhdl::BuiltinTypeIdentity::none
-                    && identity.status
-                        == semantic::CompiledResolutionStatus::not_found
-                    && owner_scope
-                    && (subtype.builtin_type
-                            == semantic::vhdl::BuiltinTypeIdentity::
-                                ieee_std_logic_1164_std_logic_vector
-                        || subtype.builtin_type
-                            == semantic::vhdl::BuiltinTypeIdentity::
-                                ieee_std_logic_1164_std_ulogic_vector)) {
-                    const auto member
-                        = subtype.builtin_type
-                                == semantic::vhdl::BuiltinTypeIdentity::
-                                    ieee_std_logic_1164_std_logic_vector
-                        ? std::string_view { "std_logic_vector" }
-                        : std::string_view { "std_ulogic_vector" };
-                    // Preserve these two existing IEEE builtin routes only
-                    // when the exact package member is visible at this unit.
-                    if (type_resolver.vhdl_builtin_package_member_imported(
-                            "ieee", "std_logic_1164", member,
-                            *owner_scope)) {
-                        builtin_identity = subtype.builtin_type;
+                        && identity.type) {
+                        auto selected_type = subtype;
+                        selected_type.type_mark.target = *identity.type;
+                        return self(self, selected_type);
+                    }
+                    if (identity.status
+                            == semantic::CompiledResolutionStatus::unique
+                        && !identity.type) {
+                        builtin_identity = identity.builtin_type;
                     }
                 }
                 if (const auto builtin_name
@@ -4882,6 +4963,25 @@ namespace {
             ? resolver.spelling
             : resolver.canonical;
         result.source = resolver.source;
+        // A resolution function name that analysis bound to the native
+        // IEEE.STD_LOGIC_1164.RESOLVED (IEEE 1076-2019 16.7) denotes it
+        // wherever the subtype is used, visible there or not (6.3, 12.3).
+        if (resolver.selected) {
+            const auto selected
+                = specialization.find_declaration(*resolver.selected);
+            const auto* native = selected && selected->vhdl != nullptr
+                ? semantic::vhdl_native_of(*selected->vhdl)
+                : nullptr;
+            if (native != nullptr
+                && native->package_id
+                    == semantic::VhdlNativePackage::ieee_std_logic_1164
+                && native->kind == semantic::VhdlNativeKind::function
+                && native->name == semantic::VhdlNativeName::resolved) {
+                result.designator = "std_logic";
+                result.kind = ResolutionKind::std_logic;
+                return result;
+            }
+        }
         const semantic::CompiledDesignResolver compiled_resolver {
             specialization
         };
@@ -4900,6 +5000,19 @@ namespace {
                 continue;
             }
             const auto& callable = *declaration->vhdl;
+            // IEEE.STD_LOGIC_1164.RESOLVED is native (IEEE 1076-2019 16.7):
+            // a subtype resolved by it, such as STD_LOGIC, X01 or a user
+            // `resolved std_ulogic`, resolves like STD_LOGIC.
+            if (const auto* native = semantic::vhdl_native_of(callable);
+                native != nullptr
+                && native->package_id
+                    == semantic::VhdlNativePackage::ieee_std_logic_1164
+                && native->kind == semantic::VhdlNativeKind::function
+                && native->name == semantic::VhdlNativeName::resolved) {
+                result.designator = "std_logic";
+                result.kind = ResolutionKind::std_logic;
+                return result;
+            }
             const auto base = compiled_vhdl_signal_type(
                 specialization, subtype, owner_scope);
             const auto formal = callable.callable->formals.size() == 1U
@@ -4956,22 +5069,6 @@ namespace {
             }
         }
         if (!executable_body) {
-            // IEEE.STD_LOGIC_1164.RESOLVED is intrinsic (16.7): a subtype
-            // resolved by it, such as X01 or a user `resolved std_ulogic`,
-            // resolves like STD_LOGIC.
-            const auto designator = std::string_view { result.designator };
-            const auto separator = designator.find_last_of('.');
-            const auto simple = separator == std::string_view::npos
-                ? designator
-                : designator.substr(separator + 1U);
-            const auto base = compiled_vhdl_signal_type(
-                specialization, subtype, owner_scope);
-            if (compiled_vhdl_name_equal(simple, "resolved") && base
-                && base->domain == frontend::ValueDomain::Logic9) {
-                result.designator = "std_logic";
-                result.kind = ResolutionKind::std_logic;
-                return result;
-            }
             result.issue = CompiledVhdlResolutionIssue::missing_body;
             return result;
         }
@@ -5082,8 +5179,8 @@ namespace {
                 if (const auto resolution = compiled_vhdl_resolution_function(
                         specialization, element.subtype, record_scope)) {
                     const auto binding = compiled_vhdl_resolution_binding(
-                        specialization, element.subtype, *resolution,
-                        record_scope);
+                        specialization, element.subtype, resolution->name,
+                        resolution->scope);
                     if (!binding.kind || !binding.body.valid()) {
                         return false;
                     }
@@ -5113,7 +5210,8 @@ namespace {
             specialization, subtype, owner_scope);
         return resolution
             && compiled_vhdl_resolution_binding(
-                   specialization, subtype, *resolution, owner_scope)
+                   specialization, subtype, resolution->name,
+                   resolution->scope)
                     .kind
                 == ResolutionKind::user_function;
     }
@@ -5846,6 +5944,10 @@ namespace {
         };
         bool character = character_name(subtype.type_mark.spelling);
         note_left(subtype.constraints);
+        // STD_ULOGIC (and its subtypes): one Logic9 value (IEEE 1076-2019
+        // 16.7), by the native declaration.
+        const bool logic9_type = type_id.valid()
+            && semantic::vhdl_native_logic9(specialization, type_id);
         while (type_id.valid() && visiting.insert(type_id.value()).second) {
             const auto type = specialization.find_type(type_id);
             if (!type || type->vhdl == nullptr) {
@@ -5999,6 +6101,15 @@ namespace {
         }
         if (definition != nullptr
             && !definition->enumeration_literals.empty()) {
+            if (logic9_type) {
+                // The leftmost value: 'U' unless a range constraint has a
+                // left bound expression (folded above when it could be).
+                return compiled_vhdl_logic9_left(specialization,
+                    chain_left || chain_left_expression
+                        ? chain_left
+                        : std::optional<std::int64_t> { 0 },
+                    chain_left_expression, width);
+            }
             return unsigned_value(
                 static_cast<std::uint64_t>(chain_left.value_or(0)), width);
         }
@@ -6574,7 +6685,14 @@ namespace {
                     return projected;
                 }
             }
+            // Only a constant's initializer is its value; a signal's or a
+            // variable's is the initial value of an object that changes
+            // (IEEE 1076-2019 6.4.2, 14.7.5.2).
             if (declaration && declaration->vhdl != nullptr
+                && (declaration->vhdl->form
+                        == semantic::vhdl::DeclarationForm::constant
+                    || declaration->vhdl->form
+                        == semantic::vhdl::DeclarationForm::generic_constant)
                 && declaration->vhdl->initializer
                 && *declaration->vhdl->initializer != expression_id) {
                 return compiled_vhdl_static_port_value(
@@ -7458,16 +7576,6 @@ namespace {
                     return static_cast<std::int64_t>(
                         static_cast<unsigned char>(character));
                 }
-                if (compiled_vhdl_name_equal(index_type, "std_ulogic")
-                    || compiled_vhdl_name_equal(index_type, "std_logic")) {
-                    constexpr auto literals = std::string_view { "UX01ZWLH-" };
-                    const auto position = literals.find(character);
-                    return position == std::string_view::npos
-                        ? std::nullopt
-                        : std::optional<std::int64_t> {
-                              static_cast<std::int64_t>(position)
-                          };
-                }
             }
             if (choice.kind != semantic::vhdl::ExpressionKind::logic_literal) {
                 if (const auto value
@@ -8248,19 +8356,10 @@ namespace {
                 effective->type_mark.spelling);
             const bool bit_vector = compiled_vhdl_name_equal(
                 name, "bit_vector");
-            const bool logic_vector = compiled_vhdl_name_equal(
-                    name, "std_logic_vector")
-                || compiled_vhdl_name_equal(name, "std_ulogic_vector")
-                || compiled_vhdl_name_equal(name, "signed")
-                || compiled_vhdl_name_equal(name, "unsigned");
-            if (bit_vector || logic_vector) {
+            if (bit_vector) {
                 element.emplace();
-                element->type_mark.spelling = bit_vector
-                    ? "bit"
-                    : "std_logic";
-                element->domain = bit_vector
-                    ? semantic::vhdl::ValueDomain::bit2
-                    : semantic::vhdl::ValueDomain::logic9;
+                element->type_mark.spelling = "bit";
+                element->domain = semantic::vhdl::ValueDomain::bit2;
                 element->executable_width = 1U;
             }
         }
@@ -23043,7 +23142,8 @@ void HierarchyBuilder::register_compiled_vhdl_formal_resolution(
     if (const auto resolution = compiled_vhdl_resolution_function(
             specialization, *formal.subtype, formal.scope)) {
         const auto binding = compiled_vhdl_resolution_binding(
-            specialization, *formal.subtype, *resolution, formal.scope);
+            specialization, *formal.subtype, resolution->name,
+            resolution->scope);
         if (formal.guarded_kind != 0U
             && binding.kind == ResolutionKind::user_function) {
             // A guarded port (bus): its drivers may be disconnected
@@ -26609,10 +26709,6 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
                     static_cast<std::int64_t>(enumeration->literals.size())
                         - 1 };
             }
-            if (compiled_vhdl_name_equal(name, "std_logic")
-                || compiled_vhdl_name_equal(name, "std_ulogic")) {
-                return IndexSubtypeBounds { 0, 8 };
-            }
             return std::nullopt;
         };
 
@@ -28098,7 +28194,7 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
             declaration.scope)) {
         const auto binding = compiled_vhdl_resolution_binding(
             working_specialization, *declaration.subtype,
-            *resolution, declaration.scope);
+            resolution->name, resolution->scope);
         if (const auto diagnostic
             = register_compiled_vhdl_resolution(
                 id, *declaration.subtype, declaration.source,
@@ -28930,18 +29026,12 @@ bool HierarchyBuilder::validate_compiled_vhdl_access_type_declarations(
             || compiled_vhdl_name_equal(name, "positive")
             || compiled_vhdl_name_equal(name, "real")
             || compiled_vhdl_name_equal(name, "time")
-            || compiled_vhdl_name_equal(name, "std_logic")
-            || compiled_vhdl_name_equal(name, "std_ulogic")
             || compiled_vhdl_name_equal(name, "bit_vector")
             || compiled_vhdl_name_equal(name, "boolean_vector")
             || compiled_vhdl_name_equal(name, "integer_vector")
             || compiled_vhdl_name_equal(name, "real_vector")
             || compiled_vhdl_name_equal(name, "time_vector")
-            || compiled_vhdl_name_equal(name, "string")
-            || compiled_vhdl_name_equal(name, "std_logic_vector")
-            || compiled_vhdl_name_equal(name, "std_ulogic_vector")
-            || compiled_vhdl_name_equal(name, "signed")
-            || compiled_vhdl_name_equal(name, "unsigned");
+            || compiled_vhdl_name_equal(name, "string");
     };
     const auto referenced_type = [&](
                                      const semantic::vhdl::
@@ -29118,8 +29208,6 @@ bool HierarchyBuilder::validate_compiled_vhdl_object_composite_types(
             || compiled_vhdl_name_equal(name, "integer")
             || compiled_vhdl_name_equal(name, "natural")
             || compiled_vhdl_name_equal(name, "positive")
-            || compiled_vhdl_name_equal(name, "std_logic")
-            || compiled_vhdl_name_equal(name, "std_ulogic")
             || compiled_vhdl_name_equal(name, "bit_vector")
             || compiled_vhdl_name_equal(name, "boolean_vector")
             || compiled_vhdl_name_equal(name, "integer_vector")
@@ -29127,11 +29215,7 @@ bool HierarchyBuilder::validate_compiled_vhdl_object_composite_types(
             || compiled_vhdl_name_equal(name, "time_vector")
             || compiled_vhdl_name_equal(name, "real")
             || compiled_vhdl_name_equal(name, "time")
-            || compiled_vhdl_name_equal(name, "string")
-            || compiled_vhdl_name_equal(name, "std_logic_vector")
-            || compiled_vhdl_name_equal(name, "std_ulogic_vector")
-            || compiled_vhdl_name_equal(name, "signed")
-            || compiled_vhdl_name_equal(name, "unsigned");
+            || compiled_vhdl_name_equal(name, "string");
     };
     const auto resolve_type = [&](
                                   const semantic::vhdl::SubtypeIndication& subtype)
@@ -32596,6 +32680,9 @@ bool HierarchyBuilder::validate_compiled_vhdl_package_callable_bodies(
                 if (!declaration || declaration->vhdl == nullptr
                     || declaration->vhdl->form != form
                     || !declaration->vhdl->callable
+                    // A native declaration's implementation is the
+                    // compiler's, not a package body (IEEE 1076-2019 16).
+                    || declaration->vhdl->native_intrinsic != 0U
                     || declaration->vhdl->callable->defined
                         != require_defined) {
                     continue;
@@ -32666,7 +32753,8 @@ bool HierarchyBuilder::validate_compiled_vhdl_package_callable_bodies(
             const auto declaration
                 = specialized->find_declaration(declaration_id);
             if (!declaration || declaration->vhdl == nullptr
-                || declaration->vhdl->form != Form::constant) {
+                || declaration->vhdl->form != Form::constant
+                || declaration->vhdl->native_intrinsic != 0U) {
                 continue;
             }
             const auto completion = std::ranges::find_if(

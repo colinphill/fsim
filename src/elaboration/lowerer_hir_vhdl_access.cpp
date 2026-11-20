@@ -1,54 +1,26 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "lowerer_internal.hpp"
 
+#include "fsim/semantic/vhdl_native_identity.hpp"
+
 namespace fsim::elaboration {
 namespace {
 
-bool declared_textio_line_type(
-    const semantic::SpecializedHirUnit& unit,
-    const semantic::vhdl::TypeDefinition& type)
-{
-    if (!type.declaration.valid()) {
-        return false;
-    }
-    const auto declaration = unit.find_declaration(type.declaration);
-    if (!declaration || declaration->vhdl == nullptr
-        || !declaration->vhdl->scope.valid()) {
-        return false;
-    }
-    return unit.design().vhdl_scope_in_package(
-        declaration->vhdl->scope, "std", "textio");
-}
-
+// STD.TEXTIO.LINE: a type whose subtype chain reaches the native LINE
+// declaration (IEEE 1076-2019 16.4), however it is spelled.
 bool compiler_owned_textio_line_type(
     const semantic::SpecializedHirUnit& unit,
     const semantic::vhdl::SubtypeIndication& subtype,
-    const semantic::ScopeId use_scope,
+    const semantic::ScopeId /*use_scope*/,
     const semantic::vhdl::TypeDefinition* type)
 {
-    auto spelling = std::string_view { subtype.type_mark.spelling };
-    spelling = simple_name_of(spelling);
-    if (!equal_ignoring_ascii_case(spelling, "line")) {
-        return false;
-    }
-    if (type != nullptr) {
-        if (type->form != semantic::vhdl::TypeForm::access
-            || !equal_ignoring_ascii_case(type->name, "line")) {
-            return false;
-        }
-        if (type->declaration.valid()) {
-            return declared_textio_line_type(unit, *type);
-        }
-    } else if (subtype.type_mark.target.valid()) {
-        return false;
-    }
-
-    // STD.TEXTIO.LINE is compiler-owned but declaration-free in the fallback
-    // environment. Require exact package visibility and compiler access-type
-    // metadata so a declaration-backed user type named LINE cannot match.
-    const semantic::CompiledDesignResolver resolver { unit };
-    return resolver.vhdl_builtin_type_visible(
-        subtype.type_mark.spelling, use_scope);
+    const auto target = subtype.type_mark.target.valid()
+        ? subtype.type_mark.target
+        : type != nullptr ? type->id : semantic::TypeId { };
+    const auto* entry = semantic::vhdl_native_type_of(unit, target);
+    return entry != nullptr
+        && entry->package_id == semantic::VhdlNativePackage::std_textio
+        && entry->name == semantic::VhdlNativeName::line;
 }
 const semantic::vhdl::TypeDefinition* hir_vhdl_named_type(
     const semantic::SpecializedHirUnit& unit,
@@ -117,11 +89,19 @@ const semantic::vhdl::TypeDefinition*
 Lowerer::hir_vhdl_access_type_definition(
     const semantic::vhdl::SubtypeIndication& subtype) const
 {
-    return specialized_hir_unit_ == nullptr
-        ? nullptr
-        : hir_vhdl_named_type(
-              *specialized_hir_unit_, subtype,
-              semantic::vhdl::TypeForm::access);
+    if (specialized_hir_unit_ == nullptr) {
+        return nullptr;
+    }
+    const auto* type = hir_vhdl_named_type(
+        *specialized_hir_unit_, subtype, semantic::vhdl::TypeForm::access);
+    // STD.TEXTIO.LINE (access STRING, IEEE 1076-2019 16.4) is held as a
+    // string register, not as a handle into an access heap.
+    if (type != nullptr
+        && compiler_owned_textio_line_type(
+            *specialized_hir_unit_, subtype, { }, type)) {
+        return nullptr;
+    }
+    return type;
 }
 
 RegisterId Lowerer::issue_hir_vhdl_access_handle(
@@ -2042,12 +2022,19 @@ bool Lowerer::is_hir_vhdl_access_assignment(
         const auto declaration = prefix_declaration
             ? specialized_hir_unit_->find_declaration(*prefix_declaration)
             : std::nullopt;
-        if (declaration && declaration->vhdl != nullptr
-            && declaration->vhdl->subtype
-            && hir_vhdl_named_type(*specialized_hir_unit_,
-                   *declaration->vhdl->subtype,
-                   semantic::vhdl::TypeForm::access)
-                != nullptr) {
+        const auto* prefix_access = declaration
+                && declaration->vhdl != nullptr
+                && declaration->vhdl->subtype
+            ? hir_vhdl_named_type(*specialized_hir_unit_,
+                  *declaration->vhdl->subtype,
+                  semantic::vhdl::TypeForm::access)
+            : nullptr;
+        // An element of the STRING a STD.TEXTIO.LINE designates is written
+        // through the line's string storage (the string paths), not a heap.
+        if (prefix_access != nullptr
+            && !compiler_owned_textio_line_type(*specialized_hir_unit_,
+                *declaration->vhdl->subtype, hir_process_scope_,
+                prefix_access)) {
             return true;
         }
     }
@@ -2563,6 +2550,26 @@ bool Lowerer::lower_hir_vhdl_access_assignment(
                 != support::ExpressionMarker::vhdl_new) {
                 return false;
             }
+        } else if (const auto value_subtype = hir_vhdl_expression_subtype(
+                       *statement->vhdl->value);
+                   value_subtype
+                   && compiler_owned_textio_line_type(*specialized_hir_unit_,
+                       *value_subtype, hir_process_scope_,
+                       hir_vhdl_named_type(*specialized_hir_unit_,
+                           *value_subtype, semantic::vhdl::TypeForm::access))
+                   && can_lower_hir_string_expression(
+                       *statement->vhdl->value, hir_process_scope_)) {
+            // A function returning LINE (GETENV, TO_STRING of STD.ENV, a
+            // user function, IEEE 1076-2019 16.5.6): its value is the
+            // string the line designates.
+            const auto value
+                = lower_hir_string_expression(*statement->vhdl->value);
+            if (!value) {
+                return false;
+            }
+            process_.operations.emplace_back(CopyStringRegister {
+                *line_binding->local, *value });
+            return true;
         }
     }
     const auto member = hir_vhdl_member_selection(

@@ -1386,15 +1386,25 @@ std::uint64_t execute_str_method(const std::uint64_t operation, const std::uint8
             ? string_method_integer(word, static_cast<std::uint32_t>((operation >> shift) & 0xffU))
             : std::nullopt;
     };
-    // The reference routine works on a std::string; a method that changes
-    // its source (itoa and the like) changes the register.
-    auto text = source.str();
-    auto result = execute_string_method(static_cast<StringMethodOperator>(operation & 0xffU),
-        text, argument, operand(str_method_first, first, 8U),
-        operand(str_method_second, second, 16U), std::nullopt,
-        (flags & str_method_ticks) != 0U ? resolution_femtoseconds : 0U);
-    if (source != text) {
-        source = text;
+    const auto method = static_cast<StringMethodOperator>(operation & 0xffU);
+    const auto ticks = (flags & str_method_ticks) != 0U ? resolution_femtoseconds : 0U;
+    StringMethodResult result;
+    if (string_method_changes_source(method)) {
+        // The reference routine of a method that changes its source (putc,
+        // itoa and the like) works on a std::string; the register takes
+        // the changed text.
+        auto text = source.str();
+        result = execute_string_method(method, text, argument,
+            operand(str_method_first, first, 8U), operand(str_method_second, second, 16U),
+            std::nullopt, ticks);
+        if (source != text) {
+            source = text;
+        }
+    } else {
+        // Every other method only reads the register.
+        result = execute_string_method(method, source.view(), argument,
+            operand(str_method_first, first, 8U), operand(str_method_second, second, 16U),
+            std::nullopt, ticks);
     }
     if ((flags & str_method_string) != 0U) {
         if (!result.string || destination == nullptr) {
@@ -2381,7 +2391,7 @@ public:
         registers_[id] = Word { low.aval, low.bval };
     }
 
-    [[nodiscard]] const std::string& read_string(StringRegisterId) override
+    [[nodiscard]] std::string_view read_string(StringRegisterId) override
     {
         throw std::logic_error { "static kernel bit stream reads no string" };
     }

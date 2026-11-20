@@ -29,6 +29,8 @@
 #include "fsim/runtime/simir_shared_vector.hpp"
 #include "fsim/runtime/systemverilog_scalar.hpp"
 #include "fsim/semantic/compiled_design.hpp"
+#include "fsim/semantic/vhdl_native_identity.hpp"
+#include "fsim/semantic/vhdl_native_intrinsics.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
 #include "fsim/semantic/compiled_design_specialization.hpp"
 #include "fsim/semantic/model.hpp"
@@ -19982,6 +19984,27 @@ bool Lowerer::hir_vhdl_overload_profile_applies(
 
 // Overload resolution of a call depends on its actuals' subtypes, the
 // context width, the scopes and the generic bindings (IEEE 1076-2008 12.5).
+// A native subprogram of a precompiled standard package has no body to
+// lower as a call: fsim implements it on its own paths (operators, TEXTIO,
+// NUMERIC_STD conversions, ...), which find it by hir_vhdl_native_callee.
+std::optional<Lowerer::HirCallableResolution>
+Lowerer::native_filtered_hir_vhdl_function_call(
+    const semantic::ExpressionId expression_id,
+    const semantic::ScopeId process_scope,
+    const std::size_t contextual_width) const
+{
+    auto result = compute_hir_vhdl_function_call(
+        expression_id, process_scope, contextual_width);
+    if (result) {
+        const auto body = specialized_hir_unit_->find_declaration(result->body);
+        if (body && body->vhdl != nullptr
+            && semantic::vhdl_native_of(*body->vhdl) != nullptr) {
+            return std::nullopt;
+        }
+    }
+    return result;
+}
+
 std::optional<Lowerer::HirCallableResolution>
 Lowerer::resolve_hir_vhdl_function_call(
     const semantic::ExpressionId expression_id,
@@ -19992,13 +20015,13 @@ Lowerer::resolve_hir_vhdl_function_call(
         return std::nullopt;
     }
     if (!hir_vhdl_expression_subtype_cacheable()) {
-        return compute_hir_vhdl_function_call(
+        return native_filtered_hir_vhdl_function_call(
             expression_id, process_scope, contextual_width);
     }
     const auto scope = hir_process_scope_;
     const auto frames = hir_binding_frames_state();
     if (!frames) {
-        return compute_hir_vhdl_function_call(
+        return native_filtered_hir_vhdl_function_call(
             expression_id, process_scope, contextual_width);
     }
     if (const auto found
@@ -20014,7 +20037,7 @@ Lowerer::resolve_hir_vhdl_function_call(
         }
     }
     const auto fallback_calls = hir_boundary_fallback_calls_;
-    auto result = compute_hir_vhdl_function_call(
+    auto result = native_filtered_hir_vhdl_function_call(
         expression_id, process_scope, contextual_width);
     constexpr std::size_t maximum_entries { 1U << 16U };
     if (hir_boundary_fallback_calls_ != fallback_calls
@@ -20074,6 +20097,19 @@ Lowerer::compute_hir_vhdl_function_call(
     auto candidates = hir_vhdl_callable_resolutions(
         *expression->vhdl->referenced_name,
         expression->vhdl->scope);
+    // A native operator of a precompiled standard package (STD_LOGIC_1164
+    // "and", NUMERIC_STD "+", ...) is lowered by fsim's operator lowering,
+    // never as a call: it is no candidate here (and matching each of them
+    // against every operand made nested operator chains exponential).
+    if (expression->vhdl->kind == semantic::vhdl::ExpressionKind::unary
+        || expression->vhdl->kind == semantic::vhdl::ExpressionKind::binary) {
+        std::erase_if(candidates, [&](const HirCallableResolution& candidate) {
+            const auto declaration = specialized_hir_unit_->find_declaration(
+                candidate.body.valid() ? candidate.body : candidate.key);
+            return declaration && declaration->vhdl != nullptr
+                && semantic::vhdl_native_of(*declaration->vhdl) != nullptr;
+        });
+    }
     if (candidates.empty()) {
         candidates = hir_vhdl_protected_method_resolutions(
             *expression->vhdl->referenced_name,
@@ -22646,7 +22682,11 @@ Lowerer::lower_hir_function_call_value(
                     return HirFunctionCallValue { *extreme, std::nullopt };
                 }
             }
-            report(
+            if (candidates.size() > 1U
+                && report_hir_vhdl_ambiguous_literal_within(expression_id)) {
+                return std::nullopt;
+            }
+report(
                 candidates.size() > 1U
                     ? "FSIM-ELAB-VHOVER-001"
                     : candidates.empty()
@@ -26397,21 +26437,29 @@ std::string Lowerer::hir_vhdl_std_env_procedure_spelling(
     const semantic::vhdl::Name& name,
     const semantic::ScopeId use_scope) const
 {
-    // Without VHDL-2019 the STD.ENV package has no declarations, so a
-    // procedure imported by `use std.env.all` resolves to nothing; name it
-    // by its selected spelling for the simulator API checks.
+    // A name whose visible subprograms are all one native STD.ENV
+    // procedure or function (STOP, FINISH, ... with their overloads, IEEE
+    // 1076-2019 16.5) names that simulator API.
     if (specialized_hir_unit_ == nullptr || name.spelling.empty()
-        || name.spelling.find_first_of(".:") != std::string::npos
-        || !hir_vhdl_callable_candidates(name, use_scope).empty()) {
+        || name.spelling.find_first_of(".:") != std::string::npos) {
         return name.spelling;
     }
-    auto member = support::ascii_lower(name.spelling);
-    if (!hir_resolver()
-            .vhdl_builtin_package_member_imported(
-                "std", "env", member, use_scope)) {
-        return name.spelling;
+    const semantic::VhdlNativeIntrinsic* common = nullptr;
+    for (const auto id : hir_vhdl_callable_candidates(name, use_scope)) {
+        const auto declaration = specialized_hir_unit_->find_declaration(id);
+        const auto* entry = declaration && declaration->vhdl != nullptr
+            ? semantic::vhdl_native_of(*declaration->vhdl)
+            : nullptr;
+        if (entry == nullptr
+            || entry->package_id != semantic::VhdlNativePackage::std_env
+            || (common != nullptr && entry->name != common->name)) {
+            return name.spelling;
+        }
+        common = entry;
     }
-    return "std.env." + member;
+    return common != nullptr
+        ? "std.env." + std::string { semantic::vhdl_native_designator(*common) }
+        : name.spelling;
 }
 
 bool Lowerer::lower_hir_vhdl_procedure_call(
@@ -26616,9 +26664,51 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
                     hir_source_span(statement->vhdl->source));
                 return true;
             }
+            // STD.TEXTIO READLINE/WRITELINE take a file of type TEXT
+            // (IEEE 1076-2019 16.4): a call whose only candidate is one of
+            // them names that misuse.
+            if (declaration && declaration->vhdl != nullptr) {
+                if (const auto* entry
+                    = semantic::vhdl_native_of(*declaration->vhdl);
+                    entry != nullptr
+                    && entry->package_id
+                        == semantic::VhdlNativePackage::std_textio
+                    && (entry->name == semantic::VhdlNativeName::readline
+                        || entry->name
+                            == semantic::VhdlNativeName::writeline)) {
+                    report("FSIM-ELAB-VHTEXTIO-001",
+                        std::string { semantic::vhdl_native_designator(
+                            *entry) }
+                            + " requires a file of std.textio.TEXT and a "
+                              "writable line object",
+                        hir_source_span(statement->vhdl->source));
+                    return true;
+                }
+            }
             report(
                 "FSIM-ELAB-VHOVER-005",
                 "VHDL procedure call has no matching overload",
+                hir_source_span(statement->vhdl->source));
+            return true;
+        }
+        // A name that STD.TEXTIO declares only in other editions is not
+        // visible in this one (IEEE 1076-2019 16.4; e.g. HREAD and its
+        // alias HEX_READ are VHDL-2008).
+        if (const auto designator = lowercase_vhdl_simple_name(
+                statement->vhdl->procedure.text());
+            (semantic::vhdl_native_designator_editions(
+                 semantic::VhdlNativePackage::std_textio, designator)
+                & ~(1U << static_cast<unsigned>(vhdl_standard_)))
+                != 0U
+            && (semantic::vhdl_native_designator_editions(
+                    semantic::VhdlNativePackage::std_textio, designator)
+                & (1U << static_cast<unsigned>(vhdl_standard_)))
+                == 0U) {
+            report("FSIM-ELAB-VHSTD-001",
+                "VHDL procedure call names no visible procedure '"
+                    + statement->vhdl->procedure.spelling
+                    + "': STD.TEXTIO declares it only in another VHDL "
+                      "edition",
                 hir_source_span(statement->vhdl->source));
             return true;
         }

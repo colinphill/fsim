@@ -5,6 +5,9 @@
 #include "fsim/semantic/compiled_design_normalization.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
 #include "fsim/semantic/compiled_design_specialization.hpp"
+#include "fsim/semantic/vhdl_native_identity.hpp"
+#include "fsim/semantic/vhdl_native_intrinsics.hpp"
+#include "fsim/support/vhdl_standard_package_form.hpp"
 #include "../../src/semantic/integral_identity_memo.hpp"
 #include <algorithm>
 #include <array>
@@ -7148,6 +7151,110 @@ void test_specialized_hir_vhdl_integer_exponentiation()
         negative_exponent_power));
 }
 
+// The native id of a declaration of an IEEE or STD package, by its
+// generated name enumerator (the precompiled standard library stamps the
+// same ids, gate BD D2).
+std::uint32_t native_id(const VhdlNativePackage package,
+    const VhdlNativeKind kind, const VhdlNativeName name)
+{
+    const auto table = vhdl_native_intrinsics();
+    for (std::size_t index = 0; index < table.size(); ++index) {
+        if (table[index].package_id == package && table[index].kind == kind
+            && table[index].name == name) {
+            return static_cast<std::uint32_t>(index + 1U);
+        }
+    }
+    assert(false && "native entry");
+    return 0U;
+}
+
+std::uint32_t numeric_std_native_id(
+    const VhdlNativeKind kind, const VhdlNativeName name)
+{
+    return native_id(VhdlNativePackage::ieee_numeric_std, kind, name);
+}
+
+// A native function declared in `package_unit`, as the precompiled standard
+// library declares it (no VHDL body).
+DeclarationId add_native_function(LinkBundleBuilder& builder,
+    const UnitId package_unit, const VhdlNativePackage package,
+    const VhdlNativeName native, const std::string& name)
+{
+    const auto scope = builder.model.units()[package_unit.value()].scope;
+    const auto function = builder.model.add_declaration(scope,
+        DeclarationKind::function, name, builder.source, builder.origin);
+    vhdl::Declaration record;
+    record.id = function;
+    record.scope = scope;
+    record.form = vhdl::DeclarationForm::function;
+    record.name = name;
+    record.source = builder.source;
+    record.origin = builder.origin;
+    record.native_intrinsic
+        = native_id(package, VhdlNativeKind::function, native);
+    builder.vhdl_hir.mutable_declarations().push_back(std::move(record));
+    builder.vhdl_unit(package_unit).declarations.push_back(function);
+    return function;
+}
+
+// A native one-dimensional array type over NATURAL with STD_ULOGIC
+// elements declared in `package_unit` (STD_LOGIC_VECTOR, UNSIGNED), as the
+// precompiled standard library declares it.
+TypeId add_native_vector_type(LinkBundleBuilder& builder,
+    const UnitId package_unit, const VhdlNativePackage package,
+    const VhdlNativeName native, const std::string& name)
+{
+    const auto scope = builder.model.units()[package_unit.value()].scope;
+    const auto declaration = builder.model.add_declaration(scope,
+        DeclarationKind::type, name, builder.source, builder.origin);
+    TypeReference base;
+    base.source = builder.source;
+    const auto type = builder.model.add_type(scope, TypeKind::declaration,
+        name, base, builder.source, builder.origin);
+    vhdl::Declaration record;
+    record.id = declaration;
+    record.scope = scope;
+    record.form = vhdl::DeclarationForm::type;
+    record.name = name;
+    record.declared_type = type;
+    record.source = builder.source;
+    record.origin = builder.origin;
+    record.native_intrinsic = native_id(package, VhdlNativeKind::type, native);
+    builder.vhdl_hir.mutable_declarations().push_back(std::move(record));
+    vhdl::TypeDefinition definition;
+    definition.id = type;
+    definition.declaration = declaration;
+    definition.form = vhdl::TypeForm::array;
+    definition.name = name;
+    definition.element_subtype.emplace();
+    definition.element_subtype->domain = vhdl::ValueDomain::logic9;
+    definition.element_subtype->executable_width = 1U;
+    vhdl::ArrayDimension dimension;
+    dimension.index_subtype = vhdl_name("natural", builder.source);
+    dimension.unconstrained = true;
+    dimension.source = builder.source;
+    definition.array_dimensions.push_back(std::move(dimension));
+    definition.source = builder.source;
+    definition.origin = builder.origin;
+    builder.vhdl_hir.mutable_types().push_back(std::move(definition));
+    builder.vhdl_unit(package_unit).declarations.push_back(declaration);
+    return type;
+}
+
+// A call that denotes `declarations`, as analysis records it (a fixture
+// that is not linked states the names its calls denote).
+void denote_call(LinkBundleBuilder& builder, const ExpressionId call,
+    const std::vector<DeclarationId>& declarations)
+{
+    auto record = std::ranges::find(builder.vhdl_hir.mutable_expressions(),
+        call, &vhdl::Expression::id);
+    assert(record != builder.vhdl_hir.mutable_expressions().end());
+    record->referenced_name.emplace();
+    record->referenced_name->spelling = record->text;
+    record->referenced_name->canonical = record->text;
+    record->referenced_name->overloads = declarations;
+}
+
 void test_specialized_hir_vhdl_packed_constant_function()
 {
     LinkBundleBuilder builder { "packed-constant-function.vhd" };
@@ -7160,7 +7267,8 @@ void test_specialized_hir_vhdl_packed_constant_function()
         "numeric_std", {}, "ieee");
     const auto numeric_std_scope
         = builder.model.units()[numeric_std.value()].scope;
-    const auto add_numeric_vector = [&](const std::string& type_name) {
+    const auto add_numeric_vector = [&](const std::string& type_name,
+                                        const VhdlNativeName native) {
         const auto declaration = builder.model.add_declaration(
             numeric_std_scope, DeclarationKind::type, type_name,
             builder.source, builder.origin);
@@ -7177,6 +7285,8 @@ void test_specialized_hir_vhdl_packed_constant_function()
         type_record.declared_type = type;
         type_record.source = builder.source;
         type_record.origin = builder.origin;
+        type_record.native_intrinsic
+            = numeric_std_native_id(VhdlNativeKind::type, native);
         builder.vhdl_hir.mutable_declarations().push_back(
             std::move(type_record));
         vhdl::TypeDefinition definition;
@@ -7200,14 +7310,17 @@ void test_specialized_hir_vhdl_packed_constant_function()
         return std::pair { declaration, type };
     };
     const auto [unsigned_array_decl, unsigned_array]
-        = add_numeric_vector("UNRESOLVED_UNSIGNED");
+        = add_numeric_vector(
+            "UNRESOLVED_UNSIGNED", VhdlNativeName::unresolved_unsigned);
     const auto [signed_array_decl, signed_array]
-        = add_numeric_vector("UNRESOLVED_SIGNED");
+        = add_numeric_vector(
+            "UNRESOLVED_SIGNED", VhdlNativeName::unresolved_signed);
     (void)unsigned_array_decl;
     (void)signed_array_decl;
     const auto add_numeric_subtype = [&](const std::string& name,
                                          const TypeId type,
-                                         const bool signed_value) {
+                                         const bool signed_value,
+                                         const VhdlNativeName native) {
         const auto declaration = builder.model.add_declaration(
             numeric_std_scope, DeclarationKind::type, name,
             builder.source, builder.origin);
@@ -7224,15 +7337,17 @@ void test_specialized_hir_vhdl_packed_constant_function()
         record.subtype->domain = vhdl::ValueDomain::logic9;
         record.subtype->signed_value = signed_value;
         record.subtype->unconstrained = true;
+        record.native_intrinsic
+            = numeric_std_native_id(VhdlNativeKind::type, native);
         builder.vhdl_hir.mutable_declarations().push_back(
             std::move(record));
         builder.vhdl_unit(numeric_std).declarations.push_back(declaration);
         return declaration;
     };
     const auto unsigned_type = add_numeric_subtype(
-        "UNSIGNED", unsigned_array, false);
+        "UNSIGNED", unsigned_array, false, VhdlNativeName::unsigned_);
     const auto signed_type = add_numeric_subtype(
-        "SIGNED", signed_array, true);
+        "SIGNED", signed_array, true, VhdlNativeName::signed_);
     const auto add_to_integer_overload = [&](const TypeId argument_type,
                                              const bool signed_value) {
         const auto function_scope = builder.model.add_scope(
@@ -7280,6 +7395,8 @@ void test_specialized_hir_vhdl_packed_constant_function()
             = signed_value ? "integer" : "natural";
         function_record.callable->return_type->domain
             = vhdl::ValueDomain::integer;
+        function_record.native_intrinsic = numeric_std_native_id(
+            VhdlNativeKind::function, VhdlNativeName::to_integer);
         builder.vhdl_hir.mutable_declarations().push_back(
             std::move(function_record));
         builder.vhdl_unit(numeric_std).declarations.push_back(function);
@@ -7289,11 +7406,91 @@ void test_specialized_hir_vhdl_packed_constant_function()
         unsigned_array, false);
     const auto signed_to_integer = add_to_integer_overload(
         signed_array, true);
+    // TO_UNSIGNED, a native function: the evaluator folds it by identity.
+    const auto to_unsigned_function = [&] {
+        const auto function = builder.model.add_declaration(
+            numeric_std_scope, DeclarationKind::function, "to_unsigned",
+            builder.source, builder.origin);
+        vhdl::Declaration function_record;
+        function_record.id = function;
+        function_record.scope = numeric_std_scope;
+        function_record.form = vhdl::DeclarationForm::function;
+        function_record.name = "to_unsigned";
+        function_record.source = builder.source;
+        function_record.origin = builder.origin;
+        function_record.native_intrinsic = numeric_std_native_id(
+            VhdlNativeKind::function, VhdlNativeName::to_unsigned);
+        builder.vhdl_hir.mutable_declarations().push_back(
+            std::move(function_record));
+        builder.vhdl_unit(numeric_std).declarations.push_back(function);
+        return function;
+    }();
     vhdl::ContextItem numeric_std_import;
     numeric_std_import.kind = vhdl::ContextKind::use_clause;
     numeric_std_import.selected_names.push_back(
         vhdl_name("ieee.numeric_std.all", builder.source));
     builder.vhdl_unit(unit).context.push_back(std::move(numeric_std_import));
+    // IEEE.STD_LOGIC_1164's STD_LOGIC_VECTOR, a native type, for the
+    // subtype nibble_t below.
+    {
+        const auto std_logic_1164 = builder.add_vhdl_unit(
+            UnitKind::vhdl_package, vhdl::UnitKind::package,
+            "std_logic_1164", {}, "ieee");
+        const auto package_scope
+            = builder.model.units()[std_logic_1164.value()].scope;
+        const auto declaration = builder.model.add_declaration(
+            package_scope, DeclarationKind::type, "std_logic_vector",
+            builder.source, builder.origin);
+        TypeReference base;
+        base.source = builder.source;
+        const auto type = builder.model.add_type(package_scope,
+            TypeKind::declaration, "std_logic_vector", base,
+            builder.source, builder.origin);
+        vhdl::Declaration type_record;
+        type_record.id = declaration;
+        type_record.scope = package_scope;
+        type_record.form = vhdl::DeclarationForm::type;
+        type_record.name = "std_logic_vector";
+        type_record.declared_type = type;
+        type_record.source = builder.source;
+        type_record.origin = builder.origin;
+        const auto table = vhdl_native_intrinsics();
+        for (std::size_t index = 0; index < table.size(); ++index) {
+            if (table[index].package_id
+                    == VhdlNativePackage::ieee_std_logic_1164
+                && table[index].kind == VhdlNativeKind::type
+                && vhdl_native_provided_type(table[index])
+                    == vhdl::ProvidedType::std_logic_vector) {
+                type_record.native_intrinsic
+                    = static_cast<std::uint32_t>(index + 1U);
+            }
+        }
+        assert(type_record.native_intrinsic != 0U);
+        builder.vhdl_hir.mutable_declarations().push_back(
+            std::move(type_record));
+        vhdl::TypeDefinition definition;
+        definition.id = type;
+        definition.declaration = declaration;
+        definition.form = vhdl::TypeForm::array;
+        definition.name = "std_logic_vector";
+        definition.element_subtype.emplace();
+        definition.element_subtype->domain = vhdl::ValueDomain::logic9;
+        definition.element_subtype->executable_width = 1U;
+        vhdl::ArrayDimension dimension;
+        dimension.index_subtype = vhdl_name("natural", builder.source);
+        dimension.unconstrained = true;
+        dimension.source = builder.source;
+        definition.array_dimensions.push_back(std::move(dimension));
+        definition.source = builder.source;
+        definition.origin = builder.origin;
+        builder.vhdl_hir.mutable_types().push_back(std::move(definition));
+        builder.vhdl_unit(std_logic_1164).declarations.push_back(declaration);
+        vhdl::ContextItem import;
+        import.kind = vhdl::ContextKind::use_clause;
+        import.selected_names.push_back(
+            vhdl_name("ieee.std_logic_1164.all", builder.source));
+        builder.vhdl_unit(unit).context.push_back(std::move(import));
+    }
     const auto add_expression_in_scope
         = [&](const ScopeId expression_scope,
               const vhdl::ExpressionKind kind, std::string text,
@@ -7492,6 +7689,18 @@ void test_specialized_hir_vhdl_packed_constant_function()
     const auto static_call = add_expression(
         vhdl::ExpressionKind::call, "gf_pow_u",
         { literal(2), literal(8), literal(1) }, function);
+    // The calls denote the native TO_UNSIGNED (linking an entity does not
+    // annotate its names; the fixture states them as analysis would).
+    for (const auto call : { to_unsigned_one, to_unsigned_poly }) {
+        auto record = std::ranges::find(
+            builder.vhdl_hir.mutable_expressions(), call,
+            &vhdl::Expression::id);
+        assert(record != builder.vhdl_hir.mutable_expressions().end());
+        record->referenced_name.emplace();
+        record->referenced_name->spelling = "to_unsigned";
+        record->referenced_name->canonical = "to_unsigned";
+        record->referenced_name->overloads = { to_unsigned_function };
+    }
     const auto set_to_integer_overloads = [&](const ExpressionId call) {
         auto record = std::ranges::find(
             builder.vhdl_hir.mutable_expressions(), call,
@@ -7618,6 +7827,15 @@ void test_specialized_hir_vhdl_packed_constant_function()
     const auto constant_nibble = add_expression(
         vhdl::ExpressionKind::call, "to_unsigned",
         { literal(7), literal(4) });
+    for (const auto call : { constant_packed, constant_nibble }) {
+        auto record = std::ranges::find(
+            builder.vhdl_hir.mutable_expressions(), call,
+            &vhdl::Expression::id);
+        record->referenced_name.emplace();
+        record->referenced_name->spelling = "to_unsigned";
+        record->referenced_name->canonical = "to_unsigned";
+        record->referenced_name->overloads = { to_unsigned_function };
+    }
     const auto add_constant_return_function
         = [&](std::string function_name,
               vhdl::SubtypeIndication return_subtype,
@@ -7965,6 +8183,17 @@ void test_specialized_hir_vhdl_generated_packed_constant_iterator()
     const auto shadowed_initializer = add_expression(
         branch_scope, vhdl::ExpressionKind::call, "to_unsigned",
         { local_name, literal(branch_scope, 4) });
+    // TO_UNSIGNED is IEEE.NUMERIC_STD's native function (gate BD D2).
+    {
+        const auto numeric_std = builder.add_vhdl_unit(
+            UnitKind::vhdl_package, vhdl::UnitKind::package, "numeric_std",
+            {}, "ieee");
+        const auto to_unsigned = add_native_function(builder, numeric_std,
+            VhdlNativePackage::ieee_numeric_std, VhdlNativeName::to_unsigned,
+            "to_unsigned");
+        denote_call(builder, packed_initializer, { to_unsigned });
+        denote_call(builder, shadowed_initializer, { to_unsigned });
+    }
     const auto add_packed_constant = [&](const std::string& name,
                                          const ExpressionId initializer,
                                          const std::int64_t left_bound) {
@@ -8248,10 +8477,18 @@ void test_specialized_hir_vhdl_local_array_constant_function()
     // library IEEE is visible only through a library clause (12.3). The
     // packages are units of the design, as analysis supplies them.
     std::vector<CompiledReference> references;
+    std::optional<UnitId> numeric_std_unit;
     for (const char* const package : { "std_logic_1164", "numeric_std" }) {
         const auto package_unit = builder.add_vhdl_unit(
             UnitKind::vhdl_package, vhdl::UnitKind::package, package, {},
             "ieee");
+        if (std::string_view { package } == "numeric_std") {
+            numeric_std_unit = package_unit;
+        } else {
+            add_native_vector_type(builder, package_unit,
+                VhdlNativePackage::ieee_std_logic_1164,
+                VhdlNativeName::std_logic_vector, "std_logic_vector");
+        }
         // The package reference a use clause makes (analysis records it).
         references.push_back(CompiledReference {
             CompiledReferenceKind::package, unit, "ieee", package, { },
@@ -8616,6 +8853,13 @@ void test_specialized_hir_vhdl_local_array_constant_function()
     const auto runtime_call = add_expression(
         vhdl::ExpressionKind::call, "pack_cells",
         { name("runtime", runtime) }, function);
+    // TO_UNSIGNED is IEEE.NUMERIC_STD's native function (gate BD D2).
+    const auto to_unsigned = add_native_function(builder, *numeric_std_unit,
+        VhdlNativePackage::ieee_numeric_std, VhdlNativeName::to_unsigned,
+        "to_unsigned");
+    denote_call(builder, helper_result, { to_unsigned });
+    denote_call(builder, zero_cell, { to_unsigned });
+    denote_call(builder, cell_sixty, { to_unsigned });
     CompiledDesign design { std::move(builder.model),
         std::move(builder.systemverilog), std::move(builder.vhdl_hir), { },
         std::move(references) };
@@ -8651,6 +8895,9 @@ void test_specialized_hir_vhdl_integer_array_constant_function()
     const auto logic_package = builder.add_vhdl_unit(
         UnitKind::vhdl_package, vhdl::UnitKind::package, "std_logic_1164",
         {}, "ieee");
+    add_native_vector_type(builder, logic_package,
+        VhdlNativePackage::ieee_std_logic_1164,
+        VhdlNativeName::std_logic_vector, "std_logic_vector");
     // The package reference the use clause makes (analysis records it).
     std::vector<CompiledReference> references;
     references.push_back(CompiledReference {
@@ -9051,6 +9298,13 @@ void test_specialized_hir_vhdl_integer_array_constant_function()
         { literal(512), literal(0) }, function);
     builder.vhdl_unit(unit).declarations.push_back(function);
 
+    // TO_UNSIGNED is IEEE.NUMERIC_STD's native function (gate BD D2).
+    const auto numeric_std = builder.add_vhdl_unit(UnitKind::vhdl_package,
+        vhdl::UnitKind::package, "numeric_std", {}, "ieee");
+    const auto to_unsigned = add_native_function(builder, numeric_std,
+        VhdlNativePackage::ieee_numeric_std, VhdlNativeName::to_unsigned,
+        "to_unsigned");
+    denote_call(builder, unsigned_result, { to_unsigned });
     CompiledDesign design { std::move(builder.model),
         std::move(builder.systemverilog), std::move(builder.vhdl_hir), { },
         std::move(references) };
@@ -9294,6 +9548,12 @@ void test_specialized_hir_vhdl_packed_array_projection()
         UnitKind::vhdl_entity, vhdl::UnitKind::entity,
         "packed_array_constant_projection");
     const auto scope = builder.model.units()[unit.value()].scope;
+    // TO_UNSIGNED is IEEE.NUMERIC_STD's native function (gate BD D2).
+    const auto numeric_std = builder.add_vhdl_unit(UnitKind::vhdl_package,
+        vhdl::UnitKind::package, "numeric_std", {}, "ieee");
+    const auto to_unsigned = add_native_function(builder, numeric_std,
+        VhdlNativePackage::ieee_numeric_std, VhdlNativeName::to_unsigned,
+        "to_unsigned");
     const auto add_expression
         = [&](const vhdl::ExpressionKind kind, std::string text,
               std::vector<ExpressionId> operands = { },
@@ -9432,6 +9692,7 @@ void test_specialized_hir_vhdl_packed_array_projection()
                   const auto fill = add_expression(
                       vhdl::ExpressionKind::call, "to_unsigned",
                       { literal(5), literal(local_element_width) });
+                  denote_call(builder, fill, { to_unsigned });
                   vhdl::AggregateAssociation association;
                   association.choices.push_back(others);
                   association.value = fill;
@@ -9454,6 +9715,7 @@ void test_specialized_hir_vhdl_packed_array_projection()
                   const auto replacement = add_expression(
                       vhdl::ExpressionKind::call, "to_unsigned",
                       { literal(10), literal(4) });
+                  denote_call(builder, replacement, { to_unsigned });
                   const auto assignment = builder.model
                       .add_statement_identity(
                           scope, builder.source, builder.origin);
@@ -12163,6 +12425,100 @@ void test_vhdl_builtin_std_logic_1164_provenance()
                                   const bool import_std_logic_1164,
                                   const bool define_user_vector_type) {
         LinkBundleBuilder builder { source_name };
+        // IEEE.STD_LOGIC_1164 as the precompiled standard library holds it
+        // (gate BD D2): declarations that carry their native identity. The
+        // operator and type identities below come from that identity, never
+        // from a name or a use clause's spelling.
+        {
+            const auto native_id = [](const auto& matches) {
+                const auto table = vhdl_native_intrinsics();
+                for (std::size_t index = 0; index < table.size(); ++index) {
+                    if (table[index].package_id
+                            == VhdlNativePackage::ieee_std_logic_1164
+                        && matches(table[index])) {
+                        return static_cast<std::uint32_t>(index + 1U);
+                    }
+                }
+                assert(false && "native STD_LOGIC_1164 entry");
+                return 0U;
+            };
+            const auto package = builder.add_vhdl_unit(
+                UnitKind::vhdl_package, vhdl::UnitKind::package,
+                "std_logic_1164", { }, "ieee");
+            builder.vhdl_unit(package).standard_package_form
+                = fsim::support::VhdlStandardPackageForm::artifact;
+            const auto package_scope
+                = builder.model.units()[package.value()].scope;
+            const auto add_operator = [&](const std::string& name,
+                                          const vhdl::BuiltinOperatorIdentity
+                                              family) {
+                const auto declaration = builder.model.add_declaration(
+                    package_scope, DeclarationKind::function, name,
+                    builder.source, builder.origin);
+                vhdl::Declaration function;
+                function.id = declaration;
+                function.scope = package_scope;
+                function.form = vhdl::DeclarationForm::function;
+                function.name = name;
+                function.source = builder.source;
+                function.origin = builder.origin;
+                function.native_intrinsic = native_id(
+                    [&](const VhdlNativeIntrinsic& entry) {
+                        return entry.kind == VhdlNativeKind::function
+                            && vhdl_native_operator(entry) == family;
+                    });
+                builder.vhdl_hir.mutable_declarations().push_back(
+                    std::move(function));
+                builder.vhdl_unit(package).declarations.push_back(
+                    declaration);
+            };
+            add_operator("not",
+                vhdl::BuiltinOperatorIdentity::ieee_std_logic_1164_not);
+            add_operator("and",
+                vhdl::BuiltinOperatorIdentity::ieee_std_logic_1164_and);
+            const auto declaration = builder.model.add_declaration(
+                package_scope, DeclarationKind::type, "std_logic_vector",
+                builder.source, builder.origin);
+            TypeReference base;
+            base.source = builder.source;
+            base.spelling = "std_logic_vector";
+            const auto type = builder.model.add_type(package_scope,
+                TypeKind::declaration, "std_logic_vector", base,
+                builder.source, builder.origin);
+            vhdl::Declaration type_declaration;
+            type_declaration.id = declaration;
+            type_declaration.scope = package_scope;
+            type_declaration.form = vhdl::DeclarationForm::type;
+            type_declaration.name = "std_logic_vector";
+            type_declaration.declared_type = type;
+            type_declaration.source = builder.source;
+            type_declaration.origin = builder.origin;
+            type_declaration.native_intrinsic = native_id(
+                [](const VhdlNativeIntrinsic& entry) {
+                    return entry.kind == VhdlNativeKind::type
+                        && vhdl_native_provided_type(entry)
+                            == vhdl::ProvidedType::std_logic_vector;
+                });
+            builder.vhdl_hir.mutable_declarations().push_back(
+                std::move(type_declaration));
+            vhdl::TypeDefinition definition;
+            definition.id = type;
+            definition.declaration = declaration;
+            definition.form = vhdl::TypeForm::array;
+            definition.name = "std_logic_vector";
+            definition.element_subtype.emplace();
+            definition.element_subtype->domain = vhdl::ValueDomain::logic9;
+            definition.element_subtype->executable_width = 1U;
+            vhdl::ArrayDimension dimension;
+            dimension.index_subtype = vhdl_name("natural", builder.source);
+            dimension.unconstrained = true;
+            dimension.source = builder.source;
+            definition.array_dimensions.push_back(std::move(dimension));
+            definition.source = builder.source;
+            definition.origin = builder.origin;
+            builder.vhdl_hir.mutable_types().push_back(std::move(definition));
+            builder.vhdl_unit(package).declarations.push_back(declaration);
+        }
         builder.add_vhdl_unit(UnitKind::vhdl_entity,
             vhdl::UnitKind::entity, "provenance_entity");
         const auto architecture = builder.add_vhdl_unit(
@@ -12425,8 +12781,9 @@ void test_vhdl_builtin_std_logic_1164_provenance()
     const auto shadow_type_declarations
         = user_vector_shadow.design.vhdl_type_declarations_named(
             "std_logic_vector");
+    // The architecture's STD_LOGIC_VECTOR and IEEE.STD_LOGIC_1164's.
     assert(shadow_type_declarations
-        && shadow_type_declarations->size() == 1U);
+        && shadow_type_declarations->size() == 2U);
     const auto shadow_type = user_vector_shadow.design.find_type(
         *user_vector_shadow.user_vector_type);
     assert(shadow_type && shadow_type->vhdl != nullptr

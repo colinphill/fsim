@@ -24,8 +24,13 @@ import sys
 from pathlib import Path
 
 STANDARDS = ("1987", "1993", "2002", "2008")
-# The 2000 text equals the 2002 text for these packages, so there is no
-# separate 2000 tree.
+# VHDL-2000 shares the 2002 tree: the 2000 text equals the 2002 text except
+# where rows of standard 2000 apply over the 2002 rows, to the packages named
+# here, whose derived files the 2002 tree carries as <file>-2000.vhdl
+# (IEEE Std 1076-2000 14.3 READLINE has `L: out LINE`; 1076-2002 made it
+# inout; owner 11-19).
+OVERLAYS = {"2000": ("2002", ("textio",))}
+ROW_STANDARDS = STANDARDS + tuple(OVERLAYS)
 PACKAGES = {
     "1987": ("std_logic_1164",),
     "1993": ("std_logic_1164", "numeric_bit", "numeric_std", "math_real",
@@ -37,9 +42,65 @@ PACKAGES = {
              "numeric_bit", "numeric_bit_unsigned", "numeric_std",
              "numeric_std_unsigned", "std_logic_1164", "std_logic_textio"),
 }
+# The packages of library STD that fsim analyzes into its precompiled standard
+# library artifacts (std/textio.vhdl, std/env.vhdl of the 2019 tree); STANDARD
+# and REFLECTION are language-predefined and are not derived.  Package names of
+# the two libraries do not collide, so a table row names the package only.
+STD_PACKAGES = {
+    "1987": ("textio",),
+    "1993": ("textio",),
+    "2002": ("textio",),
+    "2008": ("env", "textio"),
+}
+STD_NAMES = ("env", "textio")
 # Packages whose 2019 text has no separate body file.
-NO_BODY = ("fixed_float_types", "fixed_pkg", "float_pkg", "std_logic_textio")
+NO_BODY = ("fixed_float_types", "fixed_pkg", "float_pkg", "std_logic_textio",
+           "env", "textio")
 HEADER_END = "-- End of the fsim derivation header; the 2019 text follows."
+
+
+def library_of(package):
+    return "std" if package in STD_NAMES else "ieee"
+
+
+def packages_of(standard):
+    if standard in OVERLAYS:
+        return OVERLAYS[standard][1]
+    return PACKAGES[standard] + STD_PACKAGES.get(standard, ())
+
+
+def row_standards(standard):
+    """The row standards that apply to a standard's files: an overlay's rows
+    apply over its tree's rows."""
+    if standard in OVERLAYS:
+        return (OVERLAYS[standard][0], standard)
+    return (standard,)
+
+
+def overlay_file(standard, name):
+    """The tree file name of an overlay's derived file std/x.vhdl."""
+    return name[:-len(".vhdl")] + "-" + standard + ".vhdl"
+
+
+def tree_files(root, table, rewrites, standard):
+    """The derived files of one tree: [(tree name, 2019 name, deriving
+    standard, bytes)], the unmatched rows and the packages without a tree."""
+    files, unmatched, extra = derive(root, table, rewrites, standard)
+    entries = [(name, name, standard, data) for name, data in files.items()]
+    for overlay, (base, _) in OVERLAYS.items():
+        if base != standard:
+            continue
+        o_files, o_unmatched, o_extra = derive(root, table, rewrites, overlay)
+        entries += [(overlay_file(overlay, name), name, overlay, data)
+                    for name, data in o_files.items()]
+        unmatched += o_unmatched
+        extra |= o_extra
+    return entries, unmatched, extra
+
+
+def unit_name(key):
+    """Package name of a derived file key such as ieee/numeric_bit-body.vhdl."""
+    return key.split("/")[-1].replace("-body", "")[:-len(".vhdl")]
 
 
 def sha256_hex(data):
@@ -394,10 +455,15 @@ class Rewrite:
     (identifiers replaced in the item KEY, or everywhere for KEY *),
     drop_end_kind (the kind keywords after `end` are dropped), insert_before
     (a copy of the item named by from= of the 2019 file file=, with subst=,
-    precedes the item KEY), omit_file (the file is not shipped)."""
+    precedes the item KEY), replace_text (the literal text old= of the item KEY
+    becomes the literal text new=, for a declaration form that differs between
+    standards without a change of identifiers), omit_file (the file is not
+    shipped), insert_text (fsim-authored text= — `\\n` separates its lines —
+    precedes the item KEY: a declaration an older standard has that no 2019
+    text provides, cited by its clause)."""
 
     RULES = ("copy_as", "duplicate", "substitute", "drop_end_kind",
-             "insert_before", "omit_file")
+             "insert_before", "replace_text", "omit_file", "insert_text")
 
     def __init__(self, standard, package, files, rule, key, arguments, clause,
                  reason, line):
@@ -432,7 +498,7 @@ def load_table(path):
             raise ValueError("%s:%d: five tab-separated columns expected" %
                              (path, number))
         standard, package, key, clause, reason = fields
-        if standard not in STANDARDS:
+        if standard not in ROW_STANDARDS:
             raise ValueError("%s:%d: unknown standard %s" % (path, number,
                                                              standard))
         if not clause.strip() or not reason.strip():
@@ -450,7 +516,7 @@ def load_rewrites(path):
                              (path, number))
         standard, package, files, rule, key, arguments, clause, reason = \
             fields
-        if standard not in STANDARDS or rule not in Rewrite.RULES or \
+        if standard not in ROW_STANDARDS or rule not in Rewrite.RULES or \
                 files not in ("decl", "body", "both"):
             raise ValueError("%s:%d: bad standard, rule or file scope" %
                              (path, number))
@@ -458,10 +524,17 @@ def load_rewrites(path):
             raise ValueError("%s:%d: clause and reason are required" %
                              (path, number))
         parsed = {}
-        for part in arguments.split(";"):
-            if part:
-                name, value = part.split("=", 1)
-                parsed[name] = value
+        if rule == "insert_text":
+            # The text is the whole column: it may hold `;`.
+            if not arguments.startswith("text="):
+                raise ValueError("%s:%d: insert_text takes text=" %
+                                 (path, number))
+            parsed["text"] = arguments[len("text="):]
+        else:
+            for part in arguments.split(";"):
+                if part:
+                    name, value = part.split("=", 1)
+                    parsed[name] = value
         rows.append(Rewrite(standard, package, files, rule, key, parsed,
                             clause, reason, number))
     return rows
@@ -470,11 +543,14 @@ def load_rewrites(path):
 # --------------------------------------------------------------- deriving
 
 def source_files(root, package):
-    base = Path(root) / "ieee"
-    files = [(package + ".vhdl", base / (package + ".vhdl"), "decl")]
+    """[(file key such as ieee/x.vhdl, path, kind)] of one package."""
+    library = library_of(package)
+    base = Path(root) / library
+    files = [(library + "/" + package + ".vhdl", base / (package + ".vhdl"),
+              "decl")]
     if package not in NO_BODY:
-        files.append((package + "-body.vhdl", base / (package + "-body.vhdl"),
-                      "body"))
+        files.append((library + "/" + package + "-body.vhdl",
+                      base / (package + "-body.vhdl"), "body"))
     return files
 
 
@@ -562,6 +638,11 @@ def derive_file(root, original_text, items, removals, rewrites, file_kind):
                     row.subst).split("\n"))
                 out.append("")
                 used.add(("rewrite", id(row)))
+            if applies(row) and row.rule == "insert_text" and \
+                    row.key == item.key:
+                out.extend(row.arguments["text"].split("\\n"))
+                out.append("")
+                used.add(("rewrite", id(row)))
         if item.key in removal_keys:
             used.add(("removal", id(removal_keys[item.key])))
             continue
@@ -578,6 +659,13 @@ def derive_file(root, original_text, items, removals, rewrites, file_kind):
             if applies(row) and row.rule == "substitute" and \
                     row.key == item.key:
                 code = replace_identifiers(code, row.subst)
+                used.add(("rewrite", id(row)))
+        for row in rewrites:
+            if applies(row) and row.rule == "replace_text" and \
+                    row.key == item.key:
+                assert code.count(row.arguments["old"]) == 1, row.line
+                code = code.replace(row.arguments["old"],
+                                    row.arguments["new"])
                 used.add(("rewrite", id(row)))
         block = head + code.split("\n")
         for row in rewrites:
@@ -608,14 +696,14 @@ def header_for(standard, package, name, original_bytes, removal_rows,
         "-- fsim-derived IEEE package source for VHDL-%s." % standard,
         "--",
         "-- This file is NOT an IEEE original. It is derived from the IEEE",
-        "-- P1076 Working Group Open Source Repository file ieee/%s" % name,
+        "-- P1076 Working Group Open Source Repository file %s" % name,
         "-- (IEEE Std 1076-2019 packages, tag 1076-2019, SHA-256 %s)" % digest,
         "-- by deleting the declarations and bodies that later revisions of the",
         "-- standard added and by the mechanical rewrites declared in the",
         "-- tables below. The %d removal rows and %d rewrite rows applied to" %
         (len(removal_rows), len(rewrite_rows)),
         "-- this file are rows of scripts/vhdl_ieee_removals.tsv (standard %s," %
-        standard,
+        " and ".join(row_standards(standard)),
         "-- package %s) and scripts/vhdl_ieee_rewrites.tsv." % package,
         "-- Rewrite rows (line numbers of the rewrites table): %s." %
         (", ".join(str(r.line) for r in rewrite_rows) or "none"),
@@ -631,15 +719,21 @@ def header_for(standard, package, name, original_bytes, removal_rows,
 
 def derive(root, table, rewrites, standard):
     """({file name: bytes}, unmatched rows, packages without a tree)."""
-    removals = [r for r in table if r.standard == standard]
-    edits = [r for r in rewrites if r.standard == standard]
+    applying = row_standards(standard)
+    packages = packages_of(standard)
+    # An overlay derives only its packages; the base tree's own derivation
+    # reports the base rows of the others.
+    removals = [r for r in table if r.standard in applying and
+                (standard not in OVERLAYS or r.package in packages)]
+    edits = [r for r in rewrites if r.standard in applying and
+             (standard not in OVERLAYS or r.package in packages)]
     result = {}
     matched = set()
     omitted = {(r.package, r.files) for r in edits if r.rule == "omit_file"}
     for r in edits:
         if r.rule == "omit_file":
             matched.add(("rewrite", id(r)))
-    for package in PACKAGES[standard]:
+    for package in packages_of(standard):
         package_removals = [r for r in removals if r.package == package]
         package_edits = [r for r in edits if r.package == package and
                          r.rule != "omit_file"]
@@ -658,23 +752,31 @@ def derive(root, table, rewrites, standard):
             result[name] = (header_for(standard, package, name, original,
                                        file_removals, file_edits) +
                             derived).encode("latin-1")
-    unmatched = [r for r in removals if ("removal", id(r)) not in matched] + \
-        [r for r in edits if ("rewrite", id(r)) not in matched]
-    packaged = ({r.package for r in removals} | {r.package for r in edits}) \
-        - set(PACKAGES[standard])
+    unmatched = [r for r in removals if ("removal", id(r)) not in matched
+                 and r.standard == standard] + \
+        [r for r in edits if ("rewrite", id(r)) not in matched
+         and r.standard == standard]
+    packaged = ({r.package for r in table if r.standard == standard} |
+                {r.package for r in rewrites if r.standard == standard}) \
+        - set(packages)
     return result, unmatched, packaged
 
 
 def readme_for(standard, names):
-    packages = sorted({n.replace("-body", "")[:-len(".vhdl")] for n in names})
+    names = [n for n in names
+             if not any(n.endswith("-%s.vhdl" % o) for o in OVERLAYS)]
+    packages = sorted({unit_name(n) for n in names if n.startswith("ieee/")})
+    std_packages = sorted({unit_name(n) for n in names
+                           if n.startswith("std/")})
     declaration_only = sorted(
         p for p in packages if p not in NO_BODY and
-        (p + "-body.vhdl") not in names)
+        ("ieee/" + p + "-body.vhdl") not in names)
     return (
         "<!-- SPDX-License-Identifier: Apache-2.0 -->\n"
         "# IEEE package sources derived for VHDL-%s\n\n"
-        "These files are included for reference only. fsim does not read them:\n"
-        "it simulates the IEEE packages with its built-in models.\n\n"
+        "These files are the sources of fsim's precompiled standard library\n"
+        "artifact for this standard: fsim builds the artifact from them at fsim\n"
+        "build time (the `std` and `ieee` packages listed below).\n\n"
         "These files are NOT IEEE originals. Each one is the matching file of the\n"
         "IEEE 1076-2019 package sources (`third_party/ieee-1076-2019`, Apache-2.0)\n"
         "with the declarations and bodies that later standards added deleted\n"
@@ -685,13 +787,17 @@ def readme_for(standard, names):
         "applied, and the notice that applies. `scripts/derive_ieee_packages.py`\n"
         "writes the files and the `fsim.ieee-derived-*` checks reproduce them byte\n"
         "for byte.\n\n"
-        "Packages: %s.\n\n"
+        "Packages of library `ieee` (`ieee/`): %s.\n\n"
+        "Packages of library `std` (`std/`): %s. The 2019 sources have no\n"
+        "package body for them.\n\n"
         "%s%s"
         "`SHA256SUMS` records every VHDL file of this directory.\n"
-    ) % (standard, standard, ", ".join(packages),
-         ("The 2000 text equals the 2002 text for these packages, so `2002` "
-          "serves\nboth VHDL-2000 and VHDL-2002.\n\n" if standard == "2002"
-          else ""),
+    ) % (standard, standard, ", ".join(packages), ", ".join(std_packages),
+         ("`2002` serves both VHDL-2000 and VHDL-2002: the 2000 text equals "
+          "the 2002\ntext except in the files named `*-2000.vhdl`, which "
+          "fsim's VHDL-2000\nlibrary uses in place of the file of the same "
+          "name without the suffix\n(rows for standard 2000 apply over the "
+          "2002 rows).\n\n" if standard == "2002" else ""),
          ("Declaration only (no body file): %s. The 2019 bodies call the\n"
           "2008 predefined MAXIMUM and MINIMUM, which this standard does not\n"
           "have, and the 2019 text has no function to derive an integer MAX\n"
@@ -700,7 +806,7 @@ def readme_for(standard, names):
 
 
 def sums_for(files):
-    return "".join("%s  ieee/%s\n" % (sha256_hex(data), name)
+    return "".join("%s  %s\n" % (sha256_hex(data), name)
                    for name, data in sorted(files.items()))
 
 
@@ -718,15 +824,16 @@ def check_traceability(root, table, rewrites, standard, package, name,
     exactly the rewrite rows that apply to the file."""
     import difflib
     problems = []
-    original = (Path(root) / "ieee" / name).read_bytes().decode("latin-1")
+    original = (Path(root) / name).read_bytes().decode("latin-1")
     header, body = split_header(derived_bytes)
     original_lines = original.split("\n")
     kept = body.split("\n")
     kind = "body" if name.endswith("-body.vhdl") else "decl"
     items = split_items(original)
     removal_keys = {r.key for r in table
-                    if r.standard == standard and r.package == package}
-    edits = [r for r in rewrites if r.standard == standard and
+                    if r.standard in row_standards(standard)
+                    and r.package == package}
+    edits = [r for r in rewrites if r.standard in row_standards(standard) and
              r.package == package and r.files in ("both", kind) and
              r.rule != "omit_file"]
     allowed = set()
@@ -738,7 +845,8 @@ def check_traceability(root, table, rewrites, standard, package, name,
         if row.key == "*":
             continue
         for item in items:
-            if row.rule == "insert_before" and item.key == row.key:
+            if row.rule in ("insert_before", "insert_text") \
+                    and item.key == row.key:
                 allowed.update(range(max(item.first - 1, 0), item.first + 1))
             if item.key in (row.key, row.source):
                 allowed.update(range(item.first, item.last + 1))
@@ -765,6 +873,11 @@ def check_traceability(root, table, rewrites, standard, package, name,
         if tag == "equal":
             continue
         span = set(range(i1, i2)) or {i1}
+        if i2 > i1:
+            # The derivation keeps the blank lines between removed items, and
+            # a line diff cannot tell which of several equal blank lines a kept
+            # one is, so a deleted blank line is not a change by itself.
+            span = {n for n in span if original_lines[n].strip()}
         if not span <= allowed:
             problems.append(
                 "lines %d-%d of the 2019 file changed outside the declared "
@@ -822,8 +935,9 @@ def main():
     rewrites = load_rewrites(arguments.rewrites)
     failures = 0
     for standard in STANDARDS:
-        files, unmatched, extra = derive(arguments.root, table, rewrites,
-                                         standard)
+        entries, unmatched, extra = tree_files(arguments.root, table,
+                                               rewrites, standard)
+        files = {tree_name: data for tree_name, _, _, data in entries}
         for row in unmatched:
             print("table line %d matches nothing: %s %s %s" % (
                 row.line, row.standard, row.package, row.key))
@@ -834,7 +948,7 @@ def main():
             failures += 1
         base = Path(arguments.out or arguments.verify) / standard
         for name, data in files.items():
-            target = base / "ieee" / name
+            target = base / name
             if arguments.out:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(data)

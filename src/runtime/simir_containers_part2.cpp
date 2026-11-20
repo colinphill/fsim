@@ -27,7 +27,7 @@ void Interpreter::Impl::execute_container(
     StringElementCapture capture;
     const auto capture_index = [&](const RegisterId index, const bool text) {
         if (text) {
-            capture.texts.push_back(access.read_string(index));
+            capture.texts.emplace_back(access.read_string(index));
             capture.indices.emplace_back();
         } else {
             capture.indices.push_back(access.read(index));
@@ -81,7 +81,7 @@ public:
     {
         throw std::logic_error { "a captured string element write has no packed result" };
     }
-    [[nodiscard]] const std::string& read_string(StringRegisterId id) override
+    [[nodiscard]] std::string_view read_string(StringRegisterId id) override
     {
         return id == 0U ? value_ : texts_.at(id - 1U);
     }

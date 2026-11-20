@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_workspace_objects.hpp"
+#include "application_standard_library_artifact_internal.hpp"
+#include "application_workspace_store.hpp"
 
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/artifact/object.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
+#include "fsim/semantic/compiled_design_vhdl_analysis_stamp.hpp"
 #include "fsim/support/design_library.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
@@ -208,6 +211,21 @@ struct CompilerEnvironment {
     std::set<std::string> contexts;
 };
 
+// The compiler-supplied packages an object carries (projected packages):
+// not the precompiled STD/IEEE libraries, which no object embeds and which
+// load_workspace_objects loads by edition.
+std::vector<library::VhdlPackageDependency> carried_vhdl_package_dependencies(
+    const artifact::ObjectMetadata& metadata)
+{
+    std::vector<library::VhdlPackageDependency> result;
+    for (const auto& dependency : metadata.vhdl_package_dependencies) {
+        if (!is_standard_library_package_revision(dependency.revision)) {
+            result.push_back(dependency);
+        }
+    }
+    return result;
+}
+
 std::optional<std::vector<std::string>> select_compiler_environment(
     const std::filesystem::path& metadata_path,
     const artifact::ObjectMetadata& metadata,
@@ -227,8 +245,9 @@ std::optional<std::vector<std::string>> select_compiler_environment(
         }
         environment.standard = metadata.standard;
     }
+    const auto carried = carried_vhdl_package_dependencies(metadata);
     std::vector<std::string> libraries;
-    for (const auto& dependency : metadata.vhdl_package_dependencies) {
+    for (const auto& dependency : carried) {
         const auto library = dependency.package.substr(
             0, dependency.package.find('.'));
         if (library != metadata.library
@@ -236,13 +255,13 @@ std::optional<std::vector<std::string>> select_compiler_environment(
             libraries.push_back(library);
         }
     }
-    if (metadata.vhdl_package_dependencies.empty()) {
+    if (carried.empty()) {
         return libraries;
     }
     if (environment.mixed) {
         // Every object projects its compiler libraries, less the packages
         // another object's (newer-standard) copy supplies.
-        for (const auto& dependency : metadata.vhdl_package_dependencies) {
+        for (const auto& dependency : carried) {
             const auto key = support::ascii_lower(dependency.package);
             const auto winner = environment.winner.find(key);
             if (winner != environment.winner.end()
@@ -255,7 +274,7 @@ std::optional<std::vector<std::string>> select_compiler_environment(
     // An object whose packages are a subset of the provider's uses the
     // provider's copies (identical revision and source digest).
     if (environment.provider && *environment.provider != metadata_path) {
-        const bool covered = std::ranges::all_of(metadata.vhdl_package_dependencies,
+        const bool covered = std::ranges::all_of(carried,
             [&](const library::VhdlPackageDependency& dependency) {
                 return std::ranges::find(environment.provided, dependency)
                     != environment.provided.end();
@@ -276,11 +295,11 @@ std::optional<std::vector<std::string>> select_compiler_environment(
         return std::nullopt;
     }
     if (!environment.bytes) {
-        environment.dependencies = metadata.vhdl_package_dependencies;
+        environment.dependencies = carried;
         environment.bytes = std::move(bytes);
         return libraries;
     }
-    if (environment.dependencies != metadata.vhdl_package_dependencies
+    if (environment.dependencies != carried
         || *environment.bytes != *bytes) {
         diagnostics.error("FSIM-ART-VHDEP-001",
             "workspace objects contain incompatible compiler-supplied VHDL "
@@ -466,13 +485,14 @@ std::optional<CompilationWorkspace> load_workspace_objects(
                 metadata_complete = false;
                 break;
             }
-            if (!metadata->vhdl_package_dependencies.empty()) {
-                sets.emplace_back(entry->path, metadata->vhdl_package_dependencies);
+            auto carried = carried_vhdl_package_dependencies(*metadata);
+            if (!carried.empty()) {
+                sets.emplace_back(entry->path, carried);
             }
             environments.push_back({
                 metadata->language == "vhdl" ? metadata->standard
                                              : std::string { },
-                metadata->vhdl_package_dependencies,
+                std::move(carried),
                 metadata->compatibility_profile });
             environment_paths.push_back(entry->path);
         }
@@ -510,6 +530,8 @@ std::optional<CompilationWorkspace> load_workspace_objects(
     uvm_identity.add("uvm-provenance-schema", "fsim-uvm-object-v1");
     // The files each object's VHDL units come from, for analysis order.
     std::map<const WorkspaceObjectSelection*, std::vector<std::string>> vhdl_files;
+    // The precompiled STD/IEEE packages the objects need, by edition.
+    std::map<std::string, std::set<std::string>> precompiled_packages;
     for (const auto* entry : *ordered) {
         const auto& selection = *entry;
         if (selection.active_units.empty()) {
@@ -568,6 +590,44 @@ std::optional<CompilationWorkspace> load_workspace_objects(
                     return std::nullopt;
                 }
                 projected = std::move(reduced);
+                semantic::unstamp_vhdl_units_anchored_to(
+                    *projected.design, omitted);
+            }
+        }
+        // The precompiled STD/IEEE packages the object was compiled
+        // against (recorded at compile; never embedded). Objects of STD and
+        // IEEE are those libraries themselves (no workspace library has
+        // those names), loaded by load_precompiled_standard_libraries.
+        if (!workspace::standard_library_name(metadata->library)) {
+            std::vector<library::VhdlPackageDependency> precompiled;
+            for (const auto& dependency : metadata->vhdl_package_dependencies) {
+                if (is_standard_library_package_revision(dependency.revision)) {
+                    precompiled.push_back(dependency);
+                }
+            }
+            if (!precompiled.empty()) {
+                if (!validate_vhdl_package_dependencies(precompiled,
+                        ".fsimobj '" + support::path_to_utf8(selection.path) + "'",
+                        diagnostics)) {
+                    return std::nullopt;
+                }
+                const auto edition = environment.mixed
+                    ? environment.newest
+                    : precompiled.front().standard;
+                std::vector<std::string> anchored;
+                for (const auto& dependency : precompiled) {
+                    precompiled_packages[edition].insert(dependency.package);
+                    if (dependency.standard != edition) {
+                        anchored.push_back(dependency.package);
+                    }
+                }
+                if (!anchored.empty()) {
+                    // Another edition's packages serve this object (one
+                    // package set per family, newest standard): its stored
+                    // references into them are resolved again.
+                    semantic::unstamp_vhdl_units_anchored_to(
+                        *projected.design, anchored);
+                }
             }
         }
         if (!merge_trace_archive(result, *input, diagnostics)
@@ -621,6 +681,22 @@ std::optional<CompilationWorkspace> load_workspace_objects(
         }
     }
     result.set_vhdl_analysis_order(std::move(analysis_order));
+    for (const auto& [edition, packages] : precompiled_packages) {
+        const auto standard = project::parse_vhdl_standard(edition);
+        if (!standard) {
+            diagnostics.error("FSIM-ART-VHDEP-001",
+                "workspace object records an unknown VHDL standard '" + edition
+                    + "' for its precompiled standard libraries");
+            return std::nullopt;
+        }
+        const std::vector<std::string> names { packages.begin(), packages.end() };
+        auto libraries = load_precompiled_standard_libraries(
+            frontend_vhdl_standard(*standard), names, diagnostics);
+        if (!libraries) {
+            return std::nullopt;
+        }
+        bundles.push_back(std::move(*libraries));
+    }
     if (mapped_libraries != nullptr
         && !mapped_libraries->library_mappings.empty()) {
         if (!load_required_mapped_libraries(

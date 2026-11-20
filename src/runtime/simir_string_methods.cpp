@@ -522,6 +522,14 @@ std::string vhdl_logic9_radix_string(
     return result;
 }
 
+bool string_method_changes_source(
+    const StringMethodOperator operation) noexcept
+{
+    return operation == StringMethodOperator::putc
+        || (operation >= StringMethodOperator::itoa
+            && operation <= StringMethodOperator::realtoa);
+}
+
 StringMethodResult execute_string_method(
     const StringMethodOperator operation,
     std::string& source,
@@ -531,9 +539,6 @@ StringMethodResult execute_string_method(
     const std::optional<std::uint64_t> first_bits,
     const std::uint64_t resolution_femtoseconds)
 {
-    if (operation == StringMethodOperator::getc) {
-        return { { string_getc(source, first) }, std::nullopt, std::nullopt };
-    }
     if (operation == StringMethodOperator::putc) {
         string_putc(
             source, first,
@@ -541,6 +546,45 @@ StringMethodResult execute_string_method(
                          static_cast<std::uint32_t>(*second) }
                    : std::nullopt);
         return { };
+    }
+    if (operation == StringMethodOperator::realtoa) {
+        if (!first_bits) {
+            throw std::invalid_argument { "realtoa input contains X or Z" };
+        }
+        source = string_from_real_bits(*first_bits);
+        return { };
+    }
+    if (operation >= StringMethodOperator::itoa
+        && operation <= StringMethodOperator::bintoa) {
+        const auto radix = operation == StringMethodOperator::itoa
+            ? 10U
+            : operation == StringMethodOperator::hextoa
+            ? 16U
+            : operation == StringMethodOperator::octtoa ? 8U
+                                                        : 2U;
+        source = string_from_integer(first.value_or(0), radix);
+        return { };
+    }
+    return execute_string_method(operation, std::string_view { source },
+        argument, first, second, first_bits, resolution_femtoseconds);
+}
+
+StringMethodResult execute_string_method(
+    const StringMethodOperator operation,
+    const std::string_view source,
+    const std::string_view argument,
+    const std::optional<std::int32_t> first,
+    const std::optional<std::int32_t> second,
+    [[maybe_unused]] const std::optional<std::uint64_t> first_bits,
+    const std::uint64_t resolution_femtoseconds)
+{
+    if (string_method_changes_source(operation)) {
+        throw std::logic_error {
+            "a string method that changes its source needs the string itself"
+        };
+    }
+    if (operation == StringMethodOperator::getc) {
+        return { { string_getc(source, first) }, std::nullopt, std::nullopt };
     }
     if (operation == StringMethodOperator::toupper
         || operation == StringMethodOperator::tolower) {
@@ -617,7 +661,7 @@ StringMethodResult execute_string_method(
             ++position;
         }
         throw std::invalid_argument {
-            "VHDL 'VALUE: \"" + source
+            "VHDL 'VALUE: \"" + std::string { source }
             + "\" is not a literal of the enumeration type"
         };
     }
@@ -665,7 +709,7 @@ StringMethodResult execute_string_method(
         if (!elements || elements->size() != count || !first || *first < 0
             || static_cast<std::size_t>(*first) >= count) {
             throw std::invalid_argument {
-                "VHDL 'VALUE: \"" + source
+                "VHDL 'VALUE: \"" + std::string { source }
                 + "\" is not a value of the composite subtype with "
                 + std::to_string(count) + " elements"
             };
@@ -678,21 +722,7 @@ StringMethodResult execute_string_method(
             static_cast<std::uint64_t>(vhdl_integer_value(source)),
             std::nullopt };
     }
-    if (operation == StringMethodOperator::realtoa) {
-        if (!first_bits) {
-            throw std::invalid_argument { "realtoa input contains X or Z" };
-        }
-        source = string_from_real_bits(*first_bits);
-        return { };
-    }
-    const auto radix = operation == StringMethodOperator::itoa
-        ? 10U
-        : operation == StringMethodOperator::hextoa
-        ? 16U
-        : operation == StringMethodOperator::octtoa ? 8U
-                                                    : 2U;
-    source = string_from_integer(first.value_or(0), radix);
-    return { };
+    throw std::logic_error { "string method has no source-reading form" };
 }
 
 namespace {

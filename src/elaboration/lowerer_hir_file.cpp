@@ -6,6 +6,7 @@
 #include "fsim/frontend/input_format.hpp"
 #include "fsim/frontend/output_format.hpp"
 #include "fsim/runtime/file_scanning.hpp"
+#include "fsim/semantic/vhdl_native_identity.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
 #include "fsim/support/stack_growth.hpp"
 
@@ -100,23 +101,104 @@ namespace {
     return name;
 }
 
+// The predefined file operations of a file type (IEEE 1076-2019 5.5.2) and
+// the IEEE.STD_LOGIC_TEXTIO procedures (still a projected package): they
+// have no declaration of their own, so a call is recognized by its
+// spelling and its operands. Every STD.TEXTIO and IEEE.STD_LOGIC_1164
+// procedure is a native declaration instead (file_native_procedure).
 [[nodiscard]] bool vhdl_file_procedure_name(
     const std::string_view name) noexcept
 {
     const auto simple = vhdl_simple_name(name);
     return simple == "file_open" || simple == "file_close"
-        || simple == "read" || simple == "write" || simple == "swrite"
-        || simple == "bread" || simple == "binary_read"
-        || simple == "bwrite" || simple == "binary_write"
-        || simple == "sread" || simple == "string_read"
-        || simple == "hread" || simple == "hex_read"
-        || simple == "oread" || simple == "octal_read"
-        || simple == "hwrite" || simple == "hex_write"
-        || simple == "owrite" || simple == "octal_write"
-        || simple == "readline" || simple == "writeline"
-        || simple == "tee" || simple == "flush"
-        || simple == "file_rewind" || simple == "file_seek"
-        || simple == "file_truncate";
+        || simple == "read" || simple == "write" || simple == "flush"
+        || simple == "hread" || simple == "hwrite" || simple == "oread"
+        || simple == "owrite" || simple == "file_rewind"
+        || simple == "file_seek" || simple == "file_truncate";
+}
+
+// The native entry `declaration` denotes when it is a declaration of
+// STD.TEXTIO or IEEE.STD_LOGIC_1164, or a subprogram alias of one (the
+// TEXTIO aliases BREAD, SWRITE, HEX_READ, ...); null for any other.
+[[nodiscard]] const semantic::VhdlNativeIntrinsic*
+file_native_declaration(const semantic::SpecializedHirUnit& unit,
+    const semantic::DeclarationId declaration_id,
+    const unsigned depth = 0U)
+{
+    const auto declaration = unit.find_declaration(declaration_id);
+    if (!declaration || declaration->vhdl == nullptr) {
+        return nullptr;
+    }
+    if (const auto* entry = semantic::vhdl_native_of(*declaration->vhdl)) {
+        return entry->package_id == semantic::VhdlNativePackage::std_textio
+                || entry->package_id
+                    == semantic::VhdlNativePackage::ieee_std_logic_1164
+            ? entry
+            : nullptr;
+    }
+    if (depth >= 4U || !declaration->vhdl->alias_target) {
+        return nullptr;
+    }
+    const auto& target = *declaration->vhdl->alias_target;
+    if (target.selected) {
+        if (const auto* entry
+            = file_native_declaration(unit, *target.selected, depth + 1U)) {
+            return entry;
+        }
+    }
+    for (const auto overload : target.overloads) {
+        if (const auto* entry
+            = file_native_declaration(unit, overload, depth + 1U)) {
+            return entry;
+        }
+    }
+    return nullptr;
+}
+
+// Whether `type` is STD.TEXTIO.TEXT, or a subtype of it.
+[[nodiscard]] bool is_textio_text_type(
+    const semantic::SpecializedHirUnit& unit, const semantic::TypeId type)
+{
+    const auto* entry = semantic::vhdl_native_type_of(unit, type);
+    return entry != nullptr
+        && entry->package_id == semantic::VhdlNativePackage::std_textio
+        && entry->name == semantic::VhdlNativeName::text;
+}
+
+// The TextIO procedure a native entry stands for: READ, WRITE, READLINE,
+// WRITELINE, TEE, HREAD, HWRITE, OREAD, OWRITE, SREAD (IEEE 1076-2019
+// 16.4, 16.7); empty for any other entry.
+[[nodiscard]] std::string_view file_native_procedure(
+    const semantic::VhdlNativeIntrinsic* entry) noexcept
+{
+    if (entry == nullptr
+        || entry->kind != semantic::VhdlNativeKind::procedure) {
+        return { };
+    }
+    switch (entry->name) {
+    case semantic::VhdlNativeName::read:
+        return "read";
+    case semantic::VhdlNativeName::write:
+        return "write";
+    case semantic::VhdlNativeName::readline:
+        return "readline";
+    case semantic::VhdlNativeName::writeline:
+        return "writeline";
+    case semantic::VhdlNativeName::tee:
+        return "tee";
+    case semantic::VhdlNativeName::hread:
+        return "hread";
+    case semantic::VhdlNativeName::hwrite:
+        return "hwrite";
+    case semantic::VhdlNativeName::oread:
+        return "oread";
+    case semantic::VhdlNativeName::owrite:
+        return "owrite";
+    case semantic::VhdlNativeName::sread:
+        return "sread";
+    default:
+        return { };
+    }
 }
 
 // The VHDL-2019 file functions other than ENDFILE (IEEE 1076-2019 5.5.2);
@@ -341,6 +423,14 @@ bool Lowerer::is_hir_vhdl_file_call(
                 != semantic::vhdl::ExpressionKind::index)) {
         return false;
     }
+    // ENDLINE (VHDL-1987 STD.TEXTIO) is a native declaration; every other
+    // declared callee is an ordinary or native function, not a predefined
+    // file operation (IEEE 1076-2019 5.5.2).
+    if (const auto* native = hir_vhdl_native_callee(expression_id)) {
+        return native->package_id == semantic::VhdlNativePackage::std_textio
+            && native->kind == semantic::VhdlNativeKind::function
+            && native->name == semantic::VhdlNativeName::endline;
+    }
     if (vhdl_simple_name(name) == "endfile") {
         return true;
     }
@@ -389,6 +479,10 @@ Lowerer::hir_vhdl_file_call_type(
         : std::string_view { };
     const auto simple = vhdl_simple_name(name);
     const auto kind = vhdl_file_function_kind(simple);
+    if (hir_vhdl_native_callee(expression_id) != nullptr) {
+        // ENDLINE: BOOLEAN.
+        return { 1U, frontend::ValueDomain::Boolean };
+    }
     if (simple == "file_open" || kind == FilePositionKind::state
         || kind == FilePositionKind::mode) {
         return { 2U, frontend::ValueDomain::Bit2 };
@@ -431,8 +525,6 @@ Lowerer::hir_vhdl_standard_enumeration_literal(
         : name == "note" || name == "warning" || name == "error"
                 || name == "failure"
         ? std::string_view { "severity_level" }
-        : name == "right" || name == "left"
-        ? std::string_view { "side" }
         : std::string_view { };
     if (source.referenced_name && source.referenced_name->selected) {
         if (predefined_type.empty()) {
@@ -472,8 +564,8 @@ Lowerer::hir_vhdl_standard_enumeration_literal(
         && !source.referenced_name->overloads.empty()) {
         return std::nullopt;
     }
-    // `c.left` selects an element of a record object, not the SIDE literal;
-    // only a package prefix (`std.textio.left`) names a literal (IEEE
+    // A selected name that is not a package prefix of STD.STANDARD selects
+    // an element of a record object, not one of its literals (IEEE
     // 1076-2008 8.3).
     if (const auto dot = std::string_view { source.text }.rfind('.');
         dot != std::string_view::npos) {
@@ -486,8 +578,7 @@ Lowerer::hir_vhdl_standard_enumeration_literal(
         const auto package = std::string_view { prefix }.substr(
             prefix.rfind('.') == std::string::npos ? 0U
                                                    : prefix.rfind('.') + 1U);
-        if (package != "standard" && package != "textio"
-            && package != "env") {
+        if (package != "standard") {
             return std::nullopt;
         }
     }
@@ -496,12 +587,12 @@ Lowerer::hir_vhdl_standard_enumeration_literal(
     // Keep their language-defined ordinals available to all HIR lowering,
     // including severity_level variables used by report/assert statements.
     if (name == "open_ok" || name == "read_mode" || name == "note"
-        || name == "right" || name == "file_origin_begin"
+        || name == "file_origin_begin"
         || name == "state_open") {
         return 0U;
     }
     if (name == "status_error" || name == "write_mode"
-        || name == "warning" || name == "left"
+        || name == "warning"
         || name == "file_origin_current" || name == "state_closed") {
         return 1U;
     }
@@ -512,18 +603,6 @@ Lowerer::hir_vhdl_standard_enumeration_literal(
     if (name == "mode_error" || name == "failure"
         || name == "read_write_mode") {
         return 3U;
-    }
-    // STD.ENV.DAYOFWEEK is compiler-owned as well (IEEE 1076-2019 16.5).
-    constexpr auto days = std::to_array<std::string_view>({
-        "sunday", "monday", "tuesday", "wednesday", "thursday", "friday",
-        "saturday",
-    });
-    if (const auto day = std::ranges::find(days, name);
-        day != days.end()
-        && semantic::CompiledDesignResolver { *specialized_hir_unit_ }
-               .vhdl_builtin_type_visible("dayofweek", source.scope)) {
-        return static_cast<std::uint64_t>(
-            std::distance(days.begin(), day));
     }
     return std::nullopt;
 }
@@ -569,6 +648,41 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_file_call(
         : expression && expression->vhdl != nullptr
         ? std::string_view { expression->vhdl->text }
         : std::string_view { };
+    if (expression && expression->vhdl != nullptr
+        && hir_vhdl_native_callee(expression_id) != nullptr) {
+        // ENDLINE (L) is TRUE when L holds no more characters, that is when
+        // the designated string is empty (IEEE 1076-1987 14.3); a null LINE
+        // is the empty string.
+        const auto span = hir_source_span(expression->vhdl->source);
+        if (expression->vhdl->operands.size() != 1U) {
+            report("FSIM-ELAB-VHTEXTIO-001",
+                "ENDLINE requires exactly one line object", span);
+            return std::nullopt;
+        }
+        const auto line_declaration
+            = hir_target_declaration(expression->vhdl->operands.front());
+        const auto line = line_declaration
+            ? hir_string_binding(
+                  *line_declaration, hir_process_scope_, false)
+            : std::nullopt;
+        if (!line || !line->local) {
+            report("FSIM-ELAB-VHTEXTIO-001",
+                "ENDLINE requires a line object", span);
+            return std::nullopt;
+        }
+        const auto length = allocate_register(
+            32U, frontend::ValueDomain::Integer);
+        process_.operations.emplace_back(StringLength { length, *line->local });
+        const auto zero = allocate_register(
+            32U, frontend::ValueDomain::Integer);
+        process_.operations.emplace_back(
+            LoadConstant { zero, unsigned_value(0U, 32U) });
+        const auto empty = allocate_register(
+            1U, frontend::ValueDomain::Boolean);
+        process_.operations.emplace_back(
+            Binary { BinaryOperator::equal, empty, length, zero });
+        return empty;
+    }
     if (expression && expression->vhdl != nullptr
         && !expression->vhdl->operands.empty()
         && (vhdl_file_function_kind(vhdl_simple_name(name))
@@ -717,7 +831,8 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_file_position(
     if (type && type->vhdl != nullptr
         && type->vhdl->form == semantic::vhdl::TypeForm::file
         && type->vhdl->element_subtype
-        && vhdl_simple_name(type->vhdl->name) != "text") {
+        && !is_textio_text_type(*specialized_hir_unit_,
+            subtype->type_mark.target)) {
         const auto element
             = hir_effective_vhdl_subtype(*type->vhdl->element_subtype);
         lines = element
@@ -758,8 +873,18 @@ bool Lowerer::is_hir_vhdl_file_statement(
         statement_id);
     if (!statement || statement->vhdl == nullptr
         || statement->vhdl->kind
-            != semantic::vhdl::StatementKind::procedure_call
-        || !vhdl_file_procedure_name(
+            != semantic::vhdl::StatementKind::procedure_call) {
+        return false;
+    }
+    // A declared callee is a file operation only when it is a native
+    // STD.TEXTIO or IEEE.STD_LOGIC_1164 procedure; every other declared
+    // procedure is ordinary VHDL, whatever its name.
+    if (statement->vhdl->resolved_procedure) {
+        return !file_native_procedure(file_native_declaration(
+                    *specialized_hir_unit_, *statement->vhdl->resolved_procedure))
+                    .empty();
+    }
+    if (!vhdl_file_procedure_name(
             statement->vhdl->procedure.canonical.empty()
                 ? statement->vhdl->procedure.spelling
                 : statement->vhdl->procedure.canonical)) {
@@ -767,31 +892,26 @@ bool Lowerer::is_hir_vhdl_file_statement(
     }
     const auto name = vhdl_simple_name(
         statement->vhdl->procedure.text());
-    // READ, WRITE, TEE and FLUSH are file operations only when their first
-    // actual is a file object or line; other procedures share these names.
-    if (name != "read" && name != "write" && name != "swrite"
-        && name != "tee" && name != "flush" && name != "bread"
-        && name != "binary_read" && name != "bwrite"
-        && name != "binary_write") {
+    // Predefined READ, WRITE and FLUSH take a file object (IEEE 1076-2019
+    // 5.5.2); the STD_LOGIC_TEXTIO procedures take a line.
+    // The STD_LOGIC_TEXTIO procedures (projected) are file operations only
+    // when a declaration of that name is visible; otherwise the name
+    // denotes nothing (e.g. STD.TEXTIO HREAD before VHDL-2008, IEEE
+    // 1076-2019 16.4). FILE_OPEN, FILE_CLOSE, ... are implicit (5.5.2).
+    if (name == "hread" || name == "hwrite" || name == "oread"
+        || name == "owrite") {
+        return !hir_vhdl_callable_candidates(
+            statement->vhdl->procedure, statement->vhdl->scope)
+                    .empty();
+    }
+    if (name != "read" && name != "write" && name != "flush") {
         return true;
     }
     if (statement->vhdl->procedure_arguments.empty()) {
-        return name != "tee" && name != "flush";
+        return name != "flush";
     }
     const auto first = statement->vhdl->procedure_arguments.front().actual;
     const auto selected = hir_referenced_declaration(first);
-    if (!selected && name != "read" && name != "swrite") {
-        // std.textio.OUTPUT has no declaration in the design.
-        const auto expression = specialized_hir_unit_->find_expression(first);
-        if (expression && expression->vhdl != nullptr
-            && expression->vhdl->referenced_name) {
-            const auto& referenced = *expression->vhdl->referenced_name;
-            return vhdl_simple_name(referenced.canonical.empty()
-                           ? referenced.spelling
-                           : referenced.canonical)
-                == "output";
-        }
-    }
     const auto declaration = selected
         ? specialized_hir_unit_->find_declaration(*selected)
         : std::nullopt;
@@ -3392,46 +3512,28 @@ bool Lowerer::lower_hir_vhdl_file_statement(
         return false;
     }
     const auto& call = *statement->vhdl;
-    const auto called = vhdl_simple_name(
-        call.procedure.text());
-    if (!vhdl_file_procedure_name(called)) {
-        return false;
+    // A declared callee is a native STD.TEXTIO or IEEE.STD_LOGIC_1164
+    // procedure (an alias such as SWRITE or BREAD denotes its target) or an
+    // ordinary procedure; the predefined file operations (IEEE 1076-2019
+    // 5.5.2) and the STD_LOGIC_TEXTIO procedures have no declaration.
+    std::string_view name;
+    if (call.resolved_procedure) {
+        name = file_native_procedure(file_native_declaration(
+            *specialized_hir_unit_, *call.resolved_procedure));
+        if (name.empty()) {
+            return false;
+        }
+    } else {
+        name = vhdl_simple_name(call.procedure.text());
+        if (!vhdl_file_procedure_name(name)) {
+            return false;
+        }
     }
-    // VHDL-2008 SWRITE(L, VALUE) is WRITE of a STRING (16.4).
-    const auto name = called == "swrite" ? std::string_view { "write" }
-        : called == "string_read" ? std::string_view { "sread" }
-        : called == "bread" || called == "binary_read"
-        ? std::string_view { "read" }
-        : called == "bwrite" || called == "binary_write"
-        ? std::string_view { "write" }
-        : called == "hex_read" ? std::string_view { "hread" }
-        : called == "octal_read" ? std::string_view { "oread" }
-        : called == "hex_write" ? std::string_view { "hwrite" }
-        : called == "octal_write" ? std::string_view { "owrite" }
-                                   : called;
     const auto span = hir_source_span(call.source);
     const auto fail = [&](std::string code, std::string message) {
         report(std::move(code), std::move(message), span);
         return true;
     };
-    if (name == "sread"
-        && vhdl_standard_ < frontend::VhdlStandard::Vhdl2008) {
-        return fail("FSIM-ELAB-VHSTD-001",
-            "TextIO SREAD and STRING_READ require VHDL-2008");
-    }
-    if ((name == "hread" || name == "oread" || name == "hwrite"
-            || name == "owrite")
-        && vhdl_standard_ < frontend::VhdlStandard::Vhdl2008) {
-        return fail("FSIM-ELAB-VHSTD-001",
-            "TextIO HREAD, OREAD, HWRITE, and OWRITE require VHDL-2008");
-    }
-    if ((called == "bread" || called == "binary_read" || called == "bwrite"
-            || called == "binary_write")
-        && vhdl_standard_ < frontend::VhdlStandard::Vhdl2008) {
-        return fail("FSIM-ELAB-VHSTD-001",
-            "TextIO BREAD, BWRITE, BINARY_READ, and BINARY_WRITE require "
-            "VHDL-2008");
-    }
     const auto actual = [&](const std::string_view formal,
                             const std::size_t position)
         -> std::optional<semantic::ExpressionId> {
@@ -3505,13 +3607,6 @@ bool Lowerer::lower_hir_vhdl_file_statement(
         }
         const auto subtype = hir_effective_vhdl_subtype(
             *declaration->vhdl->subtype);
-        if (subtype && !subtype->type_mark.target.valid()
-            && vhdl_simple_name(subtype->type_mark.spelling) == "text") {
-            // IEEE 1076-2008 16.4: std.textio.TEXT is a file of STRING.
-            semantic::vhdl::SubtypeIndication element;
-            element.domain = semantic::vhdl::ValueDomain::string;
-            return element;
-        }
         if (!subtype || !subtype->type_mark.target.valid()) {
             return std::nullopt;
         }
@@ -3536,8 +3631,9 @@ bool Lowerer::lower_hir_vhdl_file_statement(
         }
         const auto subtype = hir_effective_vhdl_subtype(
             *declaration->vhdl->subtype);
-        return subtype && !subtype->type_mark.target.valid()
-            && vhdl_simple_name(subtype->type_mark.spelling) == "text";
+        return subtype
+            && is_textio_text_type(
+                *specialized_hir_unit_, subtype->type_mark.target);
     };
     // READLINE, WRITELINE and TEE take a file of std.textio.TEXT (IEEE
     // 1076-2019 16.4); a file type declared `is file of string` is another
@@ -3558,6 +3654,12 @@ bool Lowerer::lower_hir_vhdl_file_statement(
             // gives OUTPUT, is that same host file (IEEE 1076-2008 16.4).
             const auto file = specialized_hir_unit_->find_declaration(
                 *declared);
+            if (file && file->vhdl != nullptr
+                && semantic::vhdl_native_is(*file->vhdl,
+                    semantic::VhdlNativePackage::std_textio,
+                    semantic::VhdlNativeName::output)) {
+                return true;
+            }
             if (!file || file->vhdl == nullptr
                 || file->vhdl->form != semantic::vhdl::DeclarationForm::file
                 || !file->vhdl->initializer) {
@@ -3568,15 +3670,7 @@ bool Lowerer::lower_hir_vhdl_file_statement(
                     *file->vhdl->initializer);
             return logical_name && *logical_name == "STD_OUTPUT";
         }
-        const auto expression = specialized_hir_unit_->find_expression(
-            value);
-        if (!expression || expression->vhdl == nullptr
-            || !expression->vhdl->referenced_name) {
-            return false;
-        }
-        const auto& referenced = *expression->vhdl->referenced_name;
-        const auto spelling = referenced.text();
-        return vhdl_simple_name(spelling) == "output";
+        return false;
     };
     enum class TextioScalarClass : std::uint8_t {
         unsupported,
@@ -3592,18 +3686,28 @@ bool Lowerer::lower_hir_vhdl_file_statement(
         logic9_scalar,
         logic9_vector,
     };
-    const auto logic9_class = [](const std::string_view type_name)
+    // The nearest native type of IEEE.STD_LOGIC_1164 on the subtype chain:
+    // STD_ULOGIC, STD_LOGIC and their ordinary subtypes (X01, UX01, ...)
+    // are scalars; STD_ULOGIC_VECTOR and STD_LOGIC_VECTOR are vectors.
+    const auto logic9_class = [&](const semantic::TypeId type)
         -> std::optional<TextioScalarClass> {
-        if (type_name == "std_ulogic" || type_name == "std_logic"
-            || type_name == "x01" || type_name == "x01z"
-            || type_name == "ux01" || type_name == "ux01z") {
+        const auto* entry
+            = semantic::vhdl_native_type_of(*specialized_hir_unit_, type);
+        if (entry == nullptr
+            || entry->package_id
+                != semantic::VhdlNativePackage::ieee_std_logic_1164) {
+            return std::nullopt;
+        }
+        switch (entry->name) {
+        case semantic::VhdlNativeName::std_ulogic:
+        case semantic::VhdlNativeName::std_logic:
             return TextioScalarClass::logic9_scalar;
-        }
-        if (type_name == "std_ulogic_vector"
-            || type_name == "std_logic_vector") {
+        case semantic::VhdlNativeName::std_ulogic_vector:
+        case semantic::VhdlNativeName::std_logic_vector:
             return TextioScalarClass::logic9_vector;
+        default:
+            return std::nullopt;
         }
-        return std::nullopt;
     };
     const auto textio_scalar_class = [&](const semantic::ExpressionId value) {
         if (hir_expression_is_string(value, hir_process_scope_)) {
@@ -3649,7 +3753,7 @@ bool Lowerer::lower_hir_vhdl_file_statement(
         if (subtype_name == "bit") {
             return TextioScalarClass::bit;
         }
-        if (const auto logic9 = logic9_class(subtype_name)) {
+        if (const auto logic9 = logic9_class(subtype->type_mark.target)) {
             return *logic9;
         }
         auto type_id = subtype->type_mark.target;
@@ -3667,9 +3771,6 @@ bool Lowerer::lower_hir_vhdl_file_statement(
             if (type_name == "bit_vector") {
                 return TextioScalarClass::bit_vector;
             }
-            if (const auto logic9 = logic9_class(type_name)) {
-                return *logic9;
-            }
             if (type->vhdl->form
                 == semantic::vhdl::TypeForm::enumeration) {
                 return TextioScalarClass::unsupported;
@@ -3686,9 +3787,6 @@ bool Lowerer::lower_hir_vhdl_file_statement(
             }
             if (base_name == "bit_vector") {
                 return TextioScalarClass::bit_vector;
-            }
-            if (const auto logic9 = logic9_class(base_name)) {
-                return *logic9;
             }
             type_id = type->vhdl->base.type_mark.target;
         }
@@ -4404,6 +4502,21 @@ bool Lowerer::lower_hir_vhdl_file_statement(
         }
         bool left_justify { };
         if (const auto justified = actual("justified", 2U)) {
+            // JUSTIFIED is a STD.TEXTIO SIDE literal.
+            const auto justified_subtype
+                = hir_vhdl_expression_subtype(*justified);
+            const auto* side = justified_subtype
+                ? semantic::vhdl_native_type_of(*specialized_hir_unit_,
+                      justified_subtype->type_mark.target)
+                : nullptr;
+            if (side == nullptr
+                || side->package_id
+                    != semantic::VhdlNativePackage::std_textio
+                || side->name != semantic::VhdlNativeName::side) {
+                return fail("FSIM-ELAB-VHTEXTIO-007",
+                    "bounded TextIO justification must be static left or "
+                    "right");
+            }
             const auto expression
                 = specialized_hir_unit_->find_expression(*justified);
             auto justification = expression && expression->vhdl != nullptr
@@ -4825,7 +4938,8 @@ bool Lowerer::lower_hir_vhdl_file_statement(
                 if (type->vhdl->form
                     == semantic::vhdl::TypeForm::enumeration) {
                     const auto name = vhdl_simple_name(type->vhdl->name);
-                    return name != "std_ulogic" && name != "std_logic"
+                    return !semantic::vhdl_native_logic9(
+                               *specialized_hir_unit_, type_id)
                         && name != "bit" && name != "boolean"
                         && name != "character";
                 }

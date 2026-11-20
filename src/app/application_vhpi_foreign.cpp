@@ -28,6 +28,7 @@
 #include "fsim/semantic/model.hpp"
 #include "fsim/semantic/vhdl_block_guard.hpp"
 #include "fsim/semantic/vhdl_hir.hpp"
+#include "fsim/semantic/vhdl_native_identity.hpp"
 
 #include <algorithm>
 #include <array>
@@ -533,10 +534,6 @@ struct Object final : Handle {
     std::optional<semantic::ExpressionId> bound_left;
     std::optional<semantic::ExpressionId> bound_right;
     bool entity_designator { };
-    // The function declaration of the resolution function RESOLVED that
-    // STD_LOGIC carries (IEEE 1076-2019 16.7, Figure 14): it has no
-    // declaration in the compiled HIR.
-    bool intrinsic_resolved { };
     // A predefined subprogram of STD.STANDARD (16.3): a pure function, or an
     // impure one (NOW), whose formals are constants or signals of mode in.
     bool predefined_subprogram { };
@@ -3716,8 +3713,9 @@ private:
             ? is_function_call(*expression)
             : (expression->kind == vhdl::ExpressionKind::unary
                   || expression->kind == vhdl::ExpressionKind::binary)
-                && expression->builtin_operator
-                    == vhdl::BuiltinOperatorIdentity::none
+                && (expression->builtin_operator
+                           == vhdl::BuiltinOperatorIdentity::none
+                       || is_native_declaration(callee_of(*expression)))
                 && callee_of(*expression) != nullptr;
         if (call
             && source_position(expression->source)
@@ -7899,6 +7897,7 @@ private:
         if (part != nullptr && conversion == nullptr) {
             const auto* const type = lookup_name(region, name);
             const bool function = standard_type(std::string { name }) == nullptr
+                && package_type(name) == nullptr
                 && (type == nullptr || !is_type(*type));
             conversion = conversion_object(region, name, function,
                 std::pair { TaggedChild::formal_conversion, lower(name) });
@@ -8633,7 +8632,8 @@ private:
                 return true;
             }
         }
-        return standard_type(expression.text) != nullptr;
+        return standard_type(expression.text) != nullptr
+            || package_type(expression.text) != nullptr;
     }
 
     // The object of an expression that is not a name or an integer literal:
@@ -9313,8 +9313,9 @@ private:
         // the normalization folded keeps its unfolded form).
         const bool predefined_operator
             = expression.kind != vhdl::ExpressionKind::call
-            && (expression.builtin_operator
-                    != vhdl::BuiltinOperatorIdentity::none
+            && ((expression.builtin_operator
+                        != vhdl::BuiltinOperatorIdentity::none
+                    && !is_native_declaration(callee_of(expression)))
                 || callee_of(expression) == nullptr);
         if (object.kind == vhpiFuncCallK && !predefined_operator) {
             const auto* const callee = callee_of(expression);
@@ -11850,7 +11851,7 @@ private:
         }
         case vhpiReturnType: {
             // The result type of a function declaration.
-            if (object->intrinsic_resolved || object->predefined_subprogram) {
+            if (object->predefined_subprogram) {
                 return object->type == nullptr ? nullptr
                                                : to_handle(object->type);
             }
@@ -12011,13 +12012,15 @@ private:
         case vhpiResolFunc: {
             // The resolution function of a subtype declaration (Figure 22),
             // or named in the subtype indication of a signal, port or signal
-            // parameter (6.3, Figure 14); the type mark STD_LOGIC carries the
-            // function RESOLVED (16.7).
+            // parameter (6.3, Figure 14); a subtype mark that is itself a
+            // resolved subtype (STD_LOGIC of the real IEEE.STD_LOGIC_1164)
+            // contributes its declared function.
             const vhdl::SubtypeIndication* indication = nullptr;
+            const auto has_function = [](const vhdl::SubtypeIndication& item) {
+                return item.resolution_function.selected
+                    || !item.resolution_function.overloads.empty();
+            };
             if (object->kind == vhpiSubtypeDeclK) {
-                if (is_std_logic(object)) {
-                    return to_handle(intrinsic_resolved());
-                }
                 if (object->declaration != nullptr
                     && object->declaration->subtype) {
                     indication = &*object->declaration->subtype;
@@ -12028,6 +12031,21 @@ private:
                 && object->declaration != nullptr
                 && object->declaration->subtype) {
                 indication = &*object->declaration->subtype;
+            }
+            if (indication != nullptr && !has_function(*indication)
+                && object->kind != vhpiSubtypeDeclK) {
+                // The resolution function of the subtype the type mark names.
+                indication = nullptr;
+                for (const auto* mark = object->type;
+                     mark != nullptr && mark->type_data != nullptr;
+                     mark = mark->type_data->parent) {
+                    if (mark->declaration != nullptr
+                        && mark->declaration->subtype
+                        && has_function(*mark->declaration->subtype)) {
+                        indication = &*mark->declaration->subtype;
+                        break;
+                    }
+                }
             }
             if (indication == nullptr) {
                 return nullptr;
@@ -12052,9 +12070,6 @@ private:
                         break;
                     }
                 }
-            }
-            if (declaration == nullptr && is_std_logic(object->type)) {
-                return to_handle(intrinsic_resolved());
             }
             return declaration == nullptr ? nullptr : to_handle(declaration);
         }
@@ -14142,42 +14157,29 @@ private:
         return width;
     }
 
-    // The function declaration of IEEE.STD_LOGIC_1164.RESOLVED, the
-    // resolution function of STD_LOGIC (IEEE 1076-2019 16.7:
-    // `function resolved (s : std_ulogic_vector) return std_ulogic`), which
-    // the compiled HIR does not retain: a pure function with one constant
-    // parameter, so `vhpiResolFunc` of an STD_LOGIC signal leads to a
-    // function declaration like any user-written resolution function
-    // (Figure 14).
-    [[nodiscard]] Object* intrinsic_resolved()
+    // Whether `declaration` is the native declaration of IEEE.STD_LOGIC_1164's
+    // STD_ULOGIC (IEEE 1076-2019 16.7), whose nine literals have the logic9
+    // storage: identified by native identity, never by spelling.
+    [[nodiscard]] static bool is_native_std_ulogic(
+        const vhdl::Declaration* const declaration) noexcept
     {
-        if (resolved_function_ != nullptr) {
-            return resolved_function_;
+        if (declaration == nullptr) {
+            return false;
         }
-        auto* const function = make_object(vhpiFuncDeclK, "RESOLVED", nullptr);
-        function->case_name = "resolved";
-        function->intrinsic_resolved = true;
-        function->full_name
-            = library_member_full_name("IEEE", "STD_LOGIC_1164", "RESOLVED");
-        function->full_case_name
-            = library_member_full_name("ieee", "std_logic_1164", "resolved");
-        function->type = standard_type("std_ulogic");
-        auto* const parameter = make_object(vhpiConstParamDeclK, "S", function);
-        parameter->case_name = "s";
-        parameter->full_name = function->full_name + ":S";
-        parameter->full_case_name = function->full_case_name + ":s";
-        parameter->type = standard_type("std_ulogic_vector");
-        function->lists[ListKind::param_decls].push_back(parameter);
-        resolved_function_ = function;
-        return function;
+        const auto* const entry = semantic::vhdl_native_of(*declaration);
+        return entry != nullptr && entry->kind == semantic::VhdlNativeKind::type
+            && entry->package_id
+            == semantic::VhdlNativePackage::ieee_std_logic_1164
+            && entry->name == semantic::VhdlNativeName::std_ulogic;
     }
 
-    // Whether a type is STD_LOGIC, which carries the function RESOLVED.
-    [[nodiscard]] static bool is_std_logic(const Object* const type) noexcept
+    // Whether `declaration` is a declaration of a precompiled standard
+    // package (native identity).
+    [[nodiscard]] static bool is_native_declaration(
+        const vhdl::Declaration* const declaration) noexcept
     {
-        return type != nullptr && type->type_data != nullptr
-            && type->type_data->resolved && same_name(type->name, "std_logic")
-            && type->type_data->library == "IEEE";
+        return declaration != nullptr
+            && semantic::vhdl_native_of(*declaration) != nullptr;
     }
 
     [[nodiscard]] Object* make_type(const vhpiClassKindT kind,
@@ -14196,8 +14198,8 @@ private:
         return object;
     }
 
-    // The predefined types of STD.STANDARD and IEEE.STD_LOGIC_1164
-    // (IEEE 1076-2019 16.3), which compiled HIR does not retain.
+    // The predefined types of STD.STANDARD (IEEE 1076-2019 16.3), which
+    // compiled HIR does not retain.
     [[nodiscard]] Object* standard_type(const std::string_view spelling)
     {
         const auto key = lower(spelling);
@@ -14327,24 +14329,6 @@ private:
             }
             type = enumeration("CHARACTER", std::move(literals),
                 Storage::enumeration, "std", "standard");
-        } else if (key == "std_ulogic" || key == "std_logic") {
-            type = enumeration("STD_ULOGIC",
-                { "'U'", "'X'", "'0'", "'1'", "'Z'", "'W'", "'L'", "'H'",
-                    "'-'" },
-                Storage::logic9, "ieee", "std_logic_1164");
-            if (key == "std_logic") {
-                auto* const base = type;
-                type = make_type(vhpiSubtypeDeclK, "std_logic", "ieee",
-                    "std_logic_1164");
-                *type->type_data = *base->type_data;
-                type->type_data->base = base;
-                type->type_data->parent = base;
-                type->type_data->library = "IEEE";
-                type->type_data->package = "STD_LOGIC_1164";
-                // STD_LOGIC is STD_ULOGIC with the resolution function
-                // RESOLVED (IEEE 1076-2019 16.7).
-                type->type_data->resolved = true;
-            }
         } else if (key == "real") {
             type = make_type(vhpiFloatTypeDeclK, "REAL", "std", "standard");
             type->type_data->storage = Storage::real;
@@ -14387,29 +14371,6 @@ private:
         } else if (key == "time_vector") {
             type = array("TIME_VECTOR", standard_type("time"), "std",
                 "standard", standard_type("natural"));
-        } else if (key == "std_ulogic_vector" || key == "std_logic_vector") {
-            type = array(upper(key), standard_type(
-                    key == "std_ulogic_vector" ? "std_ulogic" : "std_logic"),
-                "ieee", "std_logic_1164", standard_type("natural"));
-        } else if (key == "unresolved_unsigned" || key == "u_unsigned"
-            || key == "unresolved_signed" || key == "u_signed"
-            || key == "unsigned" || key == "signed") {
-            // IEEE.NUMERIC_STD (IEEE 1076-2019 16.8.5.1): the resolved
-            // subtypes have STD_LOGIC elements.
-            const bool is_signed = key.ends_with("signed")
-                && !key.ends_with("unsigned");
-            const bool resolved = key == "unsigned" || key == "signed";
-            type = array(resolved ? upper(key)
-                             : is_signed ? "UNRESOLVED_SIGNED"
-                                         : "UNRESOLVED_UNSIGNED",
-                standard_type(resolved ? "std_logic" : "std_ulogic"), "ieee",
-                "numeric_std", standard_type("natural"));
-        } else if (key == "numeric_bit.unsigned"
-            || key == "numeric_bit.signed") {
-            // IEEE.NUMERIC_BIT (16.8.5.1): arrays of BIT.
-            type = array(key == "numeric_bit.signed" ? "SIGNED" : "UNSIGNED",
-                standard_type("bit"), "ieee", "numeric_bit",
-                standard_type("natural"));
         }
         standard_types_.emplace(key, type);
         return type;
@@ -14610,6 +14571,13 @@ private:
             }
             data.storage = Storage::enumeration;
             data.width = enumeration_width(data.literals.size());
+            if (is_native_std_ulogic(
+                    hir_.find_declaration(definition.declaration))) {
+                // The nine values of IEEE.STD_LOGIC_1164.STD_ULOGIC are one
+                // logic value each (16.7).
+                data.storage = Storage::logic9;
+                data.width = 1U;
+            }
             data.range = Range { 0,
                 static_cast<std::int64_t>(data.literals.size()) - 1, false };
             break;
@@ -14824,10 +14792,8 @@ private:
                 == unit.declarations.end()) {
                 continue;
             }
-            return (same_name(unit.library, "std")
-                       && same_name(unit.name, "standard"))
-                || (same_name(unit.library, "ieee")
-                    && same_name(unit.name, "std_logic_1164"));
+            return same_name(unit.library, "std")
+                && same_name(unit.name, "standard");
         }
         return false;
     }
@@ -14852,14 +14818,11 @@ private:
         if (mark == nullptr) {
             // A predefined type may be bound without its declaration.
             std::string_view spelling = subtype.type_mark.spelling;
-            const bool numeric_bit = lower(spelling).find("numeric_bit.") != std::string::npos;
             if (const auto dot = spelling.rfind('.');
                 dot != std::string_view::npos) {
                 spelling.remove_prefix(dot + 1U);
             }
-            mark = numeric_bit
-                ? standard_type("numeric_bit." + lower(spelling))
-                : standard_type(spelling);
+            mark = standard_type(spelling);
             if (mark == nullptr) {
                 mark = package_type(subtype.type_mark.spelling);
             }
@@ -15718,9 +15681,6 @@ private:
             }
             break;
         case vhpiIsPureP:
-            if (object.intrinsic_resolved) {
-                return 1;
-            }
             if (object.predefined_subprogram) {
                 return object.predefined_impure ? 0 : 1;
             }
@@ -19742,7 +19702,6 @@ private:
     std::uint64_t transaction_token_ { };
     Object* root_ { };
     Object* tool_ { };
-    Object* resolved_function_ { };
     vhpiHandleT dispatching_ { };
     // The callback whose routine is running.
     vhpiHandleT current_callback_ { };

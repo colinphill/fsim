@@ -9,6 +9,7 @@
 #include "fsim/frontend/coverage_point_identity.hpp"
 #include "fsim/frontend/source.hpp"
 #include "fsim/semantic/compiled_design_normalization.hpp"
+#include "fsim/semantic/vhdl_native_intrinsics.hpp"
 #include "fsim/semantic/sva_plan.hpp"
 
 #include <array>
@@ -4554,15 +4555,17 @@ bool Lowerer::lower_hir_statement_unsuspended(
             }
         }
     }
+    // A CALL_PATH_VECTOR_PTR object holds the call path GET_CALL_PATH
+    // builds (IEEE 1076-2019 16.5.6), not a handle into an access heap.
+    if (is_hir_vhdl_environment_call_path_assignment(statement_id)) {
+        return lower_hir_vhdl_environment_call_path_assignment(
+            statement_id);
+    }
     if (is_hir_vhdl_access_assignment(statement_id)) {
         return lower_hir_vhdl_access_assignment(statement_id);
     }
     if (is_hir_vhdl_access_deallocation(statement_id)) {
         return lower_hir_vhdl_access_deallocation(statement_id);
-    }
-    if (is_hir_vhdl_environment_call_path_assignment(statement_id)) {
-        return lower_hir_vhdl_environment_call_path_assignment(
-            statement_id);
     }
     if (reject_hir_vhdl_access_signal_escape(statement_id)) {
         return true;
@@ -14006,7 +14009,12 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 && (!value_expression->vhdl->referenced_name
                     || (!value_expression->vhdl->referenced_name->selected
                         && value_expression->vhdl->referenced_name
-                               ->overloads.empty()));
+                               ->overloads.empty()
+                        // A function a projected package exports (VITAL,
+                        // Synopsys) has no HIR declaration to select.
+                        && !hir_resolver().vhdl_projected_package_member_visible(
+                            *value_expression->vhdl->referenced_name,
+                            value_expression->vhdl->scope)));
             if (target_enumeration && unresolved_literal) {
                 report(
                     "FSIM-ELAB-VHENUM-001",
@@ -14321,6 +14329,22 @@ bool Lowerer::lower_hir_statement_unsuspended(
                       if (target_root->first != source_root->first
                           || target_root->second
                               != source_root->second) {
+                          if (elaboration_detail::trace_lowering_failures()) {
+                              const auto name = [&](const semantic::TypeId id) {
+                                  const auto type
+                                      = specialized_hir_unit_->find_type(id);
+                                  return type && type->vhdl != nullptr
+                                      ? type->vhdl->name
+                                      : std::string { "?" };
+                              };
+                              std::cerr << "[fsim-hir-lower] assignment-root "
+                                           "target="
+                                        << target_root->second.value() << ':'
+                                        << name(target_root->second)
+                                        << " source="
+                                        << source_root->second.value() << ':'
+                                        << name(source_root->second) << '\n';
+                          }
                           return true;
                       }
                       if (target_root->first
@@ -14329,6 +14353,13 @@ bool Lowerer::lower_hir_statement_unsuspended(
                       }
                       const auto source_width = hir_expression_width(
                           source_id, hir_process_scope_);
+                      if (source_width && *source_width != *assignment_width
+                          && elaboration_detail::trace_lowering_failures()) {
+                          std::cerr << "[fsim-hir-lower] assignment-width "
+                                       "target="
+                                    << *assignment_width
+                                    << " source=" << *source_width << '\n';
+                      }
                       return source_width
                           && *source_width != *assignment_width;
                   };
@@ -17017,11 +17048,48 @@ bool Lowerer::lower_hir_statement_unsuspended(
                                 continue;
                             }
                         }
-                        const auto text = expression
+                        auto text = expression
                                 && expression->vhdl != nullptr
                             ? specialized_hir_unit_->evaluate_string_expression(
                                   choice)
                             : std::nullopt;
+                        // A call of an IEEE package operation with locally
+                        // static actuals is locally static (IEEE 1076-2019
+                        // 9.4.2 e), e.g. NUMERIC_STD's TO_UNSIGNED(42, 8):
+                        // its folded bits are the BIT or STD_ULOGIC element
+                        // literals.
+                        const auto ieee_operation = [&]() {
+                            const auto* entry
+                                = hir_vhdl_native_callee(choice);
+                            if (entry == nullptr) {
+                                return false;
+                            }
+                            using semantic::VhdlNativePackage;
+                            switch (entry->package_id) {
+                            case VhdlNativePackage::ieee_std_logic_1164:
+                            case VhdlNativePackage::ieee_numeric_bit:
+                            case VhdlNativePackage::ieee_numeric_std:
+                            case VhdlNativePackage::ieee_numeric_bit_unsigned:
+                            case VhdlNativePackage::ieee_numeric_std_unsigned:
+                                return true;
+                            default:
+                                return false;
+                            }
+                        };
+                        if (!text && user_array_characters && expression
+                            && expression->vhdl != nullptr
+                            && ieee_operation()) {
+                            const auto folded = specialized_hir_unit_
+                                ->evaluate_vhdl_constant_expression(choice);
+                            const auto* packed = folded
+                                ? std::get_if<
+                                      semantic::SpecializedHirVhdlPackedValue>(
+                                      &*folded)
+                                : nullptr;
+                            if (packed != nullptr) {
+                                text = packed->bits;
+                            }
+                        }
                         if (!text) {
                             report(
                                 "FSIM-ELAB-VHDLCASE-001",
@@ -19053,7 +19121,10 @@ bool Lowerer::lower_hir_statement_unsuspended(
             const bool string_literal = expression->vhdl != nullptr
                 && expression->vhdl->kind
                     == semantic::vhdl::ExpressionKind::string_literal;
-            if (!systemverilog && user_array_selector) {
+            // A matching case's choices were validated and are lowered as
+            // matching patterns (IEEE 1076-2019 10.9), not as the array
+            // choices encoded above.
+            if (!systemverilog && user_array_selector && !vhdl_matching) {
                 const auto found = user_array_choice_bits.find(choice.value());
                 if (found == user_array_choice_bits.end()) {
                     trace_case_failure("user-array-choice", choice);

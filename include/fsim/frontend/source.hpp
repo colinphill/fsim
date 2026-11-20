@@ -147,6 +147,10 @@ struct SourceSpan {
 struct SourceText {
   std::string name;
   std::string text;
+  // A VHDL comment that starts `-- psl` holds an embedded PSL directive.
+  // Off for the standard library artifacts' own sources, whose comments are
+  // plain comments (IEEE 1076-2019 15.9, 16).
+  bool vhdl_psl_comments { true };
 
   SourceText() = default;
   SourceText(std::string source_name, std::string source_text)

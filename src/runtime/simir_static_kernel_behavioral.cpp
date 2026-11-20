@@ -77,6 +77,16 @@ public:
             // Only while the failed operation's exception propagates.
         }
     }
+    /// The lent copy of `target`, when the operation has one.
+    [[nodiscard]] const std::string* lent(const KernelString& target) const noexcept
+    {
+        for (const auto& entry : entries_) {
+            if (entry.target == &target) {
+                return &entry.text;
+            }
+        }
+        return nullptr;
+    }
     [[nodiscard]] std::string& lend(KernelString& target)
     {
         for (auto& entry : entries_) {
@@ -3308,9 +3318,18 @@ struct Interpreter::Impl::StaticKernel::MemberContainerAccess final
         }
         return loan.lend(strings[id]);
     }
-    [[nodiscard]] const std::string& read_string(const StringRegisterId id) override
+    [[nodiscard]] std::string_view read_string(const StringRegisterId id) override
     {
-        return string(id);
+        // A register the operation has not written is read in place; one
+        // it has written reads the lent copy (its own write).
+        const auto& strings = kernel.members_[member].strings;
+        if (id >= strings.size()) {
+            kernel.fail(member, pc, "invalid string register ID");
+        }
+        if (const auto* copy = loan.lent(strings[id])) {
+            return *copy;
+        }
+        return strings[id].view();
     }
     /// The string registers the operation wrote take their values.
     void give_back() { loan.give_back(); }
@@ -3368,7 +3387,8 @@ public:
     }
     [[nodiscard]] const std::string& read_text(const StringRegisterId id) override
     {
-        return access_.read_string(id);
+        // DpiFrame reads a std::string: the register's lent copy.
+        return access_.string(id);
     }
     void write_text(const StringRegisterId id, std::string value) override
     {
@@ -3532,7 +3552,7 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                     {
                         base.write(id, std::move(packed));
                     }
-                    const std::string& read_string(const StringRegisterId id) override
+                    std::string_view read_string(const StringRegisterId id) override
                     {
                         return base.read_string(id);
                     }

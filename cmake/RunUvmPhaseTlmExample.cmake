@@ -51,10 +51,37 @@ function(run_stage)
   run_stage_with_error(ignored ${ARGN})
 endfunction()
 
+# FSIM_PHASE_TLM_PART selects one part of the matrix, so CTest runs the
+# parts side by side: `direct` (its own work directory), `compile` (the
+# fixture the optimization parts read the object of), `o0` or `o2`. Without
+# it, every stage runs in order.
+if(DEFINED FSIM_PHASE_TLM_PART
+    AND NOT FSIM_PHASE_TLM_PART MATCHES "^(direct|compile|o0|o2)$")
+  message(FATAL_ERROR
+    "FSIM_PHASE_TLM_PART must be direct, compile, o0 or o2")
+endif()
+function(fsim_phase_tlm_part_selected part result)
+  if(NOT DEFINED FSIM_PHASE_TLM_PART OR FSIM_PHASE_TLM_PART STREQUAL part)
+    set(${result} TRUE PARENT_SCOPE)
+  else()
+    set(${result} FALSE PARENT_SCOPE)
+  endif()
+endfunction()
+
 set(common "${FSIM_UVM_ROOT}" "${FSIM_WORK_DIR}" "${FSIM_RELEASE}")
-run_stage(direct ${common})
-run_stage(compile ${common})
+fsim_phase_tlm_part_selected(direct selected)
+if(selected)
+  run_stage(direct ${common})
+endif()
+fsim_phase_tlm_part_selected(compile selected)
+if(selected)
+  run_stage(compile ${common})
+endif()
 foreach(optimization IN ITEMS o0 o2)
+  fsim_phase_tlm_part_selected(${optimization} selected)
+  if(NOT selected)
+    continue()
+  endif()
   set(kernel_cache "${FSIM_WORK_DIR}/${optimization}/cache/static-kernel.sqlite3")
   # Only an ahead-of-time elaboration stores v4 kernel code in the
   # optimization's cache (make_config: <work>/<optimization>/cache;

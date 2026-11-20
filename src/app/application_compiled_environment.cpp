@@ -4,7 +4,10 @@
 #include "application_internal.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
+#include "fsim/semantic/compiled_design_vhdl_analysis_stamp.hpp"
 #include "fsim/support/path.hpp"
+#include "fsim/support/vhdl_identifier.hpp"
+#include "fsim/support/vhdl_standard_package_form.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -357,6 +360,8 @@ bool install_compiled_environment(CompilationWorkspace& checked,
     // Each object carries its compiler-owned VHDL package environment. The
     // request's copy supplies shared packages, while imported packages that
     // this request did not need remain available to its existing consumers.
+    // `dropped` names the imported packages whose copy the request's replaces.
+    std::vector<std::string> dropped;
     for (const auto& unit : imported.vhdl_hir.units()) {
         if (unit.standard_package_revision.empty())
             continue;
@@ -379,8 +384,18 @@ bool install_compiled_environment(CompilationWorkspace& checked,
                 vhdl_mixed_family_message(unit.standard, local->standard));
             return false;
         }
+        // A standard library artifact's revision names its standard (and
+        // so differs between the editions of one family); a projected
+        // package has one revision for all of them.
+        const bool revision_differs
+            = unit.standard_package_revision != local->standard_package_revision
+            && (same_standard
+                || unit.standard_package_form
+                    == support::VhdlStandardPackageForm::projection
+                || local->standard_package_form
+                    == support::VhdlStandardPackageForm::projection);
         if (unit.compatibility_profile != local->compatibility_profile
-            || unit.standard_package_revision != local->standard_package_revision
+            || revision_differs
             || (same_standard
                 && unit.predefined_environment.identity
                     != local->predefined_environment.identity)) {
@@ -392,6 +407,8 @@ bool install_compiled_environment(CompilationWorkspace& checked,
             return false;
         }
         std::erase(selected, unit.id);
+        dropped.push_back(support::ascii_lower(
+            std::string { library_name(unit.library) } + "." + unit.name));
     }
 
     // Re-analysis replaces a library unit (IEEE 1076-2008 13.5): imported
@@ -452,6 +469,15 @@ bool install_compiled_environment(CompilationWorkspace& checked,
         diagnostics.error("FSIM-SEM-0003",
             "cannot project compiled library environment: " + environment.error);
         return false;
+    }
+    // Units analyzed against a dropped copy are resolved again at the link.
+    semantic::unstamp_vhdl_units_anchored_to(*environment.design, dropped);
+    // An environment with no unit adds nothing: the request's design is
+    // already linked (link_mapped_compiled_designs).
+    if (environment.design->semantics.units().empty()
+        && environment.design->vhdl_hir.units().empty()
+        && environment.design->systemverilog_hir.units().empty()) {
+        return true;
     }
     std::vector<semantic::CompiledDesign> inputs;
     inputs.push_back(std::move(*environment.design));

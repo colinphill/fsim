@@ -8,6 +8,7 @@
 
 #include "fsim/elaboration/elaborator.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
+#include "fsim/semantic/vhdl_native_identity.hpp"
 
 #include <algorithm>
 #include <array>
@@ -3812,7 +3813,16 @@ private:
             || value.kind == semantic::vhdl::ExpressionKind::binary) {
             // A retained operator selection may only be a visible candidate.
             // Its result subtype is usable after matching the operand types.
-            return operator_result_subtype(value);
+            // Each operator is typed once: overload matching types its
+            // operands, and a nested operator chain would otherwise retype
+            // every operand once per visible overload at each level.
+            if (const auto found = operator_result_subtypes_.find(id.value());
+                found != operator_result_subtypes_.end()) {
+                return found->second;
+            }
+            auto result = operator_result_subtype(value);
+            operator_result_subtypes_.emplace(id.value(), result);
+            return result;
         }
         if (value.user_attribute_value) {
             return resolve_vhdl_user_attribute_subtype(
@@ -4562,8 +4572,15 @@ private:
                         .vhdl_enumeration_literals_declared_by(
                             *value.resolved_declaration);
                     if (!owners.empty()) {
-                        return { OperandClass::enumeration,
-                            "#" + std::to_string(owners.front().type->id.value()) };
+                        // Marked as a library type the way a declared
+                        // object's type is, so the two compare.
+                        const auto type = owners.front().type->id;
+                        auto root = "#" + std::to_string(type.value());
+                        if (const auto* definition = type_definition(type);
+                            definition != nullptr && library_type(*definition)) {
+                            root = "@" + root;
+                        }
+                        return { OperandClass::enumeration, root };
                     }
                 }
             }
@@ -6598,6 +6615,13 @@ private:
         if (candidates.empty()) {
             return;
         }
+        // A projected package (fixed_pkg, float_pkg, ...) exporting this
+        // name adds overloads the HIR does not declare, so no visible set
+        // here is complete enough to refute the call.
+        if (resolver.vhdl_projected_package_member_visible(
+                *expression.referenced_name, expression.scope)) {
+            return;
+        }
         std::vector<std::pair<std::string, semantic::ExpressionId>> actuals;
         for (std::size_t index { }; index < expression.operands.size(); ++index) {
             actuals.emplace_back(index < expression.argument_names.size()
@@ -6650,6 +6674,8 @@ private:
                 return false;
             }
             const auto& formals = body->vhdl->callable->formals;
+            const bool native_callee
+                = semantic::vhdl_native_of(*body->vhdl) != nullptr;
             const auto signal_name = [&](semantic::ExpressionId id) {
                 for (;;) {
                     const auto actual = specialization_.find_expression(id);
@@ -6666,9 +6692,17 @@ private:
                     }
                     if (actual->vhdl->kind
                             != semantic::vhdl::ExpressionKind::name
-                        || !actual->vhdl->referenced_name
-                        || !actual->vhdl->referenced_name->selected) {
+                        || !actual->vhdl->referenced_name) {
                         return false;
+                    }
+                    // A selected name of a record element (`rec.clk`, 8.3)
+                    // has no stored selection before gate BD D3. A native
+                    // IEEE callee (RISING_EDGE, FALLING_EDGE, 16.7) lowers
+                    // its signal operand itself and rejects any other
+                    // object (FSIM-ELAB-045); for every other callee the
+                    // name is not known to be a signal name.
+                    if (!actual->vhdl->referenced_name->selected) {
+                        return native_callee;
                     }
                     const auto declaration = specialization_.find_declaration(
                         *actual->vhdl->referenced_name->selected);
@@ -14313,6 +14347,8 @@ private:
     const semantic::vhdl::Unit& architecture_;
     std::unordered_set<std::uint32_t> relevant_types_;
     mutable std::optional<SelectedItems> selected_items_;
+    mutable std::unordered_map<std::uint32_t, std::optional<SubtypeIndication>>
+        operator_result_subtypes_;
     bool name_check_ { true };
     bool operator_check_ { true };
     bool names_only_ { };

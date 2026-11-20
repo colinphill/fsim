@@ -1392,6 +1392,51 @@ begin
 end architecture;
 )";
 }
+// The same design without `product <= lhs * rhs` (owner 11-19): NUMERIC_STD
+// "*" of two 8-bit operands is 16 bits wide (IEEE 1076-2019 16.8.5), so
+// vhdl_signed_source is rejected; this one keeps the other operators' values.
+vhdl_signed_without_product_source =
+    directory / "vhdl_signed_without_product.vhd";
+{
+  std::ofstream output(vhdl_signed_without_product_source);
+  output << R"(
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+
+entity vhdl_signed_app is
+end entity;
+
+architecture rtl of vhdl_signed_app is
+  signal lhs : signed(7 downto 0);
+  signal rhs : signed(7 downto 0);
+  signal sum : signed(7 downto 0);
+  signal difference : signed(7 downto 0);
+  signal quotient : signed(7 downto 0);
+  signal remainder : signed(7 downto 0);
+  signal modulo : signed(7 downto 0);
+  signal less : std_logic;
+  signal shifted_left : signed(7 downto 0);
+  signal shifted_right : signed(7 downto 0);
+  signal shifted_arithmetic : signed(7 downto 0);
+begin
+  lhs <= "11111011";
+  rhs <= "00000011";
+  calculate: process(lhs, rhs)
+  begin
+    sum <= lhs + rhs;
+    difference <= lhs - rhs;
+    quotient <= lhs / rhs;
+    remainder <= lhs rem rhs;
+    modulo <= lhs mod rhs;
+    less <= lhs < rhs;
+    shifted_left <= lhs sll 1;
+    shifted_right <= lhs srl 1;
+    shifted_arithmetic <= lhs sra 1;
+  end process;
+end architecture;
+)";
+}
 conditional_statement_source =
     directory / "conditional_statements.sv";
 {

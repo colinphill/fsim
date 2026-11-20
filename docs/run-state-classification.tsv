@@ -1898,7 +1898,6 @@ foreign.vhpi_live	stepped_at_	D	position in the VHPI cycle bookkeeping (14.7.5.3
 foreign.vhpi_live	initialized_	D	VHPI object tables and caches, rebuilt on demand; not saved
 foreign.vhpi_live	cycled_	D	VHPI object tables and caches, rebuilt on demand; not saved
 foreign.vhpi_live	companion_	D	VHPI object tables and caches, rebuilt on demand; not saved
-foreign.vhpi_live	resolved_function_	D	lazily built object for IEEE.STD_LOGIC_1164.RESOLVED
 foreign.vhpi_live	catalog_source_	Cfg	library catalog reader installed by the embedder
 foreign.vhpi_live	catalog_read_	D	lazy cache: libraries whose catalog was read
 foreign.vhpi_live	catalog_units_	D	lazy cache of catalog-only design units

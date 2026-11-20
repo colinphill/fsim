@@ -6,6 +6,8 @@
 #include "fsim/artifact/object.hpp"
 #include "fsim/library/artifact.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
+#include "application_standard_library_artifact_internal.hpp"
+#include "fsim/semantic/compiled_design_vhdl_analysis_stamp.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
@@ -442,16 +444,27 @@ bool load_required_mapped_libraries(
               }
               return standard;
           };
-    // Two dependency sets name the same packages at the same revisions and
-    // sources, whatever standard each was analyzed with.
+    // Two dependency sets name the same packages, each at one revision and
+    // source, whatever standard each was analyzed with. A package of a
+    // standard library artifact has a revision per edition (it names the
+    // edition and the digest of its sources): the editions of one family
+    // differ there, and the mapped libraries are each checked against this
+    // build's revisions (validate_vhdl_package_dependencies).
     const auto same_packages
         = [](const std::span<const library::VhdlPackageDependency> left,
               const std::span<const library::VhdlPackageDependency> right) {
               return std::ranges::equal(left, right,
                   [](const auto& first, const auto& second) {
-                      return support::ascii_lower(first.package)
-                          == support::ascii_lower(second.package)
-                          && first.revision == second.revision
+                      if (support::ascii_lower(first.package)
+                          != support::ascii_lower(second.package)) {
+                          return false;
+                      }
+                      if (is_standard_library_package_revision(first.revision)
+                          && is_standard_library_package_revision(
+                              second.revision)) {
+                          return true;
+                      }
+                      return first.revision == second.revision
                           && first.source_digest == second.source_digest;
                   });
           };
@@ -950,6 +963,28 @@ bool load_required_mapped_libraries(
                           "regenerate every .fsimlib with one VHDL standard "
                           "and this fsim build");
                 return false;
+            }
+            if (family_mix) {
+                // One copy of every package survives: the newest standard's.
+                // The units analyzed against the dropped copy are resolved
+                // again at the link.
+                const bool incoming_wins = standard > held;
+                std::vector<std::string> dropped;
+                for (const auto& dependency : incoming_wins
+                         ? vhdl_dependency_identity
+                         : metadata->vhdl_package_dependencies) {
+                    dropped.push_back(
+                        support::ascii_lower(dependency.package));
+                }
+                if (incoming_wins) {
+                    for (auto& earlier : checked.mapped_compiled_designs) {
+                        semantic::unstamp_vhdl_units_anchored_to(
+                            earlier, dropped);
+                    }
+                } else {
+                    semantic::unstamp_vhdl_units_anchored_to(
+                        *primary_bundle.design, dropped);
+                }
             }
             if (vhdl_dependency_identity.empty()
                 || (family_mix && standard > held)) {

@@ -6,6 +6,7 @@
 #include "fsim/library/source_mapping.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
+#include "fsim/semantic/compiled_design_vhdl_analysis_stamp.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
@@ -574,6 +575,8 @@ application_detail::load_object_workspace(
           return std::nullopt;
         }
         selected_bundle = std::move(reduced);
+        semantic::unstamp_vhdl_units_anchored_to(
+            *selected_bundle.design, omitted_packages);
       }
     }
     const auto [bundle, inserted] = compiled_bundle_indexes.try_emplace(

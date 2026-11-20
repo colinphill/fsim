@@ -933,3 +933,173 @@
 1993	numeric_std	type|signed	IEEE Std 1076-2008 6.3, 16.8	element-resolution subtype of the 2008 text; this standard declares SIGNED itself (see the rewrites table)
 2002	numeric_std	type|unsigned	IEEE Std 1076-2008 6.3, 16.8	element-resolution subtype of the 2008 text; this standard declares UNSIGNED itself (see the rewrites table)
 2002	numeric_std	type|signed	IEEE Std 1076-2008 6.3, 16.8	element-resolution subtype of the 2008 text; this standard declares SIGNED itself (see the rewrites table)
+# ---- STD library packages (std/textio.vhdl, std/env.vhdl of each derived tree) ----
+# Edition differences are taken from the 2019 text (16.4, 16.5 and Annex E list what 2019 adds) and from
+# the older editions' own clauses cited per row (1076-2008 16.4/16.5, 1076-2002/1076-1993 14.3, 1076-1987
+# 14.3). Older-edition citations are clause numbers, checked against those editions' texts before
+# gate BD build D2 commits.
+# ENDLINE (owner decision D2-Q2 11-19): IEEE Std 1076-1987 14.3 declares function ENDLINE(L: in LINE) return
+# BOOLEAN in package TEXTIO; it is absent from the 2019 text and added by an insert_text row of
+# scripts/vhdl_ieee_rewrites.tsv (fsim-authored text).
+1987	textio	type|line_vector	IEEE Std 1076-2019 16.4, 16.5.5	LINE_VECTOR was added by IEEE Std 1076-2019 (for DIRECTORY_ITEMS of ENV); not in the IEEE Std 1076-2008 16.4 text
+1987	textio	procedure|tee(text,line)	IEEE Std 1076-2008 16.4	TEE was added by IEEE Std 1076-2008 16.4; not in IEEE Std 1076-2002/1076-1993/1076-1987 14.3
+1993	textio	type|line_vector	IEEE Std 1076-2019 16.4, 16.5.5	LINE_VECTOR was added by IEEE Std 1076-2019 (for DIRECTORY_ITEMS of ENV); not in the IEEE Std 1076-2008 16.4 text
+1993	textio	procedure|tee(text,line)	IEEE Std 1076-2008 16.4	TEE was added by IEEE Std 1076-2008 16.4; not in IEEE Std 1076-2002/1076-1993/1076-1987 14.3
+2002	textio	type|line_vector	IEEE Std 1076-2019 16.4, 16.5.5	LINE_VECTOR was added by IEEE Std 1076-2019 (for DIRECTORY_ITEMS of ENV); not in the IEEE Std 1076-2008 16.4 text
+2002	textio	procedure|tee(text,line)	IEEE Std 1076-2008 16.4	TEE was added by IEEE Std 1076-2008 16.4; not in IEEE Std 1076-2002/1076-1993/1076-1987 14.3
+2008	textio	type|line_vector	IEEE Std 1076-2019 16.4, 16.5.5	LINE_VECTOR was added by IEEE Std 1076-2019 (for DIRECTORY_ITEMS of ENV); not in the IEEE Std 1076-2008 16.4 text
+1987	textio	function|justify(string,side,width)->string	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1987 14.3
+1987	textio	procedure|sread(line,string,natural)	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1987 14.3
+1987	textio	alias|string_read=sread [ line , string , natural ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1987 14.3
+1987	textio	alias|bread=read [ line , bit_vector , boolean ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1987 14.3
+1987	textio	alias|bread=read [ line , bit_vector ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1987 14.3
+1987	textio	alias|binary_read=read [ line , bit_vector , boolean ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1987 14.3
+1987	textio	alias|binary_read=read [ line , bit_vector ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1987 14.3
+1987	textio	procedure|oread(line,bit_vector,boolean)	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1987 14.3
+1987	textio	procedure|oread(line,bit_vector)	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1987 14.3
+1987	textio	alias|octal_read=oread [ line , bit_vector , boolean ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1987 14.3
+1987	textio	alias|octal_read=oread [ line , bit_vector ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1987 14.3
+1987	textio	procedure|hread(line,bit_vector,boolean)	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1987 14.3
+1987	textio	procedure|hread(line,bit_vector)	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1987 14.3
+1987	textio	alias|hex_read=hread [ line , bit_vector , boolean ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1987 14.3
+1987	textio	alias|hex_read=hread [ line , bit_vector ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1987 14.3
+1987	textio	procedure|write(line,real,string)	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1987 14.3
+1987	textio	alias|swrite=write [ line , string , side , width ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1987 14.3
+1987	textio	alias|string_write=write [ line , string , side , width ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1987 14.3
+1987	textio	alias|bwrite=write [ line , bit_vector , side , width ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1987 14.3
+1987	textio	alias|binary_write=write [ line , bit_vector , side , width ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1987 14.3
+1987	textio	procedure|owrite(line,bit_vector,side,width)	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1987 14.3
+1987	textio	alias|octal_write=owrite [ line , bit_vector , side , width ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1987 14.3
+1987	textio	procedure|hwrite(line,bit_vector,side,width)	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1987 14.3
+1987	textio	alias|hex_write=hwrite [ line , bit_vector , side , width ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1987 14.3
+1993	textio	function|justify(string,side,width)->string	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1993 14.3
+1993	textio	procedure|sread(line,string,natural)	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1993 14.3
+1993	textio	alias|string_read=sread [ line , string , natural ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1993 14.3
+1993	textio	alias|bread=read [ line , bit_vector , boolean ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1993 14.3
+1993	textio	alias|bread=read [ line , bit_vector ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1993 14.3
+1993	textio	alias|binary_read=read [ line , bit_vector , boolean ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1993 14.3
+1993	textio	alias|binary_read=read [ line , bit_vector ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1993 14.3
+1993	textio	procedure|oread(line,bit_vector,boolean)	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1993 14.3
+1993	textio	procedure|oread(line,bit_vector)	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1993 14.3
+1993	textio	alias|octal_read=oread [ line , bit_vector , boolean ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1993 14.3
+1993	textio	alias|octal_read=oread [ line , bit_vector ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1993 14.3
+1993	textio	procedure|hread(line,bit_vector,boolean)	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1993 14.3
+1993	textio	procedure|hread(line,bit_vector)	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1993 14.3
+1993	textio	alias|hex_read=hread [ line , bit_vector , boolean ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1993 14.3
+1993	textio	alias|hex_read=hread [ line , bit_vector ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1993 14.3
+1993	textio	procedure|write(line,real,string)	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1993 14.3
+1993	textio	alias|swrite=write [ line , string , side , width ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1993 14.3
+1993	textio	alias|string_write=write [ line , string , side , width ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1993 14.3
+1993	textio	alias|bwrite=write [ line , bit_vector , side , width ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1993 14.3
+1993	textio	alias|binary_write=write [ line , bit_vector , side , width ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1993 14.3
+1993	textio	procedure|owrite(line,bit_vector,side,width)	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1993 14.3
+1993	textio	alias|octal_write=owrite [ line , bit_vector , side , width ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1993 14.3
+1993	textio	procedure|hwrite(line,bit_vector,side,width)	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1993 14.3
+1993	textio	alias|hex_write=hwrite [ line , bit_vector , side , width ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-1993 14.3
+2002	textio	function|justify(string,side,width)->string	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-2002 14.3
+2002	textio	procedure|sread(line,string,natural)	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-2002 14.3
+2002	textio	alias|string_read=sread [ line , string , natural ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-2002 14.3
+2002	textio	alias|bread=read [ line , bit_vector , boolean ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-2002 14.3
+2002	textio	alias|bread=read [ line , bit_vector ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-2002 14.3
+2002	textio	alias|binary_read=read [ line , bit_vector , boolean ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-2002 14.3
+2002	textio	alias|binary_read=read [ line , bit_vector ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-2002 14.3
+2002	textio	procedure|oread(line,bit_vector,boolean)	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-2002 14.3
+2002	textio	procedure|oread(line,bit_vector)	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-2002 14.3
+2002	textio	alias|octal_read=oread [ line , bit_vector , boolean ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-2002 14.3
+2002	textio	alias|octal_read=oread [ line , bit_vector ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-2002 14.3
+2002	textio	procedure|hread(line,bit_vector,boolean)	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-2002 14.3
+2002	textio	procedure|hread(line,bit_vector)	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-2002 14.3
+2002	textio	alias|hex_read=hread [ line , bit_vector , boolean ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-2002 14.3
+2002	textio	alias|hex_read=hread [ line , bit_vector ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-2002 14.3
+2002	textio	procedure|write(line,real,string)	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-2002 14.3
+2002	textio	alias|swrite=write [ line , string , side , width ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-2002 14.3
+2002	textio	alias|string_write=write [ line , string , side , width ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-2002 14.3
+2002	textio	alias|bwrite=write [ line , bit_vector , side , width ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-2002 14.3
+2002	textio	alias|binary_write=write [ line , bit_vector , side , width ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-2002 14.3
+2002	textio	procedure|owrite(line,bit_vector,side,width)	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-2002 14.3
+2002	textio	alias|octal_write=owrite [ line , bit_vector , side , width ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-2002 14.3
+2002	textio	procedure|hwrite(line,bit_vector,side,width)	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-2002 14.3
+2002	textio	alias|hex_write=hwrite [ line , bit_vector , side , width ]	IEEE Std 1076-2008 16.4	added to package TEXTIO by IEEE Std 1076-2008; not in IEEE Std 1076-2002 14.3
+2008	env	use|use work . textio . all	IEEE Std 1076-2019 16.5.2	the context clause serves the LINE and LINE_VECTOR declarations of the 2019 ENV, which the 2008 ENV does not have; not in the IEEE Std 1076-2008 16.5 text
+2008	env	type|dayofweek	IEEE Std 1076-2019 16.5.4	Date and time API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	type|time_record	IEEE Std 1076-2019 16.5.4	Date and time API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|localtime()->time_record	IEEE Std 1076-2019 16.5.4	Date and time API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|gmtime()->time_record	IEEE Std 1076-2019 16.5.4	Date and time API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|epoch()->real	IEEE Std 1076-2019 16.5.4	Date and time API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|localtime(real)->time_record	IEEE Std 1076-2019 16.5.4	Date and time API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|gmtime(real)->time_record	IEEE Std 1076-2019 16.5.4	Date and time API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|epoch(time_record)->real	IEEE Std 1076-2019 16.5.4	Date and time API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|localtime(time_record)->time_record	IEEE Std 1076-2019 16.5.4	Date and time API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|gmtime(time_record)->time_record	IEEE Std 1076-2019 16.5.4	Date and time API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|"+"(time_record,real)->time_record	IEEE Std 1076-2019 16.5.4	Date and time API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|"+"(real,time_record)->time_record	IEEE Std 1076-2019 16.5.4	Date and time API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|"-"(time_record,real)->time_record	IEEE Std 1076-2019 16.5.4	Date and time API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|"-"(real,time_record)->time_record	IEEE Std 1076-2019 16.5.4	Date and time API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|"-"(time_record,time_record)->real	IEEE Std 1076-2019 16.5.4	Date and time API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|time_to_seconds(time)->real	IEEE Std 1076-2019 16.5.4	Date and time API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|seconds_to_time(real)->time	IEEE Std 1076-2019 16.5.4	Date and time API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|to_string(time_record,integer range 0 to 6)->string	IEEE Std 1076-2019 16.5.4	Date and time API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|getenv(string)->string	IEEE Std 1076-2019 16.5.6	Environment API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|getenv(string)->line	IEEE Std 1076-2019 16.5.6	Environment API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|vhdl_version()->string	IEEE Std 1076-2019 16.5.6	Environment API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|tool_type()->string	IEEE Std 1076-2019 16.5.6	Environment API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|tool_vendor()->string	IEEE Std 1076-2019 16.5.6	Environment API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|tool_name()->string	IEEE Std 1076-2019 16.5.6	Environment API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|tool_edition()->string	IEEE Std 1076-2019 16.5.6	Environment API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|tool_version()->string	IEEE Std 1076-2019 16.5.6	Environment API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	type|directory_items	IEEE Std 1076-2019 16.5.5	Directory API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	type|directory	IEEE Std 1076-2019 16.5.5	Directory API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	type|dir_open_status	IEEE Std 1076-2019 16.5.5	Directory API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	type|dir_create_status	IEEE Std 1076-2019 16.5.5	Directory API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	type|dir_delete_status	IEEE Std 1076-2019 16.5.5	Directory API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	type|file_delete_status	IEEE Std 1076-2019 16.5.5	Directory API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	procedure|dir_open(directory,string,dir_open_status)	IEEE Std 1076-2019 16.5.5	Directory API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|dir_open(directory,string)->dir_open_status	IEEE Std 1076-2019 16.5.5	Directory API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	procedure|dir_close(directory)	IEEE Std 1076-2019 16.5.5	Directory API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|dir_itemexists(string)->boolean	IEEE Std 1076-2019 16.5.5	Directory API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|dir_itemisdir(string)->boolean	IEEE Std 1076-2019 16.5.5	Directory API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|dir_itemisfile(string)->boolean	IEEE Std 1076-2019 16.5.5	Directory API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	procedure|dir_workingdir(string,dir_open_status)	IEEE Std 1076-2019 16.5.5	Directory API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|dir_workingdir(string)->dir_open_status	IEEE Std 1076-2019 16.5.5	Directory API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|dir_workingdir()->string	IEEE Std 1076-2019 16.5.5	Directory API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	procedure|dir_createdir(string,dir_create_status)	IEEE Std 1076-2019 16.5.5	Directory API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	procedure|dir_createdir(string,boolean,dir_create_status)	IEEE Std 1076-2019 16.5.5	Directory API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|dir_createdir(string,boolean)->dir_create_status	IEEE Std 1076-2019 16.5.5	Directory API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	procedure|dir_deletedir(string,dir_delete_status)	IEEE Std 1076-2019 16.5.5	Directory API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	procedure|dir_deletedir(string,boolean,dir_delete_status)	IEEE Std 1076-2019 16.5.5	Directory API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|dir_deletedir(string,boolean)->dir_delete_status	IEEE Std 1076-2019 16.5.5	Directory API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	procedure|dir_deletefile(string,file_delete_status)	IEEE Std 1076-2019 16.5.5	Directory API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|dir_deletefile(string)->file_delete_status	IEEE Std 1076-2019 16.5.5	Directory API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	constant|dir_separator	IEEE Std 1076-2019 16.5.5	Directory API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	type|call_path_element	IEEE Std 1076-2019 16.5.7	Current file and line API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|to_string(call_path_element)->string	IEEE Std 1076-2019 16.5.7	Current file and line API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	type|call_path_vector	IEEE Std 1076-2019 16.5.7	Current file and line API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|to_string(call_path_vector,string)->string	IEEE Std 1076-2019 16.5.7	Current file and line API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	type|call_path_vector_ptr	IEEE Std 1076-2019 16.5.7	Current file and line API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|to_string(call_path_vector_ptr,string)->string	IEEE Std 1076-2019 16.5.7	Current file and line API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|get_call_path()->call_path_vector_ptr	IEEE Std 1076-2019 16.5.7	Current file and line API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|file_name()->line	IEEE Std 1076-2019 16.5.7	Current file and line API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|file_name()->string	IEEE Std 1076-2019 16.5.7	Current file and line API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|file_path()->line	IEEE Std 1076-2019 16.5.7	Current file and line API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|file_path()->string	IEEE Std 1076-2019 16.5.7	Current file and line API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|file_line()->positive	IEEE Std 1076-2019 16.5.7	Current file and line API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|file_line()->string	IEEE Std 1076-2019 16.5.7	Current file and line API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|isvhdlassertfailed()->boolean	IEEE Std 1076-2019 16.5.9	Report and assert statement API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|isvhdlassertfailed(severity_level)->boolean	IEEE Std 1076-2019 16.5.9	Report and assert statement API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|getvhdlassertcount()->natural	IEEE Std 1076-2019 16.5.9	Report and assert statement API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|getvhdlassertcount(severity_level)->natural	IEEE Std 1076-2019 16.5.9	Report and assert statement API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	procedure|clearvhdlassert()	IEEE Std 1076-2019 16.5.9	Report and assert statement API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	procedure|setvhdlassertenable(boolean)	IEEE Std 1076-2019 16.5.9	Report and assert statement API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	procedure|setvhdlassertenable(severity_level,boolean)	IEEE Std 1076-2019 16.5.9	Report and assert statement API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|getvhdlassertenable(severity_level)->boolean	IEEE Std 1076-2019 16.5.9	Report and assert statement API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	procedure|setvhdlassertformat(severity_level,string)	IEEE Std 1076-2019 16.5.9	Report and assert statement API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	procedure|setvhdlassertformat(severity_level,string,boolean)	IEEE Std 1076-2019 16.5.9	Report and assert statement API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|getvhdlassertformat(severity_level)->string	IEEE Std 1076-2019 16.5.9	Report and assert statement API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	procedure|setvhdlreadseverity(severity_level)	IEEE Std 1076-2019 16.5.9	Report and assert statement API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|getvhdlreadseverity()->severity_level	IEEE Std 1076-2019 16.5.9	Report and assert statement API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|pslassertfailed()->boolean	IEEE Std 1076-2019 16.5.8	PSL API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|psliscovered()->boolean	IEEE Std 1076-2019 16.5.8	PSL API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	procedure|setpslcoverassert(boolean)	IEEE Std 1076-2019 16.5.8	PSL API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|getpslcoverassert()->boolean	IEEE Std 1076-2019 16.5.8	PSL API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	function|pslisassertcovered()->boolean	IEEE Std 1076-2019 16.5.8	PSL API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT
+2008	env	procedure|clearpslstate()	IEEE Std 1076-2019 16.5.8	PSL API item added by IEEE Std 1076-2019; IEEE Std 1076-2008 16.5 declares only STOP, FINISH and RESOLUTION_LIMIT

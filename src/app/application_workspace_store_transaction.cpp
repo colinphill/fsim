@@ -325,6 +325,10 @@ std::unique_ptr<LibraryTransaction> Store::begin_library(
     const std::string_view name, std::string& error) const
 {
     error.clear();
+    if (standard_library_name(name) && !standard_library_store_) {
+        error = standard_library_refusal(name, "compiled into");
+        return nullptr;
+    }
     const auto location = detail::locate_library(*this, name, true, error);
     if (!location)
         return nullptr;
@@ -344,6 +348,10 @@ bool Store::delete_artifact(const std::string_view name,
     const std::string_view artifact_id, std::string& error) const
 {
     error.clear();
+    if (standard_library_name(name)) {
+        error = standard_library_refusal(name, "changed");
+        return false;
+    }
     const auto location = detail::locate_library(*this, name, false, error);
     if (!location)
         return false;
@@ -375,6 +383,10 @@ bool Store::delete_artifact(const std::string_view name,
 bool Store::delete_library(const std::string_view name, std::string& error) const
 {
     error.clear();
+    if (standard_library_name(name)) {
+        error = standard_library_refusal(name, "deleted");
+        return false;
+    }
     if (!detail::ensure_directory(managed_directory(), error))
         return false;
     auto mapping_lock = detail::lock_directory(managed_directory() / ".mapping-lock", error);

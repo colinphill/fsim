@@ -126,8 +126,14 @@ direct-source records use `batch162-change15-direct-*`.
 
 Each exact-stage child installs a 6 GiB POSIX or Windows process-memory ceiling
 before reading governed source. The platform-neutral CMake runner limits every
-stage to 1,200 seconds and CTest limits each serial release matrix to 7,200
-seconds. The x64 C ABI contract freezes snapshot, record, activity, and host
+stage to 1,200 seconds and CTest limits each part of a release matrix to
+7,200 seconds. A release's matrix runs as four CTest parts side by side:
+`direct` in a work directory of its own, `compile` (the fixture that
+writes the object), then `o0` and `o2`, which elaborate and simulate that
+object. Measured 2026-11-19 on the Release build, the project-building parts
+peak at 2,131,448 KiB (UVM 1.2) and 2,533,720 KiB (UVM 2020-3.1), and every
+elaborate or simulate stage stays under 1,146,664 KiB, so the two building
+parts count as two CTest processors each. The x64 C ABI contract freezes snapshot, record, activity, and host
 table sizes/offsets plus the Windows `__cdecl` callback type.
 
 UVM 1.2 passes all ten bounded stages in 7:55.05 at 4,299,868 KiB maximum RSS;

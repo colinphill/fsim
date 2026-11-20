@@ -1849,9 +1849,11 @@ void test_vhdl_revision_expression_elaboration()
     assert(ambiguous.ok());
     const auto rejected = compile_and_elaborate(
         ambiguous.design, "vhdl:work.revision_ambiguity(rtl)");
+    // The bit-string literal's type is ambiguous between the overloads'
+    // formals (IEEE 1076-2019 12.5), reported before overload resolution.
     assert(
         !rejected.ok()
-        && has_diagnostic(rejected, "FSIM-ELAB-VHOVER-001"));
+        && has_diagnostic(rejected, "FSIM-ELAB-VHENUM-004"));
 
     const auto legacy_numeric = [&](const std::string_view package,
                                     const std::string_view entity,

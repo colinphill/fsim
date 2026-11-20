@@ -27,6 +27,11 @@ namespace application_detail {
 
 int handle_workspace_compile(const cli::Invocation&, const project::Config&,
     diagnostic::Engine&, std::ostream&, std::ostream&);
+// The build-time compile of one library of an edition's precompiled
+// standard libraries STD and IEEE (check_project_for_object's bootstrap).
+int compile_standard_library(const cli::Invocation&, const project::Config&,
+    diagnostic::Engine&, std::ostream&, std::ostream&,
+    frontend::VhdlStandard standard);
 int handle_workspace_elaborate(const cli::Invocation&, const project::Config&,
     diagnostic::Engine&, std::ostream&, std::ostream&);
 int handle_workspace_simulate(const cli::Invocation&, const project::Config&,

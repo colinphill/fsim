@@ -848,6 +848,9 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
       && group.compatibility_profile != vhdl_compatibility_profile()) {
       key.add("compatibility-profile", group.compatibility_profile);
   }
+  if (!group.vhdl_psl_comments) {
+      key.add("vhdl-psl-comments", "off");
+  }
   // VHDL definitions are conditional analysis identifiers (IEEE
   // 1076-2019 24.2).
   frontend::VhdlConditionalIdentifiers identifiers;
@@ -865,15 +868,14 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
       stable_cache_source_name(input.path, group.base_directory));
   key.add("input-content", source.content_digest);
   source.compilation_unit_digest = key.finish();
+  frontend::SourceText parse_source {
+      fsim::support::path_to_utf8(input.path), std::move(text) };
+  parse_source.vhdl_psl_comments = group.vhdl_psl_comments;
   snapshot.result = identifiers.empty()
       ? frontend::parse(
-            frontend::SourceText {
-                fsim::support::path_to_utf8(input.path), std::move(text) },
-            input.language, input.vhdl_standard)
+            std::move(parse_source), input.language, input.vhdl_standard)
       : frontend::parse_vhdl(
-            frontend::SourceText {
-                fsim::support::path_to_utf8(input.path), std::move(text) },
-            input.vhdl_standard, identifiers);
+            std::move(parse_source), input.vhdl_standard, identifiers);
   for (auto& unit : snapshot.result.design.units) {
       add_unit_file_to_digest(unit, group.base_directory);
       unit.library = input.library;

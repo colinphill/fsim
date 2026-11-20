@@ -67,8 +67,38 @@ endfunction()
 set(cases sv vhdl)
 set(sources_sv kernel_coverage.sv)
 set(top_sv kernel_coverage)
-set(sources_vhdl kernel_coverage.vhd)
+set(sources_vhdl kernel_coverage_resized.vhd)
 set(top_vhdl kernel_coverage_vhdl)
+
+# kernel_coverage.vhd assigns the 16-bit product UNSIGNED(d) * 13 + 7 to the
+# 8-bit d (IEEE 1076-2019 16.8.5): it is rejected with the length error
+# (owner 11-19); kernel_coverage_resized.vhd is the positive case.
+set(case_dir "${workspace}/vhdl_rejected")
+file(MAKE_DIRECTORY "${case_dir}")
+file(COPY_FILE "${FSIM_FIXTURE_DIR}/kernel_coverage.vhd"
+  "${case_dir}/kernel_coverage.vhd")
+execute_process(
+  COMMAND "${FSIM_EXECUTABLE}" compile -q --code-coverage --standard 2008
+    kernel_coverage.vhd
+  WORKING_DIRECTORY "${case_dir}"
+  RESULT_VARIABLE rejected_result
+  OUTPUT_VARIABLE rejected_output
+  ERROR_VARIABLE rejected_output)
+if("${rejected_result}" STREQUAL "0")
+  execute_process(
+    COMMAND "${FSIM_EXECUTABLE}" elaborate -q --top kernel_coverage_vhdl
+      --code-coverage
+    WORKING_DIRECTORY "${case_dir}"
+    RESULT_VARIABLE rejected_result
+    OUTPUT_VARIABLE rejected_output
+    ERROR_VARIABLE rejected_output)
+endif()
+if("${rejected_result}" STREQUAL "0"
+    OR NOT rejected_output MATCHES "error\\[FSIM-ELAB-VHARRAY-006\\]")
+  message(FATAL_ERROR
+    "kernel_coverage.vhd was not rejected with FSIM-ELAB-VHARRAY-006\n"
+    "${rejected_output}\nworkspace: ${case_dir}")
+endif()
 
 foreach(case_name IN LISTS cases)
   set(case_dir "${workspace}/${case_name}")

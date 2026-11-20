@@ -6,3 +6,9 @@
 # check.
 2008	fixed_pkg	FSIM-VHDL-UNSUPPORTED-022	package instantiation `package fixed_pkg is new ieee.fixed_generic_pkg generic map (...)` in a project source is not supported (the 2019 original fails the same way)
 2008	float_pkg	FSIM-VHDL-UNSUPPORTED-022	package instantiation `package float_pkg is new ieee.float_generic_pkg generic map (...)` in a project source is not supported (the 2019 original fails the same way)
+1987	textio	FSIM-FE-VHDECL-004	native subprograms (fsim implements them, IEEE 1076-2019 16.4/16.5): the derived text has no body for them, so a user-library analysis rightly fails 4.7; the build-time precompile binds them as natives (owner 11-19)
+1993	textio	FSIM-FE-VHDECL-004	native subprograms (fsim implements them, IEEE 1076-2019 16.4/16.5): the derived text has no body for them, so a user-library analysis rightly fails 4.7; the build-time precompile binds them as natives (owner 11-19)
+2002	textio	FSIM-FE-VHDECL-004	native subprograms (fsim implements them, IEEE 1076-2019 16.4/16.5): the derived text has no body for them, so a user-library analysis rightly fails 4.7; the build-time precompile binds them as natives (owner 11-19)
+2002	textio-2000	FSIM-FE-VHDECL-004	native subprograms (fsim implements them, IEEE 1076-2019 16.4/16.5): the derived text has no body for them, so a user-library analysis rightly fails 4.7; the build-time precompile binds them as natives (owner 11-19)
+2008	env	FSIM-FE-VHDECL-004	native subprograms (fsim implements them, IEEE 1076-2019 16.4/16.5): the derived text has no body for them, so a user-library analysis rightly fails 4.7; the build-time precompile binds them as natives (owner 11-19)
+2008	textio	FSIM-FE-VHDECL-004	native subprograms (fsim implements them, IEEE 1076-2019 16.4/16.5): the derived text has no body for them, so a user-library analysis rightly fails 4.7; the build-time precompile binds them as natives (owner 11-19)

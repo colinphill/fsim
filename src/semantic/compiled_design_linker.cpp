@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "fsim/semantic/vhdl_native_identity.hpp"
 #include "fsim/semantic/compiled_design_vhdl_analysis_stamp.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
 
@@ -793,13 +794,15 @@ ModelRecords project_model_records(
     UdpPredicate select_udp,
     Projection& projection)
 {
-    const auto input = design.semantics.records();
+    // The model's records, read in place: copying all of them made every
+    // projection pay for the whole design (gate BD D2 compile time).
+    const auto& input = design.semantics;
     ModelRecords output;
-    output.units = select_records(input.units, projection.unit,
+    output.units = select_records(input.units(), projection.unit,
         [&](const Unit& unit) {
             return select_unit(unit);
         });
-    output.scopes = select_records(input.scopes, projection.scope,
+    output.scopes = select_records(input.scopes(), projection.scope,
         [&](const Scope& scope) {
             return retained(scope.unit, projection) && select_scope(scope);
         });
@@ -807,21 +810,21 @@ ModelRecords project_model_records(
         return retained(record.scope, projection);
     };
     output.types = select_records(
-        input.types, projection.type, retained_scope);
+        input.types(), projection.type, retained_scope);
     output.values = select_records(
-        input.values, projection.value, retained_scope);
+        input.values(), projection.value, retained_scope);
     output.instances = select_records(
-        input.instances, projection.instance, retained_scope);
+        input.instances(), projection.instance, retained_scope);
     output.declarations = select_records(
-        input.declarations, projection.declaration, retained_scope);
+        input.declarations(), projection.declaration, retained_scope);
     output.expression_identities = select_records(
-        input.expression_identities, projection.expression,
+        input.expression_identities(), projection.expression,
         retained_scope);
     output.statement_identities = select_records(
-        input.statement_identities, projection.statement,
+        input.statement_identities(), projection.statement,
         retained_scope);
     output.process_identities = select_records(
-        input.process_identities, projection.process,
+        input.process_identities(), projection.process,
         retained_scope);
 
     RetainedProvenance retained_provenance;
@@ -940,7 +943,7 @@ ModelRecords project_model_records(
         },
         retained_provenance);
     if (select_auxiliary_library("std")) {
-        for (const auto& source : input.source_files) {
+        for (const auto& source : input.source_files()) {
             const auto path = std::filesystem::path {
                 source.physical_name
             };
@@ -957,10 +960,10 @@ ModelRecords project_model_records(
     while (changed) {
         changed = false;
         for (const auto source : retained_provenance.source_spans) {
-            if (source >= input.source_spans.size()) {
+            if (source >= input.source_spans().size()) {
                 continue;
             }
-            const auto& span = input.source_spans[source];
+            const auto& span = input.source_spans()[source];
             if (span.file.valid()
                 && retained_provenance.source_files
                        .insert(span.file.value()).second) {
@@ -973,10 +976,10 @@ ModelRecords project_model_records(
             }
         }
         for (const auto origin : retained_provenance.origins) {
-            if (origin >= input.origins.size()) {
+            if (origin >= input.origins().size()) {
                 continue;
             }
-            const auto& record = input.origins[origin];
+            const auto& record = input.origins()[origin];
             if (record.source.valid()
                 && retained_provenance.source_spans
                        .insert(record.source.value()).second) {
@@ -989,10 +992,10 @@ ModelRecords project_model_records(
             }
         }
         for (const auto expansion : retained_provenance.expansions) {
-            if (expansion >= input.expansions.size()) {
+            if (expansion >= input.expansions().size()) {
                 continue;
             }
-            const auto& record = input.expansions[expansion];
+            const auto& record = input.expansions()[expansion];
             if (record.parent && record.parent->valid()
                 && retained_provenance.expansions
                        .insert(record.parent->value()).second) {
@@ -1000,22 +1003,22 @@ ModelRecords project_model_records(
             }
         }
     }
-    output.source_files = select_records(input.source_files,
+    output.source_files = select_records(input.source_files(),
         projection.source_file, [&](const SourceFile& record) {
             return retained_provenance.source_files.contains(
                 record.id.value());
         });
-    output.expansions = select_records(input.expansions,
+    output.expansions = select_records(input.expansions(),
         projection.expansion, [&](const Expansion& record) {
             return retained_provenance.expansions.contains(
                 record.id.value());
         });
-    output.source_spans = select_records(input.source_spans,
+    output.source_spans = select_records(input.source_spans(),
         projection.source_span, [&](const SourceSpan& record) {
             return retained_provenance.source_spans.contains(
                 record.id.value());
         });
-    output.origins = select_records(input.origins,
+    output.origins = select_records(input.origins(),
         projection.origin, [&](const Origin& record) {
             return retained_provenance.origins.contains(
                 record.id.value());
@@ -1192,42 +1195,59 @@ CompiledLinkResult consume_or_project_compiled_design(
     return { std::move(design), { } };
 }
 
+// Copies only the retained elements: a projection usually keeps a small
+// part of the design (one object's units), and copying the whole HIR first
+// made every projection pay for every unit (gate BD D2 compile time).
+template <typename Element, typename Keep>
+void copy_retained(std::vector<Element>& output,
+    const std::vector<Element>& input, const Keep& keep)
+{
+    output.reserve(static_cast<std::size_t>(
+        std::ranges::count_if(input, keep)));
+    for (const auto& element : input) {
+        if (keep(element)) {
+            output.push_back(element);
+        }
+    }
+}
+
 vhdl::Hir project_hir(
     const vhdl::Hir& input,
     const Projection& projection)
 {
-    auto output = input;
-    std::erase_if(output.mutable_units(),
+    vhdl::Hir output;
+    output.continue_revision_of(input);
+    copy_retained(output.mutable_units(), input.units(),
         [&](const vhdl::Unit& unit) {
-            return !retained(unit.id, projection);
+            return retained(unit.id, projection);
         });
-    std::erase_if(output.mutable_declarations(),
+    copy_retained(output.mutable_declarations(), input.declarations(),
         [&](const vhdl::Declaration& declaration) {
-            return !retained(declaration.id, projection);
+            return retained(declaration.id, projection);
         });
-    std::erase_if(output.mutable_types(),
+    copy_retained(output.mutable_types(), input.types(),
         [&](const vhdl::TypeDefinition& type) {
-            return !retained(type.id, projection);
+            return retained(type.id, projection);
         });
-    std::erase_if(output.mutable_overload_sets(),
+    copy_retained(output.mutable_overload_sets(), input.overload_sets(),
         [&](const vhdl::OverloadSet& overload) {
-            return !retained(overload.scope, projection);
+            return retained(overload.scope, projection);
         });
-    std::erase_if(output.mutable_expressions(),
+    copy_retained(output.mutable_expressions(), input.expressions(),
         [&](const vhdl::Expression& expression) {
-            return !retained(expression.id, projection);
+            return retained(expression.id, projection);
         });
-    std::erase_if(output.mutable_statements(),
+    copy_retained(output.mutable_statements(), input.statements(),
         [&](const vhdl::Statement& statement) {
-            return !retained(statement.id, projection);
+            return retained(statement.id, projection);
         });
-    std::erase_if(output.mutable_processes(),
+    copy_retained(output.mutable_processes(), input.processes(),
         [&](const vhdl::Process& process) {
-            return !retained(process.id, projection);
+            return retained(process.id, projection);
         });
-    std::erase_if(output.mutable_instances(),
+    copy_retained(output.mutable_instances(), input.instances(),
         [&](const vhdl::Instance& instance) {
-            return !retained(instance.id, projection);
+            return retained(instance.id, projection);
         });
     project(output.mutable_units(), projection);
     project(output.mutable_declarations(), projection);
@@ -1616,14 +1636,6 @@ using UnitKey = std::tuple<Language, UnitKind, std::string,
 
 using UnitDefinitions = std::map<UnitKey, bool>;
 
-std::string vhdl_link_name(
-    const std::string_view name, const bool extended = false)
-{
-    return extended || support::is_extended_vhdl_identifier(name)
-        ? std::string { name }
-        : support::ascii_lower(name);
-}
-
 std::string vhdl_reference_name(
     const std::string_view name, const bool extended = false)
 {
@@ -1649,13 +1661,15 @@ UnitKey unit_key(const CompiledDesign& design, const Unit& unit)
         ? std::ranges::find(
               design.vhdl_hir.units(), unit.id, &vhdl::Unit::id)
         : design.vhdl_hir.units().end();
+    // An extended identifier is distinct from every basic identifier
+    // (IEEE 1076-2008 15.4.3): `\ctx\` and `ctx` are two library units.
     const auto name = unit.language == Language::vhdl
-        ? vhdl_link_name(unit.name,
+        ? vhdl_reference_name(unit.name,
               vhdl_unit != design.vhdl_hir.units().end()
                   && vhdl_unit->extended_name)
         : unit.name;
     const auto secondary_name = unit.language == Language::vhdl
-        ? vhdl_link_name(unit.secondary_name,
+        ? vhdl_reference_name(unit.secondary_name,
               vhdl_unit != design.vhdl_hir.units().end()
                   && vhdl_unit->extended_primary_name)
         : unit.secondary_name;
@@ -2035,14 +2049,16 @@ void resolve_linked_vhdl_architecture_names(CompiledDesign& design)
             const auto unit_id
                 = design.semantics.scopes()[expression.scope.value()].unit;
             const auto unit = design.find_unit(unit_id);
-            if (!unit || unit->vhdl == nullptr
-                || unit->vhdl->kind != vhdl::UnitKind::architecture) {
+            // A name denotes the declarations visible where it is written
+            // (IEEE 1076-2008 12.3, 12.4), in a package, package body or
+            // entity as in an architecture: STD_ULOGIC's 'H' in a package
+            // constant is a declared literal of IEEE.STD_LOGIC_1164 (16.7),
+            // and TO_UNSIGNED in a package-body function is NUMERIC_STD's
+            // (gate BD D2).
+            if (!unit || unit->vhdl == nullptr) {
                 annotations.push_back(std::move(annotation));
                 continue;
             }
-            const auto retained_candidate = expression.referenced_name
-                && (expression.referenced_name->selected.has_value()
-                    || !expression.referenced_name->overloads.empty());
             const CompiledDesignResolver resolver { design, unit_id };
             auto synthetic_name = vhdl::Name { };
             synthetic_name.spelling = operation;
@@ -2053,13 +2069,23 @@ void resolve_linked_vhdl_architecture_names(CompiledDesign& design)
                 : synthetic_name;
             auto resolved = resolver.resolve_vhdl(
                 resolution_name, expression.scope);
+            // The operator is the native logical-operator family when every
+            // visible candidate is a native operator of that family
+            // (IEEE.STD_LOGIC_1164, IEEE.NUMERIC_STD): the kernel selects by
+            // operand shape. A user overload among the candidates leaves the
+            // ordinary overload path (IEEE 1076-2019 12.5).
             if (builtin_operator != vhdl::BuiltinOperatorIdentity::none
-                && !retained_candidate
-                && resolved.status
-                    == CompiledResolutionStatus::not_found
-                && resolved.candidates.empty()
-                && resolver.vhdl_builtin_package_member_imported("ieee",
-                    "std_logic_1164", operation, expression.scope)) {
+                && !resolved.candidates.empty()
+                && std::ranges::all_of(resolved.candidates,
+                    [&](const DeclarationId candidate) {
+                        const auto* declaration
+                            = design.vhdl_hir.find_declaration(candidate);
+                        const auto* entry = declaration == nullptr
+                            ? nullptr
+                            : vhdl_native_of(*declaration);
+                        return entry != nullptr
+                            && vhdl_native_operator(*entry) == builtin_operator;
+                    })) {
                 annotation.builtin_operator = builtin_operator;
             }
             if (expression.referenced_name) {
@@ -4485,9 +4511,23 @@ CompiledLinkResult extract_compiled_objects_impl(
                             && select_udp(declaration);
                     });
             }
+            // A unit of a precompiled standard library is a mapped
+            // library's unit, never carried by the objects that use it
+            // (IEEE 1076-2008 13.1: one definition per library unit).
+            const auto precompiled_standard_unit = [&] {
+                if (unit.language != Language::vhdl) {
+                    return false;
+                }
+                const auto found = std::ranges::find(
+                    design.vhdl_hir.units(), unit.id, &vhdl::Unit::id);
+                return found != design.vhdl_hir.units().end()
+                    && found->standard_package_form
+                        == support::VhdlStandardPackageForm::artifact;
+            };
             return std::ranges::find(units, unit.id) != units.end()
                 || std::ranges::find(class_owners, unit.id) != class_owners.end()
-                || supporting_library(unit.library);
+                || (supporting_library(unit.library)
+                    && !precompiled_standard_unit());
         }, supporting_library, select_scope, select_class,
         select_udp, "compiled-HIR catalog projection is structurally invalid",
         input_checked);

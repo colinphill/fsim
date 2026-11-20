@@ -1261,9 +1261,9 @@ begin
     Range_Order <= Forward_Order;
     Reverse_Order <= Backward_Order;
     Attribute_Aggregate <= Attribute_Local;
-    Attribute_Slice <=
+    Attribute_Slice <= std_logic_vector(
       Attribute_Local(
-        Logic_Bus_T'high downto Logic_Bus_T'high - 3);
+        Logic_Bus_T'high downto Logic_Bus_T'high - 3));
     Dynamic_Read <= Dynamic_Local(Dynamic_Index);
     Dynamic_Local(Dynamic_Index) := 'H';
     Dynamic_Local_Result <= Dynamic_Local;

@@ -6,6 +6,7 @@
 #include "fsim/support/expression_marker.hpp"
 #include "fsim/support/rare_vector.hpp"
 #include "fsim/support/symbol.hpp"
+#include "fsim/support/vhdl_standard_package_form.hpp"
 #include "fsim/support/vhdl_formal_conversion.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
 
@@ -968,6 +969,11 @@ struct Declaration {
     // or a basic identifier in its declared letter case. Empty when the
     // source spelling is already `name`.
     std::string spelling;
+    /// The native implementation of a declaration of a compiler-served
+    /// standard package (vhdl_native_intrinsics(): id - 1 indexes the
+    /// table), stamped when the standard library artifact is built; 0 for
+    /// every other declaration.
+    std::uint32_t native_intrinsic { };
 };
 
 struct OverloadSet {
@@ -1285,6 +1291,8 @@ struct Unit {
     std::string compatibility_profile;
     PredefinedEnvironment predefined_environment;
     std::string standard_package_revision;
+    /// How a compiler-served unit was made (none for user units).
+    support::VhdlStandardPackageForm standard_package_form { };
     std::vector<std::string> standard_package_declarations;
     std::vector<std::string> standard_package_operator_profiles;
     // False when parsing retained a recovery node for syntax unavailable in
@@ -1428,6 +1436,13 @@ public:
     [[nodiscard]] std::uint64_t revision() const noexcept
     {
         return revision_;
+    }
+
+    /// Continue the revision of `source` (the HIR this one is projected
+    /// from), so a projection never repeats a revision `source` had.
+    void continue_revision_of(const Hir& source) noexcept
+    {
+        revision_ = source.revision_;
     }
 
     [[nodiscard]] const std::vector<Unit>& units() const noexcept;

@@ -910,6 +910,23 @@ void ApplicationTestFixture::test_simulation_semantics()
     vhdl_signed_sources.files.push_back(vhdl_signed_source);
     vhdl_signed_config.source_sets.push_back(
         std::move(vhdl_signed_sources));
+    // NUMERIC_STD "*" of two 8-bit SIGNED values is 16 bits wide (IEEE
+    // 1076-2019 16.8.5): assigning it to an 8-bit signal is a length
+    // mismatch (owner 11-19: the fixture stays, the error is expected).
+    {
+        fsim::diagnostic::Engine rejected_diagnostics;
+        const auto rejected = fsim::app::build_project(
+            vhdl_signed_config, rejected_diagnostics);
+        assert(!rejected);
+        assert(std::ranges::any_of(rejected_diagnostics.diagnostics(),
+            [](const fsim::diagnostic::Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-ELAB-VHARRAY-006";
+            }));
+    }
+    vhdl_signed_config.source_sets.front().files = {
+        vhdl_signed_without_product_source };
+    vhdl_signed_config.build.cache_path
+        = directory / "vhdl-signed-without-product-cache";
     fsim::diagnostic::Engine vhdl_signed_diagnostics;
     auto vhdl_signed_reference_project = fsim::app::build_project(
         vhdl_signed_config, vhdl_signed_diagnostics);
@@ -934,7 +951,7 @@ void ApplicationTestFixture::test_simulation_semantics()
         vhdl_signed_hybrid.final_values
         == std::vector<std::string> {
             "11111011", "00000011", "11111110", "11111000",
-            "11110001", "11111111", "11111110", "00000001",
+            "11111111", "11111110", "00000001",
             "1", "11110110", "01111101", "11111101" }));
 
     auto conditional_statement_config = config;

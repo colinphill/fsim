@@ -4,11 +4,13 @@
 #include "application_workspace_internal.hpp"
 #include "application_workspace_selection.hpp"
 #include "application_sdf_vital_generics.hpp"
+#include "application_standard_library_artifact.hpp"
 
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/artifact/design.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
 #include "fsim/support/path.hpp"
+#include "fsim/support/vhdl_identifier.hpp"
 
 #include <algorithm>
 #include <sstream>
@@ -285,6 +287,12 @@ int handle_workspace_library(const cli::Invocation& invocation, const project::C
             output << library.name << '\t' << support::path_to_utf8(library.directory)
                    << (library.mapped ? "\tmapped" : "") << '\n';
         }
+        // The precompiled standard libraries, mapped into every workspace:
+        // one STD and IEEE per edition (read-only).
+        for (const auto& library : standard_library_locations()) {
+            output << library.name << '\t' << support::path_to_utf8(library.directory)
+                   << "\tstandard " << library.label << '\n';
+        }
         for (const auto& library : *exported) {
             output << library.name << '\t' << support::path_to_utf8(library.path)
                    << "\texported\n";
@@ -292,7 +300,41 @@ int handle_workspace_library(const cli::Invocation& invocation, const project::C
         return 0;
     }
     case cli::Command::library_objects: {
-        const auto catalog = store.read_library(name, error);
+        // STD and IEEE: the precompiled libraries of the selected edition
+        // (--standard, else the workspace's VHDL standard, else VHDL-2008).
+        std::optional<workspace::LibraryCatalog> catalog;
+        if (workspace::standard_library_name(name)) {
+            auto standard = frontend::VhdlStandard::Vhdl2008;
+            std::optional<project::VhdlStandard> selected;
+            if (invocation.standard) {
+                selected = project::parse_vhdl_standard(*invocation.standard);
+                if (!selected) {
+                    workspace_error(diagnostics,
+                        "unknown VHDL standard '" + *invocation.standard + "'");
+                    return 1;
+                }
+            } else {
+                for (const auto& source_set : config.source_sets) {
+                    if (source_set.language == project::Language::vhdl) {
+                        selected = project::parse_vhdl_standard(source_set.standard);
+                        if (selected) {
+                            break;
+                        }
+                    }
+                }
+            }
+            if (selected) {
+                standard = frontend_vhdl_standard(*selected);
+            }
+            const auto root = checked_standard_library_root(standard, diagnostics);
+            if (!root) {
+                return 1;
+            }
+            catalog = workspace::Store(*root, workspace::StandardLibraryStore { })
+                          .read_library(support::ascii_lower(name), error);
+        } else {
+            catalog = store.read_library(name, error);
+        }
         if (!catalog) {
             workspace_error(diagnostics, std::move(error));
             return 1;

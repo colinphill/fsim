@@ -246,7 +246,8 @@ relocated `.fsimlib` inputs rebuild the same semantic HIR from schema-27 owning
 units, while `.fsimdesign` restores the HIR directly beside semantic, DesignIR,
 and runtime payloads. Compiler-supplied IEEE package contents remain part of
 the standard-source digest set, and the explicit standard-library identity is
-`ieee-1076-2019-16a01232-vhdl-psl-wide-v2`; both whole-design and per-
+`vhdl-stdlib-artifacts-v1`, which also names the directory of the
+precompiled per-edition standard library artifacts; both whole-design and per-
 specialization native keys include it. A relocated design therefore receives
 fresh simulation-owned VHPI handles, then the existing name-based portable
 VHPI checkpoint flow verifies content/cache compatibility and remaps exported

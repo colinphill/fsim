@@ -125,6 +125,9 @@ struct CheckedProject : semantic::CompiledDesign {
     std::vector<CheckedSource> standard_sources;
     /// Lazily opened precompiled libraries in deterministic dependency order.
     std::vector<MappedLibrary> mapped_libraries;
+    // The precompiled STD/IEEE packages linked into this design (one entry
+    // per package declaration), recorded in the objects compiled from it.
+    std::vector<library::VhdlPackageDependency> precompiled_vhdl_package_dependencies;
     /// Explicit non-project objects in command-line declaration order.
     std::vector<ObjectProvenance> objects;
     SystemVerilogUvmProvenance systemverilog_uvm_provenance;

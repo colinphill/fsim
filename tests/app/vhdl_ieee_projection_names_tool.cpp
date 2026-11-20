@@ -100,9 +100,15 @@ int main(const int argc, const char* const argv[])
             // declarations (for instance the X01 subtypes of STD_LOGIC_1164).
             const auto& hir = checked->vhdl_hir;
             std::vector<std::string> declared;
+            // Declaration ids are not positions: a precompiled standard
+            // library's units keep their own ids in the linked design.
             for (const auto id : found->declarations) {
-                declared.push_back(fsim::support::ascii_lower(
-                    hir.declarations()[id.value()].name));
+                const auto* declaration = hir.find_declaration(id);
+                if (declaration == nullptr) {
+                    return 3;
+                }
+                declared.push_back(
+                    fsim::support::ascii_lower(declaration->name));
             }
             std::ranges::sort(declared);
             declared.erase(

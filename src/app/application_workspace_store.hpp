@@ -74,10 +74,24 @@ struct SnapshotRecord {
 class LibraryTransaction;
 class SnapshotTransaction;
 
+// Whether `name` is STD or IEEE (IEEE 1076-2019 13.2, 16): fsim's
+// precompiled standard libraries, which no workspace maps, compiles into or
+// changes (they are mapped into every workspace by default).
+[[nodiscard]] bool standard_library_name(std::string_view name) noexcept;
+// The message of refusing `action` on standard_library_name `name`.
+[[nodiscard]] std::string standard_library_refusal(
+    std::string_view name, std::string_view action);
+
+// The Store of an edition's precompiled standard libraries (their build-time
+// compile, src/tools/fsim_standard_library_builder.cpp, and their loading):
+// it holds STD and IEEE.
+struct StandardLibraryStore { };
+
 class Store final {
 public:
     // The caller supplies the current directory. No ancestor lookup occurs.
     explicit Store(std::filesystem::path workspace);
+    Store(std::filesystem::path workspace, StandardLibraryStore);
 
     [[nodiscard]] const std::filesystem::path& root() const;
     [[nodiscard]] std::filesystem::path managed_directory() const;
@@ -108,6 +122,7 @@ public:
 
 private:
     std::filesystem::path root_;
+    bool standard_library_store_ { false };
 };
 
 class LibraryTransaction final {

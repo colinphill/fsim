@@ -34,6 +34,7 @@
 #include "fsim/semantic/model.hpp"
 #include "fsim/semantic/systemverilog_hir.hpp"
 #include "fsim/semantic/vhdl_hir.hpp"
+#include "fsim/semantic/vhdl_native_identity.hpp"
 #include "fsim/support/index_distance.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
 #include "scoped_bindings.hpp"
@@ -1402,29 +1403,37 @@ PackedLogic4 character_string_value(const std::string_view text)
                     return std::nullopt;
                 }
                 std::string builtin;
-                const auto numeric_member
-                    = same_vhdl_identifier(
-                          definition->name, "unresolved_unsigned")
-                    ? std::string_view { "unsigned" }
-                    : same_vhdl_identifier(
-                          definition->name, "unresolved_signed")
-                    ? std::string_view { "signed" }
-                    : std::string_view { };
+                // UNSIGNED/SIGNED (or their unresolved base arrays) of
+                // IEEE.NUMERIC_STD: the native type declaration, not its name.
+                std::string_view numeric_member;
                 if (definition->array_dimensions.size() == 1U
                     && definition->element_subtype
                     && definition->element_subtype->domain
-                        == semantic::vhdl::ValueDomain::logic9
-                    && !numeric_member.empty()) {
+                        == semantic::vhdl::ValueDomain::logic9) {
                     const auto declaration = specialization.find_declaration(
                         definition->declaration);
-                    if (declaration && declaration->vhdl != nullptr
-                        && declaration->vhdl->scope.valid()) {
-                        if (specialization.design().vhdl_scope_in_package(
-                                declaration->vhdl->scope, "ieee",
-                                "numeric_std")) {
-                            builtin = "ieee.numeric_std."
-                                + std::string { numeric_member };
+                    const auto* entry = declaration
+                            && declaration->vhdl != nullptr
+                        ? semantic::vhdl_native_of(*declaration->vhdl)
+                        : nullptr;
+                    if (entry != nullptr
+                        && entry->package_id
+                            == semantic::VhdlNativePackage::ieee_numeric_std
+                        && entry->kind == semantic::VhdlNativeKind::type) {
+                        switch (semantic::vhdl_native_provided_type(*entry)) {
+                        case semantic::vhdl::ProvidedType::numeric_std_unsigned:
+                            numeric_member = "unsigned";
+                            break;
+                        case semantic::vhdl::ProvidedType::numeric_std_signed:
+                            numeric_member = "signed";
+                            break;
+                        default:
+                            break;
                         }
+                    }
+                    if (!numeric_member.empty()) {
+                        builtin = "ieee.numeric_std."
+                            + std::string { numeric_member };
                     }
                 }
                 return HirVhdlArraySegmentType {
@@ -1517,8 +1526,8 @@ PackedLogic4 character_string_value(const std::string_view text)
                 const auto declarations = specialization.design()
                     .vhdl_type_declarations_named(name);
                 const auto declarations_are_package_owned = [&] {
-                    return !declarations
-                        || std::ranges::all_of(
+                    return declarations && !declarations->empty()
+                        && std::ranges::all_of(
                             *declarations,
                             [&](const semantic::DeclarationId id) {
                                 const auto declaration
@@ -1528,28 +1537,15 @@ PackedLogic4 character_string_value(const std::string_view text)
                                     || !declaration->vhdl->scope.valid()) {
                                     return false;
                                 }
-                                return specialization.design()
-                                    .vhdl_scope_in_package(
-                                        declaration->vhdl->scope, "ieee",
-                                        "numeric_std");
+                                const auto* entry
+                                    = semantic::vhdl_native_of(*declaration->vhdl);
+                                return entry != nullptr
+                                    && entry->package_id
+                                        == semantic::VhdlNativePackage::
+                                            ieee_numeric_std;
                             });
                 };
-                bool package_member_visible { };
-                if (package.empty()) {
-                    package_member_visible
-                        = resolver.vhdl_builtin_package_member_imported(
-                            "ieee", "numeric_std", name, builtin_scope);
-                } else if (selected_numeric) {
-                    semantic::vhdl::Name standard_member;
-                    standard_member.spelling = std::string { package }
-                        + "." + std::string { name };
-                    standard_member.canonical = standard_member.spelling;
-                    package_member_visible
-                        = resolver.vhdl_standard_package_member_visible(
-                            standard_member, builtin_scope);
-                }
-                if (package_member_visible
-                    && declarations_are_package_owned()) {
+                if (declarations_are_package_owned()) {
                     return HirVhdlArraySegmentType {
                         { },
                         std::string { "ieee.numeric_std" } + "."
@@ -6759,71 +6755,6 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
         };
         return evaluate(evaluate, expression_id, 0U);
     };
-    const auto unshadowed_std_ulogic_index = [&](
-                                                 const semantic::vhdl::Name& name,
-                                                 const semantic::ScopeId use_scope) {
-        const auto spelling = name.text();
-        if (name.selected
-            || !same_vhdl_identifier(name.spelling, "std_ulogic")
-            || !same_vhdl_identifier(spelling, "std_ulogic")
-            || spelling.find_first_of(".:") != std::string_view::npos
-            || !use_scope.valid()
-            || !index_resolver.vhdl_builtin_type_visible(
-                spelling, use_scope)
-            || !index_resolver.vhdl_builtin_package_member_imported(
-                "ieee", "std_logic_1164", "std_ulogic", use_scope)
-            || index_resolver.resolve_vhdl_named_type(
-                spelling, use_scope)) {
-            return false;
-        }
-        semantic::vhdl::Name type_name;
-        type_name.spelling = name.spelling;
-        type_name.canonical = std::string { spelling };
-        const auto visible_type = index_resolver.resolve_vhdl(
-            type_name, use_scope,
-            [](const semantic::CompiledDeclarationView& candidate) {
-                if (candidate.vhdl == nullptr) {
-                    return false;
-                }
-                using Form = semantic::vhdl::DeclarationForm;
-                const auto form = candidate.vhdl->form;
-                return form == Form::type || form == Form::subtype
-                    || form == Form::generic_type
-                    || (form == Form::alias
-                        && candidate.vhdl->declared_type.has_value());
-            });
-        return visible_type.status
-            == semantic::CompiledResolutionStatus::not_found
-            && visible_type.candidates.empty();
-    };
-    const auto targetless_std_ulogic_literal = [&](
-                                                   const semantic::ExpressionId expression_id)
-        -> std::optional<std::int64_t> {
-        const auto expression
-            = specialized_hir_unit_->find_expression(expression_id);
-        if (!expression || expression->vhdl == nullptr) {
-            return std::nullopt;
-        }
-        const auto& value = *expression->vhdl;
-        const auto direct_character
-            = value.kind == semantic::vhdl::ExpressionKind::logic_literal
-            || value.kind == semantic::vhdl::ExpressionKind::name;
-        if (!direct_character || value.text.size() != 3U
-            || value.text.front() != '\'' || value.text.back() != '\''
-            || !value.nominal_type.empty()
-            || (value.referenced_name
-                && (value.referenced_name->selected
-                    || !value.referenced_name->overloads.empty()))) {
-            return std::nullopt;
-        }
-        constexpr std::string_view literal_order { "UX01ZWLH-" };
-        const auto ordinal = literal_order.find(value.text[1U]);
-        return ordinal == std::string_view::npos
-            ? std::nullopt
-            : std::optional {
-                  static_cast<std::int64_t>(ordinal)
-              };
-    };
     // The type mark `T` of `T'attribute` when `expression_id` is one of
     // `attributes` applied to a simple name; a mark without a resolved
     // name keeps its spelling.
@@ -6902,31 +6833,6 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
                 }
                 return std::nullopt;
             }
-        }
-        if (unshadowed_std_ulogic_index(
-                index_subtype, array_type_scope)) {
-            const auto expression
-                = specialized_hir_unit_->find_expression(expression_id);
-            const auto* value = expression && expression->vhdl != nullptr
-                ? expression->vhdl
-                : nullptr;
-            if (value != nullptr
-                && (value->kind
-                        == semantic::vhdl::ExpressionKind::logic_literal
-                    || (value->kind
-                            == semantic::vhdl::ExpressionKind::name
-                        && value->text.size() == 3U
-                        && value->text.front() == '\''))) {
-                return targetless_std_ulogic_literal(expression_id);
-            }
-            if (const auto mark = attribute_type_mark(
-                    expression_id, { "'left", "'right" });
-                mark
-                && same_vhdl_identifier(mark->spelling, "std_ulogic")
-                && unshadowed_std_ulogic_index(mark->name, mark->scope)) {
-                return hir_constant_integer(expression_id);
-            }
-            return std::nullopt;
         }
         // A character literal indexes a CHARACTER dimension by its
         // position (IEEE 1076-2008 16.3).
@@ -10848,7 +10754,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_standard_function(
             : source.source;
         report(
             "FSIM-ELAB-VHNUM-002",
-            std::string { profile.name }
+            std::string { profile.designator() }
                 + " requires a positive locally static result size "
                   "representable by SimIR",
             hir_source_span(size_source));
@@ -10859,11 +10765,11 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_standard_function(
             return std::nullopt;
         }
         using Kind = VhdlPslApiKind;
-        const auto kind = profile.name == "pslassertfailed"
+        const auto kind = profile.name == semantic::VhdlNativeName::pslassertfailed
             ? Kind::assert_failed
-            : profile.name == "psliscovered"
+            : profile.name == semantic::VhdlNativeName::psliscovered
             ? Kind::is_covered
-            : profile.name == "getpslcoverassert"
+            : profile.name == semantic::VhdlNativeName::getpslcoverassert
             ? Kind::get_cover_assert
             : Kind::is_assert_covered;
         const auto destination = allocate_register(
@@ -10883,7 +10789,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_standard_function(
         }
         const auto width = hir_expression_width(
             source.operands[0], hir_process_scope_);
-        const bool leftmost = profile.name == "find_leftmost";
+        const bool leftmost = profile.name == semantic::VhdlNativeName::find_leftmost;
         const auto subtype = hir_vhdl_expression_subtype(source.operands[0]);
         const auto effective = subtype
             ? hir_effective_vhdl_subtype(*subtype) : std::nullopt;
@@ -10905,7 +10811,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_standard_function(
         if (!width || !left) {
             report(
                 "FSIM-ELAB-VHNUM-002",
-                std::string { profile.name }
+                std::string { profile.designator() }
                     + " requires an argument with locally static bounds",
                 hir_source_span(source.source));
             return std::nullopt;
@@ -10924,7 +10830,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_standard_function(
             || register_domain(*wanted) != frontend::ValueDomain::Logic9) {
             report(
                 "FSIM-ELAB-VHLOGIC-002",
-                std::string { profile.name }
+                std::string { profile.designator() }
                     + " requires a standard-logic argument",
                 hir_source_span(source.source));
             return std::nullopt;
@@ -11219,7 +11125,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_standard_function(
     // numeric_std RESIZE).
     if (source_width && *source_width == 0U && profile.width != 0U
         && profile.kind == HirVhdlStandardFunctionKind::numeric_resize
-        && profile.name == "resize") {
+        && profile.name == semantic::VhdlNativeName::resize) {
         return load_constant(
             PackedLogic4::from_logic9_msb_string(
                 std::string(profile.width, '0')),
@@ -11227,9 +11133,9 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_standard_function(
     }
     if (source_width && *source_width == 0U
         && profile.kind == HirVhdlStandardFunctionKind::reduction) {
-        const bool identity = profile.name == "and_reduce"
-            || profile.name == "nor_reduce"
-            || profile.name == "xnor_reduce";
+        const bool identity = profile.projected == "and_reduce"
+            || profile.projected == "nor_reduce"
+            || profile.projected == "xnor_reduce";
         const auto destination = allocate_register(
             1U, frontend::ValueDomain::Logic9);
         process_.operations.emplace_back(LoadConstant {
@@ -11254,7 +11160,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_standard_function(
     }
     if (source_width && *source_width == 0U
         && profile.kind == HirVhdlStandardFunctionKind::logic_mapping
-        && profile.name == "to_01") {
+        && profile.name == semantic::VhdlNativeName::to_01) {
         const auto subtype = hir_vhdl_expression_subtype(source.operands[0]);
         const auto chain = subtype
             ? std::optional { hir_vhdl_subtype_chain(*subtype, source.scope) }
@@ -11288,7 +11194,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_standard_function(
                         == HirVhdlStandardFunctionKind::numeric_shift
                 ? "FSIM-ELAB-VHNUM-003"
                 : "FSIM-ELAB-VHLOGIC-002",
-            std::string { profile.name }
+            std::string { profile.designator() }
                 + " requires a nonempty bounded operand",
             hir_source_span(source.source));
         return std::nullopt;
@@ -11309,7 +11215,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_standard_function(
     if (profile.kind
         == HirVhdlStandardFunctionKind::numeric_to_integer) {
         auto signed_operand = hir_expression_signed(source.operands[0]);
-        if (profile.name == "conv_integer" && !signed_operand) {
+        if (profile.projected == "conv_integer" && !signed_operand) {
             const auto context = hir_vhdl_synopsys_numeric_context(
                 source.scope);
             signed_operand = context.signed_visible
@@ -11398,7 +11304,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_standard_function(
     if (profile.kind == HirVhdlStandardFunctionKind::numeric_resize) {
         const auto value_width = register_width(*value);
         auto resized = *value;
-        if (profile.name == "resize" && profile.signed_value
+        if (profile.name == semantic::VhdlNativeName::resize && profile.signed_value
             && profile.width != 0U && profile.width < value_width) {
             // A shortened SIGNED keeps its sign bit above the rightmost
             // NEW_SIZE-1 bits (IEEE 1076-2019 numeric_std RESIZE).
@@ -11423,7 +11329,20 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_standard_function(
         }
         // An integer that does not fit SIZE is truncated with a warning
         // (IEEE 1076-2008 16.8.5.3, NUMERIC_STD TO_UNSIGNED and TO_SIGNED).
-        if ((profile.name == "to_unsigned" || profile.name == "to_signed")
+        const auto* conversion_entry = [&]() -> const semantic::VhdlNativeIntrinsic* {
+            const auto callee = hir_referenced_declaration(expression_id);
+            const auto callee_declaration = callee
+                ? specialized_hir_unit_->find_declaration(*callee)
+                : std::nullopt;
+            return callee_declaration && callee_declaration->vhdl != nullptr
+                ? semantic::vhdl_native_of(*callee_declaration->vhdl)
+                : nullptr;
+        }();
+        const bool to_unsigned_call = conversion_entry != nullptr
+            && conversion_entry->name == semantic::VhdlNativeName::to_unsigned;
+        const bool to_signed_call = conversion_entry != nullptr
+            && conversion_entry->name == semantic::VhdlNativeName::to_signed;
+        if ((to_unsigned_call || to_signed_call)
             && register_domain(*value) == frontend::ValueDomain::Integer
             && profile.width != 0U && profile.width < value_width) {
             const auto restored = resize_register(
@@ -11434,7 +11353,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_standard_function(
                 BinaryOperator::equal, fits, *value, restored });
             process_.operations.emplace_back(Assert {
                 fits,
-                profile.name == "to_unsigned"
+                to_unsigned_call
                     ? "NUMERIC_STD.TO_UNSIGNED: vector truncated"
                     : "NUMERIC_STD.TO_SIGNED: vector truncated",
                 AssertionSeverity::warning,
@@ -11476,7 +11395,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_standard_function(
             left_greater, left, *other });
         const auto destination = allocate_register(
             profile.width, register_domain(left));
-        const bool maximum = profile.name == "maximum";
+        const bool maximum = profile.name == semantic::VhdlNativeName::maximum;
         process_.operations.emplace_back(ConditionalSelect {
             destination, left_greater,
             maximum ? left : *other,
@@ -11491,11 +11410,11 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_standard_function(
         if (!amount) {
             return std::nullopt;
         }
-        const auto operation = profile.name == "shift_left"
-                || profile.name == "shl"
+        const auto operation = profile.name == semantic::VhdlNativeName::shift_left
+                || profile.projected == "shl"
             ? "sll"
-            : profile.name == "rotate_left" ? "rol"
-            : profile.name == "rotate_right" ? "ror"
+            : profile.name == semantic::VhdlNativeName::rotate_left ? "rol"
+            : profile.name == semantic::VhdlNativeName::rotate_right ? "ror"
             : profile.signed_value ? "sra" : "srl";
         const auto destination = allocate_register(
             profile.width, profile.domain);
@@ -11591,7 +11510,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_standard_function(
             && register_domain(*value) != frontend::ValueDomain::Logic9) {
             report(
                 "FSIM-ELAB-VHLOGIC-002",
-                std::string { profile.name }
+                std::string { profile.designator() }
                     + " requires a bit or standard-logic operand",
                 hir_source_span(source.source));
             return std::nullopt;
@@ -11617,10 +11536,10 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_standard_function(
             return destination;
         };
         auto result = scalar(0U);
-        const auto and_family = profile.name == "and_reduce"
-            || profile.name == "nand_reduce";
+        const auto and_family = profile.projected == "and_reduce"
+            || profile.projected == "nand_reduce";
         const auto operation = and_family ? BinaryOperator::bit_and
-            : profile.name == "or_reduce" || profile.name == "nor_reduce"
+            : profile.projected == "or_reduce" || profile.projected == "nor_reduce"
             ? BinaryOperator::bit_or
             : BinaryOperator::bit_xor;
         for (std::size_t bit = 1U; bit < *source_width; ++bit) {
@@ -11630,8 +11549,8 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_standard_function(
                 operation, combined, result, scalar(bit) });
             result = combined;
         }
-        if (profile.name == "nand_reduce" || profile.name == "nor_reduce"
-            || profile.name == "xnor_reduce") {
+        if (profile.projected == "nand_reduce" || profile.projected == "nor_reduce"
+            || profile.projected == "xnor_reduce") {
             const auto negated = allocate_register(
                 1U, register_domain(result));
             process_.operations.emplace_back(UnaryNot { negated, result });
@@ -11652,7 +11571,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_standard_function(
     if (register_domain(*value) != frontend::ValueDomain::Logic9) {
         report(
             "FSIM-ELAB-VHLOGIC-002",
-            std::string { profile.name }
+            std::string { profile.designator() }
                 + " requires a standard-logic operand",
             hir_source_span(source.source));
         return std::nullopt;
@@ -11671,7 +11590,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_standard_function(
                            && *parsed != runtime::Logic9::one)) {
             report(
                 "FSIM-ELAB-VHLOGIC-003",
-                std::string { profile.name }
+                std::string { profile.designator() }
                     + " supports only a static bit xmap",
                 mapping && mapping->vhdl != nullptr
                     ? hir_source_span(mapping->vhdl->source)
@@ -11719,14 +11638,14 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_standard_function(
     };
     std::array<runtime::Logic9, 9U> table { };
     if (profile.kind == HirVhdlStandardFunctionKind::bit_conversion
-        || profile.name == "to_01") {
+        || profile.name == semantic::VhdlNativeName::to_01) {
         table.fill(xmap);
     } else {
         table.fill(runtime::Logic9::x);
-        if (profile.name == "to_x01z") {
+        if (profile.name == semantic::VhdlNativeName::to_x01z) {
             table[static_cast<std::size_t>(runtime::Logic9::z)]
                 = runtime::Logic9::z;
-        } else if (profile.name == "to_ux01") {
+        } else if (profile.name == semantic::VhdlNativeName::to_ux01) {
             table[static_cast<std::size_t>(runtime::Logic9::u)]
                 = runtime::Logic9::u;
         }
@@ -11764,7 +11683,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_standard_function(
         static_cast<std::uint32_t>(*source_width) });
     // TO_01 of a vector with any metavalue is XMAP in every element (IEEE
     // 1076-2008 16.7 STD_LOGIC_1164 and 16.8.5 NUMERIC_STD TO_01).
-    if (profile.name != "to_01") {
+    if (profile.name != semantic::VhdlNativeName::to_01) {
         return destination;
     }
     auto known = load_constant(unsigned_value(1U, 1U),
@@ -12506,12 +12425,6 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
         = lower_hir_vhdl_static_string_concatenation(
             expression_id, expected_width)) {
         return characters;
-    }
-    if (const auto math_constant
-        = hir_vhdl_math_real_constant(expression_id)) {
-        return load_constant(
-            unsigned_value(std::bit_cast<std::uint64_t>(*math_constant), 64U),
-            frontend::ValueDomain::Bit2);
     }
     // A static null array (`""`, an object of a null range) has no
     // elements and no storage to read (IEEE 1076-2008 5.3.2.2).
@@ -14687,6 +14600,42 @@ Lowerer::lower_hir_randomize_array(const semantic::ExpressionId operand,
     return held;
 }
 
+bool Lowerer::report_hir_vhdl_ambiguous_literal_within(
+    const semantic::ExpressionId expression_id)
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return false;
+    }
+    const auto find = [&](const auto& self, const semantic::ExpressionId id,
+                          const std::size_t depth)
+        -> std::optional<semantic::ExpressionId> {
+        const auto record = specialized_hir_unit_->find_expression(id);
+        if (!record || record->vhdl == nullptr || depth > 64U) {
+            return std::nullopt;
+        }
+        if (record->vhdl->ambiguous_literal) {
+            return id;
+        }
+        for (const auto operand : record->vhdl->operands) {
+            if (const auto found = self(self, operand, depth + 1U)) {
+                return found;
+            }
+        }
+        return std::nullopt;
+    };
+    const auto literal = find(find, expression_id, 0U);
+    if (!literal) {
+        return false;
+    }
+    const auto record = specialized_hir_unit_->find_expression(*literal);
+    report(
+        "FSIM-ELAB-VHENUM-004",
+        "literal " + record->vhdl->text
+            + " is ambiguous: it fits more than one overload of the call",
+        hir_source_span(record->vhdl->source));
+    return true;
+}
+
 std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
     const semantic::ExpressionId expression_id,
     const std::size_t expected_width,
@@ -14698,6 +14647,76 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
     }
+    // RISING_EDGE / FALLING_EDGE of IEEE.STD_LOGIC_1164 are recognized by
+    // the callee's native entry. The 2008 STD.STANDARD overloads for BIT and
+    // BOOLEAN have no declaration: a call with none and a BIT or BOOLEAN
+    // operand keeps the predefined path (IEEE 1076-2019 16.3).
+    enum class VhdlEdgeKind { rising, falling };
+    const auto hir_vhdl_edge_call
+        = [&](const semantic::ExpressionId call_id)
+        -> std::optional<VhdlEdgeKind> {
+        const auto call = specialized_hir_unit_->find_expression(call_id);
+        if (!call || call->vhdl == nullptr
+            || call->vhdl->kind != semantic::vhdl::ExpressionKind::call
+            || call->vhdl->operands.size() != 1U) {
+            return std::nullopt;
+        }
+        const auto callee = hir_referenced_declaration(call_id);
+        const auto callee_declaration = callee
+            ? specialized_hir_unit_->find_declaration(*callee)
+            : std::nullopt;
+        if (callee_declaration && callee_declaration->vhdl != nullptr) {
+            const auto* entry
+                = semantic::vhdl_native_of(*callee_declaration->vhdl);
+            if (entry == nullptr
+                || entry->package_id
+                    != semantic::VhdlNativePackage::ieee_std_logic_1164) {
+                return std::nullopt;
+            }
+            if (entry->name == semantic::VhdlNativeName::rising_edge) {
+                return VhdlEdgeKind::rising;
+            }
+            if (entry->name == semantic::VhdlNativeName::falling_edge) {
+                return VhdlEdgeKind::falling;
+            }
+            return std::nullopt;
+        }
+        if (callee) {
+            return std::nullopt;
+        }
+        const auto operand_subtype
+            = hir_vhdl_expression_subtype(call->vhdl->operands.front());
+        if (!operand_subtype) {
+            return std::nullopt;
+        }
+        std::string_view spelling = operand_subtype->type_mark.spelling;
+        auto type_id = operand_subtype->type_mark.target;
+        std::unordered_set<std::uint32_t> visited;
+        const support::VhdlStandardEnumeration* root
+            = support::find_vhdl_standard_enumeration(spelling);
+        while (root == nullptr && type_id.valid()
+            && visited.insert(type_id.value()).second) {
+            const auto type = specialized_hir_unit_->find_type(type_id);
+            if (!type || type->vhdl == nullptr
+                || (type->vhdl->form != semantic::vhdl::TypeForm::subtype
+                    && type->vhdl->form != semantic::vhdl::TypeForm::alias)) {
+                break;
+            }
+            spelling = type->vhdl->base.type_mark.spelling;
+            type_id = type->vhdl->base.type_mark.target;
+            root = support::find_vhdl_standard_enumeration(spelling);
+        }
+        if (root == nullptr
+            || !(same_vhdl_identifier(root->name, "bit")
+                || same_vhdl_identifier(root->name, "boolean"))) {
+            return std::nullopt;
+        }
+        return same_vhdl_identifier(call->vhdl->text, "rising_edge")
+            ? std::optional { VhdlEdgeKind::rising }
+            : same_vhdl_identifier(call->vhdl->text, "falling_edge")
+            ? std::optional { VhdlEdgeKind::falling }
+            : std::nullopt;
+    };
     // `ea[i].triggered` of an event array element (IEEE 1800-2023 15.5.3,
     // 7.4): a static array's elements are named events, selected by the
     // run-time index; the elements of an array local to a callable or a
@@ -14882,27 +14901,33 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             return (width && *width == 0U)
                 || vhdl_subtype_width(*subtype).value_or(1U) == 0U;
         };
-        const auto numeric_operand = [&](const semantic::ExpressionId operand) {
+        // UNSIGNED and SIGNED of IEEE.NUMERIC_STD / NUMERIC_BIT (and their
+        // unresolved forms), identified by the native type declaration, and
+        // the projected Synopsys IEEE.STD_LOGIC_ARITH UNSIGNED / SIGNED by
+        // the stamped provided type.
+        const auto native_numeric_vector = [&](const semantic::ExpressionId operand) {
             const auto subtype = hir_vhdl_expression_subtype(operand);
             if (!subtype) {
                 return false;
             }
-            const auto chain = hir_vhdl_subtype_chain(
-                *subtype, comparison->vhdl->scope);
-            for (const auto spelling :
-                { std::string_view { subtype->type_mark.spelling },
-                    std::string_view { chain.spelling } }) {
-                const auto name = simple_name_of(spelling);
-                for (const auto numeric :
-                    { "signed", "unsigned", "unresolved_signed",
-                        "unresolved_unsigned", "u_signed", "u_unsigned" }) {
-                    if (same_hir_identifier(name, numeric, true)) {
-                        return true;
-                    }
-                }
+            const auto* entry = subtype->type_mark.target.valid()
+                ? semantic::vhdl_native_type_of(
+                      *specialized_hir_unit_, subtype->type_mark.target)
+                : nullptr;
+            switch (entry != nullptr ? semantic::vhdl_native_provided_type(*entry)
+                                     : subtype->provided_type) {
+            case semantic::vhdl::ProvidedType::numeric_std_unsigned:
+            case semantic::vhdl::ProvidedType::numeric_std_signed:
+            case semantic::vhdl::ProvidedType::numeric_bit_unsigned:
+            case semantic::vhdl::ProvidedType::numeric_bit_signed:
+            case semantic::vhdl::ProvidedType::std_logic_arith_unsigned:
+            case semantic::vhdl::ProvidedType::std_logic_arith_signed:
+                return true;
+            default:
+                return false;
             }
-            return false;
         };
+        const auto numeric_operand = native_numeric_vector;
         // A relation the design declares itself decides its own result.
         const auto selected_operator = comparison->vhdl->referenced_name
             ? comparison->vhdl->referenced_name->selected
@@ -14914,10 +14939,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         const bool user_operator = operator_declaration
             && operator_declaration->vhdl != nullptr
             && operator_declaration->vhdl->scope.valid()
-            && !design.vhdl_scope_in_package(
-                operator_declaration->vhdl->scope, "ieee", "numeric_std")
-            && !design.vhdl_scope_in_package(
-                operator_declaration->vhdl->scope, "ieee", "numeric_bit")
+            && semantic::vhdl_native_of(*operator_declaration->vhdl) == nullptr
             && !design.vhdl_scope_in_package(
                 operator_declaration->vhdl->scope, "std", "standard");
         const bool left_null = !user_operator
@@ -14980,28 +15002,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             }
             // The IEEE numeric packages declare "=" for their vectors,
             // and STD_LOGIC_SIGNED/UNSIGNED for STD_LOGIC_VECTOR.
-            const auto numeric_vector = [&](const semantic::ExpressionId id) {
-                const auto subtype = hir_vhdl_expression_subtype(id);
-                if (!subtype) {
-                    return false;
-                }
-                const auto chain = hir_vhdl_subtype_chain(
-                    *subtype, comparison->vhdl->scope);
-                for (const auto spelling :
-                    { std::string_view { subtype->type_mark.spelling },
-                        std::string_view { chain.spelling } }) {
-                    const auto name = simple_name_of(spelling);
-                    for (const auto numeric :
-                        { "signed", "unsigned", "unresolved_signed",
-                            "unresolved_unsigned", "u_signed",
-                            "u_unsigned" }) {
-                        if (same_hir_identifier(name, numeric, true)) {
-                            return true;
-                        }
-                    }
-                }
-                return false;
-            };
+            const auto numeric_vector = native_numeric_vector;
             const auto synopsys = hir_vhdl_synopsys_numeric_context(
                 comparison->vhdl->scope);
             // FIXED_GENERIC_PKG and FLOAT_GENERIC_PKG declare the relations
@@ -15881,6 +15882,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             ? referenced
             : std::nullopt;
         const semantic::vhdl::EnumerationLiteral* selected = nullptr;
+        const semantic::vhdl::TypeDefinition* selected_type = nullptr;
         bool ambiguous { };
         // An enumeration context type selects among overloaded literals
         // (IEEE 1076-2008 12.5).
@@ -15956,6 +15958,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             }
             if (selected == nullptr) {
                 selected = literal;
+                selected_type = &type;
             }
         };
         for (const auto& member : candidates) {
@@ -15997,6 +16000,30 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                       expression_id, hir_process_scope_);
             if (!width || *width == 0U) {
                 return std::nullopt;
+            }
+            // A literal of IEEE.STD_LOGIC_1164.STD_ULOGIC is the Logic9
+            // value at its position (U, X, 0, 1, Z, W, L, H, -; IEEE
+            // 1076-2019 16.7), not the position itself.
+            const auto type_declaration = selected_type != nullptr
+                ? specialized_hir_unit_->find_declaration(
+                      selected_type->declaration)
+                : std::nullopt;
+            const auto* native = type_declaration
+                    && type_declaration->vhdl != nullptr
+                ? semantic::vhdl_native_of(*type_declaration->vhdl)
+                : nullptr;
+            if (native != nullptr
+                && native->package_id
+                    == semantic::VhdlNativePackage::ieee_std_logic_1164
+                && native->name == semantic::VhdlNativeName::std_ulogic
+                && selected->ordinal
+                    <= static_cast<std::size_t>(runtime::Logic9::dont_care)) {
+                return load_constant(PackedLogic4::from_logic9_msb_string(
+                                         std::string(1U,
+                                             runtime::to_char(
+                                                 static_cast<runtime::Logic9>(
+                                                     selected->ordinal)))),
+                    frontend::ValueDomain::Logic9);
             }
             const auto domain = hir_expression_domain(
                 expression_id, hir_process_scope_)
@@ -23882,8 +23909,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         && !is_hir_vhdl_access_expression(expression_id)
         && !is_hir_vhdl_physical_expression(expression_id)
         && !is_hir_vhdl_protected_expression(expression_id)
-        && expression->vhdl->text != "rising_edge"
-        && expression->vhdl->text != "falling_edge"
+        && !hir_vhdl_edge_call(expression_id)
         && expression->vhdl->marker
             != support::ExpressionMarker::vhdl_qualified) {
         auto type_name = std::string { expression->vhdl->text };
@@ -23901,8 +23927,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                     == semantic::vhdl::DeclarationForm::subtype);
         const auto predefined_type = type_name == "bit"
             || type_name == "boolean" || type_name == "integer"
-            || type_name == "natural" || type_name == "positive"
-            || type_name == "std_logic" || type_name == "std_ulogic";
+            || type_name == "natural" || type_name == "positive";
         if (!declared_type && !predefined_type) {
             if (expression->vhdl->referenced_name
                 && !resolve_hir_vhdl_function_call(
@@ -23921,7 +23946,12 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                         expression_id, expected_width)) {
                     return extreme;
                 }
-                report(
+                if (candidates.size() > 1U
+                    && report_hir_vhdl_ambiguous_literal_within(
+                        expression_id)) {
+                    return std::nullopt;
+                }
+report(
                     candidates.size() > 1U
                         ? "FSIM-ELAB-VHOVER-001"
                         : candidates.empty()
@@ -24000,12 +24030,11 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         return invalid_integral_result();
     } else if (expression->vhdl != nullptr
         && expression->vhdl->kind == semantic::vhdl::ExpressionKind::call
-        && (expression->vhdl->text == "rising_edge"
-            || expression->vhdl->text == "falling_edge")
+        && hir_vhdl_edge_call(expression_id)
         && expression->vhdl->operands.size() == 1U) {
         result = lower_hir_vhdl_edge_predicate(
             expression->vhdl->operands.front(),
-            expression->vhdl->text == "rising_edge",
+            *hir_vhdl_edge_call(expression_id) == VhdlEdgeKind::rising,
             hir_source_span(expression->vhdl->source));
         if (!result) {
             return std::nullopt;
@@ -26277,6 +26306,10 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             if (!subtype || !subtype->type_mark.target.valid()) {
                 return std::nullopt;
             }
+            if (semantic::vhdl_native_logic9(
+                    *specialized_hir_unit_, subtype->type_mark.target)) {
+                return std::nullopt;
+            }
             auto type_id = subtype->type_mark.target;
             std::unordered_set<std::uint32_t> visited;
             while (type_id.valid()
@@ -26384,8 +26417,27 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 source.operands[0]);
             const auto rhs_composite = hir_vhdl_composite_root_type(
                 source.operands[1]);
+            // Matching relations are predefined for BIT, STD_ULOGIC and
+            // one-dimensional arrays of them (IEEE 1076-2019 9.2.3): a
+            // STD_ULOGIC_VECTOR (STD_LOGIC_VECTOR) root is no other
+            // composite.
+            const auto logic9_array = [&](const auto& composite) {
+                if (!composite
+                    || composite->first != semantic::vhdl::TypeForm::array) {
+                    return false;
+                }
+                const auto type = specialized_hir_unit_->find_type(
+                    composite->second);
+                return type && type->vhdl != nullptr
+                    && type->vhdl->array_dimensions.size() == 1U
+                    && type->vhdl->element_subtype
+                    && type->vhdl->element_subtype->type_mark.target.valid()
+                    && semantic::vhdl_native_logic9(*specialized_hir_unit_,
+                        type->vhdl->element_subtype->type_mark.target);
+            };
             if (source.text.starts_with('?')
-                && (lhs_composite || rhs_composite)) {
+                && ((lhs_composite && !logic9_array(lhs_composite))
+                    || (rhs_composite && !logic9_array(rhs_composite)))) {
                 report(
                     "FSIM-ELAB-VHDLMATCH-004",
                     "VHDL matching equality does not accept composite "
@@ -26435,7 +26487,44 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                     return ordered;
                 }
             }
-            if (array_relational
+            // STD_LOGIC_SIGNED and STD_LOGIC_UNSIGNED declare the
+            // relations of STD_LOGIC_VECTOR, which hide its predefined
+            // ordering (IEEE 1076-2008 12.4), and NUMERIC_STD / NUMERIC_BIT
+            // declare those of UNSIGNED and SIGNED (16.8.2): they compare
+            // numbers. The numeric types are known by their native
+            // declaration.
+            const auto numeric_vector = [&](const semantic::ExpressionId operand) {
+                const auto subtype = hir_vhdl_expression_subtype(operand);
+                const auto* entry = subtype && subtype->type_mark.target.valid()
+                    ? semantic::vhdl_native_type_of(
+                          *specialized_hir_unit_, subtype->type_mark.target)
+                    : nullptr;
+                switch (entry != nullptr
+                        ? semantic::vhdl_native_provided_type(*entry)
+                        : semantic::vhdl::ProvidedType::none) {
+                case semantic::vhdl::ProvidedType::numeric_std_unsigned:
+                case semantic::vhdl::ProvidedType::numeric_std_signed:
+                case semantic::vhdl::ProvidedType::numeric_bit_unsigned:
+                case semantic::vhdl::ProvidedType::numeric_bit_signed:
+                    return true;
+                default:
+                    return false;
+                }
+            };
+            const auto numeric_relation = array_relational
+                && expression->vhdl != nullptr
+                && (((logic9_array(lhs_composite)
+                         || logic9_array(rhs_composite))
+                        && [&] {
+                               const auto context
+                                   = hir_vhdl_synopsys_numeric_context(
+                                       expression->vhdl->scope);
+                               return context.signed_visible
+                                   || context.unsigned_visible;
+                           }())
+                    || numeric_vector(source.operands[0])
+                    || numeric_vector(source.operands[1]));
+            if (array_relational && !numeric_relation
                 && ((lhs_composite
                         && lhs_composite->first
                             == semantic::vhdl::TypeForm::array)
@@ -29530,6 +29619,11 @@ std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_runtime_image(
     }
     if (!width || *width == 0U
         || *width > std::numeric_limits<std::uint32_t>::max()) {
+        // A value with no one type because a literal in it fits more than
+        // one overload (IEEE 1076-2019 12.5) is that error, not a sizing one.
+        if (report_hir_vhdl_ambiguous_literal_within(value_id)) {
+            return std::nullopt;
+        }
         report(
             "FSIM-ELAB-VHIMAGE-001",
             "the runtime image of this VHDL value requires a statically "
@@ -30235,8 +30329,12 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_string_value(
         const auto position = parse(
             StringMethodOperator::vhdl_enumeration_value,
             frontend::ValueDomain::Integer, literals);
-        // A STD_ULOGIC value is the element at the position, not its bits.
-        if (subtype.domain == semantic::vhdl::ValueDomain::logic9
+        // A STD_ULOGIC value is the element at the position, not its bits:
+        // the declared STD_ULOGIC of IEEE.STD_LOGIC_1164 and its subtypes
+        // (16.7), by native identity.
+        if ((subtype.domain == semantic::vhdl::ValueDomain::logic9
+                || semantic::vhdl_native_logic9(
+                    *specialized_hir_unit_, subtype.type_mark.target))
             && (width == 0U || width == 1U)) {
             return lower_hir_vhdl_logic9_at_position(position);
         }
@@ -36029,14 +36127,17 @@ void Lowerer::warn_hir_vhdl_numeric_integer_truncation(
     const auto declaration = operator_selected
         ? specialized_hir_unit_->find_declaration(*operator_selected)
         : std::nullopt;
-    const auto& design = specialized_hir_unit_->design();
     if (declaration && declaration->vhdl != nullptr
-        && declaration->vhdl->scope.valid()
-        && !design.vhdl_scope_in_package(
-            declaration->vhdl->scope, "ieee", "numeric_std")
-        && !design.vhdl_scope_in_package(
-            declaration->vhdl->scope, "ieee", "numeric_bit")) {
-        return;
+        && declaration->vhdl->scope.valid()) {
+        const auto* operator_entry
+            = semantic::vhdl_native_of(*declaration->vhdl);
+        if (operator_entry == nullptr
+            || (operator_entry->package_id
+                    != semantic::VhdlNativePackage::ieee_numeric_std
+                && operator_entry->package_id
+                    != semantic::VhdlNativePackage::ieee_numeric_bit)) {
+            return;
+        }
     }
     const auto vector_mark = [&](const semantic::ExpressionId operand)
         -> std::optional<bool> {
@@ -36044,18 +36145,23 @@ void Lowerer::warn_hir_vhdl_numeric_integer_truncation(
         if (!subtype) {
             return std::nullopt;
         }
-        const auto mark = simple_name_of(subtype->type_mark.spelling);
-        if (same_hir_identifier(mark, "unsigned", true)
-            || same_hir_identifier(mark, "unresolved_unsigned", true)
-            || same_hir_identifier(mark, "u_unsigned", true)) {
+        const auto* entry = subtype->type_mark.target.valid()
+            ? semantic::vhdl_native_type_of(
+                *specialized_hir_unit_, subtype->type_mark.target)
+            : nullptr;
+        if (entry == nullptr) {
+            return std::nullopt;
+        }
+        switch (semantic::vhdl_native_provided_type(*entry)) {
+        case semantic::vhdl::ProvidedType::numeric_std_unsigned:
+        case semantic::vhdl::ProvidedType::numeric_bit_unsigned:
             return false;
-        }
-        if (same_hir_identifier(mark, "signed", true)
-            || same_hir_identifier(mark, "unresolved_signed", true)
-            || same_hir_identifier(mark, "u_signed", true)) {
+        case semantic::vhdl::ProvidedType::numeric_std_signed:
+        case semantic::vhdl::ProvidedType::numeric_bit_signed:
             return true;
+        default:
+            return std::nullopt;
         }
-        return std::nullopt;
     };
     for (const std::size_t vector_side : { 0U, 1U }) {
         const auto vector = source.operands[vector_side];

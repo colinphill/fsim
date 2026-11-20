@@ -181,7 +181,8 @@ class Lexer {
   }
 
   [[nodiscard]] bool vhdl_psl_comment() const noexcept {
-    if (!is_vhdl() || peek() != '-' || peek(1) != '-') {
+    if (!is_vhdl() || !source_.vhdl_psl_comments || peek() != '-'
+        || peek(1) != '-') {
       return false;
     }
     std::size_t offset = 2;

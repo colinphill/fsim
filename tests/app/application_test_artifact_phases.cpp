@@ -46,7 +46,7 @@ void ApplicationTestFixture::test_artifact_phase_semantics()
     static_assert(app::kSystemVerilogConstraintHirStateSchema == 46);
     static_assert(app::kSystemVerilogCoverageStateSchema == 10);
     static_assert(app::kSystemVerilogUvmStateSchema == 3);
-    static_assert(app::kVhdlHirStateSchema == 21);
+    static_assert(app::kVhdlHirStateSchema == 22);
     const auto copy_artifact_tree = [](
                                         const std::filesystem::path& source_root,
                                         const std::filesystem::path& destination) {
@@ -385,7 +385,10 @@ end architecture;
     assert(vhdl_metadata->standard == "2008");
     assert(vhdl_metadata->compatibility_profile
         == "fsim-synopsys-ieee-compat-v2");
-    assert(vhdl_metadata->vhdl_package_dependencies.size() == 6U);
+    // STD_LOGIC_1164, NUMERIC_STD and TEXTIO come from the precompiled 2008
+    // standard library (owner 11-19, gate BD D2); the Synopsys and VITAL
+    // packages stay projected.
+    assert(vhdl_metadata->vhdl_package_dependencies.size() == 7U);
     const auto vhdl_dependency = [&](const std::string_view package) {
         const auto found = std::ranges::find(
             vhdl_metadata->vhdl_package_dependencies, package,
@@ -401,12 +404,11 @@ end architecture;
                     == "ieee-1076-standard:2008:fsim-v3"
                 && dependency.source_digest.size() == 64U;
         }));
-    assert(vhdl_dependency("ieee.numeric_std")->revision
-        == "ieee-p1076:1076-2019:"
-           "16a012320947d378611cc7457f64ed76cb52bac4");
-    assert(vhdl_dependency("ieee.std_logic_1164")->revision
-        == "ieee-p1076:1076-2019:"
-           "16a012320947d378611cc7457f64ed76cb52bac4");
+    for (const std::string_view precompiled :
+         { "ieee.numeric_std", "ieee.std_logic_1164", "std.textio" }) {
+        assert(vhdl_dependency(precompiled)->revision.starts_with(
+            "fsim-stdlib:vhdl-stdlib-artifacts-v1:2008:"));
+    }
     assert(vhdl_dependency("ieee.std_logic_arith")->revision
         == "synopsys-legacy-ieee:1990-1992:"
            "fsim-synopsys-ieee-compat-v2:std_logic_arith:vhdl-2008");

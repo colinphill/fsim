@@ -82,7 +82,10 @@ foreach(FSIM_TOKEN IN ITEMS
     "fsim.application.uvm_phase_tlm.1_2"
     "fsim.application.uvm_phase_tlm.2020_3_1"
     "app/uvm_process_limits.cpp"
-    "RUN_SERIAL TRUE"
+    "\"-DFSIM_PHASE_TLM_PART=\${part}\""
+    "PROPERTIES FIXTURES_SETUP \${name}.object"
+    "PROPERTIES FIXTURES_REQUIRED \${name}.object"
+    "PROPERTIES PROCESSORS 2"
     "TIMEOUT 7200")
   string(FIND "${FSIM_TEST_CMAKE_CONTENTS}" "${FSIM_TOKEN}" FSIM_INDEX)
   if(FSIM_INDEX EQUAL -1)
@@ -103,4 +106,4 @@ endforeach()
 message(STATUS
   "UVM platform contract: two governed releases, filesystem-neutral source "
   "paths, x64 C ABI/cdecl, POSIX and Windows 6-GiB process limits, 1200-second "
-  "stage limits, and 7200-second serial matrices are present")
+  "stage limits, and 7200-second matrix parts are present")

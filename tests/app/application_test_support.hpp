@@ -165,6 +165,7 @@ class ApplicationTestFixture {
   std::filesystem::path select_concat_source;
   std::filesystem::path vhdl_select_concat_source;
   std::filesystem::path vhdl_signed_source;
+  std::filesystem::path vhdl_signed_without_product_source;
   std::filesystem::path conditional_statement_source;
   std::filesystem::path vhdl_conditional_statement_source;
   std::filesystem::path partial_group_source;

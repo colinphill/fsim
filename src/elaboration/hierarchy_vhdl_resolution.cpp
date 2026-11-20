@@ -4,6 +4,7 @@
 #include "lowerer_internal.hpp"
 
 #include "fsim/support/vhdl_identifier.hpp"
+#include <array>
 
 #include <algorithm>
 #include <cstddef>
@@ -915,6 +916,26 @@ bool HierarchyBuilder::vhdl_output_port_read(
         for (const auto& statement : hir.statements()) {
             if (statement.target) {
                 mark(mark, *statement.target, 0U);
+            }
+        }
+        // The prefix of a predefined attribute of its subtype (A'LENGTH,
+        // A'RANGE, A'LEFT, ..., IEEE 1076-2019 16.2.2, 16.2.3) names the
+        // object but does not read its value.
+        for (const auto& expression : hir.expressions()) {
+            if (expression.kind != vhdl::ExpressionKind::call
+                || expression.operands.empty()
+                || !expression.text.starts_with('\'')) {
+                continue;
+            }
+            const auto designator = support::ascii_lower(
+                std::string_view { expression.text }.substr(1U));
+            static constexpr std::array<std::string_view, 9U> subtype_attributes {
+                "left", "right", "high", "low", "range", "reverse_range",
+                "length", "ascending", "element",
+            };
+            if (std::ranges::find(subtype_attributes, designator)
+                != subtype_attributes.end()) {
+                written.insert(expression.operands.front().value());
             }
         }
         const auto mark_port_map

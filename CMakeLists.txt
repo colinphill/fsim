@@ -614,6 +614,36 @@ add_custom_command(
   VERBATIM
 )
 
+# The natively implemented declarations of the compiler-served VHDL packages
+# of every supported edition (gate BD build D2, IEEE 1076-2019 16): written
+# at build time from the edition source trees into the build tree. The
+# standard library artifacts stamp their declarations from this table.
+set(FSIM_NATIVE_INTRINSICS_SOURCE
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/vhdl_native_intrinsics.cpp")
+set(FSIM_NATIVE_NAMES_INCLUDE_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
+set(FSIM_NATIVE_NAMES_HEADER
+  "${FSIM_NATIVE_NAMES_INCLUDE_DIR}/fsim/semantic/vhdl_native_names.hpp")
+file(GLOB FSIM_NATIVE_INTRINSIC_PACKAGES CONFIGURE_DEPENDS
+  "${PROJECT_SOURCE_DIR}/third_party/ieee-1076-2019/std/*.vhdl"
+  "${PROJECT_SOURCE_DIR}/third_party/ieee-1076-2019/ieee/*.vhdl"
+  "${PROJECT_SOURCE_DIR}/third_party/ieee-derived/*/std/*.vhdl"
+  "${PROJECT_SOURCE_DIR}/third_party/ieee-derived/*/ieee/*.vhdl")
+add_custom_command(
+  OUTPUT "${FSIM_NATIVE_INTRINSICS_SOURCE}" "${FSIM_NATIVE_NAMES_HEADER}"
+  COMMAND "${FSIM_PYTHON_EXECUTABLE}" -I
+    "${PROJECT_SOURCE_DIR}/scripts/generate_vhdl_native_intrinsics.py"
+    --root-2019 "${PROJECT_SOURCE_DIR}/third_party/ieee-1076-2019"
+    --derived "${PROJECT_SOURCE_DIR}/third_party/ieee-derived"
+    --output "${FSIM_NATIVE_INTRINSICS_SOURCE}"
+    --header "${FSIM_NATIVE_NAMES_HEADER}"
+  DEPENDS
+    "${PROJECT_SOURCE_DIR}/scripts/generate_vhdl_native_intrinsics.py"
+    "${PROJECT_SOURCE_DIR}/scripts/derive_ieee_packages.py"
+    ${FSIM_NATIVE_INTRINSIC_PACKAGES}
+  COMMENT "Generating the native VHDL package intrinsic table"
+  VERBATIM
+)
+
 add_library(fsim_semantic ${FSIM_SUBSYSTEM_LIBRARY_TYPE}
   src/semantic/compiled_design.cpp
   src/semantic/compiled_design_linker.cpp
@@ -635,7 +665,11 @@ add_library(fsim_semantic ${FSIM_SUBSYSTEM_LIBRARY_TYPE}
   src/semantic/vhdl_hir.cpp
   src/semantic/vhdl_standard_catalog.cpp
   src/semantic/vhdl_standard_declaration.cpp
+  src/semantic/vhdl_native_identity.cpp
+  src/semantic/vhdl_native_intrinsic_stamp.cpp
   "${FSIM_INTRINSIC_SIGNATURES_SOURCE}"
+  "${FSIM_NATIVE_INTRINSICS_SOURCE}"
+  "${FSIM_NATIVE_NAMES_HEADER}"
   # The runtime parses run-time formats too (IEEE 1800-2017 21.3.3,
   # 21.3.4.3).
   src/frontend/input_format.cpp
@@ -644,6 +678,8 @@ add_library(fsim::semantic ALIAS fsim_semantic)
 fsim_configure_subsystem_library(fsim_semantic)
 # Deep recursion continues on support::with_stack segments (fsim_base).
 target_link_libraries(fsim_semantic PRIVATE fsim_base fsim_boost_pfr_headers)
+# The generated native declaration enumerators (vhdl_native_names.hpp).
+target_include_directories(fsim_semantic PUBLIC "${FSIM_NATIVE_NAMES_INCLUDE_DIR}")
 
 set(
   FSIM_FRONTEND_SOURCES
@@ -1326,6 +1362,7 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_compiled_environment_vhdl.cpp
       src/app/application_compiled_design.cpp
       src/app/application_standard_library.cpp
+      src/app/application_standard_library_artifact.cpp
       src/app/application_standard_library_vital.cpp
       src/app/application_vhdl_analysis.cpp
       src/app/application_design_ir.cpp
@@ -1448,6 +1485,7 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_workspace_catalogs.cpp
       src/app/application_workspace_compile.cpp
       src/app/application_workspace_objects.cpp
+      src/app/application_standard_library_load.cpp
       src/app/application_workspace_selection.cpp
       src/app/application_workspace_store.cpp
       src/app/application_workspace_store_io.cpp
@@ -1537,6 +1575,48 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
     APPEND PROPERTY COMPILE_DEFINITIONS
       "FSIM_IEEE_LIBRARY_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}/third_party/ieee-1076-2019\""
   )
+  # Precompiled VHDL standard libraries (gate BD build D2, IEEE 1076-2019
+  # 16): managed libraries STD and IEEE per edition, compiled from the
+  # edition's source tree at build time by fsim_standard_library_builder and
+  # mapped into every workspace. The key of each tree is the SHA-256 of its
+  # SHA256SUMS, recorded at configure time.
+  file(READ "${PROJECT_SOURCE_DIR}/include/fsim/version.hpp" FSIM_VERSION_HEADER)
+  string(REGEX MATCH
+    "standard_library_cache_version =[ \t\r\n]*\"([^\"]+)\""
+    FSIM_STDLIB_VERSION_MATCH "${FSIM_VERSION_HEADER}")
+  if(NOT CMAKE_MATCH_1)
+    message(FATAL_ERROR "include/fsim/version.hpp lacks standard_library_cache_version")
+  endif()
+  set(FSIM_STANDARD_LIBRARY_CACHE_VERSION "${CMAKE_MATCH_1}")
+  set(FSIM_STANDARD_LIBRARY_BUILD_DIR
+    "${PROJECT_BINARY_DIR}/share/fsim/lib/${FSIM_STANDARD_LIBRARY_CACHE_VERSION}")
+  set(FSIM_STANDARD_LIBRARY_KEYS_DIR "${PROJECT_BINARY_DIR}/generated/stdlib")
+  set(FSIM_STANDARD_LIBRARY_KEYS "")
+  foreach(edition IN ITEMS 1987 1993 2000 2002 2008 2019)
+    if(edition STREQUAL "2019")
+      set(tree "${PROJECT_SOURCE_DIR}/third_party/ieee-1076-2019")
+    elseif(edition STREQUAL "2000")
+      set(tree "${PROJECT_SOURCE_DIR}/third_party/ieee-derived/2002")
+    else()
+      set(tree "${PROJECT_SOURCE_DIR}/third_party/ieee-derived/${edition}")
+    endif()
+    file(SHA256 "${tree}/SHA256SUMS" sums_digest)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${tree}/SHA256SUMS")
+    string(APPEND FSIM_STANDARD_LIBRARY_KEYS
+      "FSIM_VHDL_STDLIB_SOURCES(Vhdl${edition}, \"${sums_digest}\")\n")
+    set(FSIM_STANDARD_LIBRARY_TREE_${edition} "${tree}")
+  endforeach()
+  file(CONFIGURE OUTPUT "${FSIM_STANDARD_LIBRARY_KEYS_DIR}/vhdl_standard_library_keys.inc"
+    CONTENT "${FSIM_STANDARD_LIBRARY_KEYS}" @ONLY)
+  set_property(
+    SOURCE src/app/application_standard_library_artifact.cpp
+    APPEND PROPERTY COMPILE_DEFINITIONS
+      "FSIM_STANDARD_LIBRARY_BUILD_DIR=\"${FSIM_STANDARD_LIBRARY_BUILD_DIR}\""
+  )
+  set_property(
+    SOURCE src/app/application_standard_library_artifact.cpp
+    APPEND PROPERTY INCLUDE_DIRECTORIES "${FSIM_STANDARD_LIBRARY_KEYS_DIR}"
+  )
   target_link_libraries(
     fsim_lowering
     PUBLIC
@@ -1621,8 +1701,44 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
   target_link_libraries(fsim_api PRIVATE ${FSIM_CLI_LIBRARY})
 endif()
 
+# The builder of the precompiled VHDL standard libraries, and the libraries
+# themselves (one workspace directory per edition): built with every build,
+# before fsim.
+add_executable(fsim_standard_library_builder
+  src/tools/fsim_standard_library_builder.cpp)
+fsim_configure_executable(fsim_standard_library_builder)
+target_include_directories(fsim_standard_library_builder
+  PRIVATE "${PROJECT_SOURCE_DIR}/src/app")
+target_link_libraries(fsim_standard_library_builder PRIVATE fsim_application)
+set(FSIM_STANDARD_LIBRARY_ARTIFACTS "")
+foreach(edition IN ITEMS 1987 1993 2000 2002 2008 2019)
+  set(tree "${FSIM_STANDARD_LIBRARY_TREE_${edition}}")
+  file(GLOB tree_sources CONFIGURE_DEPENDS "${tree}/std/*.vhdl" "${tree}/ieee/*.vhdl")
+  set(edition_directory "${FSIM_STANDARD_LIBRARY_BUILD_DIR}/vhdl-${edition}")
+  set(artifact "${edition_directory}/standard-library.key")
+  add_custom_command(
+    OUTPUT "${artifact}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${edition_directory}"
+    COMMAND fsim_standard_library_builder
+      --edition ${edition}
+      --source-root "${PROJECT_SOURCE_DIR}"
+      --output "${edition_directory}"
+    DEPENDS fsim_standard_library_builder "${tree}/SHA256SUMS" ${tree_sources}
+    COMMENT "Compiling the VHDL-${edition} standard libraries STD and IEEE"
+    VERBATIM
+  )
+  list(APPEND FSIM_STANDARD_LIBRARY_ARTIFACTS "${artifact}")
+endforeach()
+add_custom_target(fsim_standard_libraries ALL
+  DEPENDS ${FSIM_STANDARD_LIBRARY_ARTIFACTS})
+install(
+  DIRECTORY "${PROJECT_BINARY_DIR}/share/fsim/lib/"
+  DESTINATION "${CMAKE_INSTALL_DATADIR}/fsim/lib"
+)
+
 if(EXISTS "${PROJECT_SOURCE_DIR}/src/main.cpp")
   add_executable(fsim src/main.cpp)
+  add_dependencies(fsim fsim_standard_libraries)
   fsim_configure_executable(fsim)
   fsim_configure_command_entrypoint(fsim)
   fsim_use_mimalloc(fsim)

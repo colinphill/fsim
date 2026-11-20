@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "application_standard_library_artifact.hpp"
 #include "tcl_command_catalog.hpp"
 
 #include "application_workspace.hpp"
@@ -1056,6 +1057,15 @@ namespace {
                     std::move(error));
             }
             Tcl_Obj* result = Tcl_NewListObj(0, nullptr);
+            // The precompiled standard libraries, mapped into every workspace.
+            for (const auto& library : standard_library_locations()) {
+                Tcl_Obj* entry = library_object(interpreter,
+                    { library.name, library.directory, true });
+                dict_put(interpreter, entry, "standard", string_object(library.label));
+                if (!list_append(interpreter, result, entry)) {
+                    return TCL_ERROR;
+                }
+            }
             for (const auto& location : *locations) {
                 if (!list_append(interpreter, result,
                         library_object(interpreter, location))) {

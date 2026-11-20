@@ -2,6 +2,7 @@
 #include "lowerer_driver_regions.hpp"
 #include "lowerer_internal.hpp"
 #include "fsim/semantic/systemverilog_class_specialization.hpp"
+#include "fsim/semantic/vhdl_native_identity.hpp"
 
 #include <algorithm>
 #include <array>
@@ -2675,6 +2676,13 @@ bool Lowerer::initialize_hir_declarations(
                     if (!type || type->vhdl == nullptr) {
                         break;
                     }
+                    // STD_ULOGIC values are Logic9, not enumeration
+                    // ordinals: their default ('U', or a subtype's left
+                    // bound) is the Logic9 default (IEEE 1076-2019 16.7).
+                    if (semantic::vhdl_native_logic9(
+                            *specialized_hir_unit_, type_id)) {
+                        break;
+                    }
                     if (!type->vhdl->enumeration_literals.empty()) {
                         enumeration_literals.reserve(
                             type->vhdl->enumeration_literals.size());
@@ -3531,18 +3539,45 @@ std::optional<Process> Lowerer::lower_hir_process(
             if (condition && condition->vhdl != nullptr
                 && condition->vhdl->kind
                     == semantic::vhdl::ExpressionKind::call
-                && condition->vhdl->operands.size() == 1U
-                && (condition->vhdl->text == "rising_edge"
-                    || condition->vhdl->text == "falling_edge")) {
-                edge_signal = hir_referenced_declaration(
-                    condition->vhdl->operands.front());
-                // The process then wakes only where the predicate holds:
-                // '0' or 'L' to '1' or 'H' (IEEE 1076-2008 16.7), not a
-                // Verilog edge, which also counts 0 to X and X to 1.
-                if (edge_signal) {
-                    edge = condition->vhdl->text == "rising_edge"
-                        ? runtime::simir::EdgeKind::rising
-                        : runtime::simir::EdgeKind::falling;
+                && condition->vhdl->operands.size() == 1U) {
+                // RISING_EDGE and FALLING_EDGE of IEEE.STD_LOGIC_1164 are
+                // native declarations (IEEE 1076-2019 16.7); the VHDL-2008
+                // STD.STANDARD overloads for BIT and BOOLEAN are predefined
+                // (no declaration).
+                const auto* native
+                    = hir_vhdl_native_callee(*statement->vhdl->condition);
+                auto edge_name = semantic::VhdlNativeName::rising_edge;
+                bool edge_call { };
+                if (native != nullptr) {
+                    edge_call = native->name
+                            == semantic::VhdlNativeName::rising_edge
+                        || native->name
+                            == semantic::VhdlNativeName::falling_edge;
+                    edge_name = native->name;
+                } else if (!condition->vhdl->resolved_declaration
+                    && (condition->vhdl->text == "rising_edge"
+                        || condition->vhdl->text == "falling_edge")) {
+                    const auto operand = hir_vhdl_expression_subtype(
+                        condition->vhdl->operands.front());
+                    edge_call = operand
+                        && (operand->type_mark.spelling == "bit"
+                            || operand->type_mark.spelling == "boolean");
+                    edge_name = condition->vhdl->text == "rising_edge"
+                        ? semantic::VhdlNativeName::rising_edge
+                        : semantic::VhdlNativeName::falling_edge;
+                }
+                if (edge_call) {
+                    edge_signal = hir_referenced_declaration(
+                        condition->vhdl->operands.front());
+                    // The process then wakes only where the predicate holds:
+                    // '0' or 'L' to '1' or 'H' (IEEE 1076-2008 16.7), not a
+                    // Verilog edge, which also counts 0 to X and X to 1.
+                    if (edge_signal) {
+                        edge = edge_name
+                                == semantic::VhdlNativeName::rising_edge
+                            ? runtime::simir::EdgeKind::rising
+                            : runtime::simir::EdgeKind::falling;
+                    }
                 }
             }
         }

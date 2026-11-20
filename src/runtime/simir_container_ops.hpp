@@ -38,7 +38,9 @@ public:
     virtual void write(RegisterId id, PackedLogic4 value) = 0;
 
     /// A string register's value.
-    [[nodiscard]] virtual const std::string& read_string(
+    /// The view lasts until the operation next changes that register
+    /// through string().
+    [[nodiscard]] virtual std::string_view read_string(
         StringRegisterId id) = 0;
     /// A string register for assignment.
     [[nodiscard]] virtual std::string& string(StringRegisterId id) = 0;
@@ -139,7 +141,7 @@ void execute_container_operation(const VhdlShaped&,
     bool linear_index,
     ProcessId process,
     InstructionIndex instruction,
-    const std::string* string_key = nullptr);
+    const std::string_view* string_key = nullptr);
 
 // Update one member of an unpacked aggregate element of a container
 // value (index, then member path).

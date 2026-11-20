@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "lowerer_internal.hpp"
 
+#include "fsim/semantic/vhdl_native_identity.hpp"
+
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -181,73 +183,6 @@ const semantic::sv::Unit* Lowerer::hir_time_scope_unit(
         : fallback;
 }
 
-std::optional<double> Lowerer::hir_vhdl_math_real_constant(
-    const semantic::ExpressionId expression_id) const
-{
-    if (specialized_hir_unit_ == nullptr) {
-        return std::nullopt;
-    }
-    const auto expression = specialized_hir_unit_->find_expression(
-        expression_id);
-    if (!expression || expression->vhdl == nullptr
-        || expression->vhdl->kind != semantic::vhdl::ExpressionKind::name) {
-        return std::nullopt;
-    }
-    const auto& source = *expression->vhdl;
-    std::string name;
-    for (const auto character : source.text.substr(
-             source.text.find_last_of('.') == std::string::npos
-                 ? 0U
-                 : source.text.find_last_of('.') + 1U)) {
-        name.push_back(static_cast<char>(
-            std::tolower(static_cast<unsigned char>(character))));
-    }
-    static constexpr std::array<std::pair<std::string_view, double>, 18>
-        constants {
-            std::pair { std::string_view { "math_e" }, 2.71828182845904523536 },
-            std::pair { std::string_view { "math_1_over_e" }, 0.36787944117144233402 },
-            std::pair { std::string_view { "math_pi" }, 3.14159265358979323846 },
-            std::pair { std::string_view { "math_2_pi" }, 6.28318530717958647693 },
-            std::pair { std::string_view { "math_1_over_pi" }, 0.31830988618379067154 },
-            std::pair { std::string_view { "math_pi_over_2" }, 1.57079632679489661923 },
-            std::pair { std::string_view { "math_pi_over_3" }, 1.04719755119659774615 },
-            std::pair { std::string_view { "math_pi_over_4" }, 0.78539816339744830962 },
-            std::pair { std::string_view { "math_3_pi_over_2" }, 4.71238898038468985769 },
-            std::pair { std::string_view { "math_log_of_2" }, 0.69314718055994530942 },
-            std::pair { std::string_view { "math_log_of_10" }, 2.30258509299404568402 },
-            std::pair { std::string_view { "math_log2_of_e" }, 1.44269504088896340736 },
-            std::pair { std::string_view { "math_log10_of_e" }, 0.43429448190325182765 },
-            std::pair { std::string_view { "math_sqrt_2" }, 1.41421356237309504880 },
-            std::pair { std::string_view { "math_1_over_sqrt_2" }, 0.70710678118654752440 },
-            std::pair { std::string_view { "math_sqrt_pi" }, 1.77245385090551602730 },
-            std::pair { std::string_view { "math_deg_to_rad" }, 0.01745329251994329577 },
-            std::pair { std::string_view { "math_rad_to_deg" }, 57.29577951308232087680 },
-        };
-    const auto found = std::ranges::find(constants, name,
-        &std::pair<std::string_view, double>::first);
-    if (found == constants.end()) {
-        return std::nullopt;
-    }
-    // A user constant of that name hides the package's.
-    if (source.referenced_name) {
-        std::vector<semantic::DeclarationId> candidates
-            = source.referenced_name->overloads;
-        if (source.referenced_name->selected) {
-            candidates.push_back(*source.referenced_name->selected);
-        }
-        for (const auto candidate : candidates) {
-            const auto declaration
-                = specialized_hir_unit_->find_declaration(candidate);
-            if (!declaration || declaration->vhdl == nullptr
-                || !specialized_hir_unit_->design().vhdl_scope_in_package(
-                    declaration->vhdl->scope, "ieee", "math_real")) {
-                return std::nullopt;
-            }
-        }
-    }
-    return found->second;
-}
-
 std::optional<std::string> Lowerer::hir_vhdl_math_real_function(
     const semantic::ExpressionId expression_id) const
 {
@@ -259,77 +194,36 @@ std::optional<std::string> Lowerer::hir_vhdl_math_real_function(
     if (!expression || expression->vhdl == nullptr
         || expression->vhdl->kind != semantic::vhdl::ExpressionKind::call
         || expression->vhdl->operands.empty()
-        || expression->vhdl->operands.size() > 2U
-        || expression->vhdl->text.starts_with('\'')) {
+        || expression->vhdl->operands.size() > 2U) {
         return std::nullopt;
     }
-    const auto& source = *expression->vhdl;
-    std::string name = source.text;
-    if (const auto separator = name.find_last_of('.');
-        separator != std::string::npos) {
-        name.erase(0U, separator + 1U);
+    // The callee is the IEEE.MATH_REAL function the call resolved to
+    // (IEEE 1076.2): a user function of the same name is an ordinary one.
+    using Name = semantic::VhdlNativeName;
+    const auto* const entry = hir_vhdl_native_callee(expression_id);
+    if (entry == nullptr
+        || entry->package_id != semantic::VhdlNativePackage::ieee_math_real
+        || entry->kind != semantic::VhdlNativeKind::function) {
+        return std::nullopt;
     }
-    std::ranges::transform(name, name.begin(), [](const char c) {
-        return static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    });
-    static constexpr std::array<std::string_view, 25> functions {
-        "ceil", "floor", "sqrt", "exp", "log", "log2", "log10", "sin", "cos",
-        "tan", "arcsin", "arccos", "arctan", "sinh", "cosh", "tanh",
-        "arcsinh", "arccosh", "arctanh", "cbrt", "sign", "round", "trunc",
-        "realmax", "realmin"
+    static constexpr std::array<Name, 25> functions {
+        Name::ceil, Name::floor, Name::sqrt, Name::exp, Name::log,
+        Name::log2, Name::log10, Name::sin, Name::cos, Name::tan,
+        Name::arcsin, Name::arccos, Name::arctan, Name::sinh, Name::cosh,
+        Name::tanh, Name::arcsinh, Name::arccosh, Name::arctanh, Name::cbrt,
+        Name::sign, Name::round, Name::trunc, Name::realmax, Name::realmin
     };
-    const auto binary = name == "log" || name == "arctan"
-        || name == "realmax" || name == "realmin";
-    if (std::ranges::find(functions, name) == functions.end()
-        || (source.operands.size() == 2U && !binary)
-        || (source.operands.size() == 1U
-            && (name == "realmax" || name == "realmin"))) {
+    const auto binary = entry->name == Name::log || entry->name == Name::arctan
+        || entry->name == Name::realmax || entry->name == Name::realmin;
+    const auto operands = expression->vhdl->operands.size();
+    if (std::ranges::find(functions, entry->name) == functions.end()
+        || (operands == 2U && !binary)
+        || (operands == 1U
+            && (entry->name == Name::realmax
+                || entry->name == Name::realmin))) {
         return std::nullopt;
     }
-    // A user function of that name hides the IEEE.MATH_REAL function only
-    // as a homograph, with REAL formals (IEEE 1076-2008 12.3); another
-    // overload (`SQRT(COMPLEX)`) leaves it visible.
-    if (source.referenced_name) {
-        std::vector<semantic::DeclarationId> candidates
-            = source.referenced_name->overloads;
-        if (source.referenced_name->selected) {
-            candidates.push_back(*source.referenced_name->selected);
-        }
-        for (const auto candidate : candidates) {
-            const auto declaration
-                = specialized_hir_unit_->find_declaration(candidate);
-            if (!declaration || declaration->vhdl == nullptr) {
-                return std::nullopt;
-            }
-            if (specialized_hir_unit_->design().vhdl_scope_in_package(
-                    declaration->vhdl->scope, "ieee", "math_real")) {
-                continue;
-            }
-            const auto& callable = declaration->vhdl->callable;
-            const bool homograph = !callable
-                || (callable->formals.size() == source.operands.size()
-                    && std::ranges::all_of(callable->formals,
-                        [&](const semantic::DeclarationId formal) {
-                            const auto view
-                                = specialized_hir_unit_->find_declaration(
-                                    formal);
-                            return !view || view->vhdl == nullptr
-                                || !view->vhdl->subtype
-                                || hir_vhdl_subtype_is_real(
-                                    *view->vhdl->subtype);
-                        }));
-            if (homograph) {
-                return std::nullopt;
-            }
-        }
-    }
-    if (!std::ranges::all_of(source.operands,
-            [&](const semantic::ExpressionId operand) {
-                return hir_vhdl_expression_is_real(operand);
-            })) {
-        return std::nullopt;
-    }
-    return name;
+    return std::string { semantic::vhdl_native_designator(*entry) };
 }
 
 std::optional<RegisterId> Lowerer::lower_hir_vhdl_math_real_call(
@@ -853,29 +747,29 @@ std::optional<bool> Lowerer::lower_hir_vhdl_math_real_uniform(
     if (!statement || statement->vhdl == nullptr) {
         return std::nullopt;
     }
-    const auto& procedure = statement->vhdl->procedure;
-    auto name = std::string { procedure.text() };
-    if (const auto separator = name.find_last_of('.');
-        separator != std::string::npos) {
-        name.erase(0U, separator + 1U);
-    }
-    if (!same_hir_identifier(name, "uniform", true)
-        || statement->vhdl->procedure_arguments.size() != 3U) {
+    if (statement->vhdl->procedure_arguments.size() != 3U) {
         return std::nullopt;
     }
-    // A user procedure UNIFORM is lowered as written.
-    std::vector<semantic::DeclarationId> candidates = procedure.overloads;
-    if (procedure.selected) {
-        candidates.push_back(*procedure.selected);
-    }
-    for (const auto candidate : candidates) {
-        const auto declaration
-            = specialized_hir_unit_->find_declaration(candidate);
-        if (!declaration || declaration->vhdl == nullptr
-            || !specialized_hir_unit_->design().vhdl_scope_in_package(
-                declaration->vhdl->scope, "ieee", "math_real")) {
-            return std::nullopt;
-        }
+    // Only the IEEE.MATH_REAL procedure UNIFORM the call resolved to; a user
+    // procedure of that name is lowered as written.
+    // The callee is the one analysis stored: the resolved procedure, else
+    // the name's selection or its only (overloaded) candidates.
+    const auto is_uniform = [&](const semantic::DeclarationId id) {
+        const auto callee = specialized_hir_unit_->find_declaration(id);
+        return callee && callee->vhdl != nullptr
+            && semantic::vhdl_native_is(*callee->vhdl,
+                semantic::VhdlNativePackage::ieee_math_real,
+                semantic::VhdlNativeName::uniform);
+    };
+    const auto& call = *statement->vhdl;
+    const bool uniform = call.resolved_procedure
+        ? is_uniform(*call.resolved_procedure)
+        : call.procedure.selected
+        ? is_uniform(*call.procedure.selected)
+        : !call.procedure.overloads.empty()
+            && std::ranges::all_of(call.procedure.overloads, is_uniform);
+    if (!uniform) {
+        return std::nullopt;
     }
     const auto& arguments = statement->vhdl->procedure_arguments;
     if (std::ranges::any_of(arguments, [](const auto& argument) {

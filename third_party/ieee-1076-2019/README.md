@@ -15,7 +15,10 @@ The upstream `ieee/` and `std/` source directories, `LICENSE`, and
 file. `inventory.cmake` supplies fsim's dependency-ordered review and loading
 inventory; it does not modify the upstream sources.
 
-These files are included for reference only. fsim simulates the IEEE
-packages with its built-in models; the one exception is `math_complex`, which
-it analyzes from its source here. `std.standard` is language-predefined
-rather than parsed as an ordinary source.
+These files are the sources of fsim's precompiled standard library artifact
+for VHDL-2019: fsim builds the artifact from the `ieee/` packages and from
+`std/textio.vhdl` and `std/env.vhdl` at fsim build time. They are also the
+originals from which `scripts/derive_ieee_packages.py` derives the per-edition
+trees of `third_party/ieee-derived` (VHDL-1987, 1993, 2002 and 2008), which are
+the sources of the artifacts of those editions. `std.standard` is
+language-predefined rather than parsed as an ordinary source.

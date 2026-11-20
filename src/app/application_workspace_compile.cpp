@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "application_standard_library_artifact_internal.hpp"
 #include "application_workspace_internal.hpp"
 
 #include "fsim/artifact/object.hpp"
@@ -666,6 +667,12 @@ namespace {
     {
         std::vector<std::string> result;
         for (const auto& dependency : vhdl_package_dependencies(checked)) {
+            // A package of the precompiled standard libraries is a mapped
+            // library's unit: an object carries it only as the context its
+            // own units need, as for any other library.
+            if (is_standard_library_package_revision(dependency.revision)) {
+                continue;
+            }
             const auto library = dependency.package.substr(0, dependency.package.find('.'));
             if (std::ranges::find(result, library) == result.end()) {
                 result.push_back(library);
@@ -683,8 +690,9 @@ std::optional<std::vector<WorkspaceCompiledObject>> partition_workspace_objects(
     return partition_objects(checked, config, diagnostics);
 }
 
-int handle_workspace_compile(const cli::Invocation& invocation, const project::Config& config,
-    diagnostic::Engine& diagnostics, std::ostream& output, std::ostream&)
+static int workspace_compile(const cli::Invocation& invocation, const project::Config& config,
+    diagnostic::Engine& diagnostics, std::ostream& output,
+    const std::optional<frontend::VhdlStandard> bootstrap_standard)
 {
     // Workspace objects and libraries are checksummed compiled HIR; the new
     // object's state is still checked when it is serialized.
@@ -716,7 +724,9 @@ int handle_workspace_compile(const cli::Invocation& invocation, const project::C
         }
         return result.ok() ? 0 : 1;
     }
-    workspace::Store store(config.base_directory);
+    const auto store = bootstrap_standard
+        ? workspace::Store(config.base_directory, workspace::StandardLibraryStore { })
+        : workspace::Store(config.base_directory);
     std::string error;
     auto transaction = store.begin_library(sources.library, error);
     if (!transaction) {
@@ -817,7 +827,7 @@ int handle_workspace_compile(const cli::Invocation& invocation, const project::C
                << "  standard: " << sources.standard << '\n';
     }
     auto checked_workspace = check_project_for_object(config, diagnostics, &*imported,
-        available_units);
+        available_units, bootstrap_standard);
     if (!checked_workspace) {
         // A unit only a skipped object provides is reported as missing.
         report_skipped();
@@ -978,6 +988,19 @@ int handle_workspace_compile(const cli::Invocation& invocation, const project::C
         output << "compiled " << count << " object(s) into library '" << sources.library << "'\n";
     }
     return 0;
+}
+
+int handle_workspace_compile(const cli::Invocation& invocation, const project::Config& config,
+    diagnostic::Engine& diagnostics, std::ostream& output, std::ostream&)
+{
+    return workspace_compile(invocation, config, diagnostics, output, std::nullopt);
+}
+
+int compile_standard_library(const cli::Invocation& invocation, const project::Config& config,
+    diagnostic::Engine& diagnostics, std::ostream& output, std::ostream&,
+    const frontend::VhdlStandard standard)
+{
+    return workspace_compile(invocation, config, diagnostics, output, standard);
 }
 
 } // namespace fsim::app::application_detail

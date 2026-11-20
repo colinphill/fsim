@@ -12,6 +12,7 @@
 #include "fsim/frontend/coverage_resolution.hpp"
 #include "fsim/frontend/design_core.hpp"
 #include "fsim/frontend/diagnostic.hpp"
+#include "fsim/diagnostic/diagnostic.hpp"
 
 #include <cstdlib>
 #include <stdexcept>
@@ -30,7 +31,21 @@ namespace fsim::tests::elaboration {
 
 semantic::CompiledDesign compile_test_design(frontend::ParsedDesign parsed)
 {
-    app::application_detail::stamp_vhdl_predefined_context(parsed);
+    // STD and IEEE come from the precompiled standard libraries, loaded and
+    // linked as the check step does (gate BD D2).
+    app::application_detail::CompilationWorkspace workspace;
+    workspace.parsed = std::move(parsed);
+    diagnostic::Engine standard_diagnostics;
+    app::application_detail::inject_vhdl_standard_libraries(workspace,
+        standard_diagnostics,
+        app::application_detail::load_precompiled_standard_libraries);
+    if (standard_diagnostics.has_error()) {
+        throw std::runtime_error {
+            "test design: the standard libraries could not be loaded: "
+            + standard_diagnostics.diagnostics().front().message
+        };
+    }
+    parsed = std::move(workspace.parsed);
     std::vector<frontend::Diagnostic> class_diagnostics;
     (void)frontend::resolve_systemverilog_classes(
         parsed, class_diagnostics);
@@ -52,7 +67,23 @@ semantic::CompiledDesign compile_test_design(frontend::ParsedDesign parsed)
         std::move(vhdl)
     };
     semantic::refresh_compiled_design_metadata(compiled);
-    return compiled;
+    if (workspace.mapped_compiled_designs.empty()) {
+        return compiled;
+    }
+    std::vector<semantic::CompiledDesign> inputs;
+    for (auto& mapped : workspace.mapped_compiled_designs) {
+        inputs.push_back(std::move(mapped));
+    }
+    inputs.push_back(std::move(compiled));
+    const auto linked = app::application_detail::install_linked_compiled_design(
+        workspace, std::move(inputs));
+    if (!linked.ok()) {
+        throw std::runtime_error {
+            "test design: the standard libraries could not be linked: "
+            + linked.error
+        };
+    }
+    return std::move(static_cast<semantic::CompiledDesign&>(workspace));
 }
 
 void set_merge_constant_drivers(const bool enabled)

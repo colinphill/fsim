@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "application_standard_library_artifact_internal.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
+#include "fsim/support/vhdl_standard_package_form.hpp"
 #include "fsim/app/built_project.hpp"
 #include "fsim/compiler/object_cache.hpp"
 #include "fsim/diagnostic/diagnostic.hpp"
@@ -61,10 +63,6 @@ namespace {
     constexpr std::array kStdPackages {
         StdPackageSource { "standard", "std/standard.vhdl",
             "0c091149ab228e6a2a53cc9bf1a377ca393e2208384dfb92bccc4f24b8e5deef" },
-        StdPackageSource { "textio", "std/textio.vhdl",
-            "01028097080267c951b06d31ea4b4b98a4047674dbbcf4791e691e6e043ee978" },
-        StdPackageSource { "env", "std/env.vhdl",
-            "59169bc8381578d4176cb6589f2cb7c407539f53d055b64da365c12ea18bf1ae" },
         StdPackageSource { "reflection", "std/reflection.vhdl",
             "66f6366e77c67385c2b66ecb2e746bed091090f41d870742886aa5576042d698" },
     };
@@ -213,6 +211,50 @@ namespace {
         return frontend::VhdlStandard::Vhdl1987;
     }
 
+    // The packages served from the standard library artifacts (gate BD D2).
+    struct ArtifactPackage {
+        std::string_view library;
+        std::string_view name;
+    };
+
+    constexpr std::array kArtifactPackages {
+        ArtifactPackage { "std", "textio" },
+        ArtifactPackage { "std", "env" },
+        ArtifactPackage { "ieee", "std_logic_1164" },
+        ArtifactPackage { "ieee", "numeric_bit" },
+        ArtifactPackage { "ieee", "numeric_std" },
+        ArtifactPackage { "ieee", "numeric_bit_unsigned" },
+        ArtifactPackage { "ieee", "numeric_std_unsigned" },
+        ArtifactPackage { "ieee", "math_real" },
+        ArtifactPackage { "ieee", "math_complex" },
+    };
+
+    const ArtifactPackage* artifact_package(
+        const std::string_view library, const std::string_view name)
+    {
+        const auto found = std::ranges::find_if(
+            kArtifactPackages, [&](const ArtifactPackage& package) {
+                return package.library == library && package.name == name;
+            });
+        return found == kArtifactPackages.end() ? nullptr : &*found;
+    }
+
+    // "library.name" as the package omission of the linker spells it.
+    std::string artifact_package_key(const ArtifactPackage& package)
+    {
+        return std::string { package.library } + "." + std::string { package.name };
+    }
+
+    frontend::VhdlStandard artifact_package_minimum_standard(
+        const ArtifactPackage& package)
+    {
+        if (package.library == "std") {
+            return package.name == "env" ? frontend::VhdlStandard::Vhdl2008
+                                         : frontend::VhdlStandard::Vhdl1987;
+        }
+        return ieee_package_minimum_standard(package.name);
+    }
+
     std::optional<frontend::VhdlStandard> requested_ieee_standard(
         const frontend::ParsedDesign& parsed,
         diagnostic::Engine& diagnostics)
@@ -227,17 +269,35 @@ namespace {
                     continue;
                 }
                 for (const auto& name : item.selected_names) {
-                    if (!name.starts_with("ieee.")) {
+                    // The packages of IEEE and the STD packages served from
+                    // the standard library artifacts.
+                    const auto library_end = name.find('.');
+                    if (library_end == std::string::npos) {
                         continue;
                     }
-                    const auto package_end = name.find('.', 5U);
+                    const auto library = std::string_view { name }.substr(
+                        0U, library_end);
+                    if (library != "ieee" && library != "std") {
+                        continue;
+                    }
+                    const auto package_end = name.find('.', library_end + 1U);
                     const auto package = std::string_view { name }.substr(
-                        5U, package_end == std::string::npos ? std::string::npos : package_end - 5U);
-                    const auto minimum = ieee_package_minimum_standard(package);
+                        library_end + 1U,
+                        package_end == std::string::npos
+                            ? std::string::npos
+                            : package_end - library_end - 1U);
+                    const auto* served = artifact_package(library, package);
+                    if (library == "std" && served == nullptr) {
+                        continue;
+                    }
+                    const auto minimum = served != nullptr
+                        ? artifact_package_minimum_standard(*served)
+                        : ieee_package_minimum_standard(package);
                     if (unit.vhdl_standard < minimum) {
                         diagnostics.error(
                             "FSIM-FE-VHSTD-003",
-                            "compiler-supplied ieee." + std::string { package }
+                            "compiler-supplied " + std::string { library }
+                                + "." + std::string { package }
                                 + " requires VHDL-"
                                 + std::string { frontend::to_string(minimum) }
                                 + ", but the owning source selects VHDL-"
@@ -298,53 +358,11 @@ end package vital_memory;
 
     constexpr std::array kPackages {
         PackageSource {
-            "std_logic_1164",
-            "ieee/std_logic_1164.vhdl",
-            "2a34c7d7b2c8ba21b1e91153741399cf2cd23c8b04028dcf53765efeea76de55",
-            "ieee/std_logic_1164-body.vhdl",
-            "6534fe4842c1133199db93725e36a9e973ea8e2ab03890433c013af813d5ce2c" },
-        PackageSource {
             "std_logic_textio",
             "ieee/std_logic_textio.vhdl",
             "526a2e1e0a05f35ae97fb046ec90ebe8250324390aab2f3adccde73e605e3937",
             "",
             "" },
-        PackageSource {
-            "numeric_bit",
-            "ieee/numeric_bit.vhdl",
-            "e54a257a6da6141ef2fb0b51dccbde127a665e474e4e8e354f28e720b5d440be",
-            "ieee/numeric_bit-body.vhdl",
-            "21fc27ef3d7ff0932ebb6c92a4d5f10865b1867ce392a008c2de1d6fde3e11ab" },
-        PackageSource {
-            "numeric_bit_unsigned",
-            "ieee/numeric_bit_unsigned.vhdl",
-            "49bb77a8ad3eb9945040a880b5daf5895f5d98b25ae52565622ebbda1b27d8da",
-            "ieee/numeric_bit_unsigned-body.vhdl",
-            "bcf17a63b59f1d739c3f2f29642df97457671338eaef8e9acdb946cfbadd0236" },
-        PackageSource {
-            "numeric_std",
-            "ieee/numeric_std.vhdl",
-            "fcb9b1d05f8d98cd068e464bf20804d432a234128b253218524901bc96d19631",
-            "ieee/numeric_std-body.vhdl",
-            "10e8bdc4fedc881a972f5900abe833d24397d686e07b566479c47495acf39721" },
-        PackageSource {
-            "numeric_std_unsigned",
-            "ieee/numeric_std_unsigned.vhdl",
-            "a39859f391c7d635e26cfec870e601513400796b8cb02f0662094463f4d107e3",
-            "ieee/numeric_std_unsigned-body.vhdl",
-            "dccecb858d476cecfb00048f1495a60c130a7561b9096b864be5a000ca597b19" },
-        PackageSource {
-            "math_real",
-            "ieee/math_real.vhdl",
-            "33fe4fe3fc21cbe6c36ed4969d96ed25549680bb3d936f106078fe47af2fec7b",
-            "ieee/math_real-body.vhdl",
-            "ed057e95cd908b547d128d6a29dbfcf243ba64468d6e6cc780090bc9cd79f3b2" },
-        PackageSource {
-            "math_complex",
-            "ieee/math_complex.vhdl",
-            "deddee8078c0c85f276bd5ebe1a49ac303116fc8fd6a7943c84a80eff73b969a",
-            "ieee/math_complex-body.vhdl",
-            "4f2f523002822b27a721d93f62d4220d3f0f75bc980fdc62c2642de03926029f" },
         PackageSource {
             "fixed_float_types",
             "ieee/fixed_float_types.vhdl",
@@ -666,9 +684,10 @@ end package vital_memory;
 
     bool uses_package(
         const frontend::ParsedDesign& parsed,
-        const std::string_view package)
+        const std::string_view package,
+        const std::string_view library = "ieee")
     {
-        const auto prefix = "ieee." + std::string { package };
+        const auto prefix = std::string { library } + "." + std::string { package };
         for (const auto& unit : parsed.units) {
             if (unit.language != frontend::Language::Vhdl2008) {
                 continue;
@@ -682,6 +701,12 @@ end package vital_memory;
                         return true;
                     }
                 }
+            }
+            // A use clause of any declarative region, or an expanded name
+            // (STD.ENV.STOP; STD is implicitly visible, 13.2).
+            if (std::ranges::binary_search(
+                    unit.vhdl_library_unit_references, prefix)) {
+                return true;
             }
         }
         return false;
@@ -810,52 +835,6 @@ end context ieee_std_context;
         }
     }
 
-    std::optional<std::vector<frontend::DesignUnit>> analyzed_units(
-        const std::string_view package,
-        const std::filesystem::path& declaration_path,
-        const std::string_view declaration,
-        const std::filesystem::path& body_path,
-        const std::string_view body,
-        diagnostic::Engine& diagnostics,
-        const frontend::VhdlStandard standard)
-    {
-        std::vector<frontend::DesignUnit> units;
-        std::vector<std::pair<std::filesystem::path, std::string>> sources;
-        sources.emplace_back(declaration_path, std::string { declaration });
-        if (!body_path.empty()) {
-            sources.emplace_back(body_path, std::string { body });
-        }
-        for (auto& [path, text] : sources) {
-            // The package is analyzed into IEEE, so its `use WORK.MATH_REAL`
-            // names IEEE.MATH_REAL.
-            for (auto at = text.find("use WORK."); at != std::string::npos;
-                 at = text.find("use WORK.", at)) {
-                text.replace(at, 9U, "library IEEE; use IEEE.");
-                at += 23U;
-            }
-            auto parsed = frontend::parse(
-                frontend::SourceText { fsim::support::path_to_utf8(path), text },
-                frontend::Language::Vhdl2008, standard);
-            if (!parsed.ok() || parsed.design.units.size() != 1U) {
-                diagnostics.error(
-                    "FSIM-FE-VHSTD-003",
-                    "internal ieee." + std::string { package }
-                        + " source does not analyze for VHDL-"
-                        + std::string { frontend::to_string(standard) },
-                    { fsim::support::path_to_utf8(path), { }, { } });
-                return std::nullopt;
-            }
-            auto unit = std::move(parsed.design.units.front());
-            unit.library = "ieee";
-            unit.vhdl_predefined_environment
-                = predefined_environment(standard, "ieee");
-            unit.standard_package_revision
-                = std::string { kIeeePackageRevision };
-            units.push_back(std::move(unit));
-        }
-        return units;
-    }
-
     std::optional<std::vector<frontend::DesignUnit>> projected_units(
         const std::string_view package,
         const std::filesystem::path& declaration_path,
@@ -866,16 +845,8 @@ end context ieee_std_context;
     {
         std::vector<frontend::DesignUnit> units;
         std::string dependency;
-        if (package == "numeric_std" || package == "std_logic_textio") {
-            dependency = "library ieee;\nuse ieee.std_logic_1164.all;\n";
-        } else if (package == "numeric_bit_unsigned") {
-            dependency = "library ieee;\nuse ieee.numeric_bit.all;\n";
-        } else if (package == "numeric_std_unsigned") {
-            dependency = "library ieee;\nuse ieee.std_logic_1164.all;\n"
-                         "use ieee.numeric_std.all;\n";
-        } else if (package == "math_complex") {
-            dependency = "library ieee;\nuse ieee.math_real.all;\n";
-        } else if (package == "std_logic_arith" || package == "std_logic_misc") {
+        if (package == "std_logic_textio" || package == "std_logic_arith"
+            || package == "std_logic_misc") {
             dependency = "library ieee;\nuse ieee.std_logic_1164.all;\n";
         } else if (package == "std_logic_signed"
             || package == "std_logic_unsigned") {
@@ -906,9 +877,6 @@ end context ieee_std_context;
         // The packages whose IEEE sources declare a CopyRightNotice keep it
         // as an ordinary STRING constant (IEEE 1076-2019 G.1).
         constexpr std::array copyright_packages {
-            std::string_view { "math_real" },
-            std::string_view { "numeric_bit_unsigned" },
-            std::string_view { "numeric_std_unsigned" },
             std::string_view { "fixed_generic_pkg" },
             std::string_view { "fixed_pkg" },
             std::string_view { "float_generic_pkg" },
@@ -919,18 +887,9 @@ end context ieee_std_context;
             ? std::string { "  constant CopyRightNotice : STRING :=\n"
                             "    \"Copyright IEEE P1076 WG. Licensed Apache 2.0\";\n" }
             : std::string { };
-        // STD_LOGIC_1164's X01, X01Z, UX01 and UX01Z are ordinary resolved
-        // subtypes of the intrinsic STD_ULOGIC (IEEE 1076-2019 16.7), so they
-        // are declared as such rather than named intrinsically.
-        const auto members = package == "std_logic_1164"
-            ? std::string { "  subtype X01 is resolved std_ulogic range 'X' to '1';\n"
-                            "  subtype X01Z is resolved std_ulogic range 'X' to 'Z';\n"
-                            "  subtype UX01 is resolved std_ulogic range 'U' to '1';\n"
-                            "  subtype UX01Z is resolved std_ulogic range 'U' to 'Z';\n" }
-            : std::string { };
         const auto declaration_projection = dependency
             + "package " + std::string { package } + " is\n" + copyright
-            + members + "end " + std::string { package } + ";\n";
+            + "end " + std::string { package } + ";\n";
         const auto body_projection = "package body " + std::string { package } + " is\n"
             + "end " + std::string { package } + ";\n";
         std::vector<std::pair<std::filesystem::path, std::string_view>> sources;
@@ -1002,50 +961,11 @@ end context ieee_std_context;
             unit.library = "ieee";
             unit.vhdl_predefined_environment = predefined_environment(standard, "ieee");
             unit.standard_package_revision = std::string { revision };
+            unit.standard_package_form
+                = support::VhdlStandardPackageForm::projection;
             if (unit.primary_name.empty() && is_synopsys_package(package)) {
                 unit.standard_package_declarations = synopsys_declarations(package);
                 unit.standard_package_operator_profiles = synopsys_profiles(package);
-            } else if (unit.primary_name.empty() && package == "std_logic_1164") {
-                unit.standard_package_declarations = {
-                    "std_ulogic",
-                    "std_ulogic_vector",
-                    "std_logic",
-                    "std_logic_vector",
-                    "resolved",
-                    "and",
-                    "nand",
-                    "or",
-                    "nor",
-                    "xor",
-                    "xnor",
-                    "not",
-                    "sll",
-                    "srl",
-                    "rol",
-                    "ror",
-                    "to_bit",
-                    "to_bitvector",
-                    "to_stdulogic",
-                    "to_stdlogicvector",
-                    "to_stdulogicvector",
-                    "to_01",
-                    "to_x01",
-                    "to_x01z",
-                    "to_ux01",
-                    "??",
-                    "rising_edge",
-                    "falling_edge",
-                    "is_x",
-                    "to_string",
-                    "to_ostring",
-                    "to_hstring",
-                    "read",
-                    "write",
-                    "oread",
-                    "hread",
-                    "owrite",
-                    "hwrite",
-                };
             } else if (unit.primary_name.empty()
                 && package == "std_logic_textio") {
                 unit.standard_package_declarations = {
@@ -1062,41 +982,6 @@ end context ieee_std_context;
                 unit.standard_package_declarations
                     = frontend::vhdl_ieee_intrinsic_package_declarations(
                         package);
-            } else if (unit.primary_name.empty()
-                && (package == "numeric_bit_unsigned"
-                    || package == "numeric_std_unsigned")) {
-                unit.standard_package_declarations = {
-                    "abs", "+", "-", "*", "/", "mod", "rem", "**",
-                    "=", "/=", "<", "<=", ">", ">=", "sll", "srl",
-                    "rol", "ror", "shift_left", "shift_right",
-                    "rotate_left", "rotate_right", "to_integer",
-                    "to_unsigned", "to_01", "find_leftmost",
-                    "find_rightmost", "minimum", "maximum",
-                };
-            } else if (unit.primary_name.empty()
-                && package == "math_real") {
-                unit.standard_package_declarations = {
-                    "math_e", "math_1_over_e", "math_pi",
-                    "math_2_pi", "math_1_over_pi", "math_pi_over_2",
-                    "math_pi_over_3", "math_pi_over_4", "math_3_pi_over_2",
-                    "math_log_of_2", "math_log_of_10", "math_log2_of_e",
-                    "math_log10_of_e", "math_sqrt_2", "math_1_over_sqrt_2",
-                    "math_sqrt_pi", "math_deg_to_rad", "math_rad_to_deg",
-                    "sign", "ceil", "floor", "round", "trunc", "mod",
-                    "realmax", "realmin", "uniform", "sqrt", "cbrt", "**",
-                    "exp", "log", "log2", "log10", "sin", "cos", "tan",
-                    "arcsin", "arccos", "arctan", "sinh", "cosh", "tanh",
-                    "arcsinh", "arccosh", "arctanh",
-                };
-            } else if (unit.primary_name.empty()
-                && package == "math_complex") {
-                unit.standard_package_declarations = {
-                    "complex", "complex_polar", "positive_real",
-                    "principal_value", "math_cbase_1", "math_cbase_j",
-                    "math_czero", "cmplx", "get_principal_value", "arg",
-                    "abs", "conj", "sqrt", "exp", "log", "sin", "cos",
-                    "tan", "sinh", "cosh", "tanh", "+", "-", "*", "/",
-                };
             } else if (unit.primary_name.empty() && package == "vital_timing") {
                 unit.standard_package_declarations = {
                     "vitaltransitiontype",
@@ -1249,7 +1134,8 @@ end context ieee_std_context;
                     "vitalmemorycrossports",
                     "vitalmemoryviolation",
                 };
-            } else if (unit.primary_name.empty()) {
+            } else if (unit.primary_name.empty()
+                && package == "fixed_float_types") {
                 unit.standard_package_declarations = {
                     "signed",
                     "unsigned",
@@ -1284,121 +1170,6 @@ end context ieee_std_context;
                     "minimum",
                     "maximum",
                 };
-                // STD_MATCH is declared by NUMERIC_STD only (IEEE 1076-2019
-                // 16.8.5); NUMERIC_BIT has none.
-                if (package == "numeric_std") {
-                    unit.standard_package_declarations.emplace_back("std_match");
-                }
-            }
-            if (unit.primary_name.empty() && package == "std_logic_1164") {
-                const auto unavailable = [&](const std::string_view name) {
-                    if (standard < frontend::VhdlStandard::Vhdl1993
-                        && (name == "xnor" || name == "sll" || name == "srl"
-                            || name == "rol" || name == "ror"
-                            || name == "rising_edge" || name == "falling_edge"
-                            || name == "is_x")) {
-                        return true;
-                    }
-                    return standard < frontend::VhdlStandard::Vhdl2008
-                        && (name == "??" || name == "to_string"
-                            || name == "to_ostring" || name == "to_hstring"
-                            || name == "read" || name == "write"
-                            || name == "oread" || name == "hread"
-                            || name == "owrite" || name == "hwrite");
-                };
-                std::erase_if(unit.standard_package_declarations, unavailable);
-                unit.standard_package_operator_profiles = {
-                    "and(std_ulogic,std_ulogic)->std_ulogic",
-                    "or(std_ulogic,std_ulogic)->std_ulogic",
-                    "nand(std_ulogic,std_ulogic)->std_ulogic",
-                    "nor(std_ulogic,std_ulogic)->std_ulogic",
-                    "xor(std_ulogic,std_ulogic)->std_ulogic",
-                    "not(std_ulogic)->std_ulogic",
-                    "and(std_ulogic_vector,std_ulogic_vector)->std_ulogic_vector",
-                    "or(std_ulogic_vector,std_ulogic_vector)->std_ulogic_vector"
-                };
-                if (standard >= frontend::VhdlStandard::Vhdl1993) {
-                    append_strings(
-                        unit.standard_package_operator_profiles,
-                        std::array<std::string, 6> {
-                            "xnor(std_ulogic,std_ulogic)->std_ulogic",
-                            "sll(std_ulogic_vector,integer)->std_ulogic_vector",
-                            "srl(std_ulogic_vector,integer)->std_ulogic_vector",
-                            "sla(std_ulogic_vector,integer)->std_ulogic_vector",
-                            "sra(std_ulogic_vector,integer)->std_ulogic_vector",
-                            "rol(std_ulogic_vector,integer)->std_ulogic_vector" });
-                }
-                if (standard >= frontend::VhdlStandard::Vhdl2008) {
-                    append_strings(
-                        unit.standard_package_operator_profiles,
-                        std::array<std::string, 3> {
-                            "and(std_ulogic_vector)->std_ulogic",
-                            "or(std_ulogic_vector)->std_ulogic",
-                            "?"
-                            "?(std_ulogic)->boolean" });
-                }
-            } else if (unit.primary_name.empty()
-                && (package == "numeric_bit" || package == "numeric_std")) {
-                std::erase_if(
-                    unit.standard_package_declarations,
-                    [&](const std::string_view name) {
-                        if (standard < frontend::VhdlStandard::Vhdl1993
-                            && (name == "sll" || name == "srl" || name == "rol"
-                                || name == "ror" || name == "shift_left"
-                                || name == "shift_right" || name == "rotate_left"
-                                || name == "rotate_right")) {
-                            return true;
-                        }
-                        return standard < frontend::VhdlStandard::Vhdl2008
-                            && (name == "find_leftmost" || name == "find_rightmost"
-                                || name == "minimum" || name == "maximum");
-                    });
-                unit.standard_package_operator_profiles = {
-                    "+(unsigned,unsigned)->unsigned", "+(signed,signed)->signed",
-                    "-(unsigned,unsigned)->unsigned", "-(signed,signed)->signed",
-                    "*(unsigned,unsigned)->unsigned", "*(signed,signed)->signed",
-                    "=(unsigned,unsigned)->boolean", "=(signed,signed)->boolean",
-                    "resize(unsigned,natural)->unsigned",
-                    "resize(signed,natural)->signed"
-                };
-                if (standard >= frontend::VhdlStandard::Vhdl1993) {
-                    append_strings(
-                        unit.standard_package_operator_profiles,
-                        std::array<std::string, 4> {
-                            "sll(unsigned,integer)->unsigned",
-                            "srl(unsigned,integer)->unsigned",
-                            "rol(unsigned,integer)->unsigned",
-                            "ror(unsigned,integer)->unsigned" });
-                }
-                if (standard >= frontend::VhdlStandard::Vhdl2008) {
-                    append_strings(
-                        unit.standard_package_operator_profiles,
-                        std::array<std::string, 4> {
-                            "minimum(unsigned,unsigned)->unsigned",
-                            "maximum(unsigned,unsigned)->unsigned",
-                            "find_leftmost(unsigned,std_ulogic)->integer",
-                            "find_rightmost(unsigned,std_ulogic)->integer" });
-                }
-            } else if (unit.primary_name.empty()
-                && (package == "numeric_bit_unsigned"
-                    || package == "numeric_std_unsigned")) {
-                const auto vector_type = package == "numeric_bit_unsigned"
-                    ? std::string { "bit_vector" }
-                    : std::string { "std_ulogic_vector" };
-                unit.standard_package_operator_profiles = {
-                    "+(" + vector_type + "," + vector_type + ")->" + vector_type,
-                    "-(" + vector_type + "," + vector_type + ")->" + vector_type,
-                    "*(" + vector_type + "," + vector_type + ")->" + vector_type,
-                    "=(" + vector_type + "," + vector_type + ")->boolean",
-                    "sll(" + vector_type + ",integer)->" + vector_type,
-                    "srl(" + vector_type + ",integer)->" + vector_type,
-                    "rol(" + vector_type + ",integer)->" + vector_type,
-                    "ror(" + vector_type + ",integer)->" + vector_type,
-                    "minimum(" + vector_type + "," + vector_type + ")->"
-                        + vector_type,
-                    "maximum(" + vector_type + "," + vector_type + ")->"
-                        + vector_type,
-                };
             }
             units.push_back(std::move(unit));
         }
@@ -1414,6 +1185,21 @@ end context ieee_std_context;
         const std::string_view qualified_name,
         const frontend::VhdlStandard standard)
     {
+        const auto separator = qualified_name.find('.');
+        if (separator != std::string_view::npos) {
+            const auto* served = artifact_package(
+                qualified_name.substr(0U, separator),
+                qualified_name.substr(separator + 1U));
+            if (served != nullptr) {
+                if (standard < artifact_package_minimum_standard(*served)) {
+                    return std::nullopt;
+                }
+                const auto key = expected_standard_library_artifact_key(standard);
+                return GovernedPackageIdentity {
+                    standard_library_package_revision(standard), key.sources_digest
+                };
+            }
+        }
         if (qualified_name.starts_with("std.")) {
             if (standard != frontend::VhdlStandard::Vhdl2019) {
                 return std::nullopt;
@@ -1518,6 +1304,7 @@ void stamp_vhdl_predefined_context(frontend::ParsedDesign& parsed)
 void inject_vhdl_standard_libraries(
     CompilationWorkspace& checked,
     diagnostic::Engine& diagnostics,
+    const StandardLibraryLoader& load_standard_libraries,
     const bool complete_environment)
 {
     stamp_vhdl_predefined_context(checked.parsed);
@@ -1569,7 +1356,10 @@ void inject_vhdl_standard_libraries(
         && diagnostics.diagnostics().size() != diagnostic_count) {
         return;
     }
-    if (!requested_standard && populate_complete_environment) {
+    // A design that names a standard package only by expanded name (no use
+    // clause) loads the edition of its own VHDL units (owner 11-19: each
+    // source set maps the std/ieee pair of its standard).
+    if (!requested_standard) {
         const auto source = std::ranges::find_if(
             checked.parsed.units, [](const frontend::DesignUnit& unit) {
                 return unit.language == frontend::Language::Vhdl2008;
@@ -1604,6 +1394,8 @@ void inject_vhdl_standard_libraries(
         || uses_package(checked.parsed, "math_real");
     const bool numeric_std = fixed_generic || numeric_std_unsigned
         || std_context || uses_package(checked.parsed, "numeric_std");
+    const bool std_textio = uses_package(checked.parsed, "textio", "std");
+    const bool std_env = uses_package(checked.parsed, "env", "std");
     const bool logic_textio = uses_package(checked.parsed, "std_logic_textio");
     const bool std_logic_signed = uses_package(checked.parsed, "std_logic_signed");
     const bool std_logic_unsigned = uses_package(checked.parsed, "std_logic_unsigned");
@@ -1620,11 +1412,84 @@ void inject_vhdl_standard_libraries(
         && !fixed_types && !fixed_generic && !fixed_pkg
         && !float_generic && !float_pkg && !std_logic_arith
         && !std_logic_signed && !std_logic_unsigned && !std_logic_misc && !vital_timing
-        && !vital_primitives && !vital_memory) {
+        && !vital_primitives && !vital_memory && !std_textio && !std_env) {
         return;
     }
     const auto standard = requested_standard.value_or(
         frontend::VhdlStandard::Vhdl2008);
+    // The packages of the standard library artifact of `standard` that the
+    // design requests (IEEE 1076-2019 16.4, 16.5, 16.8, 16.10; 16.2, 16.3):
+    // the artifact is loaded and linked with the design, less the packages
+    // nothing requests.
+    {
+        std::set<std::string> kept;
+        for (const auto& package : kArtifactPackages) {
+            const bool available
+                = standard >= artifact_package_minimum_standard(package);
+            const auto name = package.name;
+            const bool requested = populate_complete_environment && available
+                ? true
+                : package.library == "std"
+                    ? (name == "textio" ? std_textio : std_env)
+                    : name == "std_logic_1164" ? std_logic
+                    : name == "numeric_bit"    ? numeric_bit
+                    : name == "numeric_bit_unsigned" ? numeric_bit_unsigned
+                    : name == "numeric_std"    ? numeric_std
+                    : name == "numeric_std_unsigned" ? numeric_std_unsigned
+                    : name == "math_real"      ? math_real
+                                               : math_complex;
+            if (!available || !requested) {
+                continue;
+            }
+            const bool conflict = std::ranges::any_of(
+                checked.parsed.units,
+                [&](const frontend::DesignUnit& unit) {
+                    return unit.language == frontend::Language::Vhdl2008
+                        && unit.kind == frontend::UnitKind::VhdlPackage
+                        && unit.library == package.library
+                        && unit.name == name;
+                });
+            if (conflict) {
+                diagnostics.error(
+                    "FSIM-FE-VHSTD-004",
+                    "the compiler-supplied " + std::string { package.library }
+                        + "." + std::string { name }
+                        + " package cannot be redeclared by a project source");
+                return;
+            }
+            kept.insert(artifact_package_key(package));
+        }
+        if (!kept.empty()) {
+            const std::vector<std::string> packages { kept.begin(), kept.end() };
+            auto libraries = load_standard_libraries(standard, packages, diagnostics);
+            if (!libraries) {
+                return;
+            }
+            // The objects compiled from this design record the precompiled
+            // packages, so elaboration loads them (and a library built from
+            // other sources is reported stale, FSIM-ART-VHDEP-001).
+            const auto key = expected_standard_library_artifact_key(standard);
+            for (const auto& unit : libraries->vhdl_units()) {
+                if (unit.kind != semantic::vhdl::UnitKind::package
+                    || !unit.primary_name.empty()) {
+                    continue;
+                }
+                const auto package = support::ascii_lower(unit.library) + "."
+                    + support::ascii_lower(unit.name);
+                checked.precompiled_vhdl_package_dependencies.push_back({
+                    std::string { frontend::to_string(standard) },
+                    predefined_environment(standard,
+                        support::ascii_lower(unit.library) == "std"
+                            ? std::string_view { "std" }
+                            : std::string_view { "ieee" })
+                        .identity,
+                    package,
+                    standard_library_package_revision(standard),
+                    key.sources_digest });
+            }
+            checked.mapped_compiled_designs.push_back(std::move(*libraries));
+        }
+    }
     std::vector<CheckedSource> sources;
     std::vector<frontend::DesignUnit> units;
     for (const auto& package : kPackages) {
@@ -1632,14 +1497,7 @@ void inject_vhdl_standard_libraries(
             >= ieee_package_minimum_standard(package.name);
         const bool requested = populate_complete_environment && available
             ? true
-            : package.name == "std_logic_1164" ? std_logic
             : package.name == "std_logic_textio"                ? logic_textio
-            : package.name == "numeric_bit"                     ? numeric_bit
-            : package.name == "numeric_bit_unsigned"            ? numeric_bit_unsigned
-            : package.name == "numeric_std"                     ? numeric_std
-            : package.name == "numeric_std_unsigned"            ? numeric_std_unsigned
-            : package.name == "math_real"                       ? math_real
-            : package.name == "math_complex"                    ? math_complex
             : package.name == "fixed_float_types"               ? fixed_types
             : package.name == "fixed_generic_pkg"               ? fixed_generic
             : package.name == "fixed_pkg"                       ? fixed_pkg || float_generic
@@ -1682,15 +1540,8 @@ void inject_vhdl_standard_libraries(
         if (!declaration || !body) {
             return;
         }
-        // IEEE.MATH_COMPLEX is ordinary VHDL over IEEE.MATH_REAL (IEEE
-        // 1076-2019 16.10): its declarations and body are analyzed from
-        // the standard's source rather than projected.
-        auto package_units = package.name == "math_complex"
-            ? analyzed_units(package.name, declaration_path, *declaration,
-                  body_path, *body, diagnostics, standard)
-            : projected_units(
-                  package.name, declaration_path, body_path, diagnostics,
-                  standard);
+        auto package_units = projected_units(
+            package.name, declaration_path, body_path, diagnostics, standard);
         if (!package_units) {
             return;
         }
@@ -1854,6 +1705,8 @@ void inject_vhdl_standard_libraries(
         unit.library = "ieee";
         unit.vhdl_predefined_environment
             = predefined_environment(standard, "ieee");
+        unit.standard_package_form
+            = support::VhdlStandardPackageForm::projection;
         // The injected context is analyzed with the referencing units, so
         // it carries their compatibility profile into unit provenance.
         const auto name = "ieee." + std::string { context };
@@ -1941,6 +1794,9 @@ vhdl_package_dependencies(const CheckedProject& checked)
             mapped.vhdl_package_dependencies.begin(),
             mapped.vhdl_package_dependencies.end());
     }
+    result.insert(result.end(),
+        checked.precompiled_vhdl_package_dependencies.begin(),
+        checked.precompiled_vhdl_package_dependencies.end());
     for (const auto& unit : checked.vhdl_hir.units()) {
         if (unit.kind != semantic::vhdl::UnitKind::package
             || !unit.primary_name.empty()
@@ -2111,9 +1967,21 @@ std::optional<VhdlMixedEnvironmentPlan> plan_vhdl_mixed_environment(
                 plan.winner.emplace(std::move(key), index);
                 continue;
             }
-            if (found->second.first->revision != dependency.revision
-                || found->second.first->source_digest
-                    != dependency.source_digest) {
+            // A package of a standard library artifact is identified by its
+            // artifact's revision, which names its edition: the copies of
+            // the editions of one family differ, and each object's copy was
+            // checked against the one this build provides for its standard
+            // (validate_vhdl_package_dependencies).
+            const auto dot = dependency.package.find('.');
+            const bool artifact_package_dependency = dot != std::string::npos
+                && artifact_package(
+                       support::ascii_lower(dependency.package.substr(0U, dot)),
+                       support::ascii_lower(dependency.package.substr(dot + 1U)))
+                    != nullptr;
+            if (!artifact_package_dependency
+                && (found->second.first->revision != dependency.revision
+                    || found->second.first->source_digest
+                        != dependency.source_digest)) {
                 diagnostics.error(
                     "FSIM-ART-VHDEP-001",
                     "workspace objects contain incompatible compiler-supplied "
@@ -2166,6 +2034,15 @@ bool compiled_vhdl_package_dependencies_match(
         const auto ieee_source = library_name == "ieee"
             ? ieee_package_source(package_name)
             : nullptr;
+        // A standard library artifact's package is identified by the
+        // revision of its artifact alone.
+        const bool artifact_served
+            = artifact_package(library_name, package_name) != nullptr;
+        // It is supplied by the precompiled library of its edition (whose
+        // key checks its revision), not carried in the object's bundle.
+        if (artifact_served) {
+            continue;
+        }
         std::size_t matches { };
         for (const auto& unit : design.vhdl_hir.units()) {
             if (unit.kind != semantic::vhdl::UnitKind::package
@@ -2177,6 +2054,10 @@ bool compiled_vhdl_package_dependencies_match(
                     != dependency.predefined_environment
                 || unit.standard_package_revision
                     != dependency.revision) {
+                continue;
+            }
+            if (artifact_served) {
+                ++matches;
                 continue;
             }
             if (!unit.source.valid()
@@ -2200,7 +2081,7 @@ bool compiled_vhdl_package_dependencies_match(
             }
             ++matches;
         }
-        if (matches == 0U && library_name == "std") {
+        if (matches == 0U && library_name == "std" && !artifact_served) {
             matches = static_cast<std::size_t>(std::ranges::count_if(
                 design.semantics.source_files(), [&](const auto& source) {
                     const auto path = std::filesystem::path {

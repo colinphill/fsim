@@ -90,7 +90,19 @@ void verify_projection(const fsim::project::Config& config) {
   assert(!diagnostics.has_error());
   assert(checked->source_count == 1);
   assert(checked->hdl_sources.size() == 1);
-  assert(checked->standard_sources.size() == 13);
+  // STD_LOGIC_1164, NUMERIC_STD and MATH_REAL (declaration and body each)
+  // come from the precompiled standard library (owner 11-19, gate BD D2),
+  // not from projected sources.
+  assert(checked->standard_sources.size() == 7);
+  for (const std::string_view package :
+       {"ieee.std_logic_1164", "ieee.numeric_std", "ieee.math_real"}) {
+    assert(std::ranges::any_of(
+        checked->precompiled_vhdl_package_dependencies,
+        [&](const fsim::library::VhdlPackageDependency& dependency) {
+          return dependency.package == package
+              && dependency.revision.starts_with("fsim-stdlib:");
+        }));
+  }
   for (const std::string_view digest : {
            "f6bdde6dcd120358d8ce51b2760bdffaebd2e5a0ab5267fe9f7433eec89451d9",
            "093b095a30ca301968d3a3680c995fee5e59cd34b3b93bdd04bfb1e7b00002d4",

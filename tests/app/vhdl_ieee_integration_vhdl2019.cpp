@@ -3,6 +3,7 @@
 #include "fsim/app/application.hpp"
 #include "fsim/app/built_project.hpp"
 #include "fsim/semantic/vhdl_hir.hpp"
+#include "fsim/support/vhdl_standard_package_form.hpp"
 #include "fsim/runtime/simir.hpp"
 #include "fsim/frontend/design.hpp"
 #include "fsim/app/design_artifact.hpp"
@@ -577,6 +578,7 @@ void verify_vhdl2019_directory_api(const std::filesystem::path& directory)
     {
         std::ofstream output { source, std::ios::binary };
         output << R"(
+use std.env.all;
 entity directory_api is end entity;
 architecture rtl of directory_api is
 begin
@@ -855,7 +857,7 @@ begin
         + std::filesystem::weakly_canonical(source).parent_path().generic_string()
         + R"FSIM(" severity failure;
     assert std.env.file_line > 0 severity failure;
-    call_path := capture_call_path(0);
+    call_path := new string'(capture_call_path(0));
     assert call_path.all /= "" severity failure;
     saved_path := std.env.get_call_path;
     assert saved_path.all(0).name.all /= "" severity failure;
@@ -865,11 +867,11 @@ begin
         + std::filesystem::weakly_canonical(source).parent_path().generic_string()
         + R"FSIM(" severity failure;
     assert saved_path.all(0).file_line > 0 severity failure;
-    line_value := std.env.to_string(saved_path.all(0));
+    line_value := new string'(std.env.to_string(saved_path.all(0)));
     assert line_value.all /= "" severity failure;
-    line_value := std.env.to_string(saved_path, "#");
+    line_value := new string'(std.env.to_string(saved_path, "#"));
     assert line_value.all /= "" severity failure;
-    line_value := std.env.to_string(saved_path.all, "~");
+    line_value := new string'(std.env.to_string(saved_path.all, "~"));
     assert line_value.all /= "" severity failure;
     std.env.finish(0);
     wait;
@@ -1407,7 +1409,9 @@ end architecture;
         }
     }
     assert(checked && !diagnostics.has_error());
-    assert(checked->standard_sources.size() == 18U);
+    // The nine IEEE and STD packages with VHDL text, and MATH_COMPLEX, come
+    // from the precompiled 2019 standard library (owner 11-19, gate BD D2);
+    // STD.STANDARD and STD.REFLECTION stay projected.
     std::vector<std::string> source_paths;
     for (const auto& standard_source : checked->standard_sources) {
         source_paths.push_back(standard_source.path.generic_string());
@@ -1416,38 +1420,39 @@ end architecture;
     }
     std::ranges::sort(source_paths);
     assert((source_paths == std::vector<std::string> {
-        "fsim-standard/ieee/math_complex-body.vhdl",
-        "fsim-standard/ieee/math_complex.vhdl",
-        "fsim-standard/ieee/math_real-body.vhdl",
-        "fsim-standard/ieee/math_real.vhdl",
-        "fsim-standard/ieee/numeric_bit-body.vhdl",
-        "fsim-standard/ieee/numeric_bit.vhdl",
-        "fsim-standard/ieee/numeric_bit_unsigned-body.vhdl",
-        "fsim-standard/ieee/numeric_bit_unsigned.vhdl",
-        "fsim-standard/ieee/numeric_std-body.vhdl",
-        "fsim-standard/ieee/numeric_std.vhdl",
-        "fsim-standard/ieee/numeric_std_unsigned-body.vhdl",
-        "fsim-standard/ieee/numeric_std_unsigned.vhdl",
-        "fsim-standard/ieee/std_logic_1164-body.vhdl",
-        "fsim-standard/ieee/std_logic_1164.vhdl",
-        "fsim-standard/std/env.vhdl",
         "fsim-standard/std/reflection.vhdl",
         "fsim-standard/std/standard.vhdl",
-        "fsim-standard/std/textio.vhdl",
     }));
+    std::vector<std::string> precompiled;
+    for (const auto& dependency :
+         checked->precompiled_vhdl_package_dependencies) {
+        precompiled.push_back(dependency.package);
+        assert(dependency.standard == "2019");
+        assert(dependency.revision.starts_with(
+            "fsim-stdlib:vhdl-stdlib-artifacts-v1:2019:"));
+    }
+    std::ranges::sort(precompiled);
+    assert((precompiled == std::vector<std::string> {
+        "ieee.math_complex", "ieee.math_real", "ieee.numeric_bit",
+        "ieee.numeric_bit_unsigned", "ieee.numeric_std",
+        "ieee.numeric_std_unsigned", "ieee.std_logic_1164", "std.env",
+        "std.textio" }));
 
-    std::vector<std::string> projected_packages;
+    std::vector<std::string> precompiled_packages;
     for (const auto& unit : checked->vhdl_hir.units()) {
         if (unit.kind == fsim::semantic::vhdl::UnitKind::package
             && unit.library == "ieee" && unit.primary_name.empty()
-            && !unit.standard_package_revision.empty()) {
-            projected_packages.push_back(unit.name);
+            && unit.standard_package_form
+                == fsim::support::VhdlStandardPackageForm::artifact) {
+            precompiled_packages.push_back(unit.name);
+            assert(unit.standard_package_revision.starts_with(
+                "fsim-stdlib:vhdl-stdlib-artifacts-v1:2019:"));
         }
     }
-    assert((projected_packages == std::vector<std::string> {
-        "std_logic_1164", "numeric_bit", "numeric_bit_unsigned",
-        "numeric_std", "numeric_std_unsigned", "math_real",
-        "math_complex" }));
+    std::ranges::sort(precompiled_packages);
+    assert((precompiled_packages == std::vector<std::string> {
+        "math_complex", "math_real", "numeric_bit", "numeric_bit_unsigned",
+        "numeric_std", "numeric_std_unsigned", "std_logic_1164" }));
 
     auto project = fsim::app::build_project(config, diagnostics);
     assert(project && !diagnostics.has_error());
@@ -1464,9 +1469,13 @@ end architecture;
         assert(dependency.standard == "2019");
         assert(dependency.predefined_environment
             == "ieee-1076-standard:2019:fsim-v3");
-        assert(dependency.revision
-            == "ieee-p1076:1076-2019:"
-               "16a012320947d378611cc7457f64ed76cb52bac4");
+        // STD.REFLECTION stays projected; the others are precompiled.
+        assert(dependency.package == "std.reflection"
+                ? dependency.revision
+                    == "ieee-p1076:1076-2019:"
+                       "16a012320947d378611cc7457f64ed76cb52bac4"
+                : dependency.revision.starts_with(
+                    "fsim-stdlib:vhdl-stdlib-artifacts-v1:2019:"));
         assert(dependency.source_digest.size() == 64U);
     }
     assert((dependency_names == std::vector<std::string> {

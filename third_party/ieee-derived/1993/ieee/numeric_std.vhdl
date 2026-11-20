@@ -9,7 +9,7 @@
 -- tables below. The 171 removal rows and 3 rewrite rows applied to
 -- this file are rows of scripts/vhdl_ieee_removals.tsv (standard 1993,
 -- package numeric_std) and scripts/vhdl_ieee_rewrites.tsv.
--- Rewrite rows (line numbers of the rewrites table): 61, 62, 63.
+-- Rewrite rows (line numbers of the rewrites table): 63, 64, 65.
 --
 -- The 2019 file's own notice (Copyright 2019 IEEE P1076 WG Authors,
 -- Apache License, Version 2.0) follows unchanged and applies to this

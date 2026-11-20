@@ -83,55 +83,121 @@ end architecture;
         compile_and_elaborate(
             vhdl_signed_arithmetic.design,
             "vhdl:work.vhdl_signed_arithmetic(rtl)");
-    if (!elaborated_vhdl_signed_arithmetic.ok()) {
+    // NUMERIC_STD's "*" has L'LENGTH + R'LENGTH elements (IEEE 1076-2019
+    // 16.8.5): its 16-element result does not match the 8-element target
+    // (10.5.2.1), an error (owner 11-19: the fixture stays as written).
+    assert(!elaborated_vhdl_signed_arithmetic.ok());
+    assert(has_diagnostic(
+        elaborated_vhdl_signed_arithmetic, "FSIM-ELAB-VHARRAY-006"));
+    // The other operators of the same entity, without the product
+    // (owner 11-19: expect the error and keep the rest).
+    const auto vhdl_signed_without_product =
+        fsim::frontend::parse_text(
+            "vhdl_signed_without_product.vhd",
+            R"(
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+
+entity vhdl_signed_arithmetic is
+  port (
+    lhs : in signed(7 downto 0);
+    rhs : in signed(7 downto 0);
+    sum : out signed(7 downto 0);
+    difference : out signed(7 downto 0);
+    quotient : out signed(7 downto 0);
+    remainder : out signed(7 downto 0);
+    modulo : out signed(7 downto 0);
+    less : out std_logic;
+    shifted_left : out signed(7 downto 0);
+    shifted_right : out signed(7 downto 0);
+    shifted_arithmetic : out signed(7 downto 0);
+    shifted_arithmetic_left : out signed(7 downto 0);
+    rotated_left : out signed(7 downto 0);
+    rotated_right : out signed(7 downto 0);
+    reversed_logical_left : out signed(7 downto 0);
+    reversed_arithmetic_right : out signed(7 downto 0);
+    reversed_rotate_left : out signed(7 downto 0);
+    absolute : out signed(7 downto 0)
+  );
+end entity;
+
+architecture rtl of vhdl_signed_arithmetic is
+begin
+  calculate: process(lhs, rhs)
+  begin
+    sum <= lhs + rhs;
+    difference <= lhs - rhs;
+    quotient <= lhs / rhs;
+    remainder <= lhs rem rhs;
+    modulo <= lhs mod rhs;
+    less <= lhs < rhs;
+    shifted_left <= lhs sll 1;
+    shifted_right <= lhs srl 1;
+    shifted_arithmetic <= lhs sra 1;
+    shifted_arithmetic_left <= lhs sla 1;
+    rotated_left <= lhs rol 1;
+    rotated_right <= lhs ror 1;
+    reversed_logical_left <= lhs sll -1;
+    reversed_arithmetic_right <= lhs sra -1;
+    reversed_rotate_left <= lhs rol -1;
+    absolute <= abs lhs;
+  end process;
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(vhdl_signed_without_product.ok());
+    const auto elaborated_vhdl_signed_without_product =
+        compile_and_elaborate(
+            vhdl_signed_without_product.design,
+            "vhdl:work.vhdl_signed_arithmetic(rtl)");
+    if (!elaborated_vhdl_signed_without_product.ok()) {
       for (const auto& diagnostic :
-           elaborated_vhdl_signed_arithmetic.diagnostics) {
+           elaborated_vhdl_signed_without_product.diagnostics) {
         std::cerr << diagnostic.code << ": "
                   << diagnostic.message << " at "
                   << diagnostic.span.begin.line << '\n';
       }
     }
-    assert(elaborated_vhdl_signed_arithmetic.ok());
+    assert(elaborated_vhdl_signed_without_product.ok());
     const auto vhdl_signed_lhs =
-        elaborated_vhdl_signed_arithmetic.design->find_signal(
+        elaborated_vhdl_signed_without_product.design->find_signal(
             "lhs");
     const auto vhdl_signed_rhs =
-        elaborated_vhdl_signed_arithmetic.design->find_signal(
+        elaborated_vhdl_signed_without_product.design->find_signal(
             "rhs");
     const std::array vhdl_signed_outputs{
-        elaborated_vhdl_signed_arithmetic.design->find_signal(
+        elaborated_vhdl_signed_without_product.design->find_signal(
             "sum"),
-        elaborated_vhdl_signed_arithmetic.design->find_signal(
+        elaborated_vhdl_signed_without_product.design->find_signal(
             "difference"),
-        elaborated_vhdl_signed_arithmetic.design->find_signal(
-            "product"),
-        elaborated_vhdl_signed_arithmetic.design->find_signal(
+        elaborated_vhdl_signed_without_product.design->find_signal(
             "quotient"),
-        elaborated_vhdl_signed_arithmetic.design->find_signal(
+        elaborated_vhdl_signed_without_product.design->find_signal(
             "remainder"),
-        elaborated_vhdl_signed_arithmetic.design->find_signal(
+        elaborated_vhdl_signed_without_product.design->find_signal(
             "modulo"),
-        elaborated_vhdl_signed_arithmetic.design->find_signal(
+        elaborated_vhdl_signed_without_product.design->find_signal(
             "less"),
-        elaborated_vhdl_signed_arithmetic.design->find_signal(
+        elaborated_vhdl_signed_without_product.design->find_signal(
             "shifted_left"),
-        elaborated_vhdl_signed_arithmetic.design->find_signal(
+        elaborated_vhdl_signed_without_product.design->find_signal(
             "shifted_right"),
-        elaborated_vhdl_signed_arithmetic.design->find_signal(
+        elaborated_vhdl_signed_without_product.design->find_signal(
             "shifted_arithmetic"),
-        elaborated_vhdl_signed_arithmetic.design->find_signal(
+        elaborated_vhdl_signed_without_product.design->find_signal(
             "shifted_arithmetic_left"),
-        elaborated_vhdl_signed_arithmetic.design->find_signal(
+        elaborated_vhdl_signed_without_product.design->find_signal(
             "rotated_left"),
-        elaborated_vhdl_signed_arithmetic.design->find_signal(
+        elaborated_vhdl_signed_without_product.design->find_signal(
             "rotated_right"),
-        elaborated_vhdl_signed_arithmetic.design->find_signal(
+        elaborated_vhdl_signed_without_product.design->find_signal(
             "reversed_logical_left"),
-        elaborated_vhdl_signed_arithmetic.design->find_signal(
+        elaborated_vhdl_signed_without_product.design->find_signal(
             "reversed_arithmetic_right"),
-        elaborated_vhdl_signed_arithmetic.design->find_signal(
+        elaborated_vhdl_signed_without_product.design->find_signal(
             "reversed_rotate_left"),
-        elaborated_vhdl_signed_arithmetic.design->find_signal(
+        elaborated_vhdl_signed_without_product.design->find_signal(
             "absolute")};
     assert(vhdl_signed_lhs && vhdl_signed_rhs);
     assert(std::ranges::all_of(
@@ -139,23 +205,22 @@ end architecture;
         [](const auto& signal) {
           return signal.has_value();
         }));
-    auto vhdl_signed_interpreter =
-        elaborated_vhdl_signed_arithmetic.design
+    auto vhdl_without_product_interpreter =
+        elaborated_vhdl_signed_without_product.design
             ->create_interpreter();
-    vhdl_signed_interpreter->deposit_signal(
+    vhdl_without_product_interpreter->deposit_signal(
         *vhdl_signed_lhs,
         fsim::runtime::PackedLogic4::from_msb_string(
             "11111011"));
-    vhdl_signed_interpreter->deposit_signal(
+    vhdl_without_product_interpreter->deposit_signal(
         *vhdl_signed_rhs,
         fsim::runtime::PackedLogic4::from_msb_string(
             "00000011"));
-    (void)vhdl_signed_interpreter->run();
-    const std::array<std::string_view, 17>
+    (void)vhdl_without_product_interpreter->run();
+    const std::array<std::string_view, 16>
         expected_vhdl_signed{
             "11111110",
             "11111000",
-            "11110001",
             "11111111",
             "11111110",
             "00000001",
@@ -173,16 +238,16 @@ end architecture;
     for (std::size_t index = 0;
          index < vhdl_signed_outputs.size(); ++index) {
       assert(
-          vhdl_signed_interpreter
+          vhdl_without_product_interpreter
               ->signal_value(*vhdl_signed_outputs[index])
               .to_msb_string()
           == expected_vhdl_signed[index]);
     }
-    vhdl_signed_interpreter->deposit_signal(
+    vhdl_without_product_interpreter->deposit_signal(
         *vhdl_signed_lhs,
         fsim::runtime::PackedLogic4::from_msb_string(
             "10X01000"));
-    (void)vhdl_signed_interpreter->run();
+    (void)vhdl_without_product_interpreter->run();
     const std::array<std::string_view, 9>
         expected_unknown_shifts{
             "0X010000",
@@ -197,36 +262,37 @@ end architecture;
     for (std::size_t index = 0;
          index < expected_unknown_shifts.size(); ++index) {
       assert(
-          vhdl_signed_interpreter
-              ->signal_value(*vhdl_signed_outputs[index + 7])
+          vhdl_without_product_interpreter
+              ->signal_value(*vhdl_signed_outputs[index + 6])
               .to_msb_string()
           == expected_unknown_shifts[index]);
     }
     assert(
-        vhdl_signed_interpreter
+        vhdl_without_product_interpreter
             ->signal_value(*vhdl_signed_outputs.back())
             .to_msb_string()
         == "XXXXXXXX");
-    vhdl_signed_interpreter->deposit_signal(
+    vhdl_without_product_interpreter->deposit_signal(
         *vhdl_signed_lhs,
         fsim::runtime::PackedLogic4::from_msb_string(
             "10000000"));
-    (void)vhdl_signed_interpreter->run();
+    (void)vhdl_without_product_interpreter->run();
     assert(
-        vhdl_signed_interpreter
+        vhdl_without_product_interpreter
             ->signal_value(*vhdl_signed_outputs.back())
             .to_msb_string()
         == "10000000");
-    vhdl_signed_interpreter->deposit_signal(
+    vhdl_without_product_interpreter->deposit_signal(
         *vhdl_signed_lhs,
         fsim::runtime::PackedLogic4::from_msb_string(
             "00000101"));
-    (void)vhdl_signed_interpreter->run();
+    (void)vhdl_without_product_interpreter->run();
     assert(
-        vhdl_signed_interpreter
+        vhdl_without_product_interpreter
             ->signal_value(*vhdl_signed_outputs.back())
             .to_msb_string()
         == "00000101");
+
 
     const auto dynamic_vhdl_shift =
         fsim::frontend::parse_text(

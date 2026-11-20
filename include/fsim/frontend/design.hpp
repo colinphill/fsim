@@ -8,6 +8,7 @@
 #include "fsim/support/dpi_identity.hpp"
 #include "fsim/support/rare_vector.hpp"
 #include "fsim/support/uvm_role.hpp"
+#include "fsim/support/vhdl_standard_package_form.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -1877,6 +1878,7 @@ struct DesignUnit {
     // declarations whose bodies and nominal types would require general source
     // lowering. The exact upstream files remain source dependencies.
     std::string standard_package_revision;
+    support::VhdlStandardPackageForm standard_package_form { };
     std::vector<std::string> standard_package_declarations;
     std::vector<std::string> standard_package_operator_profiles;
     // Verilog/SystemVerilog compilation-unit timing context. Empty when no
@@ -1914,6 +1916,14 @@ struct DesignUnit {
     // VHDL context items immediately preceding this library unit, or the
     // reusable items contained by a bounded VHDL context declaration.
     std::vector<VhdlContextItem> vhdl_context;
+    // VHDL: every library unit of STD or IEEE that the unit's source file
+    // names, "library.unit" in lower case: the pairs `std . x` and `ieee . x`
+    // of basic identifiers, whether in a use clause (12.4, any declarative
+    // region) or an expanded name (8.3). A library unit is identified by
+    // its logical library and name (IEEE 1076-2019 13.1); these are the
+    // precompiled units the design needs (a local declaration named STD or
+    // IEEE only adds a unit loaded for nothing).
+    std::vector<std::string> vhdl_library_unit_references;
     std::optional<VhdlPslVerificationUnit> vhdl_psl_verification_unit;
     std::vector<VhdlPslDeclaration> vhdl_psl_declarations;
     std::vector<VhdlPslDirective> vhdl_psl_directives;

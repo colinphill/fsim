@@ -14,11 +14,21 @@
 namespace fsim::semantic {
 
 /// Stamps every VHDL unit of `design` among `source_units` (the units this
-/// compilation analyzed) that is not a compiler-served standard package,
-/// recording its references into other library units as anchors
-/// (vhdl::DeclarationAnchor). Targets in compiler-served packages get no
-/// anchor and are resolved at link as before.
+/// compilation analyzed) that is not a projected compiler-served package
+/// (standard_package_form projection), recording its references into other
+/// library units as anchors (vhdl::DeclarationAnchor). Units of the standard
+/// library artifacts are stamped like user units. Targets in projected
+/// packages get no anchor and are resolved at link as before.
 void stamp_vhdl_analysis(CompiledDesign& design, std::span<const UnitId> source_units);
+
+/// Clears the stamp of every unit of `design` that holds an anchor into one
+/// of `omitted_packages` (each "library.name" in lower case): a design that
+/// mixes standards of one package family links one copy of every package,
+/// and the units analyzed against a dropped copy are resolved again at the
+/// link, as unstamped units are. Call it after the packages are omitted
+/// (extract_compiled_without_vhdl_packages).
+void unstamp_vhdl_units_anchored_to(
+    CompiledDesign& design, std::span<const std::string> omitted_packages);
 
 enum class AnchorRebind : std::uint8_t {
     /// While a library object is projected out of a design.

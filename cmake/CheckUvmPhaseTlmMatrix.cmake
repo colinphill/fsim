@@ -287,6 +287,8 @@ fsim_require_token(
 set(FSIM_RUNNER "${FSIM_SOURCE_DIR}/cmake/RunUvmPhaseTlmExample.cmake")
 foreach(FSIM_TOKEN IN ITEMS
     "foreach(optimization IN ITEMS o0 o2)"
+    "fsim_phase_tlm_part_selected(\${optimization} selected)"
+    "FSIM_PHASE_TLM_PART must be direct, compile, o0 or o2"
     "compiled cold.fst"
     "compiled warm.fst"
     "debug debug.vcd"

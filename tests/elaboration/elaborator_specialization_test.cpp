@@ -1058,7 +1058,7 @@ entity generic_counter is
   );
   port (
     clk : in std_logic;
-    q : out unsigned(last downto 0)
+    q : out unsigned(last downto 0) := (others => '0')
   );
 end entity;
 
@@ -1194,6 +1194,7 @@ end architecture;
     generic_interpreter->deposit_signal(
         *generic_clock,
         fsim::runtime::PackedLogic4::from_msb_string("1"));
+    (void)generic_interpreter->run();
     (void)generic_interpreter->run();
     assert(
         generic_interpreter

@@ -861,8 +861,16 @@ make_specialization_cache_keys(
         key.add(
             "source-compilation-unit",
             compiled_source->compilation_unit);
-        for (const auto& dependency_source :
-            specialization.source_dependencies) {
+        // The dependencies are a set: the key takes them in one order,
+        // whatever order the units that hold them were loaded in.
+        std::vector<std::string> ordered_dependencies {
+            specialization.source_dependencies.begin(),
+            specialization.source_dependencies.end()
+        };
+        std::ranges::sort(ordered_dependencies);
+        const auto duplicates = std::ranges::unique(ordered_dependencies);
+        ordered_dependencies.erase(duplicates.begin(), duplicates.end());
+        for (const auto& dependency_source : ordered_dependencies) {
             const auto dependency_settings = settings_for(
                 specialization, dependency_source, false);
             if (!dependency_settings) {

@@ -1365,8 +1365,10 @@ end architecture;
       ambiguous_character_array_literal.design,
       "vhdl:work.character_array_literal_ambiguous(rtl)");
   assert(!ambiguous_character_array_literal_result.ok());
+  // The string literal fits both overloads' formals (IEEE 1076-2019 9.3.2,
+  // 12.5), reported before overload resolution.
   assert(has_diagnostic(ambiguous_character_array_literal_result,
-      "FSIM-ELAB-VHOVER-001"));
+      "FSIM-ELAB-VHENUM-004"));
 
   const auto wrong_character_array_function_profile = fsim::frontend::parse_text(
       "vhdl-character-array-function-profile.vhd",

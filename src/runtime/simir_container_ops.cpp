@@ -286,7 +286,7 @@ ContainerValue* select_container_element_for_write(
     const bool linear_index,
     const ProcessId process,
     const InstructionIndex instruction,
-    const std::string* string_key)
+    const std::string_view* string_key)
 {
     if (aggregate_box(target.type)) {
         return &target;
@@ -298,7 +298,7 @@ ContainerValue* select_container_element_for_write(
     }
     std::size_t at { };
     if (target.type.associative && string_key != nullptr) {
-        const auto& key = associative_string_key(
+        const auto key = associative_string_key(
             process, instruction, target.type, *string_key);
         at = lower_string_key(target, key);
         if (at >= target.string_keys.size() || target.string_keys[at] != key) {
@@ -308,7 +308,7 @@ ContainerValue* select_container_element_for_write(
                     process, instruction,
                     "associative nested container exceeds its owning-storage budget");
             }
-            target.string_keys.insert(iterator_at(target.string_keys, at), key);
+            target.string_keys.emplace(iterator_at(target.string_keys, at), key);
             target.nested_elements.insert(
                 iterator_at(target.nested_elements, at),
                 default_container_value(*element_type));
@@ -626,7 +626,7 @@ void execute_container_operation(
     const auto& source = access.read_container(operation.source);
     if (source.type.associative) {
         if (operation.string_index) {
-            const auto& key = associative_string_key(
+            const auto key = associative_string_key(
                 process, instruction, source.type,
                 access.read_string(operation.index));
             const auto at = lower_string_key(source, key);
@@ -749,7 +749,7 @@ void execute_container_operation(
     }
     if (target.type.associative) {
         if (operation.string_index) {
-            const auto& key = associative_string_key(
+            const auto key = associative_string_key(
                 process, instruction, target.type,
                 access.read_string(operation.index));
             const auto at = lower_string_key(target, key);
@@ -764,7 +764,7 @@ void execute_container_operation(
                         "associative array exceeds the per-container "
                         "owning-storage budget");
                 }
-                target.string_keys.insert(
+                target.string_keys.emplace(
                     iterator_at(target.string_keys, at), key);
                 target.elements.insert(
                     iterator_at(target.elements, at), source);
@@ -933,7 +933,7 @@ void execute_container_operation(
     }
     if (source.type.associative) {
         if (operation.string_index) {
-            const auto& key = associative_string_key(
+            const auto key = associative_string_key(
                 process, instruction, source.type,
                 access.read_string(operation.index));
             const auto at = lower_string_key(source, key);
@@ -1089,7 +1089,7 @@ void execute_container_operation(
     const auto source = access.read_string(operation.source);
     if (target.type.associative) {
         if (operation.string_index) {
-            const auto& key = associative_string_key(
+            const auto key = associative_string_key(
                 process, instruction, target.type,
                 access.read_string(operation.index));
             const auto at = lower_string_key(target, key);
@@ -1103,9 +1103,9 @@ void execute_container_operation(
                         process, instruction,
                         "associative string array exceeds its owning-storage budget");
                 }
-                target.string_keys.insert(
+                target.string_keys.emplace(
                     iterator_at(target.string_keys, at), key);
-                target.string_elements.insert(
+                target.string_elements.emplace(
                     iterator_at(target.string_elements, at), source);
             }
             validate_container_value(target);
@@ -1128,7 +1128,7 @@ void execute_container_operation(
                     "associative string array exceeds its owning-storage budget");
             }
             target.keys.insert(iterator_at(target.keys, at), key);
-            target.string_elements.insert(
+            target.string_elements.emplace(
                 iterator_at(target.string_elements, at), source);
         }
         return;
@@ -1157,7 +1157,7 @@ void execute_container_operation(
             return;
         }
         if (static_cast<std::uint64_t>(*requested) == size) {
-            target.string_elements.push_back(source);
+            target.string_elements.emplace_back(source);
             return;
         }
     }
@@ -1175,7 +1175,7 @@ void execute_container_operation(
                 "string container index is out of range");
         }
         static_cast<void>(
-            write_sparse_container_string(target, ordinal, source));
+            write_sparse_container_string(target, ordinal, std::string { source }));
         return;
     }
     const auto at = target.type.fixed
@@ -1229,7 +1229,7 @@ void execute_container_operation(
                 "nested element read requires a nested container");
         }
         if (source.type.associative && operation.string_index) {
-            const auto& key = associative_string_key(
+            const auto key = associative_string_key(
                 process, instruction, source.type,
                 access.read_string(operation.index));
             const auto at = lower_string_key(source, key);
@@ -1308,10 +1308,13 @@ void execute_container_operation(
 {
     auto& target = access.container(operation.target);
     const auto& source = access.read_container(operation.source);
+    const auto string_key = operation.string_index
+        ? access.read_string(operation.index)
+        : std::string_view { };
     auto* selected = operation.string_index
         ? select_container_element_for_write(target, PackedLogic4 { },
               false, false, process, instruction,
-              &access.read_string(operation.index))
+              &string_key)
         : select_container_element_for_write(
               target, access.read(operation.index),
               operation.signed_index, operation.linear_index, process,
@@ -1552,7 +1555,7 @@ void execute_container_operation(
             require_associative(
                 process, instruction, target, "delete(index)");
             if (operation.string_index) {
-                const auto& key = associative_string_key(
+                const auto key = associative_string_key(
                     process, instruction, target.type,
                     access.read_string(*operation.index));
                 const auto at = lower_string_key(target, key);
@@ -1620,7 +1623,7 @@ void execute_container_operation(
     require_associative(
         process, instruction, source, "exists(index)");
     if (operation.string_index) {
-        const auto& key = associative_string_key(
+        const auto key = associative_string_key(
             process, instruction, source.type,
             access.read_string(operation.index));
         const auto at = lower_string_key(source, key);
@@ -1655,7 +1658,7 @@ void execute_container_operation(
             } else if (operation.traversal == ContainerTraversal::last) {
                 selected = source.string_keys.size() - 1U;
             } else {
-                const auto& key = associative_string_key(
+                const auto key = associative_string_key(
                     process, instruction, source.type,
                     access.read_string(operation.index));
                 const auto at = lower_string_key(source, key);
@@ -1831,7 +1834,7 @@ void execute_container_operation(
         target.elements.push_back(std::move(value));
     }
     if (operation.text) {
-        target.string_elements.push_back(
+        target.string_elements.emplace_back(
             access.read_string(*operation.text));
     }
     // A bounded queue keeps its first elements (7.10.5).

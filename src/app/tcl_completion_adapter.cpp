@@ -869,6 +869,12 @@ namespace {
         for (const auto& mapping : context.config.library_mappings) {
             add_configured_library(mapping.library);
         }
+        // The precompiled standard libraries, mapped into every workspace.
+        for (const std::string_view library : { "std", "ieee" }) {
+            append_item(result, result.owned_libraries, std::string { library },
+                "Precompiled standard library", CandidateKind::library,
+                capability_mask(Capability::workspace));
+        }
         const auto locations = store.library_locations(error);
         if (locations) {
             const auto limit = std::min(locations->size(), kMaximumLibraries);

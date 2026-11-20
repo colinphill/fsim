@@ -175,9 +175,10 @@ Change 16 makes the exact matrix resource and platform contract executable.
 The test process applies a 6 GiB `RLIMIT_AS` ceiling on POSIX and the matching
 Windows Job Object process-memory limit before parsing any governed source.
 Every direct, compile, elaborate, or simulate stage has a 1,200-second CMake
-timeout, and each serial release matrix has the approved 7,200-second CTest
-timeout. A fast contract freezes filesystem-neutral source paths, both release
-registrations, MSVC-compatible test setup, `_WIN32` `__cdecl`, the append-only
+timeout, and each of a release matrix's four CTest parts (direct, compile,
+o0, o2; the optimization parts require the compile fixture) has the approved
+7,200-second CTest timeout. A fast contract freezes filesystem-neutral
+source paths, both release registrations, MSVC-compatible test setup, `_WIN32` `__cdecl`, the append-only
 x64 C structure sizes/offsets, and compile-checked callback assignment. The
 exact transcript exposes this as `platform_contract=source/abi/linux/windows/
 cdecl/filesystem limits=as6g/stage1200/matrix7200`.

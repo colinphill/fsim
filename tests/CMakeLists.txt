@@ -1697,6 +1697,19 @@ if(FSIM_PERFORMANCE_PYTHON_EXECUTABLE)
     fsim.run-state-classification
     PROPERTIES LABELS "fast;structure;save-restart;python;positive;negative"
   )
+  # Gate BD: the native VHDL packages (STD.TEXTIO, STD.ENV, IEEE.STD_LOGIC_1164,
+  # NUMERIC_*, MATH_REAL) are identified by native identity; the per-file
+  # counts of the remaining spelling sites only go down.
+  add_test(
+    NAME fsim.vhdl-native-spelling-ratchet
+    COMMAND "${FSIM_PERFORMANCE_PYTHON_EXECUTABLE}" -I
+      "${PROJECT_SOURCE_DIR}/scripts/check_vhdl_native_spellings.py"
+      --root "${PROJECT_SOURCE_DIR}"
+  )
+  set_tests_properties(
+    fsim.vhdl-native-spelling-ratchet
+    PROPERTIES LABELS "fast;structure;vhdl;python;positive"
+  )
 endif()
 
 # cocotb smoke tests (docs/cocotb.md), registered when FSIM_COCOTB_PYTHON is
@@ -4476,34 +4489,47 @@ if(TARGET fsim_application)
   target_link_libraries(
     fsim_uvm_phase_tlm_application_tests PRIVATE fsim_application)
   if(FSIM_UVM_1_2_SOURCE_DIR AND FSIM_UVM_2020_3_1_SOURCE_DIR)
-    add_test(
-      NAME fsim.application.uvm_phase_tlm.1_2
-      COMMAND
-        "${CMAKE_COMMAND}"
-        "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim_uvm_phase_tlm_application_tests>"
-        "-DFSIM_UVM_ROOT=${FSIM_UVM_1_2_SOURCE_DIR}"
-        "-DFSIM_WORK_DIR=${PROJECT_BINARY_DIR}/uvm-phase-tlm-example/uvm-1.2"
-        "-DFSIM_RELEASE=uvm-1.2"
-        -P "${PROJECT_SOURCE_DIR}/cmake/RunUvmPhaseTlmExample.cmake"
-    )
-    add_test(
-      NAME fsim.application.uvm_phase_tlm.2020_3_1
-      COMMAND
-        "${CMAKE_COMMAND}"
-        "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim_uvm_phase_tlm_application_tests>"
-        "-DFSIM_UVM_ROOT=${FSIM_UVM_2020_3_1_SOURCE_DIR}"
-        "-DFSIM_WORK_DIR=${PROJECT_BINARY_DIR}/uvm-phase-tlm-example/uvm-2020.3.1"
-        "-DFSIM_RELEASE=uvm-2020.3.1"
-        -P "${PROJECT_SOURCE_DIR}/cmake/RunUvmPhaseTlmExample.cmake"
-    )
-    set_tests_properties(
-      fsim.application.uvm_phase_tlm.1_2
-      fsim.application.uvm_phase_tlm.2020_3_1
-      PROPERTIES
-        LABELS "slow;application;systemverilog;uvm;artifact;llvm;debug;trace"
-        RUN_SERIAL TRUE
-        TIMEOUT 7200
-    )
+    # Each release's matrix runs as four parts side by side: direct (its own
+    # work directory), compile (the fixture whose object the optimization
+    # parts elaborate), o0 and o2. Every part keeps the 7200-second limit.
+    function(fsim_add_uvm_phase_tlm_parts name root release)
+      set(work "${PROJECT_BINARY_DIR}/uvm-phase-tlm-example/${release}")
+      foreach(part IN ITEMS direct compile o0 o2)
+        set(part_work "${work}/staged")
+        if(part STREQUAL "direct")
+          set(part_work "${work}/direct")
+        endif()
+        add_test(
+          NAME ${name}.${part}
+          COMMAND
+            "${CMAKE_COMMAND}"
+            "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim_uvm_phase_tlm_application_tests>"
+            "-DFSIM_UVM_ROOT=${root}"
+            "-DFSIM_WORK_DIR=${part_work}"
+            "-DFSIM_RELEASE=${release}"
+            "-DFSIM_PHASE_TLM_PART=${part}"
+            -P "${PROJECT_SOURCE_DIR}/cmake/RunUvmPhaseTlmExample.cmake"
+        )
+        set_tests_properties(${name}.${part}
+          PROPERTIES
+            LABELS "slow;application;systemverilog;uvm;artifact;llvm;debug;trace"
+            TIMEOUT 7200
+        )
+      endforeach()
+      # Building the project from the UVM sources peaks near 2.5 GB, twice
+      # an elaboration or simulation stage (about 1.1 GB): those parts
+      # count as two processors against `ctest -j`.
+      set_tests_properties(${name}.direct ${name}.compile
+        PROPERTIES PROCESSORS 2)
+      set_tests_properties(${name}.compile
+        PROPERTIES FIXTURES_SETUP ${name}.object)
+      set_tests_properties(${name}.o0 ${name}.o2
+        PROPERTIES FIXTURES_REQUIRED ${name}.object)
+    endfunction()
+    fsim_add_uvm_phase_tlm_parts(fsim.application.uvm_phase_tlm.1_2
+      "${FSIM_UVM_1_2_SOURCE_DIR}" uvm-1.2)
+    fsim_add_uvm_phase_tlm_parts(fsim.application.uvm_phase_tlm.2020_3_1
+      "${FSIM_UVM_2020_3_1_SOURCE_DIR}" uvm-2020.3.1)
   endif()
 
   add_executable(

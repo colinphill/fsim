@@ -312,6 +312,31 @@ ParseResult VhdlParser::run()
         }
     }
     analyze_vhdl_psl(design);
+    {
+        std::vector<std::string> references;
+        const auto basic = [](const Token& token) {
+            return token.kind == TokenKind::Identifier && !token.text.empty()
+                && token.text.front() != '\\';
+        };
+        for (std::size_t index = 0; index + 2U < tokens_.size(); ++index) {
+            const auto& library = tokens_[index];
+            if (!basic(library) || tokens_[index + 1U].kind != TokenKind::Dot
+                || !basic(tokens_[index + 2U])) {
+                continue;
+            }
+            const auto name = detail::ascii_lower(library.text);
+            if (name != "std" && name != "ieee") {
+                continue;
+            }
+            references.push_back(
+                name + "." + detail::ascii_lower(tokens_[index + 2U].text));
+        }
+        std::ranges::sort(references);
+        references.erase(std::ranges::unique(references).begin(), references.end());
+        for (auto& unit : design.units) {
+            unit.vhdl_library_unit_references = references;
+        }
+    }
     design.vhdl_profile_compatible = vhdl_profile_compatible_;
     return ParseResult { std::move(design), std::move(diagnostics_) };
 }

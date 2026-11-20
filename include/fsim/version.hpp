@@ -12,10 +12,9 @@ inline constexpr std::uint32_t native_abi_version = 2;
 inline constexpr std::uint32_t runtime_abi_version = 1;
 inline constexpr std::string_view production_llvm_version = "22.1.8";
 // Bump when bundled HDL declarations/bodies can affect elaboration or
-// generated code. The pinned IEEE sources are inventoried but not yet loaded;
-// the explicit marker prevents activating one without invalidating native
-// objects.
+// generated code. It keys the precompiled standard library artifacts
+// (share/fsim/vhdl/stdlib/<this>/vhdl-<edition>.fsimstd) and native objects.
 inline constexpr std::string_view standard_library_cache_version =
-    "ieee-1076-2019-16a01232-vhdl-psl-wide-v2";
+    "vhdl-stdlib-artifacts-v1";
 
 } // namespace fsim

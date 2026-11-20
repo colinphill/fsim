@@ -2892,19 +2892,19 @@ if(FSIM_OTHER_PARALLEL)
 endif()
 
 string(REGEX MATCHALL
-  "timeout-minutes:[ ]*180([ \t\r\n]|$)"
-  FSIM_180_MINUTE_TIMEOUTS
+  "timeout-minutes:[ ]*240([ \t\r\n]|$)"
+  FSIM_240_MINUTE_TIMEOUTS
   "${FSIM_WORKFLOW_CONTENTS}")
 string(REGEX MATCHALL
   "timeout-minutes:"
   FSIM_HOSTED_TIMEOUTS
   "${FSIM_WORKFLOW_CONTENTS}")
-list(LENGTH FSIM_180_MINUTE_TIMEOUTS FSIM_180_MINUTE_TIMEOUT_COUNT)
+list(LENGTH FSIM_240_MINUTE_TIMEOUTS FSIM_240_MINUTE_TIMEOUT_COUNT)
 list(LENGTH FSIM_HOSTED_TIMEOUTS FSIM_HOSTED_TIMEOUT_COUNT)
 if(NOT FSIM_HOSTED_TIMEOUT_COUNT EQUAL 2
-    OR NOT FSIM_180_MINUTE_TIMEOUT_COUNT EQUAL FSIM_HOSTED_TIMEOUT_COUNT)
+    OR NOT FSIM_240_MINUTE_TIMEOUT_COUNT EQUAL FSIM_HOSTED_TIMEOUT_COUNT)
   message(FATAL_ERROR
-    "expected both hosted job timeouts to be 180 minutes")
+    "expected both hosted job timeouts to be 240 minutes")
 endif()
 
 foreach(FSIM_FOOTPRINT_POLICY IN ITEMS
@@ -4007,7 +4007,7 @@ foreach(FSIM_VHDL_2019_PREDEFINED_PACKAGE_POLICY IN ITEMS
     "vhdl_package_dependencies"
     "validate_vhdl_package_dependencies"
     "verify_vhdl2019_governed_packages"
-    "standard_sources.size() == 18U")
+    "checked->precompiled_vhdl_package_dependencies")
   string(FIND
     "${FSIM_VHDL_2019_PREDEFINED_PACKAGE_MODEL_CONTENTS}${FSIM_VHDL_2019_PREDEFINED_PACKAGE_IMPLEMENTATION_CONTENTS}${FSIM_VHDL_2019_SIMULATOR_API_TEST_CONTENTS}"
     "${FSIM_VHDL_2019_PREDEFINED_PACKAGE_POLICY}" FSIM_INDEX)

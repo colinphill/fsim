@@ -291,16 +291,25 @@ if {[file normalize [dict get $switched_view directory]] ne $switched_directory 
         [file normalize [file join $switched_directory .fsim]]} {
   error "cd did not switch the fsim workspace: $switched_view"
 }
-if {[llength [dict get $switched_view libraries]] != 0 ||
-    [llength [fsim::library list]] != 0} {
+proc user_libraries {libraries} {
+  # The read-only standard std/ieee rows of each VHDL edition are in every
+  # workspace (owner 11-19); a workspace's own libraries are the others.
+  set user {}
+  foreach library $libraries {
+    if {![dict exists $library standard]} {lappend user $library}
+  }
+  return $user
+}
+if {[llength [user_libraries [dict get $switched_view libraries]]] != 0 ||
+    [llength [user_libraries [fsim::library list]]] != 0} {
   error "new workspace exposed libraries from the prior directory"
 }
 set switched_compile [fsim::compile -verbosity quiet switched.sv]
 if {[dict get $switched_compile library] ne "work" ||
-    [llength [dict get [fsim::get_workspace] libraries]] != 1} {
+    [llength [user_libraries [dict get [fsim::get_workspace] libraries]]] != 1} {
   error "compile did not publish into the switched workspace"
 }
-set switched_library [lindex [dict get [fsim::get_workspace] libraries] 0]
+set switched_library [lindex [user_libraries [dict get [fsim::get_workspace] libraries]] 0]
 if {[dict get $switched_library library] ne "work" ||
     [file normalize [dict get $switched_library path]] ne
         [file normalize [file join $switched_directory .fsim libraries work]]} {
@@ -392,8 +401,8 @@ if {$cd_result ne ""} {
 assert_stale_catalog_reference $switched_catalog_ref cd
 set restored_view [fsim::get_workspace]
 if {[file normalize [dict get $restored_view directory]] ne $initial_directory ||
-    [llength [dict get $restored_view libraries]] != 1 ||
-    [dict get [lindex [dict get $restored_view libraries] 0] library] ne "work"} {
+    [llength [user_libraries [dict get $restored_view libraries]]] != 1 ||
+    [dict get [lindex [user_libraries [dict get $restored_view libraries]] 0] library] ne "work"} {
   error "cd back did not restore the original workspace view: $restored_view"
 }
 if {[dict get [fsim::object read $switched_ready] value] ne "1"} {

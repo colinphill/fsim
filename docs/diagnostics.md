@@ -243,6 +243,7 @@ are no longer emitted.
 | `FSIM-FE-VHSTD-004` | error | A project source attempts to redeclare a compiler-supplied IEEE package. |
 | `FSIM-FE-VHSTD-005` | error | Sources using different VHDL revisions attempt to share one compiler-supplied IEEE package environment; analyze them into separate logical libraries. |
 | `FSIM-FE-VHSTD-006` | error | A requested compiler-supplied non-standard Synopsys compatibility package is unavailable or incompatible with the selected VHDL revision; select a compatible revision or remove its use clause. |
+| `FSIM-FE-VHSTD-007` | error | The precompiled VHDL standard libraries STD and IEEE of the selected revision (managed libraries built with fsim) are missing, or their key file is corrupt or records other sources, natives or a different fsim version than this build expects; the message names the key file and the reason. |
 | `FSIM-FE-VHDL-COMPAT-001` | error | A source set names an unknown or noncanonical VHDL compatibility profile, or selects one for a non-VHDL language. |
 | `FSIM-ELAB-VHSTD-001` | error | A compiler-supplied IEEE intrinsic is unavailable in the owning process's selected VHDL revision and no user-defined overload owns the name. |
 | `FSIM-ELAB-VHPROFILE-001` | error | Direct elaboration attempted to consume VHDL recovery nodes containing a construct unavailable in the selected language revision. |
