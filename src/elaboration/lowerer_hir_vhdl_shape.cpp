@@ -402,6 +402,7 @@ Lowerer::hir_vhdl_external_subtype(
     const auto& mark = *subtype_expression->vhdl->qualified_type_mark;
     semantic::vhdl::SubtypeIndication declared;
     declared.type_mark.spelling = mark.spelling;
+    declared.written_type_mark = mark;
     if (mark.selected) {
         if (const auto declaration
             = specialized_hir_unit_->find_declaration(*mark.selected);
@@ -876,12 +877,21 @@ Lowerer::hir_vhdl_concatenation_subtype(
     }
     array->type_mark.target = root;
     array->type_mark.spelling.clear();
+    // The copied operand's written mark denotes the operand's own subtype,
+    // not the root type this indication now names.
+    array->written_type_mark.reset();
     if (const auto type = specialized_hir_unit_->find_type(root);
         type && type->vhdl != nullptr) {
         if (const auto declaration = specialized_hir_unit_->find_declaration(
                 type->vhdl->declaration);
             declaration && declaration->vhdl != nullptr) {
             array->type_mark.spelling = declaration->vhdl->name;
+            semantic::vhdl::Name root_mark;
+            root_mark.spelling = declaration->vhdl->name;
+            root_mark.canonical = declaration->vhdl->name;
+            root_mark.selected = type->vhdl->declaration;
+            root_mark.analyzed = true;
+            array->written_type_mark = std::move(root_mark);
         }
     }
     std::erase_if(array->constraints, [](const RangeConstraint& range) {

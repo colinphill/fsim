@@ -29,3 +29,7 @@ t27_image_attribute_legal	t27_image_attribute_legal.vhd	1993	OK
 t28_event_on_variable	t28_event_on_variable.vhd	2008	FSIM-VHDL-TYPE-001
 t29_sll_1993_legal	t29_sll_1993_legal.vhd	1993	OK
 t30_sll_1987	t30_sll_1987.vhd	1987	FSIM-FE-VHSTD-003
+t31_new_integer_type_to_integer	t31_new_integer_type_to_integer.vhd	2008	FSIM-VHDL-TYPE-001
+t32_new_integer_type_plus_integer	t32_new_integer_type_plus_integer.vhd	2008	FSIM-VHDL-TYPE-001
+t33_new_floating_type_to_real	t33_new_floating_type_to_real.vhd	2008	FSIM-VHDL-TYPE-001
+t34_new_integer_type_universal_legal	t34_new_integer_type_universal_legal.vhd	2008	OK

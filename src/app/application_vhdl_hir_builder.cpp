@@ -183,6 +183,44 @@ void VhdlHirBuilder::add_design(const frontend::ParsedDesign& parsed)
     return id;
 }
 
+[[nodiscard]] semantic::DeclarationId VhdlHirBuilder::add_generate_parameter(
+    const std::string_view name, const frontend::SourceSpan& span,
+    const semantic::ScopeId scope, const semantic::OriginId parent)
+{
+    // Declared by the generate statement's header, before its body.
+    auto declared_span = span;
+    declared_span.end = declared_span.begin;
+    const auto parameter_source = source(declared_span);
+    const auto parameter_origin = origin(parameter_source, parent, name);
+    const auto id = model_.add_declaration(scope,
+        semantic::DeclarationKind::constant, std::string { name },
+        parameter_source, parameter_origin);
+    // The parameter's type is that of its discrete range (11.8), which the
+    // compile-time typing stores on the mark; the HIR starts from the
+    // INTEGER placeholder a loop parameter also starts from (10.10).
+    frontend::Type integer_type;
+    integer_type.domain = frontend::ValueDomain::Integer;
+    integer_type.spelling = "integer";
+    integer_type.is_signed = true;
+    vh::Declaration output;
+    output.id = id;
+    output.scope = scope;
+    output.form = vh::DeclarationForm::generate_parameter;
+    output.name = name;
+    output.source = parameter_source;
+    output.origin = parameter_origin;
+    output.object_class = vh::ObjectClass::constant;
+    vh::SubtypeIndication subtype;
+    subtype.type_mark = type_reference(integer_type, declared_span, scope);
+    subtype.domain = vh::ValueDomain::integer;
+    subtype.signed_value = true;
+    // No model value: the parameter has no storage; each elaborated
+    // iteration binds its value (14.5.3).
+    output.subtype = subtype;
+    hir_.mutable_declarations().push_back(std::move(output));
+    return id;
+}
+
 [[nodiscard]] semantic::DeclarationId VhdlHirBuilder::add_signal(
     const frontend::SignalDeclaration& input,
     const semantic::ScopeId scope,
@@ -203,6 +241,7 @@ void VhdlHirBuilder::add_design(const frontend::ParsedDesign& parsed)
         vhdl_direction(input.direction),
         input.default_value);
     declaration(id).linkage = input.vhdl_linkage;
+    declaration(id).formal_conversion_signal = input.vhdl_formal_conversion_signal;
     declaration(id).guarded_kind = input.vhdl_guarded_kind;
     attach_interface_view(id, input, scope);
     return id;
@@ -532,6 +571,7 @@ void VhdlHirBuilder::add_design(const frontend::ParsedDesign& parsed)
         profile.subtype = subtype(
             input.type, input.span, scope, declaration_origin);
     } else {
+        profile.designator = name(input.name, input.span, scope);
         profile.entity_class = input.entity_class;
         profile.entity_class_kind = input.entity_class_kind;
         profile.name_list = input.name_list;
@@ -1078,6 +1118,10 @@ void VhdlHirBuilder::add_generate_body(
     output.label = input.then_scope;
     output.alternative_label = input.else_scope;
     output.iterator = input.variable;
+    if (output.kind == vh::GenerateKind::iterative && !input.variable.empty()) {
+        output.parameter = add_generate_parameter(
+            input.variable, input.span, output.scope, declaration_origin);
+    }
     output.initial = expression(
         input.initial, output.scope, declaration_origin);
     output.condition = expression(
@@ -1109,8 +1153,16 @@ void VhdlHirBuilder::add_generate_body(
         // force from the condition's start.
         guard.span = input.condition.span;
         guard.span.end = guard.span.begin;
-        output.declarations.push_back(add_signal(
-            guard, output.scope, declaration_origin));
+        const auto guard_id = add_signal(guard, output.scope, declaration_origin);
+        // GUARD is of type STD.STANDARD.BOOLEAN (11.2), whatever BOOLEAN is
+        // visible: the mark denotes that row and is no written name.
+        if (auto& subtype = declaration(guard_id).subtype) {
+            vh::Name boolean;
+            boolean.standard = support::StandardDeclaration::boolean;
+            boolean.analyzed = true;
+            subtype->written_type_mark = std::move(boolean);
+        }
+        output.declarations.push_back(guard_id);
     }
     add_generate_body(input.then_body, output);
 

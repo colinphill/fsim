@@ -2502,21 +2502,28 @@ private:
     // The protected type of the object a method call is selected from.
     [[nodiscard]] const semantic::vhdl::TypeDefinition*
     hir_vhdl_protected_type(
-        semantic::ScopeId scope, std::string_view object) const;
+        semantic::ScopeId scope, std::string_view object,
+        const semantic::vhdl::Name* stored = nullptr) const;
     // The defined methods of the protected body that `name`
     // (`object.method`) selects when its prefix denotes a protected object.
     [[nodiscard]] std::optional<semantic::CompiledVhdlPackageMember>
     hir_vhdl_protected_instance(
-        semantic::ScopeId scope, std::string_view object) const;
+        semantic::ScopeId scope, std::string_view object,
+        const semantic::vhdl::Name* stored = nullptr) const;
     [[nodiscard]] std::vector<semantic::CompiledVhdlCallableResolution>
     hir_vhdl_protected_method_resolutions(const semantic::vhdl::Name& name,
         semantic::ScopeId scope, bool function) const;
+    // The stored callee of an operator node of an analyzed unit (9.2,
+    // 12.5) as an analyzed Name; nullopt for other nodes.
+    [[nodiscard]] std::optional<semantic::vhdl::Name>
+    hir_vhdl_operator_call_name(const semantic::vhdl::Expression& call) const;
     // The private-variable storage of the object a call of `method` named
     // `call_name` runs on: the selected object, or the active method's own
     // object for an unprefixed call of a sibling method.
     [[nodiscard]] std::optional<std::vector<HirVhdlProtectedMember>>
     hir_vhdl_protected_call_members(std::string_view call_name,
-        semantic::ScopeId scope, semantic::DeclarationId method) const;
+        semantic::ScopeId scope, semantic::DeclarationId method,
+        const semantic::vhdl::Name* stored = nullptr) const;
     // A constant of an architecture, block or package whose composite value
     // the elaborator cannot fold is computed once at run time: its first
     // reader runs the initializer (IEEE 1076-2008 14.4.2.2) into global
@@ -2558,7 +2565,8 @@ private:
         const std::string& type_name, const frontend::SourceSpan& source);
     // The anchor of the protected object `object` names in `scope`.
     [[nodiscard]] std::optional<ContainerObjectId> hir_vhdl_protected_anchor(
-        std::string_view object, semantic::ScopeId scope) const;
+        std::string_view object, semantic::ScopeId scope,
+        const semantic::vhdl::Name* stored = nullptr) const;
     // The protected type a subtype denotes, if any.
     [[nodiscard]] const semantic::vhdl::TypeDefinition*
     hir_vhdl_subtype_protected_type(
@@ -2607,7 +2615,8 @@ private:
     // (IEEE 1076-2019 5.4.1).
     [[nodiscard]] const semantic::vhdl::TypeDefinition*
     hir_vhdl_access_protected_type(semantic::ScopeId scope,
-        std::string_view object) const;
+        std::string_view object,
+        const semantic::vhdl::Name* stored = nullptr) const;
     // The protected type an access type designates, if any.
     [[nodiscard]] const semantic::vhdl::TypeDefinition*
     hir_vhdl_designated_protected_type(
@@ -2626,7 +2635,8 @@ private:
     // The access value a method call on a pool object runs on: the
     // prefix's access variable, or the calling method's own object.
     [[nodiscard]] std::optional<RegisterId> hir_vhdl_protected_call_receiver(
-        std::string_view call_name, semantic::ScopeId scope) const;
+        std::string_view call_name, semantic::ScopeId scope,
+        const semantic::vhdl::Name* stored = nullptr) const;
     // `new T` for a protected T: a fresh access value into T's pool.
     [[nodiscard]] RegisterId lower_hir_vhdl_protected_allocator(
         const semantic::vhdl::TypeDefinition& protected_type,
@@ -2670,7 +2680,8 @@ private:
     // The type a VHDL type mark spelling denotes when looked up from
     // `scope`, for type marks the HIR left unresolved.
     [[nodiscard]] std::optional<semantic::TypeId> hir_vhdl_type_of_spelling(
-        std::string_view spelling, semantic::ScopeId scope) const;
+        std::string_view spelling, semantic::ScopeId scope,
+        const semantic::vhdl::Name* written = nullptr) const;
     // The CHARACTER code of a VHDL character literal lowered self-determined
     // or in an 8-bit context: a non-logic character, a CHARACTER control
     // name (NUL), or a logic character ('0') whose context is CHARACTER.
@@ -3155,6 +3166,12 @@ private:
     hir_vhdl_generate_iterator_value(
         semantic::ExpressionId expression,
         semantic::ScopeId process_scope) const;
+    // The iterative generate region whose generate parameter (11.8) the
+    // name `expression` selects by its stored result; null for any other
+    // expression.
+    [[nodiscard]] const semantic::vhdl::GenerateRegion*
+    hir_vhdl_stored_generate_region(
+        const semantic::vhdl::Expression& expression) const;
     // The literal lower bound of the character or enumeration range a
     // VHDL generate parameter named by `expression` iterates.
     [[nodiscard]] std::optional<semantic::ExpressionId>
@@ -3863,10 +3880,19 @@ private:
         std::size_t width { };
         std::int64_t scale { };
     };
+    [[nodiscard]] bool hir_vhdl_literal_typed(
+        const semantic::vhdl::Expression& literal) const;
     [[nodiscard]] std::optional<HirVhdlPhysicalUnit> hir_vhdl_physical_unit(
         std::string_view unit_name,
         std::size_t expected_width,
         semantic::ScopeId source_scope) const;
+    // The unit `unit_name` of the physical literal `literal` (or unit name
+    // used as a value) by what typing stored on it (5.2.4, 12.5): its type
+    // and declared unit, or the STANDARD TIME row. None when nothing fits.
+    [[nodiscard]] std::optional<HirVhdlPhysicalUnit> hir_vhdl_stored_physical_unit(
+        const semantic::vhdl::Expression& literal,
+        std::string_view unit_name,
+        std::size_t expected_width) const;
     [[nodiscard]] std::optional<std::string> hir_vhdl_physical_unit_name(
         semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<RegisterId>

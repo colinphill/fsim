@@ -302,6 +302,11 @@ bool unconstrained_subtype(const Types& types, const vhdl::SubtypeIndication& su
         throw std::logic_error("file element subtype has no type definition");
     }
     const auto& definition = *record->vhdl;
+    if (definition.scalar_type) {
+        // A declared integer or floating type is scalar (5.2.3.1, 5.2.5.1):
+        // no unconstrained array; its base is only its representation.
+        return false;
+    }
     if (definition.form == vhdl::TypeForm::subtype || definition.form == vhdl::TypeForm::alias) {
         return unconstrained_subtype(types, definition.base, designated, depth + 1U);
     }

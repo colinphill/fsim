@@ -4324,6 +4324,10 @@ tests/fixtures/vhdl/type_analysis/t27_image_attribute_legal.vhd
 tests/fixtures/vhdl/type_analysis/t28_event_on_variable.vhd
 tests/fixtures/vhdl/type_analysis/t29_sll_1993_legal.vhd
 tests/fixtures/vhdl/type_analysis/t30_sll_1987.vhd
+tests/fixtures/vhdl/type_analysis/t31_new_integer_type_to_integer.vhd
+tests/fixtures/vhdl/type_analysis/t32_new_integer_type_plus_integer.vhd
+tests/fixtures/vhdl/type_analysis/t33_new_floating_type_to_real.vhd
+tests/fixtures/vhdl/type_analysis/t34_new_integer_type_universal_legal.vhd
 tests/fixtures/vhdl/user_array_case/run_user_array_case.cmake
 tests/fixtures/vhdl/user_array_case/user_array_case.expected
 tests/fixtures/vhdl/user_array_case/user_array_case.expected.license

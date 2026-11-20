@@ -27,13 +27,27 @@ bool in_force(const TextPoint& before, const TextPoint& at) noexcept
         || precedes(before, at);
 }
 
-/// 12.3: subprograms (functions, procedures, generic subprogram instances,
-/// subprogram aliases) and enumeration literals are overloadable.
+/// 12.3: subprograms (functions, procedures, uninstantiated subprograms and
+/// subprogram instances, 4.2.1, 4.4; subprogram aliases) and enumeration
+/// literals are overloadable. An instance carries no callable record: its
+/// profile is known after instantiation (BD2 V4), so it is no homograph of
+/// another overloadable (profile_of).
 bool overloadable(const vhdl::Declaration& declaration) noexcept
 {
-    return declaration.callable.has_value()
-        || declaration.alias_signature.has_value()
-        || declaration.form == vhdl::DeclarationForm::enumeration_literal;
+    using Form = vhdl::DeclarationForm;
+    switch (declaration.form) {
+    case Form::generic_function:
+    case Form::generic_procedure:
+    case Form::generic_function_template:
+    case Form::generic_procedure_template:
+    case Form::generic_function_instance:
+    case Form::generic_procedure_instance:
+    case Form::enumeration_literal:
+        return true;
+    default:
+        return declaration.callable.has_value()
+            || declaration.alias_signature.has_value();
+    }
 }
 
 /// The parameter and result type profile of an overloadable declaration
@@ -208,6 +222,18 @@ bool encloses(const Regions& regions, const ScopeId outer, ScopeId inner)
 
 /// A potentially visible entity (12.4): a declaration or a primary unit,
 /// with the clause that makes it so.
+struct Potential;
+
+// Whether `region` is the region of a compiler-projected package, whose
+// members have no declarations (Region::undeclared; BD2).
+[[nodiscard]] bool projected_region(const Regions& regions, const Region& region)
+{
+    const auto unit = regions.design().find_unit(region.unit);
+    return unit && unit->vhdl != nullptr
+        && unit->vhdl->standard_package_form
+            == support::VhdlStandardPackageForm::projection;
+}
+
 struct Potential {
     const vhdl::Declaration* declaration { };
     UnitId unit;
@@ -720,6 +746,12 @@ void collect(const Regions& regions, const support::SymbolId designator,
     for (const auto& entry : potential) {
         if (entry.undeclared) {
             resolution.undeclared = true;
+            if (entry.region) {
+                if (const auto* owner = regions.find(*entry.region);
+                    owner != nullptr && projected_region(regions, *owner)) {
+                    resolution.undeclared_projected = true;
+                }
+            }
         } else if (entry.standard_package) {
             resolution.standard_package = true;
         } else if (entry.served_package.valid()) {
@@ -883,6 +915,8 @@ Resolution Lookup::member(const Denotation& prefix,
                 resolution.implicit.push_back(type->id);
             }
             resolution.undeclared = region->undeclared.contains(designator.index());
+            resolution.undeclared_projected
+                = resolution.undeclared && projected_region(regions_, *region);
         }
         resolution.status = resolution.candidates.empty()
                 && resolution.implicit.empty() && !resolution.undeclared

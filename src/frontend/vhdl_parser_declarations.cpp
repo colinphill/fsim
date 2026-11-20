@@ -1096,7 +1096,9 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
                   && !member_type.enumeration_range_expression
               ? std::vector<Type>{}
               : std::vector<Type>{member_type},
-          std::nullopt});
+          std::nullopt, false, support::SystemVerilogBuiltinType::none,
+          member_type.vhdl_written_type_mark,
+          member_type.vhdl_written_type_mark_span});
       if (member_type.domain == ValueDomain::Logic9) {
         type.domain = ValueDomain::Logic9;
       } else if (member_type.domain == ValueDomain::Logic4 &&

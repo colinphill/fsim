@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "vhdl_hir_type_validation.hpp"
 #include "fsim/support/stack_growth.hpp"
+#include "fsim/support/symbol.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
 #include "fsim/support/vhdl_standard_enumeration.hpp"
 
@@ -9,6 +10,7 @@
 #include "fsim/elaboration/elaborator.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
 #include "fsim/semantic/vhdl_native_identity.hpp"
+#include "fsim/semantic/vhdl_standard_declaration.hpp"
 
 #include <algorithm>
 #include <array>
@@ -93,6 +95,33 @@ struct TypeProfile {
     std::vector<ArrayDimensionProfile> dimensions;
     bool indefinite_element { };
 };
+
+// A subtype indication the compiler writes itself for a STD.STANDARD type
+// carries the STANDARD row it denotes, as analysis stores it for a written
+// mark (IEEE 1076-2019 16.3), so no spelling lookup is needed.
+void set_standard_mark(SubtypeIndication& subtype,
+    const support::StandardDeclaration row)
+{
+    semantic::vhdl::Name mark;
+    mark.spelling = subtype.type_mark.spelling;
+    mark.canonical = subtype.type_mark.spelling;
+    mark.standard = row;
+    mark.analyzed = true;
+    subtype.written_type_mark = std::move(mark);
+}
+
+// The same for a type or subtype a design declares (12.3): the mark selects
+// the declaration, and `target` names its declared type.
+void set_declared_mark(SubtypeIndication& subtype,
+    const semantic::DeclarationId declaration)
+{
+    semantic::vhdl::Name mark;
+    mark.spelling = subtype.type_mark.spelling;
+    mark.canonical = subtype.type_mark.spelling;
+    mark.selected = declaration;
+    mark.analyzed = true;
+    subtype.written_type_mark = std::move(mark);
+}
 
 class Validator final {
 public:
@@ -414,17 +443,63 @@ private:
         return selected;
     }
 
+    // The scope a type mark is judged in: the unit that wrote it (a formal
+    // of a callee read while validating a call is the callee's, 12.3).
+    semantic::ScopeId mark_scope() const
+    {
+        return mark_scope_.value_or(specialization_.scope());
+    }
+
     std::optional<semantic::TypeId> subtype_type(
         const SubtypeIndication& subtype) const
     {
         if (subtype.type_mark.target.valid()) {
             return subtype.type_mark.target;
         }
+        // A mark of an analyzed unit carries what name analysis resolved
+        // (gate BD D3): a STANDARD mark (16.3) denotes no stored type.
+        if (subtype.written_type_mark && mark_scope().valid()) {
+            if (const auto stored = semantic::CompiledDesignResolver {
+                    specialization_ }.stored_vhdl_type_identity(
+                    *subtype.written_type_mark, mark_scope())) {
+                if (stored->type) {
+                    return stored->type;
+                }
+                if (stored->standard_scalar_type
+                        != semantic::CompiledVhdlStandardScalarIdentity::none
+                    || stored->builtin_type
+                        != semantic::vhdl::BuiltinTypeIdentity::none) {
+                    return std::nullopt;
+                }
+            } else if (subtype.written_type_mark->analyzed
+                && semantic::CompiledDesignResolver { specialization_ }
+                       .vhdl_scope_analyzed(mark_scope())) {
+                // Name analysis found no type, STANDARD or declared, for
+                // the mark (12.3): it is not a compiler-provided type.
+                return named_type(subtype.type_mark.spelling);
+            }
+        }
+        // The compiler-provided type the resolution pass stamped on the
+        // indication of an analyzed unit (12.3, 16.3).
+        if (mark_scope().valid()
+            && (subtype.provided_type != semantic::CompiledVhdlProvidedType::none
+                || subtype.builtin_type
+                    != semantic::vhdl::BuiltinTypeIdentity::none)
+            && semantic::CompiledDesignResolver { specialization_ }
+                   .vhdl_scope_analyzed(mark_scope())) {
+            return std::nullopt;
+        }
         // A mark that denotes a type the compiler provides, where the unit
         // sees it, is that type: a source type of the same simple name that
         // is not visible there is another type (IEEE 1076-2019 12.3, 13.2,
         // 16.3, 16.7).
-        if (compiler_provided_mark(subtype.type_mark.spelling)) {
+        // A declaration identity (a compiler-built mark naming its
+        // declaration by position) denotes that declaration, never a
+        // compiler-provided type.
+        if (!semantic::parse_vhdl_declaration_identity(
+                subtype.type_mark.spelling)
+            && compiler_provided_mark(subtype.type_mark.spelling,
+                subtype.written_type_mark ? &*subtype.written_type_mark : nullptr)) {
             return std::nullopt;
         }
         return named_type(subtype.type_mark.spelling);
@@ -433,13 +508,23 @@ private:
     // Whether a type mark without a target denotes, at the unit's scope, a
     // compiler-provided STD.STANDARD or IEEE.STD_LOGIC_1164 type by the
     // resolver's identity.
-    bool compiler_provided_mark(const std::string_view spelling) const
+    bool compiler_provided_mark(const std::string_view spelling,
+        const semantic::vhdl::Name* written = nullptr) const
     {
-        const auto scope = specialization_.scope();
+        const auto scope = mark_scope();
         if (spelling.empty() || !scope.valid()) {
             return false;
         }
         const semantic::CompiledDesignResolver resolver { specialization_ };
+        if (resolver.vhdl_scope_analyzed(scope)) {
+            if (written != nullptr) {
+                semantic::note_vhdl_unstored_name(
+                    "Validator::compiler_provided_mark", *written, scope);
+            } else {
+                semantic::note_vhdl_unstored_reference(
+                    "Validator::compiler_provided_mark", spelling, scope);
+            }
+        }
         const auto identity = resolver.resolve_vhdl_type_identity(spelling, scope);
         if (identity.type) {
             return false;
@@ -581,6 +666,12 @@ private:
                 semantic::vhdl::Name root;
                 root.spelling = candidate->vhdl->text.substr(0U, dot);
                 root.canonical = root.spelling;
+                if (semantic::CompiledDesignResolver { specialization_ }
+                        .vhdl_scope_analyzed(candidate->vhdl->scope)) {
+                    semantic::note_vhdl_unstored_reference(
+                        "Validator::dotted_root_object", root.spelling,
+                        candidate->vhdl->scope);
+                }
                 std::ranges::transform(root.canonical,
                     root.canonical.begin(), [](const unsigned char c) {
                         return static_cast<char>(std::tolower(c));
@@ -1055,7 +1146,7 @@ private:
     {
         auto result = index_profile(index_subtype.selected
                 ? semantic::CompiledVhdlProvidedType::none
-                : provided_type(index_subtype.spelling, scope));
+                : provided_type(index_subtype, scope));
         const auto declaration = index_subtype.selected
             ? specialization_.find_declaration(*index_subtype.selected)
             : std::nullopt;
@@ -1195,9 +1286,21 @@ private:
         const auto selected = value.referenced_name
             ? value.referenced_name->selected
             : std::nullopt;
+        // The endpoint attributes of an analyzed unit are the stored
+        // predefined attribute (16.2); other units keep their spelling.
+        using Attribute = semantic::vhdl::PredefinedAttribute;
+        const bool stored_attribute = value.predefined_attribute.has_value()
+            && semantic::CompiledDesignResolver { specialization_ }
+                   .vhdl_scope_analyzed(value.scope);
+        const bool endpoint_attribute = stored_attribute
+            ? (*value.predefined_attribute == Attribute::low
+                  || *value.predefined_attribute == Attribute::high
+                  || *value.predefined_attribute == Attribute::left
+                  || *value.predefined_attribute == Attribute::right)
+            : (value.text == "'low" || value.text == "'high"
+                  || value.text == "'left" || value.text == "'right");
         if (value.kind == Kind::call && value.operands.size() == 1U
-            && (value.text == "'low" || value.text == "'high"
-                || value.text == "'left" || value.text == "'right")) {
+            && endpoint_attribute) {
             const auto prefix = specialization_.find_expression(
                 value.operands.front());
             if (prefix && prefix->vhdl != nullptr
@@ -1217,10 +1320,21 @@ private:
                             prefix_type = declaration->vhdl->declared_type;
                         }
                     }
+                } else if (prefix_name && prefix_name->analyzed
+                    && semantic::CompiledDesignResolver { specialization_ }
+                           .vhdl_scope_analyzed(prefix->vhdl->scope)) {
+                    // Name analysis found no retained type declaration
+                    // for the prefix (a STANDARD type or not a type).
                 } else {
                     const auto spelling = prefix_name
                         ? (prefix_name->text())
                         : std::string_view { prefix->vhdl->text };
+                    if (semantic::CompiledDesignResolver { specialization_ }
+                            .vhdl_scope_analyzed(prefix->vhdl->scope)) {
+                        semantic::note_vhdl_unstored_reference(
+                            "Validator::enumeration_endpoint_ordinal",
+                            spelling, prefix->vhdl->scope);
+                    }
                     prefix_type
                         = semantic::CompiledDesignResolver { specialization_ }
                               .resolve_vhdl_named_type(
@@ -1231,8 +1345,10 @@ private:
                 }
                 if (prefix_type && *prefix_type == *expected_root
                     && !expected_definition->enumeration_literals.empty()) {
-                    const bool low_endpoint
-                        = value.text == "'low" || value.text == "'left";
+                    const bool low_endpoint = stored_attribute
+                        ? (*value.predefined_attribute == Attribute::low
+                            || *value.predefined_attribute == Attribute::left)
+                        : (value.text == "'low" || value.text == "'left");
                     return low_endpoint
                         ? expected_definition->enumeration_literals.front().ordinal
                         : expected_definition->enumeration_literals.back().ordinal;
@@ -1323,9 +1439,17 @@ private:
                 return std::nullopt;
             }
             type = declaration->vhdl->declared_type;
-        } else if (!index_name.spelling.empty()) {
+        } else if (!index_name.spelling.empty()
+            && !(index_name.analyzed
+                && semantic::CompiledDesignResolver { specialization_ }
+                       .vhdl_scope_analyzed(type_declaration_scope(array)))) {
             const auto scope = type_declaration_scope(array);
             const auto spelling = index_name.text();
+            if (semantic::CompiledDesignResolver { specialization_ }
+                    .vhdl_scope_analyzed(scope)) {
+                semantic::note_vhdl_unstored_reference(
+                    "Validator::index_subtype_of", spelling, scope);
+            }
             type = semantic::CompiledDesignResolver { specialization_ }
                        .resolve_vhdl_named_type(
                            spelling,
@@ -1368,6 +1492,17 @@ private:
             return false;
         }
         const semantic::CompiledDesignResolver resolver { specialization_ };
+        if (index_name.analyzed && resolver.vhdl_scope_analyzed(scope)) {
+            // Visibility resolved the mark to exactly STD.STANDARD's
+            // CHARACTER (12.3, 16.3), or to something else.
+            return index_name.standard
+                == support::StandardDeclaration::character;
+        }
+        if (resolver.vhdl_scope_analyzed(scope)) {
+            semantic::note_vhdl_unstored_reference(
+                "Validator::implicit_standard_character_index",
+                index_name.spelling, scope);
+        }
         if (resolver.resolve_vhdl_named_type(
                 index_name.spelling, scope)) {
             return false;
@@ -1548,6 +1683,110 @@ private:
             : semantic::CompiledVhdlProvidedType::none;
     }
 
+    // The type mark of `subtype` as a name to resolve at `scope`: the
+    // written mark with what name analysis resolved (12.3, 12.4) in an
+    // analyzed unit, else one built from its spelling.
+    semantic::vhdl::Name written_mark(const SubtypeIndication& subtype,
+        const semantic::ScopeId scope, const std::string_view site) const
+    {
+        if (semantic::CompiledDesignResolver { specialization_ }
+                .vhdl_scope_analyzed(scope)) {
+            if (subtype.written_type_mark) {
+                return *subtype.written_type_mark;
+            }
+            semantic::note_vhdl_unstored_reference(
+                site, subtype.type_mark.spelling, scope);
+        }
+        semantic::vhdl::Name reference;
+        reference.spelling = subtype.type_mark.spelling;
+        reference.canonical = reference.spelling;
+        return reference;
+    }
+
+    // The compiler-provided type a type mark denotes where it is written,
+    // from what name analysis stored on it in an analyzed unit (12.3, 12.4,
+    // 16.3): a STANDARD type (Name::standard) or a retained declaration
+    // (Name::selected, which is no compiler-provided type). A mark with
+    // nothing stored takes the lookup by spelling.
+    semantic::CompiledVhdlProvidedType provided_type(
+        const semantic::vhdl::Name& mark, const semantic::ScopeId scope) const
+    {
+        if (!scope.valid()) {
+            return semantic::CompiledVhdlProvidedType::none;
+        }
+        const semantic::CompiledDesignResolver resolver { specialization_ };
+        if (resolver.vhdl_scope_analyzed(scope)) {
+            if (mark.standard != support::StandardDeclaration::none) {
+                return semantic::provided_type_of(mark.standard).value_or(
+                    semantic::CompiledVhdlProvidedType::none);
+            }
+            if (mark.selected || mark.analyzed) {
+                // Analysis found a retained declaration, or nothing that is a
+                // compiler-provided type, visible for the mark (12.3).
+                return semantic::CompiledVhdlProvidedType::none;
+            }
+            // A subtype without a mark (a generic type's own subtype, 6.5.3)
+            // names no provided type.
+            if (mark.text().empty()) {
+                return semantic::CompiledVhdlProvidedType::none;
+            }
+            semantic::note_vhdl_unstored_name("Validator::provided_type", mark, scope);
+        }
+        return resolver.resolve_vhdl_provided_type(mark.text(), scope);
+    }
+
+    // The same for a subtype indication: the provided type the resolution
+    // pass stamped on it.
+    semantic::CompiledVhdlProvidedType provided_type(
+        const SubtypeIndication& subtype, const semantic::ScopeId scope) const
+    {
+        if (!scope.valid()) {
+            return semantic::CompiledVhdlProvidedType::none;
+        }
+        const semantic::CompiledDesignResolver resolver { specialization_ };
+        if (resolver.vhdl_scope_analyzed(scope)) {
+            if (subtype.provided_type != semantic::CompiledVhdlProvidedType::none) {
+                return subtype.provided_type;
+            }
+            if (subtype.written_type_mark) {
+                return provided_type(*subtype.written_type_mark, scope);
+            }
+            // A subtype without a mark (a generic type's own subtype, 6.5.3)
+            // names no provided type.
+            if (subtype.type_mark.spelling.empty()) {
+                return semantic::CompiledVhdlProvidedType::none;
+            }
+            semantic::note_vhdl_unstored_reference(
+                "Validator::provided_type", subtype.type_mark.spelling, scope);
+        }
+        return resolver.resolve_vhdl_provided_type(
+            subtype.type_mark.spelling, scope);
+    }
+
+    // The same for a name expression (the prefix TIME of TIME'VALUE).
+    semantic::CompiledVhdlProvidedType provided_type(
+        const semantic::vhdl::Expression& expression) const
+    {
+        if (!expression.scope.valid()) {
+            return semantic::CompiledVhdlProvidedType::none;
+        }
+        const semantic::CompiledDesignResolver resolver { specialization_ };
+        if (resolver.vhdl_scope_analyzed(expression.scope)) {
+            if (expression.denoted_provided_type) {
+                return *expression.denoted_provided_type;
+            }
+            if (expression.referenced_name) {
+                return provided_type(*expression.referenced_name, expression.scope);
+            }
+            // Analysis stores the provided type a type-denoting name
+            // expression denotes (12.3, 12.4): a node without one denotes
+            // no compiler-provided type.
+            return semantic::CompiledVhdlProvidedType::none;
+        }
+        return resolver.resolve_vhdl_provided_type(
+            expression.text, expression.scope);
+    }
+
     // The compiler-provided type a canonical identity such as
     // "std.standard.string" or "ieee.std_logic_1164.std_ulogic" names.
     static semantic::CompiledVhdlProvidedType provided_type_of_identity(
@@ -1592,17 +1831,112 @@ private:
     // there: a retained declaration, or the provided type it names.
     SubtypeIndication mark_subtype(
         const std::string_view mark, const semantic::ScopeId scope,
-        const bool predefined = false) const
+        const bool predefined = false,
+        const semantic::vhdl::Name* written = nullptr,
+        const bool generic_actual = false) const
     {
         SubtypeIndication subtype;
         subtype.type_mark.spelling = std::string { mark };
         subtype.type_mark.builtin_declaration = predefined;
+        // A generic type's actual is bound by the binding frames (6.5.3): the
+        // spelling path below reads them (BD2 V4), nothing is missing.
+        if (!generic_actual
+            && semantic::CompiledDesignResolver { specialization_ }
+                .vhdl_scope_analyzed(scope)) {
+            if (written != nullptr) {
+                semantic::note_vhdl_unstored_name(
+                    "Validator::mark_subtype", *written, scope);
+            } else {
+                semantic::note_vhdl_unstored_reference(
+                    "Validator::mark_subtype", mark, scope);
+            }
+        }
         if (const auto type = named_type(mark, scope)) {
             subtype.type_mark.target = *type;
         } else {
             subtype.provided_type = provided_type(mark, scope);
         }
         return subtype;
+    }
+
+    // The same for a mark name of an analyzed unit that carries what name
+    // analysis resolved (12.3, 12.4, 16.3): the declaration it selects or
+    // the STANDARD type it denotes; any other mark takes its spelling.
+    SubtypeIndication mark_subtype(
+        const semantic::vhdl::Name& mark, const std::string_view spelling,
+        const semantic::ScopeId scope, const bool predefined = false) const
+    {
+        if (semantic::CompiledDesignResolver { specialization_ }
+                .vhdl_scope_analyzed(scope)) {
+            SubtypeIndication subtype;
+            subtype.type_mark.spelling = std::string { spelling };
+            subtype.type_mark.builtin_declaration = predefined;
+            if (mark.selected) {
+                const auto declaration
+                    = specialization_.find_declaration(*mark.selected);
+                if (declaration && declaration->vhdl != nullptr
+                    && declaration->vhdl->declared_type
+                    && declaration->vhdl->form
+                        != semantic::vhdl::DeclarationForm::generic_type) {
+                    subtype.type_mark.target = *declaration->vhdl->declared_type;
+                    subtype.written_type_mark = mark;
+                    return subtype;
+                }
+            } else if (mark.standard != support::StandardDeclaration::none) {
+                if (const auto provided = semantic::provided_type_of(mark.standard)) {
+                    subtype.provided_type = *provided;
+                }
+                // A STANDARD mark that is no provided type (NATURAL, ...)
+                // denotes no retained type (16.3).
+                subtype.written_type_mark = mark;
+                return subtype;
+            } else if (mark.analyzed && mark.overloads.empty()) {
+                // Name analysis found no type visible for the mark (12.3).
+                subtype.written_type_mark = mark;
+                return subtype;
+            }
+        }
+        const auto selected = mark.selected
+            ? specialization_.find_declaration(*mark.selected)
+            : std::nullopt;
+        const bool generic_actual = selected && selected->vhdl != nullptr
+            && selected->vhdl->form == semantic::vhdl::DeclarationForm::generic_type;
+        return mark_subtype(spelling, scope, predefined, &mark, generic_actual);
+    }
+
+    // The same for the nominal type of an expression of an analyzed unit
+    // whose type compile-time typing stored (12.5): a predefined nominal
+    // type that is a STD.STANDARD type (16.3) denotes that row, which is no
+    // retained declaration.
+    SubtypeIndication mark_subtype(const std::string_view spelling,
+        const semantic::ScopeId scope, const bool predefined,
+        const semantic::vhdl::TypeIdentity& stored,
+        const support::StandardDeclaration resolved_standard
+        = support::StandardDeclaration::none) const
+    {
+        // A literal of a STD.STANDARD physical type (`10 ns`) stores the
+        // type's row as its resolved standard (5.2.4, 16.3).
+        // A literal of a STANDARD physical type stores that type's row both
+        // as its type and as its resolved standard: its subtype is the type.
+        const auto row
+            = stored.kind == semantic::vhdl::TypeIdentity::Kind::standard
+            ? (predefined || resolved_standard == stored.standard
+                      ? stored.standard
+                      : support::StandardDeclaration::none)
+            : resolved_standard;
+        if (row != support::StandardDeclaration::none
+            && semantic::CompiledDesignResolver { specialization_ }
+                   .vhdl_scope_analyzed(scope)) {
+            SubtypeIndication subtype;
+            subtype.type_mark.spelling = std::string { spelling };
+            subtype.type_mark.builtin_declaration = predefined;
+            if (const auto provided = semantic::provided_type_of(row)) {
+                subtype.provided_type = *provided;
+            }
+            set_standard_mark(subtype, row);
+            return subtype;
+        }
+        return mark_subtype(spelling, scope, predefined);
     }
 
     TypeProfile builtin_profile(
@@ -1616,7 +1950,7 @@ private:
         return builtin_profile(subtype.type_mark.target.valid()
                 ? semantic::CompiledDesignResolver { specialization_ }
                       .vhdl_provided_type_of(subtype.type_mark.target)
-                : provided_type(subtype.type_mark.spelling, scope));
+                : provided_type(subtype, scope));
     }
 
     // Whether a subtype denotes an array type of the IEEE fixed- or
@@ -1930,12 +2264,34 @@ private:
         if (subtype.type_mark.spelling.empty()) {
             return;
         }
-        const auto identity
-            = semantic::CompiledDesignResolver { specialization_ }
-                  .resolve_vhdl_type_identity(
-                      subtype.type_mark.spelling,
-                      use_scope.valid() ? use_scope
-                                        : specialization_.scope());
+        const auto mark_scope
+            = use_scope.valid() ? use_scope : specialization_.scope();
+        const semantic::CompiledDesignResolver resolver { specialization_ };
+        if (resolver.vhdl_scope_analyzed(mark_scope)) {
+            // Name analysis stored a unique denotation (12.3, 12.4): not
+            // ambiguous.
+            if (resolver.stored_vhdl_type_identity(subtype, mark_scope)) {
+                return;
+            }
+            // The resolution pass stamped the one compiler-provided type
+            // the mark denotes (12.3, 16.3).
+            if (subtype.provided_type != semantic::CompiledVhdlProvidedType::none
+                || subtype.builtin_type
+                    != semantic::vhdl::BuiltinTypeIdentity::none) {
+                return;
+            }
+            if (subtype.written_type_mark) {
+                semantic::note_vhdl_unstored_name(
+                    "Validator::validate_ambiguous_type_mark",
+                    *subtype.written_type_mark, mark_scope);
+            } else {
+                semantic::note_vhdl_unstored_reference(
+                    "Validator::validate_ambiguous_type_mark",
+                    subtype.type_mark.spelling, mark_scope);
+            }
+        }
+        const auto identity = resolver.resolve_vhdl_type_identity(
+            subtype.type_mark.spelling, mark_scope);
         if (identity.status
             != semantic::CompiledResolutionStatus::ambiguous) {
             return;
@@ -2336,8 +2692,7 @@ private:
         if (!found->vhdl->referenced_name || !found->vhdl->referenced_name->selected) {
             // STD.STANDARD's scalar types are not retained as declarations:
             // the name denotes one where it is written (12.3, 12.4).
-            const auto provided
-                = provided_type(found->vhdl->text, found->vhdl->scope);
+            const auto provided = provided_type(*found->vhdl);
             const auto kind = builtin_operand_class(provided);
             return kind == OperandClass::integer
                 || kind == OperandClass::floating
@@ -2569,7 +2924,7 @@ private:
                     const auto index_provided
                         = implicit_index || dimension.index_subtype.selected
                         ? Provided::none
-                        : provided_type(dimension.index_subtype.spelling,
+                        : provided_type(dimension.index_subtype,
                               type_declaration_scope(type));
                     // (An anonymous range's placeholder index is INTEGER, so
                     // INTEGER itself is not checked.)
@@ -2634,7 +2989,7 @@ private:
                 if (!index_declaration) {
                     using Provided = semantic::CompiledVhdlProvidedType;
                     const auto provided = provided_type(
-                        dimension.index_subtype.spelling,
+                        dimension.index_subtype,
                         type_declaration_scope(type));
                     const auto kind = builtin_operand_class(provided);
                     if (kind == OperandClass::array
@@ -2828,7 +3183,10 @@ private:
         // retained as a declaration.
         if (expression && expression->vhdl != nullptr
             && expression->vhdl->referenced_name
+            && !expression->vhdl->referenced_name->text().empty()
             && !expression->vhdl->referenced_name->spelling.starts_with('"')
+            // An attribute designator names no function (16.2).
+            && !expression->vhdl->referenced_name->spelling.starts_with('\'')
             && (expression->vhdl->kind == semantic::vhdl::ExpressionKind::name
                 || expression->vhdl->kind
                     == semantic::vhdl::ExpressionKind::index
@@ -2839,7 +3197,18 @@ private:
                 candidates.push_back(*name.selected);
             } else if (!name.overloads.empty()) {
                 candidates = name.overloads;
+            } else if (const semantic::CompiledDesignResolver resolver {
+                           specialization_ };
+                       resolver.vhdl_scope_analyzed(expression->vhdl->scope)
+                       && name.analyzed) {
+                // Name analysis found no declaration visible (12.3): only
+                // STANDARD or implicit operations remain.
             } else {
+                if (resolver.vhdl_scope_analyzed(expression->vhdl->scope)) {
+                    semantic::note_vhdl_unstored_reference(
+                        "Validator::validate_alias_result", name.text(),
+                        expression->vhdl->scope);
+                }
                 for (const auto& candidate :
                     semantic::CompiledDesignResolver { specialization_ }
                         .resolve_vhdl_callables(name, expression->vhdl->scope)
@@ -3139,6 +3508,21 @@ private:
             semantic::vhdl::Name attribute_reference;
             attribute_reference.spelling = declaration.name;
             attribute_reference.canonical = declaration.name;
+            const bool analyzed_scope = semantic::CompiledDesignResolver {
+                specialization_ }.vhdl_scope_analyzed(declaration.scope);
+            // The designator as name analysis resolved it (7.2).
+            if (analyzed_scope && profile.designator
+                && profile.designator->analyzed) {
+                attribute_reference = *profile.designator;
+            } else if (analyzed_scope && profile.designator) {
+                semantic::note_vhdl_unstored_name(
+                    "Validator::validate_attribute_specifications",
+                    *profile.designator, declaration.scope);
+            } else if (analyzed_scope) {
+                semantic::note_vhdl_unstored_reference(
+                    "Validator::validate_attribute_specifications",
+                    declaration.name, declaration.scope);
+            }
             const semantic::CompiledDeclarationPredicate attribute_declaration
                 = [](const semantic::CompiledDeclarationView& candidate) {
                       return candidate.vhdl != nullptr
@@ -3322,6 +3706,30 @@ private:
         return type ? array_root(*type) : std::nullopt;
     }
 
+    // The operator Name of an operator expression (unary, binary) of an
+    // analyzed unit as 12.5 chose it: it selects the declared function
+    // (Expression::resolved_declaration) the operator applies, or nothing
+    // when it applies an implicitly declared or a STANDARD operation, which
+    // have no declaration. `name` is returned unchanged for any other
+    // expression; the operator symbol is then looked up by spelling.
+    semantic::vhdl::Name operator_name_of(
+        const semantic::vhdl::Expression& expression,
+        const semantic::vhdl::Name& name) const
+    {
+        if ((expression.kind != semantic::vhdl::ExpressionKind::unary
+                && expression.kind != semantic::vhdl::ExpressionKind::binary)
+            || !semantic::CompiledDesignResolver { specialization_ }
+                    .vhdl_scope_analyzed(expression.scope)) {
+            return name;
+        }
+        auto stored = name;
+        stored.selected = expression.resolved_declaration;
+        stored.overloads.clear();
+        stored.analyzed = true;
+        stored.selected_parts = 0;
+        return stored;
+    }
+
     std::optional<SubtypeIndication> function_result_subtype(
         const semantic::vhdl::Expression& expression,
         bool* matching_callable = nullptr) const
@@ -3340,8 +3748,18 @@ private:
             return std::nullopt;
         }
         const semantic::CompiledDesignResolver resolver { specialization_ };
+        // An operation that applies an implicitly declared operation
+        // (12.5; Expression::predefined_operation) matches no declared
+        // callable.
+        if (operator_expression && !expression.resolved_declaration
+            && expression.predefined_operation
+                != semantic::vhdl::PredefinedOperation::none
+            && resolver.vhdl_scope_analyzed(expression.scope)) {
+            return std::nullopt;
+        }
         const auto candidates = resolver.resolve_vhdl_callables(
-            *expression.referenced_name, expression.scope).candidates;
+            operator_name_of(expression, *expression.referenced_name),
+            expression.scope).candidates;
         std::vector<std::pair<std::string, semantic::ExpressionId>> actuals;
         actuals.reserve(expression.operands.size());
         for (std::size_t index { }; index < expression.operands.size(); ++index) {
@@ -3521,6 +3939,22 @@ private:
         const auto resolver = semantic::CompiledDesignResolver {
             specialization_ };
         const auto resolve_object = [&](const std::string_view spelling) {
+            if (resolver.vhdl_scope_analyzed(value.scope)) {
+                // Name analysis stopped at the first object of the selected
+                // name and stored it (12.3, 8.3), tried above: no other
+                // object is denoted.
+                if (value.referenced_name && value.referenced_name->analyzed) {
+                    return std::optional<semantic::DeclarationId> { };
+                }
+                // A name expression without a reference is no name: the
+                // `open` actual of an association denotes no object
+                // (6.5.7.1).
+                if (!value.referenced_name) {
+                    return std::optional<semantic::DeclarationId> { };
+                }
+                semantic::note_vhdl_unstored_reference(
+                    "Validator::name_object_subtype", spelling, value.scope);
+            }
             semantic::vhdl::Name name;
             name.spelling = std::string { spelling };
             name.canonical = name.spelling;
@@ -3619,6 +4053,11 @@ private:
             if (declared_subtype.type_mark.spelling.empty()) {
                 declared_subtype.type_mark.spelling = definition->name;
             }
+            // The base's written mark denotes the base, not this type.
+            declared_subtype.written_type_mark.reset();
+            if (definition->declaration.valid()) {
+                set_declared_mark(declared_subtype, definition->declaration);
+            }
             subtype = specialized_subtype(std::move(declared_subtype));
         }
         if (!subtype) {
@@ -3715,6 +4154,20 @@ private:
             return result;
         }
         if (value.user_attribute_value) {
+            // The attribute name `x'weight` stores the attribute
+            // declaration it denotes (12.3, 12.5): its subtype is the type
+            // of the value.
+            if (value.resolved_declaration
+                && semantic::CompiledDesignResolver { specialization_ }
+                       .vhdl_scope_analyzed(value.scope)) {
+                const auto attribute = specialization_.find_declaration(
+                    *value.resolved_declaration);
+                if (attribute && attribute->vhdl != nullptr
+                    && attribute->vhdl->attribute
+                    && attribute->vhdl->attribute->subtype) {
+                    return *attribute->vhdl->attribute->subtype;
+                }
+            }
             return resolve_vhdl_user_attribute_subtype(
                 specialization_, value.nominal_type, value.scope);
         }
@@ -3732,7 +4185,9 @@ private:
                 if (mark.empty()) {
                     return std::nullopt;
                 }
-                return specialized_subtype(mark_subtype(mark, value.scope));
+                return specialized_subtype(value.qualified_type_mark
+                        ? mark_subtype(*value.qualified_type_mark, mark, value.scope)
+                        : mark_subtype(mark, value.scope));
             }
         }
         if (value.referenced_name) {
@@ -3768,6 +4223,10 @@ private:
                         = *declaration->vhdl->declared_type;
                     subtype.type_mark.spelling
                         = declaration->vhdl->name;
+                    // A copied indication's written mark denotes the
+                    // copied subtype, not the declared type (12.3).
+                    subtype.written_type_mark.reset();
+                    set_declared_mark(subtype, *selected);
                 }
                 return specialized_subtype(std::move(subtype));
             }
@@ -3798,7 +4257,8 @@ private:
         }
         if (!value.nominal_type.empty()) {
             auto subtype = mark_subtype(
-                value.nominal_type, value.scope, value.builtin_nominal);
+                value.nominal_type, value.scope, value.builtin_nominal,
+                value.type, value.resolved_standard);
             return specialized_subtype(std::move(subtype));
         }
         if (value.kind != semantic::vhdl::ExpressionKind::name) {
@@ -3809,10 +4269,20 @@ private:
                 : std::nullopt;
             if (!selected_object && value.kind == semantic::vhdl::ExpressionKind::name
                 && value.text.find('.') != std::string::npos
-                && value.text.find('\'') == std::string::npos) {
+                && value.text.find('\'') == std::string::npos
+                && !(value.referenced_name && value.referenced_name->analyzed
+                    && semantic::CompiledDesignResolver { specialization_ }
+                           .vhdl_scope_analyzed(value.scope))) {
                 semantic::vhdl::Name prefix;
                 prefix.spelling = value.text.substr(0U, value.text.find('.'));
                 prefix.canonical = prefix.spelling;
+                if (semantic::CompiledDesignResolver { specialization_ }
+                        .vhdl_scope_analyzed(value.scope)) {
+                    // A selected name stores no resolution of its prefix.
+                    semantic::note_vhdl_unstored_reference(
+                        "Validator::selected_prefix_object", prefix.spelling,
+                        value.scope);
+                }
                 const semantic::CompiledDeclarationPredicate object
                     = [](const semantic::CompiledDeclarationView& candidate) {
                           return candidate.vhdl != nullptr
@@ -3885,6 +4355,12 @@ private:
                         subtype.type_mark.target = definition->id;
                         if (subtype.type_mark.spelling.empty()) {
                             subtype.type_mark.spelling = definition->name;
+                        }
+                        // The base's written mark denotes the base.
+                        subtype.written_type_mark.reset();
+                        if (definition->declaration.valid()) {
+                            set_declared_mark(
+                                subtype, definition->declaration);
                         }
                         return specialized_subtype(std::move(subtype));
                     }
@@ -4345,7 +4821,9 @@ private:
             if (value.marker == support::ExpressionMarker::vhdl_qualified
                 && value.operands.size() == 1U) {
                 const auto mark = std::string_view { value.marker_argument };
-                const auto subtype = mark_subtype(mark, value.scope);
+                const auto subtype = value.qualified_type_mark
+                    ? mark_subtype(*value.qualified_type_mark, mark, value.scope)
+                    : mark_subtype(mark, value.scope);
                 return support::with_stack([&] { return subtype_operand_type(subtype, depth + 1U); });
             }
             // T'LEFT, T'RIGHT, T'LOW and T'HIGH of a scalar type mark have
@@ -4569,9 +5047,27 @@ private:
             || !expression.referenced_name->overloads.empty()) {
             return false;
         }
-        return semantic::CompiledDesignResolver { specialization_ }
-            .resolve_vhdl_callables(
-                *expression.referenced_name, expression.scope)
+        const semantic::CompiledDesignResolver resolver { specialization_ };
+        if (resolver.vhdl_scope_analyzed(expression.scope)
+            && !expression.referenced_name->analyzed
+            && expression.kind != semantic::vhdl::ExpressionKind::unary
+            && expression.kind != semantic::vhdl::ExpressionKind::binary) {
+            // Name analysis leaves the designator of an attribute name, a
+            // choice or a literal to its context (16.2): no function of that
+            // name is visible.
+            return true;
+        }
+        if (resolver.vhdl_scope_analyzed(expression.scope)
+            && expression.referenced_name->analyzed
+            && !expression.resolved_declaration
+            && expression.predefined_operation
+                != semantic::vhdl::PredefinedOperation::none) {
+            // 12.5 chose the implicitly declared operation.
+            return true;
+        }
+        return resolver.resolve_vhdl_callables(
+                operator_name_of(expression, *expression.referenced_name),
+                expression.scope)
             .candidates.empty();
     }
 
@@ -4744,20 +5240,45 @@ private:
         }
         const auto mark = std::string_view { subtype->vhdl->marker_argument };
         bool unconstrained { };
-        if (const auto type = named_type(mark, expression.scope)) {
-            const auto* definition = type_definition(*type);
-            unconstrained = definition != nullptr && definition->form == TypeForm::array
+        const auto array_unconstrained = [&](const semantic::TypeId type) {
+            const auto* definition = type_definition(type);
+            return definition != nullptr && definition->form == TypeForm::array
                 && std::ranges::any_of(definition->array_dimensions,
                     [](const semantic::vhdl::ArrayDimension& dimension) {
                         return dimension.unconstrained;
                     });
+        };
+        const semantic::CompiledDesignResolver resolver { specialization_ };
+        if (resolver.vhdl_scope_analyzed(expression.scope)
+            && subtype->vhdl->qualified_type_mark
+            && subtype->vhdl->qualified_type_mark->analyzed) {
+            // The mark of the allocator's subtype node as name analysis
+            // resolved it (12.3, 12.4): a retained declaration, or a
+            // STANDARD type (16.3).
+            const auto stored = resolver.stored_vhdl_type_identity(
+                *subtype->vhdl->qualified_type_mark, expression.scope);
+            unconstrained = stored
+                && (stored->type
+                        ? array_unconstrained(*stored->type)
+                        : semantic::vhdl::is_standard_array_builtin(
+                              stored->builtin_type));
         } else {
-            // The predefined array types of STD.STANDARD are unconstrained
-            // (16.3): a mark denoting one where it is written (12.3).
-            const auto identity = semantic::CompiledDesignResolver { specialization_ }
-                                      .resolve_vhdl_type_identity(mark, expression.scope);
-            unconstrained = !identity.type
-                && semantic::vhdl::is_standard_array_builtin(identity.builtin_type);
+            if (resolver.vhdl_scope_analyzed(expression.scope)) {
+                // The mark of an allocator's subtype node is kept as text only.
+                semantic::note_vhdl_unstored_reference(
+                    "Validator::validate_allocator", mark, expression.scope);
+            }
+            if (const auto type = named_type(mark, expression.scope)) {
+                unconstrained = array_unconstrained(*type);
+            } else {
+                // The predefined array types of STD.STANDARD are unconstrained
+                // (16.3): a mark denoting one where it is written (12.3).
+                const auto identity = resolver.resolve_vhdl_type_identity(
+                    mark, expression.scope);
+                unconstrained = !identity.type
+                    && semantic::vhdl::is_standard_array_builtin(
+                        identity.builtin_type);
+            }
         }
         if (unconstrained) {
             report("FSIM-ELAB-VHACCESS-031",
@@ -4781,7 +5302,8 @@ private:
         }
         const auto spelling = dimension.index_subtype.text();
         if (!spelling.empty()) {
-            return subtype_operand_type(mark_subtype(spelling, scope), 0U);
+            return subtype_operand_type(
+                mark_subtype(dimension.index_subtype, spelling, scope), 0U);
         }
         if (dimension.constraint && dimension.constraint->left_expression) {
             return operand_type(*dimension.constraint->left_expression);
@@ -4862,7 +5384,9 @@ private:
             && expression.operands.size() == 1U) {
             const auto mark
                 = std::string_view { expression.marker_argument };
-            const auto subtype = mark_subtype(mark, expression.scope);
+            const auto subtype = expression.qualified_type_mark
+                ? mark_subtype(*expression.qualified_type_mark, mark, expression.scope)
+                : mark_subtype(mark, expression.scope);
             const auto expected = subtype_operand_type(subtype, 0U);
             const auto actual = operand_type(expression.operands.front());
             if (const auto operand = specialization_.find_expression(
@@ -5331,6 +5855,18 @@ private:
     bool locally_static_operator(
         const semantic::vhdl::Expression& expression) const
     {
+        // An operator of an analyzed unit that applies an implicitly
+        // declared operation (9.2, 12.5; Expression::predefined_operation)
+        // has no declaration to look up.
+        if (expression.resolved_declaration.has_value() == false
+            && expression.predefined_operation
+                != semantic::vhdl::PredefinedOperation::none
+            && (expression.kind == semantic::vhdl::ExpressionKind::unary
+                || expression.kind == semantic::vhdl::ExpressionKind::binary)
+            && semantic::CompiledDesignResolver { specialization_ }
+                   .vhdl_scope_analyzed(expression.scope)) {
+            return true;
+        }
         semantic::vhdl::Name operation_name;
         if (expression.referenced_name) {
             operation_name = *expression.referenced_name;
@@ -5341,7 +5877,7 @@ private:
         const auto resolver
             = semantic::CompiledDesignResolver { specialization_ };
         const auto resolutions = resolver.resolve_vhdl_callables(
-            operation_name, expression.scope);
+            operator_name_of(expression, operation_name), expression.scope);
         if (!resolutions.candidates.empty()) {
             const auto arity
                 = expression.kind == semantic::vhdl::ExpressionKind::unary
@@ -5354,7 +5890,8 @@ private:
             return false;
         }
         if (!resolver.resolve_vhdl_callable_candidates(
-                         operation_name, expression.scope)
+                         operator_name_of(expression, operation_name),
+                         expression.scope)
                 .candidates.empty()) {
             return false;
         }
@@ -5772,11 +6309,31 @@ private:
         if (!prefix || prefix->vhdl == nullptr || !prefix->vhdl->referenced_name) {
             return false;
         }
-        const auto selected = prefix->vhdl->referenced_name->selected
-            ? prefix->vhdl->referenced_name->selected
-            : semantic::CompiledDesignResolver { specialization_ }
-                  .resolve_vhdl(*prefix->vhdl->referenced_name, prefix->vhdl->scope)
-                  .unique();
+        const semantic::CompiledDesignResolver resolver { specialization_ };
+        const auto& name = *prefix->vhdl->referenced_name;
+        std::optional<semantic::DeclarationId> selected = name.selected;
+        if (!selected) {
+            if (resolver.vhdl_scope_analyzed(prefix->vhdl->scope)
+                && !name.analyzed && name.overloads.empty()) {
+                // An operator or predefined attribute of an analyzed unit
+                // carries its stored result on the expression (12.5): it
+                // names no port.
+                if (prefix->vhdl->predefined_operation
+                        != semantic::vhdl::PredefinedOperation::none
+                    || prefix->vhdl->predefined_attribute
+                    || prefix->vhdl->resolved_declaration
+                    || prefix->vhdl->kind == semantic::vhdl::ExpressionKind::unary
+                    || prefix->vhdl->kind == semantic::vhdl::ExpressionKind::binary) {
+                    return false;
+                }
+                // A name analysis left to its context (a choice, a formal
+                // designator, a record element name, an enumeration or
+                // character literal: 12.3, 15.8) denotes no port: a port
+                // reference is a name analysis resolved (12.3, 12.4).
+                return false;
+            }
+            selected = resolver.resolve_vhdl(name, prefix->vhdl->scope).unique();
+        }
         const auto declaration = selected
             ? specialization_.find_declaration(*selected)
             : std::nullopt;
@@ -5930,6 +6487,16 @@ private:
                 semantic::vhdl::Name name;
                 name.spelling = entry.signal;
                 name.canonical = entry.signal;
+                const bool analyzed_scope = semantic::CompiledDesignResolver {
+                    specialization_ }.vhdl_scope_analyzed(scope);
+                // The entry's name as name analysis resolved it (10.2).
+                if (analyzed_scope && entry.name && entry.name->analyzed) {
+                    name = *entry.name;
+                } else if (analyzed_scope) {
+                    semantic::note_vhdl_unstored_reference(
+                        "Validator::validate_sensitivity_list", entry.signal,
+                        scope);
+                }
                 const auto selected = semantic::CompiledDesignResolver { specialization_ }
                                           .resolve_vhdl(name, scope)
                                           .unique();
@@ -6036,6 +6603,12 @@ private:
                 semantic::vhdl::Name function_name;
                 function_name.spelling = std::string { name };
                 function_name.canonical = function_name.spelling;
+                if (semantic::CompiledDesignResolver { specialization_ }
+                        .vhdl_scope_analyzed(aggregate->vhdl->scope)) {
+                    semantic::note_vhdl_unstored_reference(
+                        "Validator::conversion_function", function_name.spelling,
+                        aggregate->vhdl->scope);
+                }
                 const semantic::CompiledDesignResolver resolver { specialization_ };
                 const auto actual_type = operand_type(
                     aggregate->vhdl->associations.front().value);
@@ -6135,7 +6708,10 @@ private:
                     })) {
                 return false;
             }
+            const auto previous_mark_scope = mark_scope_;
+            mark_scope_ = formal_declaration->vhdl->scope;
             const auto expected = subtype_operand_type(*formal_declaration->vhdl->subtype, 0U);
+            mark_scope_ = previous_mark_scope;
             const auto given = operand_type(actual);
             return !scalar_class(expected.kind) || !scalar_class(given.kind)
                 || (!types_conflict(given, expected));
@@ -6702,6 +7278,35 @@ private:
         }
     }
 
+    // The object that the prefix `prefix_text` of a selected name `v.f`
+    // denotes, from what name analysis stored on the whole name (12.3, 8.3):
+    // the analysis stops at an object prefix, so the stored selection is that
+    // object; a selection of another designator (a package member `p.c`) is
+    // no object prefix. Returns false when the unit is not analyzed or the
+    // name carries no analysis result.
+    bool stored_prefix_object(
+        const std::optional<semantic::vhdl::Name>& name,
+        const semantic::ScopeId scope, const std::string_view prefix_text,
+        std::optional<semantic::DeclarationId>& object) const
+    {
+        object.reset();
+        if (!name || !name->analyzed
+            || !semantic::CompiledDesignResolver { specialization_ }
+                    .vhdl_scope_analyzed(scope)) {
+            return false;
+        }
+        if (name->selected) {
+            const auto declaration
+                = specialization_.find_declaration(*name->selected);
+            if (declaration && declaration->vhdl != nullptr
+                && support::vhdl_symbol(declaration->vhdl->name)
+                    == support::vhdl_symbol(prefix_text)) {
+                object = name->selected;
+            }
+        }
+        return true;
+    }
+
     // IEEE 1076-2008 8.3: a selected name whose prefix is an object denotes
     // an element of a record (or the object an access value designates).
     void validate_selected_element(const semantic::vhdl::Expression& expression)
@@ -6716,12 +7321,23 @@ private:
         if (separator == std::string_view::npos || separator == 0U) {
             return;
         }
-        semantic::vhdl::Name prefix;
-        prefix.spelling = std::string { text.substr(0U, separator) };
-        prefix.canonical = prefix.spelling;
-        const auto selected = semantic::CompiledDesignResolver { specialization_ }
-                                  .resolve_vhdl(prefix, expression.scope)
-                                  .unique();
+        std::optional<semantic::DeclarationId> selected;
+        if (!stored_prefix_object(expression.referenced_name, expression.scope,
+                text.substr(0U, separator), selected)) {
+            semantic::vhdl::Name prefix;
+            prefix.spelling = std::string { text.substr(0U, separator) };
+            prefix.canonical = prefix.spelling;
+            if (semantic::CompiledDesignResolver { specialization_ }
+                    .vhdl_scope_analyzed(expression.scope)) {
+                // The name was not analyzed: nothing is stored.
+                semantic::note_vhdl_unstored_reference(
+                    "Validator::validate_selected_element", prefix.spelling,
+                    expression.scope);
+            }
+            selected = semantic::CompiledDesignResolver { specialization_ }
+                           .resolve_vhdl(prefix, expression.scope)
+                           .unique();
+        }
         const auto declaration = selected
             ? specialization_.find_declaration(*selected)
             : std::nullopt;
@@ -6918,7 +7534,7 @@ private:
                 return equal_ignoring_ascii_case(expression.text, literal);
             })
             || builtin_operand_class(
-                   provided_type(expression.text, expression.scope))
+                   provided_type(expression))
                 != OperandClass::unknown
             || vhdl_character_control_literal(expression.text)) {
             return;
@@ -7693,6 +8309,7 @@ private:
             const auto& found = *declaration->vhdl;
             const bool not_variable = found.form == Form::signal
                 || found.form == Form::constant || found.form == Form::generic_constant
+                || found.form == Form::generate_parameter // a constant (11.8)
                 || found.form == Form::function || found.form == Form::procedure
                 || (found.form == Form::port && found.object_class != Class::variable);
             if (not_variable) {
@@ -8471,7 +9088,7 @@ private:
             return { };
         }
         using Provided = semantic::CompiledVhdlProvidedType;
-        const auto provided = provided_type(index_name.spelling, scope);
+        const auto provided = provided_type(index_name, scope);
         if (provided == Provided::character || provided == Provided::boolean
             || provided == Provided::bit) {
             return { OperandClass::enumeration, builtin_root(provided) };
@@ -9175,6 +9792,10 @@ private:
             visiting = &local_visiting;
         }
         std::optional<semantic::TypeId> target;
+        // What name analysis stored for the mark (12.3, 12.4) in an
+        // analyzed unit; a STANDARD mark has no retained type.
+        std::optional<semantic::CompiledVhdlTypeIdentityResolution> stored;
+        auto builtin_type = subtype.builtin_type;
         if (subtype.type_mark.target.valid()) {
             target = subtype.type_mark.target;
         } else if (scope.valid()) {
@@ -9182,18 +9803,48 @@ private:
             // spelling. Resolve that spelling in the use scope before
             // classifying its base; a same-name hidden or sibling type must
             // not become a predefined vector by name alone.
-            target = named_type(subtype.type_mark.spelling, scope);
+            const semantic::CompiledDesignResolver resolver { specialization_ };
+            if (resolver.vhdl_scope_analyzed(scope)) {
+                stored = resolver.stored_vhdl_type_identity(subtype, scope);
+            }
+            if (stored) {
+                target = stored->type;
+                if (!stored->type
+                    && builtin_type == semantic::vhdl::BuiltinTypeIdentity::none) {
+                    builtin_type = stored->builtin_type;
+                }
+            } else if (resolver.vhdl_scope_analyzed(scope)
+                && (subtype.provided_type
+                        != semantic::CompiledVhdlProvidedType::none
+                    || builtin_type
+                        != semantic::vhdl::BuiltinTypeIdentity::none)) {
+                // The resolution pass stamped the compiler-provided type
+                // the mark denotes: no retained declaration (12.3, 16.3).
+            } else {
+                if (resolver.vhdl_scope_analyzed(scope)) {
+                    if (subtype.written_type_mark) {
+                        semantic::note_vhdl_unstored_name(
+                            "Validator::predefined_array_identity",
+                            *subtype.written_type_mark, scope);
+                    } else {
+                        semantic::note_vhdl_unstored_reference(
+                            "Validator::predefined_array_identity",
+                            subtype.type_mark.spelling, scope);
+                    }
+                }
+                target = named_type(subtype.type_mark.spelling, scope);
+            }
         }
         if (target) {
             if (!visiting->insert(target->value()).second) {
                 return std::nullopt;
             }
         }
-        if (subtype.builtin_type != semantic::vhdl::BuiltinTypeIdentity::none) {
+        if (builtin_type != semantic::vhdl::BuiltinTypeIdentity::none) {
             return std::string { semantic::vhdl::builtin_type_package(
-                       subtype.builtin_type) }
+                       builtin_type) }
                 + "." + std::string { semantic::vhdl::builtin_type_name(
-                    subtype.builtin_type) };
+                    builtin_type) };
         }
         if (target) {
             const auto* retained = type_definition(*target);
@@ -9336,9 +9987,24 @@ private:
         if (compiler_owned) {
             return standard_qualified_name(canonical);
         }
+        if (stored) {
+            // The stored mark denotes no predefined array (12.3, 16.3): a
+            // STANDARD array mark would have stored its builtin identity.
+            return std::nullopt;
+        }
         semantic::vhdl::Name reference;
         reference.spelling = canonical;
         reference.canonical = reference.spelling;
+        if (semantic::CompiledDesignResolver { specialization_ }
+                .vhdl_scope_analyzed(scope)) {
+            if (subtype.written_type_mark) {
+                semantic::note_vhdl_unstored_name("Validator::predefined_array_identity",
+                    *subtype.written_type_mark, scope);
+            } else {
+                semantic::note_vhdl_unstored_reference(
+                    "Validator::predefined_array_identity", canonical, scope);
+            }
+        }
         const semantic::CompiledDeclarationPredicate type_declaration
             = semantic::is_vhdl_type_declaration;
         const auto resolution = semantic::CompiledDesignResolver {
@@ -9386,9 +10052,8 @@ private:
     {
         auto element_type = element.type_mark.target;
         if (!element_type.valid()) {
-            semantic::vhdl::Name reference;
-            reference.spelling = element.type_mark.spelling;
-            reference.canonical = reference.spelling;
+            const auto reference = written_mark(
+                element, type_scope, "Validator::string_enumeration_membership");
             const semantic::CompiledDeclarationPredicate type_declaration
                 = semantic::declares_vhdl_type;
             const auto declaration
@@ -9537,9 +10202,8 @@ private:
                         + package_name) {
                 return members_allowed();
             }
-            semantic::vhdl::Name reference;
-            reference.spelling = element->type_mark.spelling;
-            reference.canonical = reference.spelling;
+            const auto reference = written_mark(*element, type_scope,
+                "Validator::contextual_string_array_value_for");
             const semantic::CompiledDeclarationPredicate type_declaration
                 = semantic::is_vhdl_type_declaration;
             const auto visible = semantic::CompiledDesignResolver {
@@ -9638,6 +10302,10 @@ private:
         SubtypeIndication result;
         result.type_mark.spelling = std::string { element };
         result.provided_type = provided_type_of_identity(element);
+        if (const auto row
+            = semantic::standard_declaration_of(result.provided_type)) {
+            set_standard_mark(result, *row);
+        }
         return result;
     }
 
@@ -11259,6 +11927,12 @@ private:
                     subtype.type_mark.spelling
                         = prefix_definition->name;
                 }
+                // The base's written mark denotes the base, not this type.
+                subtype.written_type_mark.reset();
+                if (prefix_definition->declaration.valid()) {
+                    set_declared_mark(
+                        subtype, prefix_definition->declaration);
+                }
                 prefix = specialized_subtype(std::move(subtype));
             }
         }
@@ -11360,7 +12034,12 @@ private:
             // scoped declaration resolution.
             if (prefix_expression->vhdl->kind
                     == semantic::vhdl::ExpressionKind::name
-                && !selected) {
+                && !selected
+                && !(prefix_expression->vhdl->referenced_name
+                    && prefix_expression->vhdl->referenced_name->analyzed
+                    && semantic::CompiledDesignResolver { specialization_ }
+                           .vhdl_scope_analyzed(
+                               prefix_expression->vhdl->scope))) {
                 const auto& text = prefix_expression->vhdl->text;
                 auto separator = text.find('.');
                 if (!text.empty() && text.front() == '\\') {
@@ -11385,6 +12064,14 @@ private:
                     semantic::vhdl::Name object_name;
                     object_name.spelling = text.substr(0U, separator);
                     object_name.canonical = object_name.spelling;
+                    if (semantic::CompiledDesignResolver { specialization_ }
+                            .vhdl_scope_analyzed(prefix_expression->vhdl->scope)) {
+                        // A selected name stores no resolution of its prefix.
+                        semantic::note_vhdl_unstored_reference(
+                            "Validator::selected_prefix_object",
+                            object_name.spelling,
+                            prefix_expression->vhdl->scope);
+                    }
                     selected = semantic::CompiledDesignResolver {
                                    specialization_ }
                                    .resolve_vhdl(object_name,
@@ -13661,6 +14348,12 @@ private:
                                 = semantic::TypeId { };
                             context->provided_type
                                 = provided_type_of_identity(*predefined);
+                            context->written_type_mark.reset();
+                            if (const auto row
+                                = semantic::standard_declaration_of(
+                                    context->provided_type)) {
+                                set_standard_mark(*context, *row);
+                            }
                             context->constraints.clear();
                             context->executable_width.reset();
                         } else if (root != nullptr
@@ -13668,6 +14361,11 @@ private:
                                 == semantic::vhdl::TypeForm::array) {
                             context->type_mark.spelling = root->name;
                             context->type_mark.target = root->id;
+                            context->written_type_mark.reset();
+                            if (root->declaration.valid()) {
+                                set_declared_mark(
+                                    *context, root->declaration);
+                            }
                             context->constraints.clear();
                             context->executable_width.reset();
                         }
@@ -14023,6 +14721,8 @@ private:
     }
 
     const semantic::SpecializedHirUnit& specialization_;
+    // Set while a callee's formal subtype is read (mark_scope).
+    mutable std::optional<semantic::ScopeId> mark_scope_;
     const semantic::vhdl::Unit& entity_;
     const semantic::vhdl::Unit& architecture_;
     std::unordered_set<std::uint32_t> relevant_types_;
@@ -14190,6 +14890,18 @@ resolve_vhdl_user_attribute_subtype(
     semantic::vhdl::Name reference;
     reference.spelling = std::string { attribute_name };
     reference.canonical = reference.spelling;
+    const bool analyzed_scope = semantic::CompiledDesignResolver {
+        specialization }.vhdl_scope_analyzed(selected_specification->scope);
+    // The specification's designator as name analysis resolved it (7.2).
+    if (analyzed_scope && selected_specification->attribute
+        && selected_specification->attribute->designator
+        && selected_specification->attribute->designator->analyzed) {
+        reference = *selected_specification->attribute->designator;
+    } else if (analyzed_scope) {
+        semantic::note_vhdl_unstored_reference(
+            "resolve_vhdl_user_attribute_subtype", attribute_name,
+            selected_specification->scope);
+    }
     const semantic::CompiledDeclarationPredicate attribute_declaration
         = [](const semantic::CompiledDeclarationView& candidate) {
               return candidate.vhdl != nullptr

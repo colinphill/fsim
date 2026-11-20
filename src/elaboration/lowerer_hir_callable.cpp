@@ -13244,12 +13244,18 @@ std::optional<semantic::ExpressionId> Lowerer::hir_generic_actual(
     // expanded name ending in it) stands for its actual.
     if (expression && expression->vhdl != nullptr
         && expression->vhdl->referenced_name) {
-        const auto declaration
+        const auto& written = *expression->vhdl->referenced_name;
+        // Name analysis recorded whether the stored selection is only the
+        // object prefix of the name (8.3).
+        if (written.analyzed && written.selected) {
+            if (written.selected_parts != 0U) {
+                return std::nullopt;
+            }
+        } else if (const auto declaration
             = specialized_hir_unit_->find_declaration(*selected);
-        const auto& spelling = expression->vhdl->referenced_name->canonical;
-        if (declaration && declaration->vhdl != nullptr
-            && spelling.find('.') != std::string::npos
-            && !same_hir_identifier(simple_name_of(spelling),
+            declaration && declaration->vhdl != nullptr
+            && written.canonical.find('.') != std::string::npos
+            && !same_hir_identifier(simple_name_of(written.canonical),
                 declaration->vhdl->name, true)) {
             return std::nullopt;
         }
@@ -13403,9 +13409,54 @@ Lowerer::hir_vhdl_type_actual(
     const auto resolver = hir_resolver();
     const auto& text = expression->vhdl->text;
     const auto scope = expression->vhdl->scope;
-    const auto identity = resolver.resolve_vhdl_type_identity(text, scope);
+    // The name's stored analysis result (12.3, 12.4); the spelling lookup
+    // serves only non-analyzed units.
+    // A subtype node (an allocator's subtype indication, 9.3.7) keeps its
+    // mark as qualified_type_mark, as analysis resolved it.
+    const auto& mark_name
+        = expression->vhdl->marker == support::ExpressionMarker::vhdl_subtype
+        ? expression->vhdl->qualified_type_mark
+        : expression->vhdl->referenced_name;
+    const auto stored_identity = mark_name
+        ? resolver.stored_vhdl_type_identity(*mark_name, scope)
+        : std::nullopt;
+    if (!stored_identity && resolver.vhdl_scope_analyzed(scope)) {
+        // A node without a Name (an external name's path, 8.7) names no
+        // type.
+        if (!mark_name) {
+            return std::nullopt;
+        }
+        // A name analysis resolved to no type (only STANDARD overloads such
+        // as an enumeration literal or function, an overload set, or another
+        // kind of declaration) is no type mark (12.3).
+        const auto& name = *mark_name;
+        if (name.analyzed) {
+            using Form = semantic::vhdl::DeclarationForm;
+            const auto selected = name.selected
+                ? specialized_hir_unit_->find_declaration(*name.selected)
+                : std::nullopt;
+            const bool type_form = selected && selected->vhdl != nullptr
+                && (selected->vhdl->form == Form::type
+                    || selected->vhdl->form == Form::subtype
+                    || selected->vhdl->form == Form::generic_type
+                    || selected->vhdl->form == Form::alias);
+            if (!type_form) {
+                return std::nullopt;
+            }
+        }
+        semantic::note_vhdl_unstored_name(
+            "Lowerer::hir_vhdl_type_actual", name, scope);
+    }
+    const auto identity = stored_identity
+        ? *stored_identity
+        : resolver.resolve_vhdl_type_identity(text, scope);
     semantic::vhdl::SubtypeIndication result;
     result.type_mark.source = expression->vhdl->source;
+    // The mark is the name as analyzed: its STANDARD row (16.3).
+    if (stored_identity && mark_name
+        && mark_name->standard != support::StandardDeclaration::none) {
+        result.written_type_mark = *mark_name;
+    }
     using Scalar = semantic::CompiledVhdlStandardScalarIdentity;
     if (!identity.type && identity.standard_scalar_type != Scalar::none) {
         result.type_mark.spelling
@@ -14004,6 +14055,17 @@ Lowerer::hir_vhdl_callable_candidates(
     if (specialized_hir_unit_ == nullptr) {
         return vhdl_callable_candidates(name);
     }
+    // Inside a generic unit elaborated with generic actuals the actuals'
+    // operations are candidates too (IEEE 1076-2019 5.8.3, 6.5.3), which
+    // the analysis of the uninstantiated unit did not store: the name is
+    // looked up in the instance (BD2 V4 re-analyzes instances).
+    if (name.analyzed && !hir_generic_binding_frames_.empty()) {
+        auto instance_name = name;
+        instance_name.analyzed = false;
+        return hir_resolver()
+            .resolve_vhdl_callable_candidates(instance_name, use_scope)
+            .candidates;
+    }
     return hir_resolver()
         .resolve_vhdl_callable_candidates(name, use_scope)
         .candidates;
@@ -14025,6 +14087,12 @@ Lowerer::hir_vhdl_callable_resolutions(
         return hir_resolver().resolve_vhdl_callables(name, use_scope)
             .candidates;
     }
+    // Under generic actuals the instance's candidates (see
+    // hir_vhdl_callable_candidates).
+    auto instance_name = name;
+    if (!hir_generic_binding_frames_.empty()) {
+        instance_name.analyzed = false;
+    }
     if (const auto found = hir_vhdl_callable_cache_.find(key);
         found != hir_vhdl_callable_cache_.end()) {
         for (const auto& entry : found->second) {
@@ -14036,7 +14104,7 @@ Lowerer::hir_vhdl_callable_resolutions(
     }
     const auto fallback_calls = hir_boundary_fallback_calls_;
     auto candidates = hir_resolver()
-        .resolve_vhdl_callables(name, use_scope)
+        .resolve_vhdl_callables(instance_name, use_scope)
         .candidates;
     constexpr std::size_t maximum_entries { 1U << 16U };
     if (hir_boundary_fallback_calls_ != fallback_calls
@@ -15405,6 +15473,12 @@ bool Lowerer::hir_vhdl_actual_lengths_fit(
                     != semantic::vhdl::ExpressionKind::slice
                 && actual->vhdl->kind
                     != semantic::vhdl::ExpressionKind::string_literal)) {
+            continue;
+        }
+        // Matching lengths is a rule of array subtypes (5.3.2.2, 14.3.x):
+        // a scalar actual's subtype is checked by its range, not here.
+        if (actual->vhdl->kind != semantic::vhdl::ExpressionKind::string_literal
+            && !hir_vhdl_array_valued(actuals[index])) {
             continue;
         }
         // A string literal has as many elements as characters, each of the
@@ -19993,6 +20067,120 @@ Lowerer::compute_hir_vhdl_function_call(
             return std::nullopt;
         }
     }
+    // An analyzed unit's call is the declaration compile-time typing stored
+    // (IEEE 1076-2019 12.5): the one path, with no width-keyed applicability
+    // matching and no contextual fallback. A predefined operation has no
+    // declaration: the predefined operator is used.
+    // A call inside a generic unit elaborated with generic actuals denotes
+    // the actual's operation (IEEE 1076-2019 5.8.3, 6.5.3): the binding
+    // frames decide it (BD2 V4 re-analyzes instances).
+    const bool analyzed_unit
+        = hir_resolver().vhdl_scope_analyzed(expression->vhdl->scope)
+        && hir_generic_binding_frames_.empty();
+    if (analyzed_unit && !expression->vhdl->resolved_declaration
+        && expression->vhdl->predefined_operation
+            != semantic::vhdl::PredefinedOperation::none) {
+        return std::nullopt;
+    }
+    // A STANDARD type or subtype name (a conversion's mark) is no callable:
+    // the analyzed name stores it (12.3, 16.3).
+    if (analyzed_unit && !expression->vhdl->resolved_declaration
+        && expression->vhdl->referenced_name->analyzed
+        && expression->vhdl->referenced_name->standard
+            != support::StandardDeclaration::none) {
+        return std::nullopt;
+    }
+    if (analyzed_unit && expression->vhdl->resolved_declaration) {
+        const auto stored = *expression->vhdl->resolved_declaration;
+        // A native operator of a precompiled standard package is lowered by
+        // the operator lowering, never as a call (see below).
+        if (expression->vhdl->kind == semantic::vhdl::ExpressionKind::unary
+            || expression->vhdl->kind == semantic::vhdl::ExpressionKind::binary) {
+            const auto declaration = specialized_hir_unit_->find_declaration(stored);
+            if (declaration && declaration->vhdl != nullptr
+                && semantic::vhdl_native_of(*declaration->vhdl) != nullptr) {
+                return std::nullopt;
+            }
+        }
+        // A subprogram of a generic package is reached through its
+        // instance's generic environment, which the candidates carry (4.9;
+        // BD2 V4 re-analyzes instances). A sibling call in a generic
+        // package body is elaborated under binding frames (not here).
+        const auto direct = [&] {
+            const auto declaration = specialized_hir_unit_->find_declaration(stored);
+            const auto* scope = declaration && declaration->vhdl != nullptr
+                ? specialized_hir_unit_->design().find_scope(declaration->vhdl->scope)
+                : nullptr;
+            const auto owner = scope != nullptr
+                ? specialized_hir_unit_->design().find_unit(scope->unit)
+                : std::nullopt;
+            if (!owner || owner->vhdl == nullptr) {
+                return false;
+            }
+            using Kind = semantic::vhdl::UnitKind;
+            if (owner->vhdl->kind != Kind::package) {
+                return true;
+            }
+            using Form = semantic::vhdl::DeclarationForm;
+            return std::ranges::none_of(owner->vhdl->declarations,
+                [&](const semantic::DeclarationId id) {
+                    const auto member = specialized_hir_unit_->find_declaration(id);
+                    if (!member || member->vhdl == nullptr) {
+                        return false;
+                    }
+                    const auto form = member->vhdl->form;
+                    return form == Form::generic_constant || form == Form::generic_type
+                        || form == Form::generic_function || form == Form::generic_procedure
+                        || form == Form::generic_package;
+                });
+        }();
+        auto chosen = direct ? hir_callable_resolution(stored) : std::nullopt;
+        // `obj.m(...)`: the stored name selects the object (8.3) and the
+        // typing the method; the method's resolution through the object
+        // carries the generic actuals of the instance declaring its
+        // protected type (4.9, 5.6.2).
+        const auto& called = *expression->vhdl->referenced_name;
+        if (called.analyzed && called.selected && called.selected_parts != 0U) {
+            const auto object = specialized_hir_unit_->find_declaration(*called.selected);
+            if (object && object->vhdl != nullptr && !object->vhdl->callable
+                && object->vhdl->form != semantic::vhdl::DeclarationForm::alias) {
+                const auto methods = hir_vhdl_protected_method_resolutions(
+                    called, expression->vhdl->scope, true);
+                const auto method = std::ranges::find_if(methods,
+                    [&](const HirCallableResolution& resolution) {
+                        return resolution.key == stored || resolution.body == stored;
+                    });
+                if (method != methods.end()) {
+                    chosen = *method;
+                }
+            }
+        }
+        if (!direct && !chosen) {
+            const auto candidates = hir_vhdl_callable_resolutions(
+                *expression->vhdl->referenced_name, expression->vhdl->scope);
+            const auto found = std::ranges::find_if(candidates,
+                [&](const HirCallableResolution& resolution) {
+                    return resolution.key == stored || resolution.body == stored;
+                });
+            if (found != candidates.end()) {
+                chosen = *found;
+            }
+        }
+        if (!chosen) {
+            return std::nullopt;
+        }
+        // The chosen subprogram's formals constrain the actuals (an actual
+        // whose length differs from a constrained formal's is an error,
+        // 14.3.x / 5.3.2.2): such a call is reported, not lowered.
+        if (const auto actuals
+            = bind_hir_function_actuals(expression_id, chosen->body);
+            actuals
+            && !hir_vhdl_actual_lengths_fit(
+                chosen->body, *actuals, process_scope)) {
+            return std::nullopt;
+        }
+        return chosen;
+    }
     auto candidates = hir_vhdl_callable_resolutions(
         *expression->vhdl->referenced_name,
         expression->vhdl->scope);
@@ -20010,9 +20198,35 @@ Lowerer::compute_hir_vhdl_function_call(
         });
     }
     if (candidates.empty()) {
-        candidates = hir_vhdl_protected_method_resolutions(
-            *expression->vhdl->referenced_name,
-            expression->vhdl->scope, true);
+        const auto& call = *expression->vhdl;
+        if (!call.referenced_name->analyzed
+            && call.interpretation != semantic::vhdl::Interpretation::none) {
+            // An operator or attribute call: name analysis stores no name
+            // for it, the typing decided it (12.5). Declarations of a
+            // protected type are not visible outside it (12.3), so only a
+            // method alias the typing selected reaches a method (6.6.3).
+            const auto decided_view = call.resolved_declaration
+                ? specialized_hir_unit_->find_declaration(
+                      *call.resolved_declaration)
+                : std::nullopt;
+            const auto* decided = decided_view ? decided_view->vhdl : nullptr;
+            if (decided != nullptr
+                && decided->form == semantic::vhdl::DeclarationForm::alias
+                && decided->alias_signature && decided->alias_target) {
+                auto alias_name = *call.referenced_name;
+                alias_name.selected = *call.resolved_declaration;
+                alias_name.overloads.clear();
+                alias_name.analyzed = true;
+                candidates = hir_vhdl_protected_method_resolutions(
+                    alias_name, call.scope, true);
+            }
+        } else if (call.kind != semantic::vhdl::ExpressionKind::unary
+            && call.kind != semantic::vhdl::ExpressionKind::binary) {
+            // An infix operator with no visible candidate denotes no method:
+            // a method alias would be a visible candidate itself (12.3).
+            candidates = hir_vhdl_protected_method_resolutions(
+                *call.referenced_name, call.scope, true);
+        }
     }
     // A relation the type resolution typed BOOLEAN is not a user overload
     // returning another type (IEEE 1076-2008 9.2.3, 12.5).
@@ -20047,6 +20261,8 @@ Lowerer::compute_hir_vhdl_function_call(
             return std::nullopt;
         }
     }
+    // Width-keyed overload matching: serves only non-analyzed units
+    // (generic-package instance expansions, unanalyzed links), BD2 V4.
     std::optional<HirCallableResolution> checker_resolution;
     const auto& referenced_name = *expression->vhdl->referenced_name;
     if (referenced_name.selected) {
@@ -20156,24 +20372,6 @@ Lowerer::compute_hir_vhdl_function_call(
             continue;
         }
         destination = resolution;
-    }
-    // Test-only agreement check (gate BD D4b, FSIM_VERIFY_VHDL_TYPING=1):
-    // the width-keyed pick must be the declaration the compile-time typing
-    // stored (12.5).
-    static const bool verify_typing = [] {
-        const char* text = std::getenv("FSIM_VERIFY_VHDL_TYPING");
-        return text != nullptr && std::string_view { text } == "1";
-    }();
-    if (const auto& stored = expression->vhdl->resolved_declaration;
-        verify_typing && stored && !ambiguous) {
-        const auto& pick = selected ? selected : contextual_fallback;
-        if (pick && pick->key != *stored && pick->body != *stored) {
-            throw std::logic_error { "VHDL typing agreement: expression "
-                + std::to_string(expression_id.value()) + " '"
-                + expression->vhdl->text + "' stored declaration "
-                + std::to_string(stored->value()) + ", lowerer picked "
-                + std::to_string(pick->key.value()) };
-        }
     }
     // The design's context-typed resolution (IEEE 1076-2008 12.5) selects
     // among the overloads whose profiles match the actuals, and decides a
@@ -22557,19 +22755,26 @@ report(
         }
         return std::nullopt;
     }
-    // A protected method runs on the object its call selects.
+    // A protected method runs on the object its call selects. An operator
+    // node's name is not resolved by visibility (D3); its callee is the
+    // one the compile-time typing stored (9.2, 12.5).
+    const auto operator_name = expression && expression->vhdl != nullptr
+        ? hir_vhdl_operator_call_name(*expression->vhdl)
+        : std::nullopt;
     const auto protected_members = expression && expression->vhdl != nullptr
             && expression->vhdl->referenced_name
         ? hir_vhdl_protected_call_members(
               expression->vhdl->referenced_name->text(),
-              expression->vhdl->scope, resolution->body)
+              expression->vhdl->scope, resolution->body,
+              operator_name ? &*operator_name
+                            : &*expression->vhdl->referenced_name)
         : std::nullopt;
     // A method of an allocated object runs on the one its access value
     // designates (IEEE 1076-2019 5.4.1).
     const auto protected_receiver = protected_members
         ? hir_vhdl_protected_call_receiver(
               expression->vhdl->referenced_name->text(),
-              expression->vhdl->scope)
+              expression->vhdl->scope, &*expression->vhdl->referenced_name)
         : std::nullopt;
     if (protected_members
         && !check_hir_vhdl_protected_call(resolution->body,
@@ -22908,7 +23113,9 @@ report(
             (*actuals)[index]);
         const auto anchor = actual && actual->vhdl != nullptr
                 && actual->vhdl->kind == semantic::vhdl::ExpressionKind::name
-            ? hir_vhdl_protected_anchor(actual->vhdl->text, actual->vhdl->scope)
+            ? hir_vhdl_protected_anchor(actual->vhdl->text, actual->vhdl->scope,
+                  actual->vhdl->referenced_name
+                      ? &*actual->vhdl->referenced_name : nullptr)
             : std::nullopt;
         if (!anchor) {
             return std::nullopt;
@@ -25499,19 +25706,26 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_function_call(
     if (!resolution) {
         return std::nullopt;
     }
-    // A protected method runs on the object its call selects.
+    // A protected method runs on the object its call selects. An operator
+    // node's name is not resolved by visibility (D3); its callee is the
+    // one the compile-time typing stored (9.2, 12.5).
+    const auto operator_name = expression && expression->vhdl != nullptr
+        ? hir_vhdl_operator_call_name(*expression->vhdl)
+        : std::nullopt;
     const auto protected_members = expression && expression->vhdl != nullptr
             && expression->vhdl->referenced_name
         ? hir_vhdl_protected_call_members(
               expression->vhdl->referenced_name->text(),
-              expression->vhdl->scope, resolution->body)
+              expression->vhdl->scope, resolution->body,
+              operator_name ? &*operator_name
+                            : &*expression->vhdl->referenced_name)
         : std::nullopt;
     // A method of an allocated object runs on the one its access value
     // designates (IEEE 1076-2019 5.4.1).
     const auto protected_receiver = protected_members
         ? hir_vhdl_protected_call_receiver(
               expression->vhdl->referenced_name->text(),
-              expression->vhdl->scope)
+              expression->vhdl->scope, &*expression->vhdl->referenced_name)
         : std::nullopt;
     if (protected_members
         && !check_hir_vhdl_protected_call(resolution->body,
@@ -26724,7 +26938,9 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
             (*actuals)[index]);
         const auto anchor = actual && actual->vhdl != nullptr
                 && actual->vhdl->kind == semantic::vhdl::ExpressionKind::name
-            ? hir_vhdl_protected_anchor(actual->vhdl->text, actual->vhdl->scope)
+            ? hir_vhdl_protected_anchor(actual->vhdl->text, actual->vhdl->scope,
+                  actual->vhdl->referenced_name
+                      ? &*actual->vhdl->referenced_name : nullptr)
             : std::nullopt;
         if (!anchor) {
             report(
@@ -27287,12 +27503,13 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
     // A protected method runs on the object its call selects.
     const auto protected_members = hir_vhdl_protected_call_members(
         statement->vhdl->procedure.text(), statement->vhdl->scope,
-        resolution->body);
+        resolution->body, &statement->vhdl->procedure);
     // A method of an allocated object runs on the one its access value
     // designates (IEEE 1076-2019 5.4.1).
     const auto protected_receiver = protected_members
         ? hir_vhdl_protected_call_receiver(
-              statement->vhdl->procedure.text(), statement->vhdl->scope)
+              statement->vhdl->procedure.text(), statement->vhdl->scope,
+              &statement->vhdl->procedure)
         : std::nullopt;
     if (protected_members) {
         if (!check_hir_vhdl_protected_call(resolution->body,

@@ -5,10 +5,17 @@
 #include "fsim/semantic/vhdl_native_identity.hpp"
 #include "fsim/support/design_library.hpp"
 #include "fsim/support/index_distance.hpp"
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
 #include "fsim/support/vhdl_standard_enumeration.hpp"
 #include "fsim/support/vhdl_time.hpp"
 #include "resolution_memo.hpp"
+
+#if defined(__linux__) || defined(__APPLE__)
+#include <dlfcn.h>
+#include <execinfo.h>
+#define FSIM_D6_CENSUS_FRAMES 1
+#endif
 
 #include <algorithm>
 #include <array>
@@ -18,11 +25,15 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iterator>
 #include <limits>
+#include <mutex>
 #include <ranges>
 #include <set>
 #include <span>
+#include <stdexcept>
 #include <tuple>
 #include <unordered_set>
 
@@ -3571,11 +3582,260 @@ bool CompiledDesignResolver::resolutions_memoizable() const noexcept
         && resolving_expression_names_.empty();
 }
 
+// The census records its caller only in a FSIM_D6_CENSUS_FRAMES build
+// (Linux: dladdr/backtrace).
+#if defined(FSIM_D6_CENSUS_FRAMES)
+#define FSIM_D6_CENSUS_CALLER __builtin_return_address(0)
+#else
+#define FSIM_D6_CENSUS_CALLER nullptr
+#endif
+
+namespace {
+
+// Gate BD D6' census (FSIM_D6_LOOKUP_CENSUS=<file>): names of analyzed
+// units the stored-reference read could not serve, by spelling.
+void note_vhdl_lookup_fallback(
+    const std::string_view kind, const std::string_view text,
+    const ScopeId scope, const void* caller)
+{
+    static const char* const path = std::getenv("FSIM_D6_LOOKUP_CENSUS");
+    if (path == nullptr || *path == '\0') {
+        return;
+    }
+    static std::mutex mutex;
+    const std::scoped_lock lock { mutex };
+    auto stream = support::native_fs::open_ofstream(
+        std::filesystem::path { path }, std::ios::app);
+    std::uintptr_t offset { };
+    const char* object = "?";
+#if defined(FSIM_D6_CENSUS_FRAMES)
+    Dl_info info { };
+    if (dladdr(caller, &info) != 0 && info.dli_fname != nullptr) {
+        object = info.dli_fname;
+        offset = reinterpret_cast<std::uintptr_t>(caller)
+            - reinterpret_cast<std::uintptr_t>(info.dli_fbase);
+    }
+#else
+    (void)caller;
+#endif
+    stream << kind << '\t' << scope.value() << '\t' << text << '\t' << object
+           << "\t0x" << std::hex << offset << std::dec;
+    // FSIM_D6_LOOKUP_CENSUS_FRAMES=1: the callers' frames too.
+#if defined(FSIM_D6_CENSUS_FRAMES)
+    static const bool frames = std::getenv("FSIM_D6_LOOKUP_CENSUS_FRAMES") != nullptr;
+    if (frames) {
+        std::array<void*, 8> stack { };
+        const auto depth = backtrace(stack.data(), static_cast<int>(stack.size()));
+        for (int frame = 2; frame < depth; ++frame) {
+            Dl_info frame_info { };
+            if (dladdr(stack[static_cast<std::size_t>(frame)], &frame_info) != 0
+                && frame_info.dli_fname != nullptr) {
+                stream << '\t' << frame_info.dli_fname << "@0x" << std::hex
+                       << (reinterpret_cast<std::uintptr_t>(stack[static_cast<std::size_t>(frame)])
+                              - reinterpret_cast<std::uintptr_t>(frame_info.dli_fbase))
+                       << std::dec;
+            }
+        }
+    }
+#endif
+    stream << '\n';
+}
+
+// The name lookups a type-identity lookup makes are counted with it.
+thread_local unsigned vhdl_type_identity_census_depth = 0U;
+struct TypeIdentityCensusScope {
+    TypeIdentityCensusScope() noexcept { ++vhdl_type_identity_census_depth; }
+    ~TypeIdentityCensusScope() { --vhdl_type_identity_census_depth; }
+    TypeIdentityCensusScope(const TypeIdentityCensusScope&) = delete;
+    TypeIdentityCensusScope& operator=(const TypeIdentityCensusScope&) = delete;
+};
+
+} // namespace
+
+namespace {
+
+// The identity of a STANDARD type or subtype row (16.3); none for another
+// row.
+[[nodiscard]] std::optional<CompiledVhdlTypeIdentityResolution>
+standard_type_identity(const support::StandardDeclaration row)
+{
+    using SD = support::StandardDeclaration;
+    using Scalar = CompiledVhdlStandardScalarIdentity;
+    using Subtype = CompiledVhdlStandardScalarSubtype;
+    using Builtin = vhdl::BuiltinTypeIdentity;
+    CompiledVhdlTypeIdentityResolution result;
+    result.status = CompiledResolutionStatus::unique;
+    switch (row) {
+    case SD::bit: result.standard_scalar_type = Scalar::bit; break;
+    case SD::boolean: result.standard_scalar_type = Scalar::boolean; break;
+    case SD::character: result.standard_scalar_type = Scalar::character; break;
+    case SD::file_open_kind:
+        result.standard_scalar_type = Scalar::file_open_kind;
+        break;
+    case SD::file_open_status:
+        result.standard_scalar_type = Scalar::file_open_status;
+        break;
+    case SD::integer: result.standard_scalar_type = Scalar::integer; break;
+    case SD::natural:
+        result.standard_scalar_type = Scalar::integer;
+        result.standard_scalar_subtype = Subtype::natural;
+        break;
+    case SD::positive:
+        result.standard_scalar_type = Scalar::integer;
+        result.standard_scalar_subtype = Subtype::positive;
+        break;
+    case SD::range_direction:
+        result.standard_scalar_type = Scalar::range_direction;
+        break;
+    case SD::real: result.standard_scalar_type = Scalar::real; break;
+    case SD::severity_level:
+        result.standard_scalar_type = Scalar::severity_level;
+        break;
+    case SD::time: result.standard_scalar_type = Scalar::time; break;
+    case SD::delay_length:
+        result.standard_scalar_type = Scalar::time;
+        result.standard_scalar_subtype = Subtype::delay_length;
+        break;
+    case SD::string: result.builtin_type = Builtin::std_standard_string; break;
+    case SD::bit_vector:
+        result.builtin_type = Builtin::std_standard_bit_vector;
+        break;
+    case SD::boolean_vector:
+        result.builtin_type = Builtin::std_standard_boolean_vector;
+        break;
+    case SD::integer_vector:
+        result.builtin_type = Builtin::std_standard_integer_vector;
+        break;
+    case SD::real_vector:
+        result.builtin_type = Builtin::std_standard_real_vector;
+        break;
+    case SD::time_vector:
+        result.builtin_type = Builtin::std_standard_time_vector;
+        break;
+    default: return std::nullopt;
+    }
+    return result;
+}
+
+} // namespace
+
+bool CompiledDesignResolver::vhdl_scope_analyzed(const ScopeId scope) const
+{
+    const auto* unit = design_ != nullptr && scope.valid()
+        ? design_->vhdl_scope_unit(scope) : nullptr;
+    return unit != nullptr && unit->analyzed;
+}
+
+void note_vhdl_unstored_reference(
+    const std::string_view site, const std::string_view text,
+    const ScopeId scope)
+{
+    // An analyzed unit's names are resolved at compile time (gate BD D3,
+    // D4): elaboration reads the stored result, so a missing one is an
+    // internal error, never a lookup by spelling.
+    note_vhdl_lookup_fallback(site, text, scope, FSIM_D6_CENSUS_CALLER);
+    throw std::logic_error { "gate BD D6': " + std::string { site }
+        + " has no stored result for '" + std::string { text }
+        + "' in an analyzed VHDL unit" };
+}
+
+void note_vhdl_unstored_name(
+    const std::string_view site, const vhdl::Name& name, const ScopeId scope)
+{
+    if (name.exemption != vhdl::AnalysisExemption::none) {
+        note_vhdl_lookup_fallback(std::string { site } + " [exempt:"
+                + (name.exemption == vhdl::AnalysisExemption::package_instance
+                        ? "package_instance"
+                        : name.exemption == vhdl::AnalysisExemption::projected_package
+                        ? "projected_package"
+                        : name.exemption == vhdl::AnalysisExemption::generic_type
+                        ? "generic_type"
+                        : "no_declaration")
+                + "]",
+            name.text(), scope, FSIM_D6_CENSUS_CALLER);
+        return;
+    }
+    note_vhdl_unstored_reference(site, name.text(), scope);
+}
+
+std::optional<CompiledVhdlTypeIdentityResolution>
+CompiledDesignResolver::stored_vhdl_type_identity(
+    const vhdl::Name& mark, const ScopeId use_scope) const
+{
+    const auto* unit = design_ != nullptr ? design_->vhdl_scope_unit(use_scope) : nullptr;
+    if (unit == nullptr || !unit->analyzed) {
+        return std::nullopt;
+    }
+    if (mark.standard != support::StandardDeclaration::none) {
+        return standard_type_identity(mark.standard);
+    }
+    if (!mark.selected) {
+        return std::nullopt;
+    }
+    const auto declaration = find_declaration(*design_, effective_, *mark.selected);
+    // A generic type denotes its actual through the binding frames (6.5.3),
+    // which the spelling path applies.
+    if (!declaration || declaration->vhdl == nullptr
+        || declaration->vhdl->form == vhdl::DeclarationForm::generic_type) {
+        return std::nullopt;
+    }
+    // An object prefix of a subtype attribute (`obj'subtype`, 16.2.2;
+    // `obj'element`, `obj'index`): the type of the object's subtype, as
+    // stored where the object is declared.
+    if ((vhdl::is_value_object_form(declaration->vhdl->form)
+            || declaration->vhdl->form == vhdl::DeclarationForm::generate_parameter)
+        && declaration->vhdl->subtype) {
+        return stored_vhdl_type_identity(
+            *declaration->vhdl->subtype, declaration->vhdl->scope);
+    }
+    CompiledVhdlTypeIdentityResolution result;
+    result.type = declaration->vhdl->declared_type;
+    if (!result.type && declaration->vhdl->subtype
+        && declaration->vhdl->subtype->type_mark.target.valid()) {
+        result.type = declaration->vhdl->subtype->type_mark.target;
+    }
+    if (!result.type) {
+        return std::nullopt;
+    }
+    result.status = CompiledResolutionStatus::unique;
+    return result;
+}
+
+std::optional<CompiledVhdlTypeIdentityResolution>
+CompiledDesignResolver::stored_vhdl_type_identity(
+    const vhdl::SubtypeIndication& subtype, const ScopeId use_scope) const
+{
+    if (subtype.written_type_mark) {
+        if (auto stored = stored_vhdl_type_identity(*subtype.written_type_mark, use_scope)) {
+            return stored;
+        }
+    }
+    const auto* unit = design_ != nullptr ? design_->vhdl_scope_unit(use_scope) : nullptr;
+    if (unit == nullptr || !unit->analyzed) {
+        return std::nullopt;
+    }
+    if (!subtype.type_mark.target.valid()) {
+        return std::nullopt;
+    }
+    CompiledVhdlTypeIdentityResolution result;
+    result.status = CompiledResolutionStatus::unique;
+    result.type = subtype.type_mark.target;
+    return result;
+}
+
 CompiledVhdlTypeIdentityResolution
 CompiledDesignResolver::resolve_vhdl_type_identity(
     std::string_view spelling,
     const std::optional<ScopeId> owner_scope) const
 {
+    if (owner_scope && design_ != nullptr) {
+        if (const auto* unit = design_->vhdl_scope_unit(*owner_scope);
+            unit != nullptr && unit->analyzed) {
+            note_vhdl_lookup_fallback("type_identity", spelling, *owner_scope,
+                FSIM_D6_CENSUS_CALLER);
+        }
+    }
+    const TypeIdentityCensusScope census_scope;
     if (!owner_scope || !resolutions_memoizable()) {
         return compute_vhdl_type_identity(spelling, owner_scope);
     }
@@ -4739,25 +4999,49 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
         const auto native_domain = native != nullptr
             ? vhdl_native_domain(*native)
             : VhdlNativeDomain::none;
+        // What name analysis stored for the mark (gate BD D3/D6'): a
+        // STANDARD type or subtype (16.3) by its row, a declared type by its
+        // declaration. Only a mark of a unit not analyzed is read by name.
+        const CompiledDesignResolver mark_resolver {
+            *design_, selected_unit_, effective_, active
+        };
+        const auto stored = mark_resolver.stored_vhdl_type_identity(
+            result, subtype_scope);
         if (result.builtin_type == vhdl::BuiltinTypeIdentity::none
             && !result.type_mark.target.valid()) {
-            auto spelling = std::string_view {
-                result.type_mark.spelling
-            };
-            const auto resolved = CompiledDesignResolver {
-                *design_, selected_unit_, effective_, active
-            }.resolve_vhdl_type_identity(spelling, subtype_scope);
-            if (resolved.status == CompiledResolutionStatus::unique
-                && resolved.builtin_type
-                    != vhdl::BuiltinTypeIdentity::none) {
-                result.builtin_type = resolved.builtin_type;
+            if (stored) {
+                if (!stored->type) {
+                    result.builtin_type = stored->builtin_type;
+                }
+            } else {
+                auto spelling = std::string_view {
+                    result.type_mark.spelling
+                };
+                const auto resolved = mark_resolver.resolve_vhdl_type_identity(
+                    spelling, subtype_scope);
+                if (resolved.status == CompiledResolutionStatus::unique
+                    && resolved.builtin_type
+                        != vhdl::BuiltinTypeIdentity::none) {
+                    result.builtin_type = resolved.builtin_type;
+                }
             }
         }
-        if (same_vhdl_identifier(name, "integer")
-            || same_vhdl_identifier(name, "natural")
-            || same_vhdl_identifier(name, "positive")
-            || same_vhdl_identifier(name, "universal_integer")
-            || same_vhdl_identifier(name, "time")) {
+        using Scalar = CompiledVhdlStandardScalarIdentity;
+        const auto stored_scalar = stored && !stored->type
+            ? stored->standard_scalar_type : Scalar::none;
+        // The STANDARD scalar type the mark denotes: the stored row, or for a
+        // unit not analyzed the mark's simple name.
+        const auto standard_scalar = [&](const Scalar scalar,
+                                         const std::string_view spelling) {
+            return stored ? stored_scalar == scalar
+                          : same_vhdl_identifier(name, spelling);
+        };
+        if (standard_scalar(Scalar::integer, "integer")
+            || (!stored
+                && (same_vhdl_identifier(name, "natural")
+                    || same_vhdl_identifier(name, "positive")
+                    || same_vhdl_identifier(name, "universal_integer")))
+            || standard_scalar(Scalar::time, "time")) {
             // A compiled subtype can deliberately retain a storage width
             // that differs from the language's predefined INTEGER width.
             // TIME and compiler-owned VITAL aliases are the important case:
@@ -4769,7 +5053,7 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
                 ? static_cast<std::uint8_t>(*result.executable_width)
                 : result.integer_storage_width != 0U
                 ? result.integer_storage_width
-                : same_vhdl_identifier(name, "time")
+                : standard_scalar(Scalar::time, "time")
                 ? std::uint8_t { 64U }
                 : standard_width();
             result.domain = vhdl::ValueDomain::integer;
@@ -4777,17 +5061,17 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
             result.integer_storage_width = width;
             result.signed_value = true;
             return true;
-        } else if (same_vhdl_identifier(name, "boolean")) {
+        } else if (standard_scalar(Scalar::boolean, "boolean")) {
             result.domain = vhdl::ValueDomain::boolean;
             result.executable_width = 1U;
             return true;
-        } else if (same_vhdl_identifier(name, "real")) {
+        } else if (standard_scalar(Scalar::real, "real")) {
             // STD.STANDARD.REAL is held as a 64-bit IEEE double.
             result.domain = vhdl::ValueDomain::bit2;
             result.executable_width = 64U;
             result.signed_value = true;
             return true;
-        } else if (same_vhdl_identifier(name, "bit")) {
+        } else if (standard_scalar(Scalar::bit, "bit")) {
             result.domain = vhdl::ValueDomain::bit2;
             result.executable_width = 1U;
             return true;
@@ -4798,23 +5082,27 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
             result.domain = vhdl::ValueDomain::logic9;
             result.executable_width = 1U;
             return true;
-        } else if (same_vhdl_identifier(name, "character")) {
+        } else if (standard_scalar(Scalar::character, "character")) {
             result.domain = vhdl::ValueDomain::bit2;
             result.executable_width = 8U;
             return true;
         } else if (const auto* enumeration
-                   = support::find_vhdl_standard_enumeration(name)) {
+                   = support::find_vhdl_standard_enumeration(stored
+                       ? vhdl_standard_scalar_declaration_name(stored_scalar)
+                       : name)) {
             // Predefined STD.STANDARD enumerations (IEEE 1076-2019 16.3).
             result.domain = vhdl::ValueDomain::bit2;
             result.executable_width
                 = support::vhdl_standard_enumeration_width(*enumeration);
             return true;
-        } else if (same_vhdl_identifier(name, "type_class")
-            || same_vhdl_identifier(name, "value_class")) {
+        } else if (!stored
+            && (same_vhdl_identifier(name, "type_class")
+                || same_vhdl_identifier(name, "value_class"))) {
             result.domain = vhdl::ValueDomain::bit2;
             result.executable_width = 4U;
             return true;
-        } else if (name.size() >= std::string_view { "_mirror" }.size()
+        } else if (!stored
+            && name.size() >= std::string_view { "_mirror" }.size()
             && same_vhdl_identifier(
                 name.substr(name.size()
                     - std::string_view { "_mirror" }.size()),
@@ -5926,6 +6214,12 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
                 const auto& index = definition->array_dimensions
                     [static_cast<std::size_t>(dimension - 1)];
                 selected = named(index.index_subtype.text());
+                // The index subtype's name as analysis stored it (5.3.2.2,
+                // 16.2.3): a STANDARD row or the selected declaration.
+                if (index.index_subtype.analyzed
+                    || index.index_subtype.exemption != vhdl::AnalysisExemption::none) {
+                    selected->written_type_mark = index.index_subtype;
+                }
                 if (index.index_subtype.selected) {
                     const auto declaration = find_declaration(*design_,
                         effective_, *index.index_subtype.selected);
@@ -8055,6 +8349,14 @@ CompiledDesignResolver::bind_vhdl_generics(
                             subtype = *actual->vhdl->subtype;
                         }
                     }
+                    // The actual's type mark is the name as analysis
+                    // stored it (6.5.7.2, 12.3): a STD.STANDARD row keeps
+                    // its row without a spelling lookup.
+                    if (!subtype.written_type_mark
+                        && (name.analyzed
+                            || name.exemption != vhdl::AnalysisExemption::none)) {
+                        subtype.written_type_mark = name;
+                    }
                     // `inst.t` naming a generic type of another package
                     // instance denotes that instance's actual (IEEE
                     // 1076-2008 6.5.3, 4.9).
@@ -9846,10 +10148,46 @@ bool CompiledDesignResolver::vhdl_package_member_use_clause_names(
         });
 }
 
+
 CompiledDeclarationResolution CompiledDesignResolver::resolve_vhdl(
     const vhdl::Name& name, const ScopeId use_scope,
     const CompiledDeclarationPredicate& predicate) const
 {
+    // A name of an analyzed unit carries what compile-time analysis
+    // resolved by visibility (gate BD D3, IEEE 1076-2019 12.3, 12.4): the
+    // declaration it selects or its visible overloads. They are the result.
+    if (const auto* unit = design_->vhdl_scope_unit(use_scope);
+        unit != nullptr && unit->analyzed) {
+        if (name.analyzed || name.selected || !name.overloads.empty()) {
+            std::vector<DeclarationId> candidates;
+            const auto keep = [&](const DeclarationId id) {
+                if (!predicate) {
+                    candidates.push_back(id);
+                    return;
+                }
+                const auto view = find_declaration(*design_, effective_, id);
+                if (view && predicate(*view)) {
+                    candidates.push_back(id);
+                }
+            };
+            if (name.selected) {
+                keep(*name.selected);
+            } else {
+                for (const auto id : name.overloads) {
+                    keep(id);
+                }
+            }
+            return declaration_result(std::move(candidates));
+        }
+        // A STANDARD declaration (16.3) has no vhdl::Declaration.
+        if (name.standard != support::StandardDeclaration::none) {
+            return { CompiledResolutionStatus::not_found, { } };
+        }
+        if (vhdl_type_identity_census_depth == 0U) {
+            note_vhdl_lookup_fallback("name", vhdl_spelling(name), use_scope,
+                FSIM_D6_CENSUS_CALLER);
+        }
+    }
     const auto spelling = vhdl_spelling(name);
     const auto parts = vhdl_name_parts(spelling);
     if (parts.empty()) {
@@ -10197,12 +10535,19 @@ CompiledDesignResolver::resolve_vhdl_callable_candidates(
     // Resolving the spelling first also preserves complete overload sets when
     // `selected` is an indexing interpretation rather than a callable.
     auto visible = resolve_vhdl(name, use_scope, callable_or_alias);
+    // Compile-time name analysis stored the whole visible overload set,
+    // outer regions included (gate BD D3, 12.3, 12.4).
+    const bool stored_complete = name.analyzed && [&] {
+        const auto* unit = design_->vhdl_scope_unit(use_scope);
+        return unit != nullptr && unit->analyzed;
+    }();
     // Subprograms are overloadable: an inner declaration hides only its
     // homographs, so the outer regions' subprograms of other profiles stay
     // visible (IEEE 1076-2008 12.3). A nonoverloadable declaration of the
     // designator, or an unknown profile, ends the walk.
     if (const auto parts = vhdl_name_parts(vhdl_spelling(name));
-        parts.size() == 1U && !visible.candidates.empty()) {
+        !stored_complete && parts.size() == 1U
+        && !visible.candidates.empty()) {
         const auto first = find_declaration(
             *design_, effective_, visible.candidates.front());
         std::optional<ScopeId> found_scope;
@@ -10350,6 +10695,7 @@ CompiledDesignResolver::resolve_vhdl_callable_candidates(
         auto target_name = *alias->vhdl->alias_target;
         target_name.selected.reset();
         target_name.overloads.clear();
+        target_name.analyzed = false;
         const auto targets = resolve_vhdl_callable_candidates(
             target_name, alias->vhdl->scope);
         for (const auto target : targets.candidates) {
@@ -11377,7 +11723,33 @@ CompiledDesignResolver::resolve_vhdl_callable(
             : std::nullopt;
         if (!owner || owner->vhdl == nullptr
             || owner->vhdl->kind != vhdl::UnitKind::package) {
-            return { CompiledResolutionStatus::not_found, { } };
+            // Outside a package the body of a subprogram declaration is in
+            // the same declarative region (IEEE 1076-2019 4.2.1, 4.3): a
+            // name written before the body (a resolution function of a
+            // subtype declared between them, 4.6) denotes that subprogram.
+            std::vector<DeclarationId> local_bodies;
+            visit_vhdl_declarations_in_scope(*design_, effective_,
+                declaration->vhdl->scope, declaration->vhdl->name,
+                [&](const vhdl::Declaration& candidate) {
+                    if (candidate.id != selected && candidate.callable
+                        && candidate.callable->defined
+                        && same_vhdl_identifier(
+                            candidate.name, declaration->vhdl->name)
+                        && vhdl_callable_profile_matches(
+                            requested, candidate.id, true)) {
+                        local_bodies.push_back(candidate.id);
+                    }
+                });
+            sort_unique(local_bodies);
+            std::vector<CompiledVhdlCallableResolution> local;
+            for (const auto body : local_bodies) {
+                local.push_back({ requested, body, std::nullopt, { },
+                    propagated_bindings });
+            }
+            if (local.empty()) {
+                return { CompiledResolutionStatus::not_found, { } };
+            }
+            return { status_for(local.size()), std::move(local) };
         }
         std::vector<DeclarationId> bodies;
         for (const auto& unit : design_->vhdl_units()) {
@@ -11915,6 +12287,24 @@ CompiledDesignResolver::resolve_expression_name(
     const auto& source = *view->vhdl;
     if (!source.referenced_name) {
         return { CompiledResolutionStatus::not_found, { } };
+    }
+    // Compile-time typing chose the declaration an expression of an
+    // analyzed unit denotes (gate BD D4, 12.5), or decided it is a
+    // predefined operation or attribute, which has none.
+    if (vhdl_scope_analyzed(source.scope)) {
+        if (source.resolved_declaration) {
+            const auto declaration = find_declaration(
+                *design_, effective_, *source.resolved_declaration);
+            if (declaration && (!predicate || predicate(*declaration))) {
+                return { CompiledResolutionStatus::unique,
+                    { *source.resolved_declaration } };
+            }
+            return { CompiledResolutionStatus::not_found, { } };
+        }
+        if (source.predefined_operation != vhdl::PredefinedOperation::none
+            || source.predefined_attribute) {
+            return { CompiledResolutionStatus::not_found, { } };
+        }
     }
     auto resolution = resolve_vhdl(
         *source.referenced_name, source.scope, predicate);

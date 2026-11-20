@@ -167,7 +167,9 @@ Type VerilogParser::parse_systemverilog_aggregate_type(bool* const complete)
                     { },
                     std::move(member_initializer),
                     random_member,
-                    declarator_type.systemverilog_builtin
+                    declarator_type.systemverilog_builtin,
+                    { },
+                    { }
                 };
                 if (!packed || !declarator_type.named_type.empty()
                     || declarator_type.packed_aggregate

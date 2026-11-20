@@ -541,6 +541,11 @@ struct PackedMember {
     // same name); `none` for VHDL record elements.
     support::SystemVerilogBuiltinType systemverilog_builtin {
         support::SystemVerilogBuiltinType::none };
+    // The type mark of a VHDL record element's subtype indication as
+    // written (Type::vhdl_written_type_mark; IEEE 1076-2019 5.3.3, 6.3),
+    // kept for an element whose nested_types is empty.
+    std::string vhdl_written_type_mark;
+    SourceSpan vhdl_written_type_mark_span;
 
     [[nodiscard]] std::optional<std::uint64_t> width() const noexcept;
 };
@@ -1246,6 +1251,8 @@ struct SignalDeclaration {
     // A VHDL-2019 variable port, a reference to a shared variable (IEEE
     // 1076-2019 6.5.6.3).
     bool vhdl_variable_port { };
+    // The implicit signal of a port map formal part f(s) (6.5.7.1).
+    bool vhdl_formal_conversion_signal { };
 
     SignalDeclaration() = default;
     SignalDeclaration(
@@ -1959,6 +1966,11 @@ struct Sensitivity {
     // 1800-2023 9.4.2.3): the event triggers only while it holds. A control
     // with one event keeps its guard on the statement or process instead.
     std::optional<Expression> guard { };
+    // A VHDL direct signal entry's simple name as written (an extended
+    // identifier keeps its backslashes and case, IEEE 1076-2019 15.4.3).
+    std::string vhdl_spelling { };
+    // Its canonical name text, as an expression name holds it.
+    std::string vhdl_name_text { };
 };
 
 struct CaseAlternative;

@@ -59,6 +59,12 @@ private:
     [[nodiscard]] semantic::UnitId scope_unit(
         const semantic::ScopeId scope) const;
 
+    // The generate parameter `name` of the iterative generate region
+    // `scope` (IEEE 1076-2019 11.8), in force from `span`'s start.
+    [[nodiscard]] semantic::DeclarationId add_generate_parameter(
+        const std::string_view name, const frontend::SourceSpan& span,
+        const semantic::ScopeId scope, const semantic::OriginId parent);
+
     [[nodiscard]] vh::Name name(
         const std::string_view spelling,
         const frontend::SourceSpan& span,

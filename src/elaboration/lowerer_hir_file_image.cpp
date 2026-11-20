@@ -56,6 +56,19 @@ struct FileImageLeaf {
             : spelling.substr(separator + 1U));
 }
 
+// A synthesized element indication of a STD.STANDARD type carries the row it
+// denotes, as analysis stores it for a written mark (12.4, 16.3).
+void set_standard_element_mark(semantic::vhdl::SubtypeIndication& subtype,
+    const support::StandardDeclaration row)
+{
+    semantic::vhdl::Name mark;
+    mark.spelling = subtype.type_mark.spelling;
+    mark.canonical = subtype.type_mark.spelling;
+    mark.standard = row;
+    mark.analyzed = true;
+    subtype.written_type_mark = std::move(mark);
+}
+
 } // namespace
 
 // Typed VHDL files hold one element per line as text images: scalars as
@@ -153,13 +166,22 @@ Lowerer::HirVhdlFileImageResult Lowerer::lower_hir_vhdl_file_image(
             if (definition != nullptr && definition->element_subtype) {
                 member = *definition->element_subtype;
             } else {
-                member.type_mark.spelling = named("string") ? "character"
-                    : named("bit_vector")                   ? "bit"
-                    : named("boolean_vector")               ? "boolean"
-                    : named("integer_vector")               ? "integer"
-                    : named("real_vector")                  ? "real"
-                                                            : "time";
-                if (member.type_mark.spelling == "integer") {
+                using Row = support::StandardDeclaration;
+                const auto [element_spelling, element_row]
+                    = named("string") ? std::pair<const char*, Row> {
+                          "character", Row::character }
+                    : named("bit_vector") ? std::pair<const char*, Row> {
+                          "bit", Row::bit }
+                    : named("boolean_vector") ? std::pair<const char*, Row> {
+                          "boolean", Row::boolean }
+                    : named("integer_vector") ? std::pair<const char*, Row> {
+                          "integer", Row::integer }
+                    : named("real_vector") ? std::pair<const char*, Row> {
+                          "real", Row::real }
+                    : std::pair<const char*, Row> { "time", Row::time };
+                member.type_mark.spelling = element_spelling;
+                set_standard_element_mark(member, element_row);
+                if (element_row == Row::integer) {
                     member.domain = semantic::vhdl::ValueDomain::integer;
                     member.integer_storage_width = 32U;
                 }

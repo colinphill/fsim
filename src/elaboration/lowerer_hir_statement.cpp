@@ -1389,6 +1389,23 @@ namespace {
 
 namespace {
 
+// A synthesized indication of a STD.STANDARD type carries the row it denotes,
+// as the analysis stores it for a written mark (12.4, 16.3).
+void hir_statement_set_standard_mark(semantic::vhdl::SubtypeIndication& subtype,
+    const support::StandardDeclaration row)
+{
+    semantic::vhdl::Name mark;
+    mark.spelling = subtype.type_mark.spelling;
+    mark.canonical = subtype.type_mark.spelling;
+    mark.standard = row;
+    mark.analyzed = true;
+    subtype.written_type_mark = std::move(mark);
+}
+
+} // namespace
+
+namespace {
+
     // The array locator methods that find elements (IEEE 1800-2023 7.12.1).
     bool is_array_find_method(const support::BuiltinMethod method) noexcept
     {
@@ -5613,29 +5630,39 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     name = simple_name_of(name);
                     semantic::vhdl::SubtypeIndication element;
                     const auto set = [&](const std::string_view scalar,
+                                         const support::StandardDeclaration row,
                                          const semantic::vhdl::ValueDomain domain,
                                          const std::uint64_t width) {
                         element.type_mark.spelling = std::string { scalar };
+                        if (row != support::StandardDeclaration::none) {
+                            hir_statement_set_standard_mark(element, row);
+                        }
                         element.domain = domain;
                         element.executable_width = width;
                     };
                     if (equal_ignoring_ascii_case(name, "bit_vector")) {
-                        set("bit", semantic::vhdl::ValueDomain::bit2, 1U);
+                        set("bit", support::StandardDeclaration::bit,
+                            semantic::vhdl::ValueDomain::bit2, 1U);
                     } else if (equal_ignoring_ascii_case(name, "string")) {
-                        set("character", semantic::vhdl::ValueDomain::bit2, 8U);
+                        set("character", support::StandardDeclaration::character,
+                            semantic::vhdl::ValueDomain::bit2, 8U);
                     } else if (equal_ignoring_ascii_case(name, "boolean_vector")) {
-                        set("boolean", semantic::vhdl::ValueDomain::boolean, 1U);
+                        set("boolean", support::StandardDeclaration::boolean,
+                            semantic::vhdl::ValueDomain::boolean, 1U);
                     } else if (equal_ignoring_ascii_case(name, "integer_vector")) {
                         const auto width = vhdl_wide_integer_
                             ? 64U : 32U;
-                        set("integer", semantic::vhdl::ValueDomain::integer, width);
+                        set("integer", support::StandardDeclaration::integer,
+                            semantic::vhdl::ValueDomain::integer, width);
                         element.integer_storage_width
                             = static_cast<std::uint8_t>(width);
                     } else if (equal_ignoring_ascii_case(name, "time_vector")) {
-                        set("time", semantic::vhdl::ValueDomain::integer, 64U);
+                        set("time", support::StandardDeclaration::time,
+                            semantic::vhdl::ValueDomain::integer, 64U);
                         element.integer_storage_width = 64U;
                     } else if (equal_ignoring_ascii_case(name, "real_vector")) {
-                        set("real", semantic::vhdl::ValueDomain::bit2, 64U);
+                        set("real", support::StandardDeclaration::real,
+                            semantic::vhdl::ValueDomain::bit2, 64U);
                     } else if (synopsys_arith
                         || equal_ignoring_ascii_case(name, "ufixed")
                         || equal_ignoring_ascii_case(name, "sfixed")
@@ -5646,7 +5673,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         || equal_ignoring_ascii_case(name, "u_float")) {
                         // Arrays of STD_LOGIC, its native declaration
                         // (IEEE 1076-2019 16.7).
-                        set({ }, semantic::vhdl::ValueDomain::logic9, 1U);
+                        set({ }, support::StandardDeclaration::none,
+                            semantic::vhdl::ValueDomain::logic9, 1U);
                         for (const auto& declaration :
                             specialized_hir_unit_->design()
                                 .vhdl_hir.declarations()) {
@@ -5663,6 +5691,15 @@ bool Lowerer::lower_hir_statement_unsuspended(
                                 semantic::vhdl_native_designator(
                                     *semantic::vhdl_native_of(declaration))
                             };
+                            // 12.4: the declaration the mark denotes.
+                            element.written_type_mark.emplace();
+                            element.written_type_mark->spelling
+                                = element.type_mark.spelling;
+                            element.written_type_mark->canonical
+                                = element.type_mark.spelling;
+                            element.written_type_mark->selected
+                                = declaration.id;
+                            element.written_type_mark->analyzed = true;
                             break;
                         }
                     } else {
@@ -16475,8 +16512,20 @@ bool Lowerer::lower_hir_statement_unsuspended(
         auto selector_array_base_subtype = selector_subtype;
         if (selector_subtype && !selector_array_type_id.valid()
             && !selector_subtype->type_mark.spelling.empty()) {
-            if (const auto declared = hir_vhdl_type_of_spelling(
-                    selector_subtype->type_mark.spelling, selector_scope)) {
+            // 12.4: an analyzed unit stores the mark's identity (a STANDARD
+            // type has no declared type); the spelling is read only for a
+            // unit that was not analyzed.
+            if (const auto stored = hir_resolver().stored_vhdl_type_identity(
+                    *selector_subtype, selector_scope)) {
+                if (stored->type && stored->type->valid()) {
+                    selector_array_type_id = *stored->type;
+                }
+            } else if (const auto declared = hir_vhdl_type_of_spelling(
+                           selector_subtype->type_mark.spelling,
+                           selector_scope,
+                           selector_subtype->written_type_mark
+                               ? &*selector_subtype->written_type_mark
+                               : nullptr)) {
                 selector_array_type_id = *declared;
             }
         }
@@ -17813,6 +17862,19 @@ bool Lowerer::lower_hir_statement_unsuspended(
                                     standard_bit_vector_subtype;
                                 standard_bit_vector_subtype.type_mark.spelling
                                     = "std.standard.bit_vector";
+                                // The mark denotes the STANDARD row (16.3), as
+                                // the analysis stores a written one.
+                                {
+                                    semantic::vhdl::Name mark;
+                                    mark.spelling = standard_bit_vector_subtype
+                                                        .type_mark.spelling;
+                                    mark.canonical = mark.spelling;
+                                    mark.standard = support::StandardDeclaration::
+                                        bit_vector;
+                                    mark.analyzed = true;
+                                    standard_bit_vector_subtype.written_type_mark
+                                        = std::move(mark);
+                                }
                                 if (standard_bit_vector) {
                                     standard_bit_vector_subtype.type_mark.target
                                         = *standard_bit_vector;

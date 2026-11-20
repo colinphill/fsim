@@ -86,6 +86,10 @@ enum class DeclarationForm : std::uint8_t {
     group_template,
     group_instance,
     mode_view,
+    /// The constant a generate parameter specification declares (IEEE
+    /// 1076-2019 11.8); its value is the elaborated iteration's
+    /// (GenerateRegion::parameter).
+    generate_parameter,
 };
 
 enum class TypeForm : std::uint8_t {
@@ -308,6 +312,27 @@ enum class DelayMechanism : std::uint8_t {
 /// A source-level name plus the semantic declarations visible for it.
 /// `canonical` is lower-case for ordinary VHDL identifiers and preserves
 /// extended/character-literal spelling.
+/// Why a Name's stored result may be incomplete by design (owner 11-20):
+/// names through package instances and members of compiler-projected
+/// packages are analyzed by gate BD2 (V4); an elaboration site reading
+/// such a name by spelling is recorded residue, not an internal error.
+enum class AnalysisExemption : std::uint8_t {
+    none,
+    /// The name selects through a package instance or generic package
+    /// (4.9, 6.5.5) or into the declarations of an instance's expansion.
+    package_instance,
+    /// The name denotes a member of a compiler-projected package
+    /// (Unit::standard_package_form projection).
+    projected_package,
+    /// Analysis resolved the name to an entity with no HIR declaration: a
+    /// design unit, a library, STD.STANDARD itself, a member of a served
+    /// package, a label (12.3); the elaboration reads it from the name.
+    no_declaration,
+    /// The name selects a generic type (6.5.3): `selected` is the generic;
+    /// its actual is bound by the elaboration's binding frames (BD2 V4).
+    generic_type,
+};
+
 struct Name {
     std::string spelling;
     std::string canonical;
@@ -323,6 +348,18 @@ struct Name {
     /// when visibility gives exactly one non-overloadable one (a type,
     /// subtype or attribute; gate BD D3/D4); none otherwise.
     support::StandardDeclaration standard { support::StandardDeclaration::none };
+    /// Compile-time name analysis resolved the name by visibility (12.3,
+    /// 12.4; gate BD D3/D6'): `selected`, `overloads` and `standard` are then
+    /// the complete result, empty when only STANDARD overloads or implicit
+    /// operations (which have no declaration) are visible.
+    bool analyzed { };
+    /// Set by name analysis when the result is incomplete by design.
+    AnalysisExemption exemption { AnalysisExemption::none };
+    /// The number of leading parts of a selected name the stored result
+    /// denotes when it is an object prefix and the rest selects elements or
+    /// members by its type (8.3, 8.4: `r.f`, `pt.method`); 0 when the
+    /// stored result denotes the whole name.
+    std::uint8_t selected_parts { };
 
     /// The canonical text, or the source spelling when there is none.
     [[nodiscard]] std::string_view text() const noexcept
@@ -335,7 +372,9 @@ struct Name {
     {
         return spelling == other.spelling && canonical == other.canonical
             && source == other.source && selected == other.selected
-            && overloads == other.overloads && standard == other.standard;
+            && overloads == other.overloads && standard == other.standard
+            && analyzed == other.analyzed && exemption == other.exemption
+            && selected_parts == other.selected_parts;
     }
 };
 
@@ -706,6 +745,9 @@ struct Sensitivity {
     std::string signal;
     std::optional<ExpressionId> expression;
     SourceSpanId source;
+    /// A direct signal entry without an expression: its simple name as name
+    /// analysis resolves it (10.2, 11.3; gate BD D6').
+    std::optional<Name> name;
 };
 
 struct ProcedureAssociation {
@@ -991,6 +1033,9 @@ struct PackageProfile {
 
 struct AttributeProfile {
     bool specification { };
+    /// A specification's attribute designator, denoting the attribute
+    /// declaration visible at the specification (7.2; gate BD D6').
+    std::optional<Name> designator;
     std::optional<SubtypeIndication> subtype;
     // The entity designators of a specification; empty for `all` and
     // `others`, which name_list records (IEEE 1076-2019 7.2).
@@ -1077,6 +1122,10 @@ struct Declaration {
     bool linkage { };
     bool shared { };
     bool local { };
+    // A signal the parser declares for a port map formal part f(s) (IEEE
+    // 1076-2019 6.5.7.1): its subtype is that of its formal, whose type
+    // mark name analysis takes from the formal's declaration.
+    bool formal_conversion_signal { };
     // Present for an alias declaration. Protected method aliases are untyped,
     // so the target is retained independently from the optional subtype.
     std::optional<Name> alias_target;
@@ -1165,6 +1214,8 @@ struct GenerateRegion {
     std::string label;
     std::string alternative_label;
     std::string iterator;
+    /// The generate parameter's declaration (11.8) of an iterative region.
+    std::optional<DeclarationId> parameter;
     std::optional<ExpressionId> initial;
     std::optional<ExpressionId> condition;
     std::optional<ExpressionId> iteration;
@@ -1383,7 +1434,7 @@ enum class AnchoredSlot : std::uint8_t {
     /// The written type mark's selected declaration of a subtype indication
     /// of a declaration (6.3); item = the declaration's ordinal, part =
     /// which one (subtype_part, return_part, alias_result_part, then alias
-    /// signature parameter i at alias_parameter_part + i).
+    /// signature parameter i at alias_parameter_part + i; attribute_part).
     declaration_subtype_mark_selected,
     /// The written type mark's selected declaration of a subtype indication
     /// of a type definition; item = the type's ordinal, part = which one
@@ -1394,6 +1445,31 @@ enum class AnchoredSlot : std::uint8_t {
     type_index_subtype_selected,
     /// Expression::type.declared (the 12.5 typing, gate BD D4).
     expression_type_declared,
+    /// The selected declaration of an analyzed Expression::referenced_name
+    /// (12.3, gate BD D6'); part 0.
+    expression_name_selected,
+    /// Overload `part` (its position in Name::overloads) of an analyzed
+    /// Expression::referenced_name.
+    expression_name_overload,
+    /// The selected declaration of an analyzed Statement::procedure.
+    statement_procedure_selected,
+    /// Overload `part` of an analyzed Statement::procedure.
+    statement_procedure_overload,
+    /// The selected signal of analyzed Sensitivity::name `part` of a
+    /// statement's sensitivity list (10.2).
+    statement_sensitivity_selected,
+    /// The same of a process's sensitivity list (11.3); item = the
+    /// process's ordinal.
+    process_sensitivity_selected,
+    /// The attribute declaration an analyzed attribute specification's
+    /// AttributeProfile::designator selects (7.2).
+    declaration_attribute_designator_selected,
+    /// The interface declaration the analyzed formal of generic map
+    /// association `part` of an instance selects (6.5.7); item = the
+    /// instance's ordinal.
+    instance_generic_formal_selected,
+    /// The same of port map association `part`.
+    instance_port_formal_selected,
 };
 
 /// The subtype indications of a type definition an anchored
@@ -1407,6 +1483,9 @@ inline constexpr std::uint32_t subtype_part = 0U;
 inline constexpr std::uint32_t return_part = 1U;
 inline constexpr std::uint32_t alias_result_part = 2U;
 inline constexpr std::uint32_t alias_parameter_part = 3U;
+/// The subtype indication of an attribute declaration (7.2); above every
+/// alias signature parameter part.
+inline constexpr std::uint32_t attribute_part = 0xFFFFFFFFU;
 
 /// Slot `slot` of the owning unit's item `item` (its ordinal in the unit's
 /// items), resolved again at every link instead of kept: its target is in
@@ -1414,6 +1493,8 @@ inline constexpr std::uint32_t alias_parameter_part = 3U;
 struct RecomputedSlot {
     AnchoredSlot slot { AnchoredSlot::expression_resolved_declaration };
     std::uint32_t item { };
+    /// The slot's part (a sensitivity entry), as AnchoredReference::part.
+    std::uint32_t part { };
     bool operator==(const RecomputedSlot&) const = default;
 };
 

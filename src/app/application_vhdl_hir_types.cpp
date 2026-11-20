@@ -104,6 +104,19 @@ namespace fsim::app::application_detail {
     }
     output.subtype = subtype(
         declared_subtype, input.span, scope, output.origin);
+    if (input.vhdl_scalar_type && !output.subtype->written_type_mark) {
+        // An integer or floating type definition defines an anonymous base
+        // type (5.2.3.1, 5.2.5.1), represented as a subtype of INTEGER or
+        // REAL: the mark denotes that STANDARD row, whatever is visible,
+        // and is no written name (no spelling: name analysis skips it).
+        vh::Name representation;
+        representation.standard = input.type.systemverilog_scalar
+                == frontend::SystemVerilogScalarKind::Real
+            ? support::StandardDeclaration::real
+            : support::StandardDeclaration::integer;
+        representation.analyzed = true;
+        output.subtype->written_type_mark = std::move(representation);
+    }
     const auto type_id = ensure_type(
         input.name,
         scope,
@@ -349,6 +362,9 @@ void VhdlHirBuilder::add_record_payload(
         member_type.packed_range = member.packed_range;
         member_type.is_signed = member.is_signed;
         member_type.packed_range_expression = member.packed_range_expression;
+        member_type.vhdl_written_type_mark = member.vhdl_written_type_mark;
+        member_type.vhdl_written_type_mark_span
+            = member.vhdl_written_type_mark_span;
         if (!member.nested_types.empty()) {
             member_type = member.nested_types.front();
         }

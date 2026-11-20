@@ -312,6 +312,20 @@ struct CompiledVhdlDuplicateCallableProfile {
 [[nodiscard]] bool systemverilog_genvar_hides(const CompiledDesign& design,
     ScopeId use_scope, ScopeId declaration_scope, std::string_view name);
 
+/// Gate BD D6': an elaboration site found no stored result (vhdl::Name::
+/// analyzed/selected/overloads/standard, Expression::type/resolved_*, a
+/// written type mark) for `text` in an analyzed VHDL unit: an internal
+/// error (std::logic_error; owner 11-20, strict default). Recorded first in
+/// FSIM_D6_LOOKUP_CENSUS=<file> when set.
+void note_vhdl_unstored_reference(
+    std::string_view site, std::string_view text, ScopeId scope);
+
+/// The same for a stored Name: a name analysis exempted (owner 11-20:
+/// package instances, projected packages; vhdl::AnalysisExemption) is
+/// counted as recorded BD2 residue and never throws.
+void note_vhdl_unstored_name(
+    std::string_view site, const vhdl::Name& name, ScopeId scope);
+
 class CompiledDesignResolver final {
 public:
     CompiledDesignResolver(const CompiledDesign&, UnitId selected_unit,
@@ -409,6 +423,26 @@ public:
     resolve_vhdl_type_identity(
         std::string_view spelling,
         std::optional<ScopeId> owner_scope = std::nullopt) const;
+
+    /// What a type mark written in an analyzed unit denotes, as compile-time
+    /// name analysis stored it (gate BD D3/D6', IEEE 1076-2019 12.3, 12.4):
+    /// the STANDARD type or subtype (Name::standard, 16.3) or the type of the
+    /// declaration it selects. No value when `use_scope`'s unit is not
+    /// analyzed or the mark carries no stored result; the caller then has
+    /// only its spelling.
+    [[nodiscard]] std::optional<CompiledVhdlTypeIdentityResolution>
+    stored_vhdl_type_identity(const vhdl::Name& mark, ScopeId use_scope) const;
+
+    /// Whether `scope` belongs to a VHDL unit compile-time analysis
+    /// resolved (vhdl::Unit::analyzed; gate BD D3/D4): its names and
+    /// expressions carry stored results.
+    [[nodiscard]] bool vhdl_scope_analyzed(ScopeId scope) const;
+
+    /// The same for a subtype indication: its written type mark, else the
+    /// type its type mark targets.
+    [[nodiscard]] std::optional<CompiledVhdlTypeIdentityResolution>
+    stored_vhdl_type_identity(
+        const vhdl::SubtypeIndication& subtype, ScopeId use_scope) const;
 
     /// The predefined enumeration type a VHDL type mark denotes when the
     /// compiler provides that type's declaration and the design retains none:

@@ -37,13 +37,29 @@ enum class AnchorRebind : std::uint8_t {
     link,
 };
 
+/// While alive on the calling thread, a link leaves a unit made obsolete by
+/// a changed target unit (13.5) unstamped (resolved again at the link)
+/// instead of refusing the link. A workspace compile holds it: environment
+/// objects built on a unit the compile analyzes again become obsolete and
+/// leave the library in the same transaction (13.5), but the compile's own
+/// links see them beside the new unit. Every other link refuses them
+/// (FSIM-SEM-0003).
+class VhdlObsoleteUnitsLeftUnstamped {
+public:
+    VhdlObsoleteUnitsLeftUnstamped() noexcept;
+    ~VhdlObsoleteUnitsLeftUnstamped();
+    VhdlObsoleteUnitsLeftUnstamped(const VhdlObsoleteUnitsLeftUnstamped&) = delete;
+    VhdlObsoleteUnitsLeftUnstamped& operator=(
+        const VhdlObsoleteUnitsLeftUnstamped&) = delete;
+};
+
 /// Sets every anchored slot of the stamped units of `design` to the
 /// declaration its anchor denotes in the design. Returns an empty string on
 /// success. A link (or a projection keeping the target unit) whose target
 /// unit is missing or differs from the one the unit was analyzed against
 /// (digest) returns the error text: the unit is obsolete (IEEE 1076-2019
 /// 13.5) and must be analyzed again; the linker reports it as
-/// FSIM-SEM-0003. Only an inconsistency of the design itself (an ordinal or
+/// FSIM-SEM-0003 (unstamped instead under VhdlObsoleteUnitsLeftUnstamped). Only an inconsistency of the design itself (an ordinal or
 /// item out of range for a matching digest) is a std::logic_error.
 [[nodiscard]] std::string rebind_vhdl_declaration_anchors(
     CompiledDesign& design, AnchorRebind mode);

@@ -83,6 +83,161 @@ const semantic::vhdl::TypeDefinition* hir_vhdl_array_type(
         : nullptr;
 }
 
+// The type a subtype indication's type mark denotes: the result analysis
+// stored for it (IEEE 1076-2019 12.3, 12.4), else the spelling lookup of a
+// unit analysis did not resolve.
+semantic::CompiledVhdlTypeIdentityResolution stored_subtype_type_identity(
+    const semantic::CompiledDesignResolver& resolver,
+    const semantic::vhdl::SubtypeIndication& subtype,
+    const semantic::ScopeId scope)
+{
+    if (auto stored = resolver.stored_vhdl_type_identity(subtype, scope)) {
+        return *stored;
+    }
+    if (resolver.vhdl_scope_analyzed(scope)) {
+        if (subtype.written_type_mark) {
+            semantic::note_vhdl_unstored_name("stored_subtype_type_identity",
+                *subtype.written_type_mark, scope);
+        } else {
+            semantic::note_vhdl_unstored_reference(
+                "stored_subtype_type_identity", subtype.type_mark.spelling,
+                scope);
+        }
+    }
+    return resolver.resolve_vhdl_type_identity(
+        subtype.type_mark.spelling, scope);
+}
+
+// The type of an allocator's or qualified expression's subtype marker (marker
+// vhdl_subtype): the type mark name analysis stored on the marker node (IEEE
+// 1076-2019 12.3, 12.4), else the spelling lookup of a unit analysis did not
+// resolve.
+semantic::CompiledVhdlTypeIdentityResolution marker_type_identity(
+    const semantic::CompiledDesignResolver& resolver,
+    const semantic::vhdl::Expression& marker, const semantic::ScopeId scope)
+{
+    const std::string_view mark { marker.marker_argument };
+    if (marker.qualified_type_mark) {
+        if (auto stored = resolver.stored_vhdl_type_identity(
+                *marker.qualified_type_mark, scope)) {
+            return *stored;
+        }
+    }
+    if (resolver.vhdl_scope_analyzed(scope)) {
+        semantic::note_vhdl_unstored_reference(
+            "marker_type_identity", mark, scope);
+    }
+    return resolver.resolve_vhdl_type_identity(mark, scope);
+}
+
+// The width and scale in its primary unit of unit `unit_name` of physical
+// type `stored_id` (IEEE 1076-2008 5.2.4, 5.2.4.1).
+std::optional<std::pair<std::size_t, std::int64_t>> physical_unit_in_type(
+    const semantic::SpecializedHirUnit& unit_hir,
+    const semantic::TypeId stored_id, const std::string_view unit_name,
+    const std::size_t expected_width,
+    const std::optional<semantic::DeclarationId> unit_declaration = std::nullopt)
+{
+    const auto type = unit_hir.find_type(stored_id);
+    if (!type || type->vhdl == nullptr
+        || type->vhdl->form
+            != semantic::vhdl::TypeForm::physical) {
+        return std::nullopt;
+    }
+    const auto width = vhdl_subtype_width(type->vhdl->base);
+    if (expected_width != 0U && width && *width != expected_width) {
+        return std::nullopt;
+    }
+    const auto unit = std::ranges::find_if(
+        type->vhdl->physical_units,
+        [&](const semantic::vhdl::PhysicalUnit& candidate) {
+            // The unit the literal's typing selected (5.2.4.1), else the
+            // unit of that name among this type's units.
+            return unit_declaration
+                ? candidate.declaration == *unit_declaration
+                : equal_ignoring_ascii_case(candidate.name, unit_name);
+        });
+    if (unit == type->vhdl->physical_units.end()) {
+        return std::nullopt;
+    }
+    std::unordered_map<std::string, std::int64_t> scales;
+    for (const auto& candidate : type->vhdl->physical_units) {
+        std::optional<std::int64_t> candidate_scale
+            = candidate.scale_factor;
+        if (!candidate_scale && !candidate.scale) {
+            candidate_scale = 1;
+        }
+        if (!candidate_scale && candidate.scale) {
+            const auto scale_expression
+                = unit_hir.find_expression(
+                    *candidate.scale);
+            if (scale_expression
+                && scale_expression->vhdl != nullptr
+                && scale_expression->vhdl->marker
+                    == support::ExpressionMarker::vhdl_physical
+                && scale_expression->vhdl->operands.size() == 1U) {
+                const auto referenced
+                    = scale_expression->vhdl->marker_argument;
+                const auto prior = scales.find(referenced);
+                const auto multiplier = unit_hir
+                    .evaluate_integral_expression(
+                        scale_expression->vhdl->operands.front());
+                if (prior != scales.end() && multiplier
+                    && *multiplier >= 0
+                    && (*multiplier == 0
+                        || prior->second
+                            <= std::numeric_limits<std::int64_t>::max()
+                                / *multiplier)) {
+                    candidate_scale = prior->second * *multiplier;
+                }
+            }
+        }
+        if (!candidate_scale) {
+            break;
+        }
+        scales.insert_or_assign(candidate.name, *candidate_scale);
+    }
+    const auto resolved_scale = scales.find(unit->name);
+    if (resolved_scale == scales.end()) {
+        return std::nullopt;
+    }
+    // Without a context width, a physical type is as wide as an
+    // integer type with its range (IEEE 1076-2008 5.2.4.1).
+    const auto range_width = [&]() -> std::size_t {
+        auto constraints = type->vhdl->base.constraints;
+        if (type->vhdl->scalar_range) {
+            constraints.insert(constraints.begin(),
+                *type->vhdl->scalar_range);
+        }
+        for (const auto& constraint : constraints) {
+            const auto left = constraint.left ? constraint.left
+                : constraint.left_expression
+                ? unit_hir.evaluate_integral_expression(
+                      *constraint.left_expression)
+                : std::nullopt;
+            const auto right = constraint.right ? constraint.right
+                : constraint.right_expression
+                ? unit_hir.evaluate_integral_expression(
+                      *constraint.right_expression)
+                : std::nullopt;
+            if (left && right) {
+                const auto fits = [](const std::int64_t value) {
+                    return value >= std::numeric_limits<std::int32_t>::min()
+                        && value <= std::numeric_limits<std::int32_t>::max();
+                };
+                return fits(*left) && fits(*right) ? 32U : 64U;
+            }
+        }
+        return 0U;
+    };
+    const auto resolved_width = expected_width != 0U
+        ? expected_width
+        : width ? *width
+                : range_width();
+    return std::pair<std::size_t, std::int64_t> {
+        resolved_width, resolved_scale->second };
+}
+
 } // namespace
 
 const semantic::vhdl::TypeDefinition*
@@ -1214,9 +1369,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
                 != support::ExpressionMarker::vhdl_subtype) {
             return nullptr;
         }
-        const auto designated_name = std::string_view {
-            subtype_expression->vhdl->marker_argument
-        };
+        const auto& designated_marker = *subtype_expression->vhdl;
         const auto resolver = hir_resolver();
         using BuiltinType = semantic::vhdl::BuiltinTypeIdentity;
         using ScalarType = semantic::CompiledVhdlStandardScalarIdentity;
@@ -1267,9 +1420,8 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
                     if (!declaration || declaration->vhdl == nullptr) {
                         return std::nullopt;
                     }
-                    const auto resolved = resolver.resolve_vhdl_type_identity(
-                        definition.base.type_mark.spelling,
-                        declaration->vhdl->scope);
+                    const auto resolved = stored_subtype_type_identity(
+                        resolver, definition.base, declaration->vhdl->scope);
                     if (resolved.status
                         != semantic::CompiledResolutionStatus::unique) {
                         return std::nullopt;
@@ -1302,8 +1454,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
             return declaration->vhdl->scope;
         };
         const auto allocated_designated_type
-            = resolver.resolve_vhdl_type_identity(
-                designated_name, source.scope);
+            = marker_type_identity(resolver, designated_marker, source.scope);
         const auto same_designated_base_type = [&](
             const semantic::vhdl::SubtypeIndication& candidate,
             const semantic::ScopeId candidate_scope) {
@@ -1341,8 +1492,8 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
                 : std::nullopt;
             auto candidate_type = candidate.type_mark.target;
             if (!candidate_identity && !candidate_type.valid()) {
-                const auto resolved = resolver.resolve_vhdl_type_identity(
-                    candidate.type_mark.spelling, candidate_scope);
+                const auto resolved = stored_subtype_type_identity(
+                    resolver, candidate, candidate_scope);
                 if (resolved.status
                     != semantic::CompiledResolutionStatus::unique) {
                     return false;
@@ -1646,14 +1797,16 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
                 const auto name = std::string_view {
                     allocator_subtype->vhdl->marker_argument
                 };
-                const auto resolved = hir_resolver().resolve_vhdl_type_identity(
-                    name, source.scope);
+                const auto resolved = marker_type_identity(
+                    hir_resolver(), *allocator_subtype->vhdl, source.scope);
                 if (resolved.status
                         == semantic::CompiledResolutionStatus::unique
                     && resolved.type) {
                     allocated.emplace();
                     allocated->type_mark.spelling = std::string { name };
                     allocated->type_mark.target = *resolved.type;
+                    allocated->written_type_mark
+                        = allocator_subtype->vhdl->qualified_type_mark;
                 }
             }
             return lower_hir_vhdl_shaped_allocator(*heap,
@@ -2161,8 +2314,9 @@ Lowerer::hir_vhdl_qualified_allocator_string_subtype(
     const auto name = std::string_view { qualifier->vhdl->marker_argument };
     semantic::vhdl::SubtypeIndication subtype;
     subtype.type_mark.spelling = std::string { name };
-    const auto resolved = hir_resolver().resolve_vhdl_type_identity(
-        name, value->vhdl->scope);
+    subtype.written_type_mark = qualifier->vhdl->qualified_type_mark;
+    const auto resolved = marker_type_identity(
+        hir_resolver(), *qualifier->vhdl, value->vhdl->scope);
     if (resolved.status == semantic::CompiledResolutionStatus::unique
         && resolved.type) {
         subtype.type_mark.target = *resolved.type;
@@ -3005,6 +3159,14 @@ std::optional<Lowerer::HirVhdlPhysicalUnit> Lowerer::hir_vhdl_physical_unit(
         return std::nullopt;
     }
     const auto resolver = hir_resolver();
+    if (resolver.vhdl_scope_analyzed(source_scope)) {
+        // A physical literal's unit is a synthesized node, selected by the
+        // literal's type (5.2.4), so no name is stored for it: the caller's
+        // Expression::type is the stored form (needs a signature carrying
+        // the expression).
+        semantic::note_vhdl_unstored_reference(
+            "hir_vhdl_physical_unit", unit_name, source_scope);
+    }
     semantic::vhdl::Name name;
     name.spelling = std::string { unit_name };
     name.canonical = name.spelling;
@@ -3059,109 +3221,52 @@ std::optional<Lowerer::HirVhdlPhysicalUnit> Lowerer::hir_vhdl_physical_unit(
     if (!selected_type) {
         return std::nullopt;
     }
-    std::optional<HirVhdlPhysicalUnit> result;
-    for (const auto stored_id : { *selected_type }) {
-        const auto type = specialized_hir_unit_->find_type(stored_id);
-        if (!type || type->vhdl == nullptr
-            || type->vhdl->form
-                != semantic::vhdl::TypeForm::physical) {
-            continue;
-        }
-        const auto width = vhdl_subtype_width(type->vhdl->base);
-        if (expected_width != 0U && width && *width != expected_width) {
-            continue;
-        }
-        const auto unit = std::ranges::find_if(
-            type->vhdl->physical_units,
-            [&](const semantic::vhdl::PhysicalUnit& candidate) {
-                return equal_ignoring_ascii_case(candidate.name, unit_name);
-            });
-        if (unit == type->vhdl->physical_units.end()) {
-            continue;
-        }
-        std::unordered_map<std::string, std::int64_t> scales;
-        for (const auto& candidate : type->vhdl->physical_units) {
-            std::optional<std::int64_t> candidate_scale
-                = candidate.scale_factor;
-            if (!candidate_scale && !candidate.scale) {
-                candidate_scale = 1;
-            }
-            if (!candidate_scale && candidate.scale) {
-                const auto scale_expression
-                    = specialized_hir_unit_->find_expression(
-                        *candidate.scale);
-                if (scale_expression
-                    && scale_expression->vhdl != nullptr
-                    && scale_expression->vhdl->marker
-                        == support::ExpressionMarker::vhdl_physical
-                    && scale_expression->vhdl->operands.size() == 1U) {
-                    const auto referenced
-                        = scale_expression->vhdl->marker_argument;
-                    const auto prior = scales.find(referenced);
-                    const auto multiplier = specialized_hir_unit_
-                        ->evaluate_integral_expression(
-                            scale_expression->vhdl->operands.front());
-                    if (prior != scales.end() && multiplier
-                        && *multiplier >= 0
-                        && (*multiplier == 0
-                            || prior->second
-                                <= std::numeric_limits<std::int64_t>::max()
-                                    / *multiplier)) {
-                        candidate_scale = prior->second * *multiplier;
-                    }
-                }
-            }
-            if (!candidate_scale) {
-                break;
-            }
-            scales.insert_or_assign(candidate.name, *candidate_scale);
-        }
-        const auto resolved_scale = scales.find(unit->name);
-        if (resolved_scale == scales.end()) {
-            continue;
-        }
-        // Without a context width, a physical type is as wide as an
-        // integer type with its range (IEEE 1076-2008 5.2.4.1).
-        const auto range_width = [&]() -> std::size_t {
-            auto constraints = type->vhdl->base.constraints;
-            if (type->vhdl->scalar_range) {
-                constraints.insert(constraints.begin(),
-                    *type->vhdl->scalar_range);
-            }
-            for (const auto& constraint : constraints) {
-                const auto left = constraint.left ? constraint.left
-                    : constraint.left_expression
-                    ? specialized_hir_unit_->evaluate_integral_expression(
-                          *constraint.left_expression)
-                    : std::nullopt;
-                const auto right = constraint.right ? constraint.right
-                    : constraint.right_expression
-                    ? specialized_hir_unit_->evaluate_integral_expression(
-                          *constraint.right_expression)
-                    : std::nullopt;
-                if (left && right) {
-                    const auto fits = [](const std::int64_t value) {
-                        return value >= std::numeric_limits<std::int32_t>::min()
-                            && value <= std::numeric_limits<std::int32_t>::max();
-                    };
-                    return fits(*left) && fits(*right) ? 32U : 64U;
-                }
-            }
-            return 0U;
-        };
-        const auto resolved_width = expected_width != 0U
-            ? expected_width
-            : width ? *width
-                    : range_width();
-        if (result
-            && (result->scale != resolved_scale->second
-                || result->width != resolved_width)) {
-            return std::nullopt;
-        }
-        result = HirVhdlPhysicalUnit {
-            resolved_width, resolved_scale->second };
+    if (!selected_type) {
+        return std::nullopt;
     }
-    return result;
+    if (const auto found = physical_unit_in_type(
+            *specialized_hir_unit_, *selected_type, unit_name,
+            expected_width)) {
+        return HirVhdlPhysicalUnit { found->first, found->second };
+    }
+    return std::nullopt;
+}
+
+std::optional<Lowerer::HirVhdlPhysicalUnit>
+Lowerer::hir_vhdl_stored_physical_unit(
+    const semantic::vhdl::Expression& literal,
+    const std::string_view unit_name,
+    const std::size_t expected_width) const
+{
+    const auto& type = literal.type;
+    if (type.kind == semantic::vhdl::TypeIdentity::Kind::declared) {
+        if (const auto found = physical_unit_in_type(
+                *specialized_hir_unit_, type.declared, unit_name,
+                expected_width, literal.resolved_declaration)) {
+            return HirVhdlPhysicalUnit { found->first, found->second };
+        }
+    } else if (((type.kind == semantic::vhdl::TypeIdentity::Kind::standard
+                    && type.standard == support::StandardDeclaration::time)
+                   || literal.resolved_standard
+                       == support::StandardDeclaration::time)
+        && (expected_width == 0U || expected_width == 64U)) {
+        if (const auto femtoseconds
+            = support::vhdl_time_unit_femtoseconds(unit_name)) {
+            return HirVhdlPhysicalUnit {
+                64U, static_cast<std::int64_t>(*femtoseconds) };
+        }
+    }
+    return std::nullopt;
+}
+
+// Whether compile-time typing stored the type of a literal of an analyzed
+// unit (12.5): its physical unit is then read from that type alone.
+bool Lowerer::hir_vhdl_literal_typed(
+    const semantic::vhdl::Expression& literal) const
+{
+    return (literal.type.kind != semantic::vhdl::TypeIdentity::Kind::none
+               || literal.resolved_standard != support::StandardDeclaration::none)
+        && hir_resolver().vhdl_scope_analyzed(literal.scope);
 }
 
 std::optional<RegisterId> Lowerer::lower_hir_vhdl_physical_expression(
@@ -3176,9 +3281,20 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_physical_expression(
             && expected_width != 64U)) {
         return std::nullopt;
     }
-    const auto unit = hir_vhdl_physical_unit(
-        std::string_view { expression->vhdl->marker_argument },
-        expected_width, expression->vhdl->scope);
+    // A physical literal's unit is selected by the literal's type (IEEE
+    // 1076-2019 5.2.4, 9.3.2, 12.5): an analyzed unit stores that type on
+    // the literal, so the unit is read from it, never looked up by its
+    // spelling. A STANDARD TIME literal (16.3) takes the unit's value from
+    // the STD.STANDARD catalog row (declared units: the declaring type).
+    const std::string_view unit_name { expression->vhdl->marker_argument };
+    const auto stored_unit = hir_vhdl_stored_physical_unit(
+        *expression->vhdl, unit_name, expected_width);
+    // The stored type is the whole answer (a unit of another width does
+    // not fit, 5.2.4); the lookup serves units analysis did not type.
+    const auto unit = stored_unit ? stored_unit
+        : hir_vhdl_literal_typed(*expression->vhdl) ? std::nullopt
+        : hir_vhdl_physical_unit(
+              unit_name, expected_width, expression->vhdl->scope);
     std::optional<std::int64_t> value;
     const auto magnitude_expression = specialized_hir_unit_->find_expression(
         expression->vhdl->operands.front());

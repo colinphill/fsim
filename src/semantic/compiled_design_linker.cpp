@@ -206,6 +206,17 @@ void project(Value& value, const Projection& projection)
             project(*copy, projection);
             value = std::move(copy);
         }
+    } else if constexpr (std::same_as<Type, vhdl::Name>) {
+        // A selection into a unit the projection leaves out is dropped; the
+        // name's stored result is then no longer complete (gate BD D6').
+        const bool had_selected = value.selected.has_value();
+        const auto overloads = value.overloads.size();
+        boost::pfr::for_each_field(
+            value, [&](auto& field) { project(field, projection); });
+        if (value.selected.has_value() != had_selected
+            || value.overloads.size() != overloads) {
+            value.analyzed = false;
+        }
     } else if constexpr (std::is_aggregate_v<Type>) {
         boost::pfr::for_each_field(
             value, [&](auto& field) { project(field, projection); });
@@ -2059,6 +2070,33 @@ void resolve_linked_vhdl_architecture_names(CompiledDesign& design)
                 annotations.push_back(std::move(annotation));
                 continue;
             }
+            // An expression compile-time typing decided in an analyzed unit
+            // keeps its stored name binding (12.3, rebound by anchors); its
+            // operator family is that of the declaration typing selected
+            // (12.5), not of its text.
+            // A name name analysis resolved keeps its stored result even
+            // where typing left the expression unmodeled (12.3; D3 stored
+            // the complete visible set).
+            if (unit->vhdl->analyzed
+                && (expression.referenced_name
+                        ? expression.referenced_name->analyzed
+                        : expression.interpretation
+                            != vhdl::Interpretation::none)) {
+                const auto* declaration = expression.resolved_declaration
+                    ? design.vhdl_hir.find_declaration(
+                          *expression.resolved_declaration)
+                    : nullptr;
+                const auto* entry = declaration == nullptr
+                    ? nullptr
+                    : vhdl_native_of(*declaration);
+                if (entry != nullptr
+                    && (expression.kind == vhdl::ExpressionKind::unary
+                        || expression.kind == vhdl::ExpressionKind::binary)) {
+                    annotation.builtin_operator = vhdl_native_operator(*entry);
+                }
+                annotations.push_back(std::move(annotation));
+                continue;
+            }
             const CompiledDesignResolver resolver { design, unit_id };
             auto synthetic_name = vhdl::Name { };
             synthetic_name.spelling = operation;
@@ -3794,7 +3832,24 @@ void resolve_linked_vhdl_binding_maps(CompiledDesign& design)
             [](const CompiledDeclarationView& view) {
                 return view.vhdl != nullptr && view.vhdl->component.has_value();
             });
-        const auto selected = resolved.unique();
+        auto selected = resolved.unique();
+        if (!selected && component.text().find('.') == std::string_view::npos) {
+            // A configuration specification in a block's declarative part
+            // (7.3.1) names a component declared in that block, not visible
+            // at the architecture: the unit's one component of that name.
+            for (const auto id : block.declarations) {
+                const auto candidate = design.find_declaration(id);
+                if (candidate && candidate->vhdl != nullptr
+                    && candidate->vhdl->component
+                    && same_vhdl_identifier(candidate->vhdl->name, component.text())) {
+                    if (selected) {
+                        selected.reset();
+                        break;
+                    }
+                    selected = id;
+                }
+            }
+        }
         if (!selected) {
             return nullptr;
         }

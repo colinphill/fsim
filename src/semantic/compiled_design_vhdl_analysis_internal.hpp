@@ -196,6 +196,11 @@ public:
         support::SymbolId library, support::SymbolId name) const;
     /// The scope a primary unit's declarations are declared in.
     [[nodiscard]] std::optional<ScopeId> unit_scope(UnitId unit) const noexcept;
+    /// The innermost scope of `unit` whose text contains `span` (a
+    /// declarative item the HIR lists at the unit, such as a configuration
+    /// specification of a block, 7.3.1); the unit scope when none does.
+    [[nodiscard]] ScopeId innermost_scope(
+        const vhdl::Unit& unit, SourceSpanId span) const;
     /// Whether library logical name `library` is visible at `at` in
     /// `scope`: STD and WORK always (13.2), the predefined environment's
     /// implicit libraries, and every library clause of an enclosing region
@@ -250,6 +255,8 @@ struct Resolution {
     bool standard_package { };
     /// found: the name denotes entities of Region::undeclared.
     bool undeclared { };
+    /// ... of a compiler-projected package's region (BD2).
+    bool undeclared_projected { };
     /// found: the name denotes a primary unit the design has no HIR of.
     bool available_unit { };
     /// found: the name denotes this compiler-served package of STD (when
@@ -348,6 +355,23 @@ enum class NameRole : std::uint8_t {
     /// An entity/configuration/component name of an instance, binding
     /// indication, block or component configuration.
     unit_reference,
+    /// The `f` of a formal part `f(s)` in a binding indication's port map
+    /// (6.5.7.1): a function name visible at the binding indication when
+    /// `f` is no port of the bound entity (a conversion), which the linker
+    /// decides; resolved by visibility without an error when nothing is
+    /// found (`f` is then the port, indexed).
+    conversion_function,
+    /// A name actual of a binding indication's generic map (7.3.2.2): a
+    /// local generic of the component, which the linker binds, or a type
+    /// mark visible at the binding indication (a generic type's actual,
+    /// 6.5.7.2); only a type or subtype found by visibility is stored,
+    /// without an error when nothing is found.
+    binding_type_actual,
+    /// The component name of a configuration specification (7.3.1): a
+    /// component visible where the specification is written, which is the
+    /// innermost region containing it (the HIR lists block specifications
+    /// at the unit).
+    specification_component,
 };
 
 /// One visibility-resolved name and the site it is resolved at (a Name
@@ -357,7 +381,7 @@ struct NameSite {
     ScopeId scope;
     NameRole role { NameRole::ordinary };
     /// The instantiation whose target `name` is (unit_reference only).
-    const vhdl::Instance* instance { };
+    vhdl::Instance* instance { };
 };
 
 /// Every visibility-resolved Name of `unit` (walk.cpp): its expressions

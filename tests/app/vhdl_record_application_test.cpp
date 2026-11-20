@@ -187,6 +187,7 @@ int main() {
   {
     std::ofstream output{source};
     output << R"(
+library ieee; use ieee.std_logic_1164.all;
 entity record_execution is
 end entity;
 

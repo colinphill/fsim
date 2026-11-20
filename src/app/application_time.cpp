@@ -804,6 +804,16 @@ void select_delay_alternatives(
 
 namespace {
 
+// A literal the time normalization builds or rewrites is a value of
+// STD.STANDARD TIME (5.2.4.1, 16.3): it carries that stored type, as the
+// compile-time typing stores it on the literal it replaces (12.5).
+void stamp_standard_time(semantic::vhdl::Expression& expression)
+{
+    expression.type.kind = semantic::vhdl::TypeIdentity::Kind::standard;
+    expression.type.standard = support::StandardDeclaration::time;
+    expression.type.declared = { };
+}
+
 template<typename Delay>
 void select_hir_delay(Delay& delay, const project::DelayMode mode,
     const bool keep_alternatives = false)
@@ -1315,6 +1325,7 @@ private:
                     expression.folded = retained_folded;
                     expression.nominal_type = "time";
                     expression.builtin_nominal = true;
+                    stamp_standard_time(expression);
                 }
             }
 
@@ -1352,6 +1363,7 @@ private:
                     expression.nominal_type = "time";
                     expression.builtin_nominal = true;
                     expression.folded = true;
+                    stamp_standard_time(expression);
                 }
             }
             if (expression.kind == semantic::vhdl::ExpressionKind::call
@@ -1414,6 +1426,7 @@ private:
             replacement.nominal_type = "time";
             replacement.builtin_nominal = true;
             replacement.folded = true;
+            stamp_standard_time(replacement);
             expression = std::move(replacement);
             return;
         }
@@ -1471,11 +1484,13 @@ private:
         replacement.nominal_type = "time";
         replacement.builtin_nominal = true;
         replacement.folded = true;
+        stamp_standard_time(replacement);
         // The magnitude is no longer an operand of a stored expression; it
         // stays the abstract literal of a TIME value (IEEE 1076-2008
         // 5.2.4.1), which portable INTEGER range checks do not apply to.
         expressions[operand.value()]->nominal_type = "time";
         expressions[operand.value()]->builtin_nominal = true;
+        stamp_standard_time(*expressions[operand.value()]);
         expression = std::move(replacement);
     }
 

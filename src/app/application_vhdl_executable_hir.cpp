@@ -298,10 +298,26 @@ class VhdlExecutableBuilder final {
       const frontend::Sensitivity& input,
       const semantic::ScopeId scope,
       const semantic::OriginId parent) {
-    return {
+    vh::Sensitivity output {
         input.signal,
         expression(input.expression, scope, parent),
-        source(input.span)};
+        source(input.span),
+        std::nullopt};
+    // A direct signal entry (no expression): its simple name, resolved by
+    // name analysis (10.2, 11.3).
+    // `process (all)` (11.3) is the parser's "*", no name.
+    if (!output.expression && !input.signal.empty() && input.signal != "*"
+        && input.signal.find_first_of(".(") == std::string::npos) {
+      output.name = name(input.vhdl_name_text.empty() ? input.signal
+                                                       : input.vhdl_name_text,
+          input.span, scope);
+      // An extended identifier keeps its written spelling (15.4.3), as an
+      // expression's name does.
+      if (!input.vhdl_spelling.empty()) {
+        output.name->spelling = input.vhdl_spelling;
+      }
+    }
+    return output;
   }
 
   [[nodiscard]] vh::StatementKind statement_kind(
@@ -1400,6 +1416,7 @@ class VhdlExecutableBuilder final {
       const auto prior_selected = name.selected;
       name.overloads.clear();
       name.selected.reset();
+      name.analyzed = false;
       if (const auto separator = name.canonical.rfind('.');
           separator != std::string::npos) {
         const auto prefix = std::string_view { name.canonical }.substr(

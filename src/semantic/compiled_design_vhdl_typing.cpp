@@ -190,6 +190,7 @@ public:
                     const auto* candidate = declaration(id);
                     if (candidate != nullptr && support::vhdl_symbol(candidate->name) == parameter) {
                         parameter_types_[id.value()] = type;
+                        store_parameter_type(*candidate, type);
                     }
                 }
             }
@@ -215,6 +216,22 @@ public:
                 type_instance(instance);
             }
         }
+        // A physical literal has the type of its unit whatever its context
+        // (5.2.4.1, 9.3.2): one left untyped under an unmodeled parent (a
+        // projected package's aggregate, BD2) is typed alone.
+        std::vector<ExpressionId> physical;
+        for (const auto& e : design_.vhdl_hir.expressions()) {
+            if (owned(e.scope) && e.marker == support::ExpressionMarker::vhdl_physical
+                && !typed_.contains(e.id.value())) {
+                physical.push_back(e.id);
+            }
+        }
+        for (const auto id : physical) {
+            const auto& found = interpret(id);
+            if (!found.unmodeled && found.list.size() == 1U && found.list.front().type) {
+                (void)select(id, found.list.front().type);
+            }
+        }
         census();
         return !failed_;
     }
@@ -234,6 +251,14 @@ private:
         return found == expression_index_.end()
             ? nullptr
             : &design_.vhdl_hir.mutable_expressions()[found->second];
+    }
+
+    /// Whether `id` is a subprogram body (its declarative region holds its
+    /// declarations and statements, 4.3).
+    [[nodiscard]] bool subprogram_body(const DeclarationId id) const
+    {
+        const auto* found = declaration(id);
+        return found != nullptr && found->callable && found->callable->defined;
     }
 
     [[nodiscard]] const vhdl::Declaration* declaration(const DeclarationId id) const
@@ -349,11 +374,19 @@ private:
             // others (12.3 b, the order Lookup gives).
             // A subprogram body and its declaration are one subprogram
             // (4.2.1, 4.3); D3 rejects other directly visible homographs.
-            for (const auto& existing : result) {
+            // The one subprogram is stored by its body where both are
+            // visible: elaboration executes the body.
+            for (auto& existing : result) {
                 if (existing.parameters == profile.parameters
                     && existing.result == profile.result
                     && (existing.source != Profile::Source::implicit
                         || profile.source == Profile::Source::implicit)) {
+                    if (existing.source == Profile::Source::declaration
+                        && profile.source == Profile::Source::declaration
+                        && subprogram_body(profile.declaration)
+                        && !subprogram_body(existing.declaration)) {
+                        existing = std::move(profile);
+                    }
                     return;
                 }
             }
@@ -800,8 +833,10 @@ private:
         case Form::constant:
         case Form::variable:
         case Form::file:
-        case Form::generic_constant: {
-            // A loop parameter has the type of its range (10.10).
+        case Form::generic_constant:
+        case Form::generate_parameter: {
+            // A loop or generate parameter has the type of its range
+            // (10.10, 11.8).
             if (const auto parameter = parameter_types_.find(found.id.value());
                 parameter != parameter_types_.end()) {
                 meaning.type = parameter->second;
@@ -914,20 +949,23 @@ private:
         // Overloadable: every function called without actuals and every
         // enumeration literal (4.2.2.1, 5.2.2.1).
         const auto designator = parts.back();
+        if (parts.size() == 1U && !name.selected && name.overloads.empty()) {
+            // A statement label (implicitly declared, 11.1) denotes no
+            // value: the name has no interpretation (12.3, 12.5). Members of
+            // compiler-projected packages are census-counted (BD2).
+            const auto visible = lookup_.visible(designator, e.scope, regions_.begin(e.source));
+            if (visible.undeclared && !visible.undeclared_projected
+                && visible.candidates.empty() && visible.units.empty()) {
+                return result;
+            }
+        }
         for (const auto& profile : overloads(designator, e.scope, e.source, &name)) {
             if (auto meaning = apply(profile, { }, { }, 0U); meaning && meaning->type) {
                 result.list.push_back(std::move(*meaning));
             }
         }
         if (result.list.empty()) {
-            // A generate parameter or a name the pass has no model for.
-            if (const auto parameter = generate_parameter(designator, e.scope)) {
-                Meaning meaning;
-                meaning.type = *parameter;
-                meaning.kind = Interpretation::object;
-                result.list.push_back(std::move(meaning));
-                return result;
-            }
+            // A name the pass has no model for.
             result.unmodeled = true;
         }
         return result;
@@ -944,23 +982,6 @@ private:
             scope = *region->enclosing;
         }
         return depth;
-    }
-
-    [[nodiscard]] std::optional<Type> generate_parameter(const support::SymbolId designator,
-        ScopeId scope) const
-    {
-        for (std::size_t depth { }; depth < 256U; ++depth) {
-            if (const auto found = generate_parameters_.find(scope.value());
-                found != generate_parameters_.end() && found->second.first == designator) {
-                return found->second.second;
-            }
-            const auto* region = regions_.find(scope);
-            if (region == nullptr || !region->enclosing) {
-                return std::nullopt;
-            }
-            scope = *region->enclosing;
-        }
-        return std::nullopt;
     }
 
     /// A generic subprogram or an instance of one (4.2.1, 4.4): its formal
@@ -1481,20 +1502,29 @@ private:
         Interpretations result;
         const auto symbol = support::vhdl_symbol(e.marker_argument);
         const auto resolution = lookup_.visible(symbol, e.scope, regions_.begin(e.source));
-        std::vector<Type> found;
+        // The unit name a physical literal uses (5.2.4.1): a declared unit
+        // (its declaration) or a unit of STD.STANDARD.TIME (its row).
+        struct Found {
+            Type type;
+            DeclarationId declaration;
+            support::StandardDeclaration standard { support::StandardDeclaration::none };
+        };
+        std::vector<Found> found;
         for (const auto& entry : resolution.standard) {
             if (entry.kind == StandardEntry::Kind::unit) {
-                found.push_back(types_.of_standard(entry.declaration));
+                found.push_back({ types_.of_standard(entry.declaration), { }, entry.declaration });
             }
         }
         for (const auto id : resolution.candidates) {
             if (const auto unit = physical_units_.find(id.value()); unit != physical_units_.end()) {
-                found.push_back(Types::declared(unit->second));
+                found.push_back({ Types::declared(unit->second), id, support::StandardDeclaration::none });
             }
         }
-        for (const auto& type : found) {
+        for (const auto& [type, declaration, standard] : found) {
             Meaning meaning;
             meaning.type = type;
+            meaning.declaration = declaration;
+            meaning.standard = standard;
             meaning.kind = Interpretation::physical_literal;
             meaning.operands.resize(e.operands.size()); // the abstract literal
             meaning.formals.resize(e.operands.size(), vhdl::no_formal);
@@ -1635,6 +1665,44 @@ private:
         return result;
     }
 
+    // A user-defined attribute name `x'a` (7.2, 16.2.1): its designator
+    // denotes an attribute declaration by visibility (6.7, 12.3); the value
+    // has the type of that declaration's subtype. The prefix is a named
+    // entity (7.2), not typed here.
+    Interpretations user_attribute(const Expression& e, const support::SymbolId designator)
+    {
+        Interpretations result;
+        const auto resolution = lookup_.visible(designator, e.scope, regions_.begin(e.source));
+        const vhdl::Declaration* found = nullptr;
+        for (const auto id : resolution.candidates) {
+            const auto* candidate = declaration(id);
+            if (candidate == nullptr
+                || candidate->form != vhdl::DeclarationForm::attribute_declaration) {
+                continue;
+            }
+            if (found != nullptr) {
+                result.unmodeled = true;
+                return result;
+            }
+            found = candidate;
+        }
+        const auto type = found != nullptr && found->subtype
+            ? types_.of_subtype(*found->subtype) : Type { };
+        if (!type || e.operands.size() != 1U) {
+            result.unmodeled = true;
+            return result;
+        }
+        Meaning meaning;
+        meaning.type = type;
+        meaning.kind = Interpretation::attribute;
+        meaning.declaration = found->id;
+        meaning.operands.resize(1U);
+        meaning.formals.resize(1U, vhdl::no_formal);
+        unmodeled_.insert(e.operands.front().value());
+        result.list.push_back(std::move(meaning));
+        return result;
+    }
+
     Interpretations attribute(const Expression& e)
     {
         Interpretations result;
@@ -1646,11 +1714,10 @@ private:
         const auto designator = support::vhdl_symbol(std::string_view { e.text }.substr(1U));
         const auto predefined = predefined_attribute(designator, edition);
         if (!predefined) {
-            result.unmodeled = true; // a user-defined attribute (7.2)
-            return result;
+            return user_attribute(e, designator);
         }
         const auto& prefix = interpret(e.operands.front());
-        if (prefix.unmodeled && e.operands.size() == 1U
+        if ((prefix.unmodeled || prefix.list.empty()) && e.operands.size() == 1U
             && (*predefined == vhdl::PredefinedAttribute::simple_name
                 || *predefined == vhdl::PredefinedAttribute::instance_name
                 || *predefined == vhdl::PredefinedAttribute::path_name)) {
@@ -1704,6 +1771,27 @@ private:
             Meaning none;
             (void)none;
             return result; // no interpretation: TYPE-001 at the context
+        }
+        if (!profile->result) {
+            // A dimension written as a discrete range names no index
+            // subtype; its type is that of the bounds (5.3.2.2), which the
+            // core decides (index_of): A'LEFT, A'RANGE, A'INDEX, ... of
+            // `array (1 to 6) of T` are INTEGER (16.2.3).
+            using A = vhdl::PredefinedAttribute;
+            const auto attribute = profile->attribute;
+            if (attribute == A::left || attribute == A::right || attribute == A::high
+                || attribute == A::low || attribute == A::range
+                || attribute == A::reverse_range || attribute == A::index) {
+                const auto array = types_.class_of(candidate.type) == TypeClass::array
+                    ? candidate.type
+                    : !candidate.type_mark
+                        && types_.class_of(candidate.type) == TypeClass::access
+                    ? types_.designated(candidate.type)
+                    : Type { };
+                if (array && types_.class_of(array) == TypeClass::array) {
+                    profile->result = index_of(array, dimension);
+                }
+            }
         }
         Meaning meaning;
         meaning.type = profile->result;
@@ -1759,6 +1847,12 @@ private:
             return { };
         }
         auto found = interpret(id); // copy: the map may grow
+        // The prefix of 'SIMPLE_NAME / 'PATH_NAME / 'INSTANCE_NAME that
+        // attribute() already took as a named entity (a label, 16.2.5) is
+        // not a value to type.
+        if (found.list.empty() && unmodeled_.contains(id.value())) {
+            found.unmodeled = true;
+        }
         if (expected && types_.class_of(expected) == TypeClass::none) {
             found.unmodeled = true; // an interface type (6.5.3): BD2 (V4)
         }
@@ -2216,6 +2310,49 @@ private:
         return type;
     }
 
+    // The type of a loop parameter is the type of its discrete range (10.10;
+    // 5.3.2.2 for universal_integer bounds): stored as the parameter's type
+    // mark, a type declaration or a STD.STANDARD row (the HIR's placeholder
+    // subtype carries no written mark).
+    void store_parameter_type(const vhdl::Declaration& parameter, const Type& type)
+    {
+        vhdl::Name mark;
+        if (type.kind == Type::Kind::standard) {
+            mark.standard = type.standard;
+        } else if (type.kind == Type::Kind::universal_integer) {
+            mark.standard = support::StandardDeclaration::integer;
+        } else if (type.kind == Type::Kind::declared) {
+            const auto* definition = design_.vhdl_hir.find_type(type.declared);
+            if (definition == nullptr || !definition->declaration.valid()) {
+                return;
+            }
+            mark.selected = definition->declaration;
+        } else {
+            return;
+        }
+        auto& declarations = design_.vhdl_hir.mutable_declarations();
+        const auto position = static_cast<std::size_t>(&parameter - design_.vhdl_hir.declarations().data());
+        if (position >= declarations.size() || !declarations[position].subtype) {
+            return;
+        }
+        auto& subtype = *declarations[position].subtype;
+        // The mark names the decided type (10.10, 11.8), not the HIR's
+        // INTEGER placeholder.
+        if (type.kind == Type::Kind::declared) {
+            mark.spelling = design_.vhdl_hir.find_type(type.declared)->name;
+        } else {
+            mark.spelling = std::string { support::name(mark.standard) };
+        }
+        mark.canonical = support::canonical_vhdl_spelling(mark.spelling);
+        mark.symbol = support::vhdl_symbol(mark.text());
+        mark.analyzed = true;
+        // The parameter's type (10.10, 11.8) is the stored mark; the HIR's
+        // INTEGER type_mark is the storage representation (values of a
+        // discrete type are held as positions), which the runtime binding
+        // of the parameter sizes from.
+        subtype.written_type_mark = std::move(mark);
+    }
+
     void store(Expression& e, const Meaning& meaning, const Type& expected)
     {
         typed_.insert(e.id.value());
@@ -2229,7 +2366,9 @@ private:
             e.resolved_formals = meaning.formals;
         }
         if ((meaning.kind == Interpretation::function_call
-                || meaning.kind == Interpretation::enumeration_literal)
+                || meaning.kind == Interpretation::enumeration_literal
+                || meaning.kind == Interpretation::physical_literal
+                || meaning.kind == Interpretation::attribute)
             && meaning.declaration.valid()) {
             e.resolved_declaration = meaning.declaration;
         }
@@ -2273,7 +2412,21 @@ private:
     void type_declaration(const vhdl::Declaration& d)
     {
         using Form = vhdl::DeclarationForm;
-        if (d.subtype) {
+        const auto* defined = d.declared_type
+            ? design_.vhdl_hir.find_type(*d.declared_type)
+            : nullptr;
+        if (defined != nullptr && defined->scalar_type && d.subtype) {
+            // An integer or floating type definition: each bound is of some
+            // integer (floating) type, typed without context (5.2.3.1,
+            // 5.2.5.1); the INTEGER/REAL representation is no context.
+            for (const auto& range : d.subtype->constraints) {
+                for (const auto& bound : { range.left_expression, range.right_expression }) {
+                    if (bound) {
+                        select_range_or_value(*bound, Type { });
+                    }
+                }
+            }
+        } else if (d.subtype) {
             type_subtype(*d.subtype);
         }
         if (d.callable && d.callable->return_type) {
@@ -2328,7 +2481,10 @@ private:
     void type_definition(const vhdl::TypeDefinition& type, const ScopeId scope)
     {
         (void)scope;
-        if (type.form == vhdl::TypeForm::subtype || type.form == vhdl::TypeForm::alias) {
+        // A declared integer or floating type's base is its INTEGER/REAL
+        // representation, no context for its bounds (scalar_range below).
+        if ((type.form == vhdl::TypeForm::subtype || type.form == vhdl::TypeForm::alias)
+            && !type.scalar_type) {
             type_subtype(type.base);
         }
         if (type.scalar_range) {
@@ -2653,9 +2809,11 @@ private:
                 const auto* compare = node(*region.condition);
                 if (compare != nullptr && compare->operands.size() == 2U) {
                     const auto type = select_bounds(*region.initial, compare->operands[1]);
-                    if (type && !region.iterator.empty()) {
-                        generate_parameters_[region.scope.value()]
-                            = { support::vhdl_symbol(region.iterator), type };
+                    if (type && region.parameter) {
+                        if (const auto* parameter = declaration(*region.parameter)) {
+                            parameter_types_[region.parameter->value()] = type;
+                            store_parameter_type(*parameter, type);
+                        }
                     }
                 }
             }
@@ -2719,7 +2877,6 @@ private:
     std::unordered_map<std::uint32_t, TypeId> physical_units_;
     std::unordered_map<std::uint32_t, Type> parameter_types_;
     std::unordered_map<std::uint32_t, std::vector<DeclarationId>> scope_declarations_;
-    std::unordered_map<std::uint32_t, std::pair<support::SymbolId, Type>> generate_parameters_;
     std::unordered_map<std::uint32_t, Interpretations> interpretations_;
     std::unordered_set<std::uint32_t> typed_;
     std::unordered_set<std::uint32_t> unmodeled_;

@@ -1551,6 +1551,7 @@ void VhdlParser::rewrite_vhdl_formal_conversions(DesignUnit& unit,
         const auto implicit = "fsim__formal_conversion_" + implicit_suffix;
         SignalDeclaration signal;
         signal.name = implicit;
+        signal.vhdl_formal_conversion_signal = true;
         signal.type = port->type;
         // The port's subtype is copied from the entity, where its type mark
         // was written and is resolved; it is not a name of this unit.
@@ -1563,6 +1564,17 @@ void VhdlParser::rewrite_vhdl_formal_conversions(DesignUnit& unit,
         // The converted port's driving value starts at its default (IEEE
         // 1076-1993 4.3.2, 12.6.1).
         signal.default_value = port->default_value;
+        // Its default is written for the instance: names in it are visible
+        // where the instance statement declares the signal.
+        const auto at_instance = [&](const auto& self, Expression& node) -> void {
+          node.span = signal.span;
+          for (auto& operand : node.operands) {
+            self(self, operand);
+          }
+        };
+        if (signal.default_value) {
+          at_instance(at_instance, *signal.default_value);
+        }
         if (!generic_actuals.empty()) {
           const auto substitute = [&](const auto& self, Expression& node) -> void {
             if (node.kind == ExpressionKind::Identifier) {
@@ -1742,7 +1754,16 @@ Process VhdlParser::parse_process(
               ? (wildcard ? "*" : vhdl_name(expression.text))
               : std::string{},
           expression.span,
-          identifier ? Expression{} : std::move(expression)});
+          Expression{}});
+      if (identifier && !wildcard) {
+        process.sensitivities.back().vhdl_name_text = expression.text;
+        if (expression.vhdl_selected_name_spelling) {
+          process.sensitivities.back().vhdl_spelling
+              = *expression.vhdl_selected_name_spelling;
+        }
+      } else if (!identifier) {
+        process.sensitivities.back().expression = std::move(expression);
+      }
       if (!match(TokenKind::Comma)) {
         break;
       }

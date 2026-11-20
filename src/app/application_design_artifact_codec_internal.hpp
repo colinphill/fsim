@@ -682,9 +682,12 @@ namespace codec_detail {
                 && value
                 <= runtime::SystemVerilogConstraintDistributionWeight::
                     AcrossRange;
+        } else if constexpr (std::same_as<T, semantic::vhdl::AnalysisExemption>) {
+            return value >= semantic::vhdl::AnalysisExemption::none
+                && value <= semantic::vhdl::AnalysisExemption::generic_type;
         } else if constexpr (std::same_as<T, semantic::vhdl::AnchoredSlot>) {
             return value >= semantic::vhdl::AnchoredSlot::expression_resolved_declaration
-                && value <= semantic::vhdl::AnchoredSlot::expression_type_declared;
+                && value <= semantic::vhdl::AnchoredSlot::instance_port_formal_selected;
         } else if constexpr (std::same_as<T, support::VhdlStandardPackageForm>) {
             return value >= support::VhdlStandardPackageForm::none
                 && value <= support::VhdlStandardPackageForm::projection;
@@ -702,7 +705,7 @@ namespace codec_detail {
                 && value <= semantic::vhdl::ObjectClass::file;
         } else if constexpr (std::same_as<T, semantic::vhdl::DeclarationForm>) {
             return value >= semantic::vhdl::DeclarationForm::type
-                && value <= semantic::vhdl::DeclarationForm::mode_view;
+                && value <= semantic::vhdl::DeclarationForm::generate_parameter;
         } else if constexpr (std::same_as<T, semantic::vhdl::TypeForm>) {
             return value >= semantic::vhdl::TypeForm::unresolved
                 && value <= semantic::vhdl::TypeForm::alias;

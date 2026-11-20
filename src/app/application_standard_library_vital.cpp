@@ -36,6 +36,12 @@ namespace {
             type.builtin_nominal = true;
             type.vhdl_type_declaration = type.nominal_type;
             type.builtin_declaration = true;
+            // The mark VITAL_Timing writes (IEEE 1076.4 VitalDelayType is
+            // TIME; its delay arrays are of TIME): name analysis resolves it
+            // to STD.STANDARD's TIME (16.3) or records the projected
+            // package's reason (owner 11-20: R2).
+            type.vhdl_written_type_mark = "time";
+            type.vhdl_written_type_mark_span = span;
         }
         return type;
     }
@@ -195,7 +201,8 @@ namespace {
                 field_type.packed_range, field_type.is_signed,
                 field_type.packed_range_expression, 0, span,
                 std::vector<frontend::Type> { std::move(field_type) },
-                std::nullopt });
+                std::nullopt, false,
+                support::SystemVerilogBuiltinType::none, { }, { } });
             width += *field_width;
         }
         if (width != 0) {

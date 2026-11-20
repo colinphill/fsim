@@ -1054,11 +1054,14 @@ Expression VhdlParser::parse_primary()
         subtype.call_result_signed = external_type.is_signed;
         subtype.nominal_type = external_type.nominal_type;
         subtype.builtin_nominal = external_type.builtin_nominal;
+        // The path names the object through the design hierarchy (8.7),
+        // resolved at elaboration: it is no name resolved by visibility.
+        Expression path { ExpressionKind::Identifier, target,
+            std::move(path_indices), first.span };
+        path.vhdl_not_a_name = true;
         auto external = marked_expression(
             support::ExpressionMarker::vhdl_external, { },
-            { Expression { ExpressionKind::Identifier, target,
-                  std::move(path_indices), first.span },
-                std::move(subtype) },
+            { std::move(path), std::move(subtype) },
             cover(start.span, previous().span));
         // An external name is a name; an element or record element of the
         // object it denotes is selected by suffix (IEEE 1076-2008 8.3, 8.7).

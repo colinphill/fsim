@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/semantic/compiled_design_vhdl_resolution.hpp"
 
+#include "fsim/semantic/compiled_design_normalization.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
 #include "fsim/semantic/vhdl_native_identity.hpp"
 #include "fsim/semantic/vhdl_standard_catalog.hpp"
@@ -27,6 +28,50 @@
 #include <vector>
 
 namespace fsim::semantic {
+
+namespace {
+
+// The STD.STANDARD row a compiler-provided type identity denotes (16.3), or
+// none for a declared or other compiler-provided type.
+[[nodiscard]] support::StandardDeclaration standard_row_of(
+    const CompiledVhdlTypeIdentityResolution& identity) noexcept
+{
+    using SD = support::StandardDeclaration;
+    using Scalar = CompiledVhdlStandardScalarIdentity;
+    using Subtype = CompiledVhdlStandardScalarSubtype;
+    using Builtin = vhdl::BuiltinTypeIdentity;
+    switch (identity.builtin_type) {
+    case Builtin::std_standard_string: return SD::string;
+    case Builtin::std_standard_bit_vector: return SD::bit_vector;
+    case Builtin::std_standard_boolean_vector: return SD::boolean_vector;
+    case Builtin::std_standard_integer_vector: return SD::integer_vector;
+    case Builtin::std_standard_real_vector: return SD::real_vector;
+    case Builtin::std_standard_time_vector: return SD::time_vector;
+    default: break;
+    }
+    switch (identity.standard_scalar_subtype) {
+    case Subtype::natural: return SD::natural;
+    case Subtype::positive: return SD::positive;
+    case Subtype::delay_length: return SD::delay_length;
+    case Subtype::none: break;
+    }
+    switch (identity.standard_scalar_type) {
+    case Scalar::bit: return SD::bit;
+    case Scalar::boolean: return SD::boolean;
+    case Scalar::character: return SD::character;
+    case Scalar::file_open_kind: return SD::file_open_kind;
+    case Scalar::file_open_status: return SD::file_open_status;
+    case Scalar::integer: return SD::integer;
+    case Scalar::range_direction: return SD::range_direction;
+    case Scalar::real: return SD::real;
+    case Scalar::severity_level: return SD::severity_level;
+    case Scalar::time: return SD::time;
+    case Scalar::none: break;
+    }
+    return SD::none;
+}
+
+} // namespace
 namespace {
 
 using vhdl::ExpressionKind;
@@ -286,6 +331,10 @@ public:
                             name.selected = definition->declaration;
                         }
                     }
+                } else {
+                    // A STD.STANDARD type or subtype (16.3): its row, as name
+                    // analysis stores it.
+                    name.standard = standard_row_of(identity);
                 }
             }
             expression.qualified_type_mark = std::move(name);
@@ -581,11 +630,28 @@ private:
             }
             stamped_units_[unit.id.value()] = 1U;
         }
+        const auto& expressions = *expressions_;
+        // An expression the compile-time typing decided (12.5; gate BD D4)
+        // keeps its result in the normalize that follows the analysis, before
+        // the unit is stamped (VhdlTypingAuthority).
+        frozen_expressions_.assign(expressions.size(), 0U);
+        const bool typing_authority = vhdl_typing_authority_active();
+        for (std::size_t index { }; typing_authority && index < expressions.size(); ++index) {
+            auto frozen = std::uint8_t { };
+            if (expressions[index].interpretation != vhdl::Interpretation::none) {
+                frozen = static_cast<std::uint8_t>(frozen_declaration | frozen_type);
+            }
+            // A type mark that name analysis resolved (12.3, 12.4) keeps its
+            // result too.
+            if (expressions[index].qualified_type_mark
+                && expressions[index].qualified_type_mark->analyzed) {
+                frozen = static_cast<std::uint8_t>(frozen | frozen_qualified);
+            }
+            frozen_expressions_[index] = frozen;
+        }
         if (stamped_units_.empty()) {
             return;
         }
-        const auto& expressions = *expressions_;
-        frozen_expressions_.assign(expressions.size(), 0U);
         for (std::size_t index { }; index < expressions.size(); ++index) {
             if (stamped_scope(expressions[index].scope)) {
                 frozen_expressions_[index] = frozen_all;
@@ -610,6 +676,20 @@ private:
             }
             for (const auto& reference : unit.recomputed) {
                 using Slot = vhdl::AnchoredSlot;
+                // A name whose selection is served by the compiler keeps
+                // analyzed false; the link's name binding serves it.
+                if (reference.slot == Slot::expression_name_selected
+                    || reference.slot == Slot::expression_name_overload
+                    || reference.slot == Slot::statement_procedure_selected
+                    || reference.slot == Slot::statement_procedure_overload
+                    || reference.slot == Slot::statement_sensitivity_selected
+                    || reference.slot == Slot::process_sensitivity_selected
+                    || reference.slot
+                        == Slot::declaration_attribute_designator_selected
+                    || reference.slot == Slot::instance_generic_formal_selected
+                    || reference.slot == Slot::instance_port_formal_selected) {
+                    continue;
+                }
                 if (reference.slot == Slot::statement_resolved_procedure) {
                     frozen_statements_.at(
                         items->statements.at(reference.item)) = 0U;

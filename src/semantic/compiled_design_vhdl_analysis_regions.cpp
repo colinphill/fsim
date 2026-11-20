@@ -213,6 +213,14 @@ namespace {
 } // namespace
 
 struct Regions::State {
+    struct ScopePosition {
+        ScopeId scope;
+        TextPoint begin;
+        TextPoint end;
+    };
+    /// By vhdl::Unit::id value: the unit's scopes (other than its own) with
+    /// the text they span.
+    std::unordered_map<std::uint32_t, std::vector<ScopePosition>> scope_positions;
     const CompiledDesign* design { };
     const std::vector<SourceSpan>* spans { };
     /// By scope id value; scope invalid for a scope that is not VHDL.
@@ -574,12 +582,6 @@ struct Regions::State {
         TextPoint end;
     };
 
-    struct ScopePosition {
-        ScopeId scope;
-        TextPoint begin;
-        TextPoint end;
-    };
-
     // 12.1, 12.4: a clause of a declarative part belongs to the innermost
     // region whose text contains it; Unit::context lists every clause of
     // the unit with its span.
@@ -605,9 +607,6 @@ struct Regions::State {
             positioned.push_back({ static_cast<std::uint32_t>(index), begin,
                 point(item.source, true) });
         }
-        if (positioned.empty()) {
-            return;
-        }
         std::vector<ScopePosition> candidates;
         if (unit.id.value() < unit_scopes.size()) {
             for (const auto scope_index : unit_scopes[unit.id.value()]) {
@@ -621,6 +620,10 @@ struct Regions::State {
                         { scope.id, begin, point(scope.source, true) });
                 }
             }
+        }
+        scope_positions[unit.id.value()] = candidates;
+        if (positioned.empty()) {
+            return;
         }
         std::ranges::sort(positioned,
             [](const ItemPosition& left, const ItemPosition& right) {
@@ -868,22 +871,9 @@ struct Regions::State {
                 region->undeclared.emplace(symbol.index(), overloadable);
             }
         };
-        const auto generates = [&](const auto& self,
-                                   const std::vector<vhdl::GenerateRegion>& list)
-            -> void {
-            for (const auto& generate : list) {
-                // 11.8: the generate parameter (GUARD of a guarded block is
-                // a declaration the HIR builder makes, 11.2).
-                if (generate.kind == vhdl::GenerateKind::iterative
-                    && !generate.iterator.empty()) {
-                    undeclare(generate.scope,
-                        support::vhdl_symbol(generate.iterator), false);
-                }
-                self(self, generate.nested);
-            }
-        };
+        // (A generate parameter, 11.8, and GUARD, 11.2, are declarations
+        // the HIR builder makes.)
         for (const auto& unit : hir_units) {
-            generates(generates, unit.generates);
             // The members of a package the compiler projects.
             if (unit.standard_package_form
                 == support::VhdlStandardPackageForm::projection) {
@@ -1069,6 +1059,32 @@ std::span<const UnitId> Regions::primary_units(
         return { };
     }
     return found->second;
+}
+
+ScopeId Regions::innermost_scope(
+    const vhdl::Unit& unit, const SourceSpanId span) const
+{
+    const auto begin = this->begin(span);
+    const auto end = this->end(span);
+    ScopeId result = unit.scope;
+    const auto found = state_->scope_positions.find(unit.id.value());
+    if (found == state_->scope_positions.end() || !begin.ordered) {
+        return result;
+    }
+    const State::ScopePosition* best = nullptr;
+    for (const auto& candidate : found->second) {
+        if (candidate.begin.file != begin.file
+            || candidate.begin.offset > begin.offset
+            || end.offset > candidate.end.offset) {
+            continue;
+        }
+        if (best == nullptr || candidate.begin.offset > best->begin.offset
+            || (candidate.begin.offset == best->begin.offset
+                && candidate.end.offset <= best->end.offset)) {
+            best = &candidate;
+        }
+    }
+    return best != nullptr ? best->scope : result;
 }
 
 std::optional<ScopeId> Regions::unit_scope(const UnitId unit) const noexcept

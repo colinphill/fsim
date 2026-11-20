@@ -84,6 +84,146 @@ using namespace hierarchy_sv_parameters_detail;
 
 namespace {
 
+// The type a subtype indication's type mark denotes: the result compile-time
+// analysis stored for it (IEEE 1076-2019 12.3, 12.4), else the spelling
+// lookup of a unit that was not analyzed (generic package instance
+// expansions, unanalyzed links).
+[[nodiscard]] semantic::CompiledVhdlTypeIdentityResolution
+stored_subtype_type_identity(const semantic::CompiledDesignResolver& resolver,
+    const semantic::vhdl::SubtypeIndication& subtype,
+    const std::optional<semantic::ScopeId> owner_scope)
+{
+    if (owner_scope && owner_scope->valid()) {
+        if (auto stored
+            = resolver.stored_vhdl_type_identity(subtype, *owner_scope)) {
+            return *stored;
+        }
+        // An indication without a mark (a generic type's own subtype,
+        // 6.5.3) denotes no type.
+        if (subtype.type_mark.spelling.empty() && !subtype.written_type_mark) {
+            return { };
+        }
+        if (resolver.vhdl_scope_analyzed(*owner_scope)) {
+            if (subtype.written_type_mark) {
+                semantic::note_vhdl_unstored_name("stored_subtype_type_identity",
+                    *subtype.written_type_mark, *owner_scope);
+            } else {
+                semantic::note_vhdl_unstored_reference(
+                    "stored_subtype_type_identity", subtype.type_mark.spelling,
+                    *owner_scope);
+            }
+        }
+    }
+    return resolver.resolve_vhdl_type_identity(
+        subtype.type_mark.spelling, owner_scope);
+}
+
+// A subtype indication the compiler writes itself for a STD.STANDARD type
+// carries the STANDARD row it denotes, as analysis stores it for a written
+// mark (IEEE 1076-2019 16.3), so no spelling lookup is needed.
+void set_vhdl_standard_mark(semantic::vhdl::SubtypeIndication& subtype,
+    const support::StandardDeclaration row)
+{
+    semantic::vhdl::Name mark;
+    mark.spelling = subtype.type_mark.spelling;
+    mark.canonical = subtype.type_mark.spelling;
+    mark.standard = row;
+    mark.analyzed = true;
+    subtype.written_type_mark = std::move(mark);
+}
+
+// The compiler-provided type a stored type identity denotes (IEEE 1076-2019
+// 16.3, 16.7): a retained declaration's own provided identity, else the
+// STANDARD scalar or predefined array the identity names.
+[[nodiscard]] semantic::CompiledVhdlProvidedType
+provided_type_of_stored_identity(
+    const semantic::CompiledDesignResolver& resolver,
+    const semantic::CompiledVhdlTypeIdentityResolution& identity)
+{
+    using Type = semantic::CompiledVhdlProvidedType;
+    using Scalar = semantic::CompiledVhdlStandardScalarIdentity;
+    using Subtype = semantic::CompiledVhdlStandardScalarSubtype;
+    using Builtin = semantic::vhdl::BuiltinTypeIdentity;
+    if (identity.status == semantic::CompiledResolutionStatus::ambiguous) {
+        return Type::none;
+    }
+    if (identity.type) {
+        return resolver.vhdl_provided_type_of(*identity.type);
+    }
+    switch (identity.standard_scalar_type) {
+    case Scalar::none: break;
+    case Scalar::bit: return Type::bit;
+    case Scalar::boolean: return Type::boolean;
+    case Scalar::character: return Type::character;
+    case Scalar::file_open_kind: return Type::file_open_kind;
+    case Scalar::file_open_status: return Type::file_open_status;
+    case Scalar::range_direction: return Type::range_direction;
+    case Scalar::real: return Type::real;
+    case Scalar::severity_level: return Type::severity_level;
+    case Scalar::integer:
+        return identity.standard_scalar_subtype == Subtype::natural
+            ? Type::natural
+            : identity.standard_scalar_subtype == Subtype::positive
+            ? Type::positive
+            : Type::integer;
+    case Scalar::time:
+        return identity.standard_scalar_subtype == Subtype::delay_length
+            ? Type::delay_length
+            : Type::time;
+    }
+    switch (identity.builtin_type) {
+    case Builtin::none: break;
+    case Builtin::ieee_std_logic_1164_std_logic_vector:
+        return Type::std_logic_vector;
+    case Builtin::ieee_std_logic_1164_std_ulogic_vector:
+        return Type::std_ulogic_vector;
+    case Builtin::std_standard_string: return Type::string;
+    case Builtin::std_standard_bit_vector: return Type::bit_vector;
+    case Builtin::std_standard_boolean_vector: return Type::boolean_vector;
+    case Builtin::std_standard_integer_vector: return Type::integer_vector;
+    case Builtin::std_standard_real_vector: return Type::real_vector;
+    case Builtin::std_standard_time_vector: return Type::time_vector;
+    }
+    return Type::none;
+}
+
+// The compiler-provided type a subtype indication's type mark denotes: the
+// stored result of an analyzed unit (12.3, 12.4), else the spelling lookup of
+// a unit that was not analyzed (generic package instance expansions,
+// unanalyzed links).
+[[nodiscard]] semantic::CompiledVhdlProvidedType stored_subtype_provided_type(
+    const semantic::CompiledDesignResolver& resolver,
+    const semantic::vhdl::SubtypeIndication& subtype,
+    const semantic::ScopeId scope)
+{
+    if (subtype.type_mark.target.valid()) {
+        return resolver.vhdl_provided_type_of(subtype.type_mark.target);
+    }
+    if (scope.valid()) {
+        if (const auto stored
+            = resolver.stored_vhdl_type_identity(subtype, scope)) {
+            return provided_type_of_stored_identity(resolver, *stored);
+        }
+        if (resolver.vhdl_scope_analyzed(scope)) {
+            // A subtype without a mark (a generic type's own subtype, 6.5.3)
+            // names no provided type.
+            if (subtype.type_mark.spelling.empty() && !subtype.written_type_mark) {
+                return semantic::CompiledVhdlProvidedType::none;
+            }
+            if (subtype.written_type_mark) {
+                semantic::note_vhdl_unstored_name("resolve_vhdl_provided_type",
+                    *subtype.written_type_mark, scope);
+            } else {
+                semantic::note_vhdl_unstored_reference(
+                    "resolve_vhdl_provided_type", subtype.type_mark.spelling,
+                    scope);
+            }
+        }
+    }
+    return resolver.resolve_vhdl_provided_type(
+        subtype.type_mark.spelling, scope);
+}
+
 // Methods the container call checks treat as container methods when a call
 // carries no container marker.
 [[nodiscard]] constexpr bool is_legacy_container_method(
@@ -1650,12 +1790,28 @@ namespace {
             if (!scope.valid()) {
                 return false;
             }
+            const semantic::CompiledDesignResolver resolver {
+                specialization
+            };
+            // The stored result of the written mark: a design type is a
+            // user declaration, the STANDARD row is the predefined one.
+            if (const auto stored
+                = resolver.stored_vhdl_type_identity(current, scope)) {
+                return stored->status
+                        == semantic::CompiledResolutionStatus::unique
+                    && !stored->type
+                    && stored->builtin_type
+                        == semantic::vhdl::BuiltinTypeIdentity::
+                            std_standard_bit_vector;
+            }
+            if (resolver.vhdl_scope_analyzed(scope)) {
+                semantic::note_vhdl_unstored_reference(
+                    "predefined_bit_vector_identity", spelling, scope);
+            }
             semantic::vhdl::Name type_name;
             type_name.spelling = std::string { spelling };
             type_name.canonical = type_name.spelling;
-            const auto resolution
-                = semantic::CompiledDesignResolver { specialization }
-                      .resolve_vhdl(type_name, scope);
+            const auto resolution = resolver.resolve_vhdl(type_name, scope);
             return resolution.status
                 == semantic::CompiledResolutionStatus::not_found
                 && resolution.candidates.empty();
@@ -1688,9 +1844,14 @@ namespace {
                     declaration->vhdl->name, root_name)) {
                 semantic::vhdl::Name root_reference;
                 root_reference.spelling = std::string { root_name };
-                selected = semantic::CompiledDesignResolver {
+                const semantic::CompiledDesignResolver root_resolver {
                     specialization
+                };
+                if (root_resolver.vhdl_scope_analyzed(source.scope)) {
+                    semantic::note_vhdl_unstored_reference(
+                        "actual_subtype", root_name, source.scope);
                 }
+                selected = root_resolver
                                .resolve_vhdl(root_reference, source.scope)
                                .unique();
                 declaration = selected
@@ -2027,6 +2188,7 @@ namespace {
     {
         semantic::vhdl::SubtypeIndication integer;
         integer.type_mark.spelling = "integer";
+        set_vhdl_standard_mark(integer, support::StandardDeclaration::integer);
         const auto linked = compiled_vhdl_link_subtype(
             specialization, std::move(integer));
         return linked.integer_storage_width != 0U
@@ -4341,9 +4503,8 @@ namespace {
                         || provided
                             == semantic::vhdl::ProvidedType::numeric_bit_signed;
                 } else {
-                    const auto identity
-                        = type_resolver.resolve_vhdl_type_identity(
-                            subtype.type_mark.spelling, owner_scope);
+                    const auto identity = stored_subtype_type_identity(
+                        type_resolver, subtype, owner_scope);
                     // A selected source declaration stays nominal and follows
                     // the ordinary HIR metadata path. The resolver reports a
                     // Standard builtin only for a true source lookup miss in
@@ -8390,6 +8551,8 @@ namespace {
             if (bit_vector) {
                 element.emplace();
                 element->type_mark.spelling = "bit";
+                set_vhdl_standard_mark(
+                    *element, support::StandardDeclaration::bit);
                 element->domain = semantic::vhdl::ValueDomain::bit2;
                 element->executable_width = 1U;
             }
@@ -8649,6 +8812,21 @@ namespace {
             semantic::vhdl::SubtypeIndication mark;
             if (source.marker == support::ExpressionMarker::vhdl_qualified) {
                 mark.type_mark.spelling = source.marker_argument;
+                if (source.qualified_type_mark
+                    && source.qualified_type_mark->analyzed) {
+                    // The qualified mark's stored result (9.3.5, 12.3).
+                    mark.written_type_mark = *source.qualified_type_mark;
+                    if (const auto type_declaration
+                        = source.qualified_type_mark->selected
+                        ? specialization.find_declaration(
+                              *source.qualified_type_mark->selected)
+                        : std::nullopt;
+                        type_declaration && type_declaration->vhdl != nullptr
+                        && type_declaration->vhdl->declared_type) {
+                        mark.type_mark.target
+                            = *type_declaration->vhdl->declared_type;
+                    }
+                }
             } else {
                 const auto declaration = source.referenced_name
                         && source.referenced_name->selected
@@ -8663,6 +8841,14 @@ namespace {
                     return expression_id;
                 }
                 mark.type_mark.spelling = source.text;
+                // The conversion's type mark is the declaration analysis
+                // selected (12.3, 12.4).
+                if (source.referenced_name->analyzed) {
+                    mark.written_type_mark = *source.referenced_name;
+                }
+                if (declaration->vhdl->declared_type) {
+                    mark.type_mark.target = *declaration->vhdl->declared_type;
+                }
             }
             const auto operand_element = compiled_vhdl_array_element_spelling(
                 specialization, mark, source.scope);
@@ -21617,6 +21803,12 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
                         = std::string { qualified_name };
                 }
             }
+            if (actual_expression.qualified_type_mark
+                && actual_expression.qualified_type_mark->analyzed) {
+                // The qualified mark's stored result (9.3.5, 12.3).
+                qualified_subtype.written_type_mark
+                    = *actual_expression.qualified_type_mark;
+            }
             const auto formal_name
                 = simple_name_of(
                     formal_declaration.subtype
@@ -21943,10 +22135,15 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
                                 });
                             if (member
                                 != definition->record_elements.end()) {
-                                subtype = compiled_vhdl_link_subtype(
-                                    port_actual_specialization,
-                                    member->subtype,
-                                    declaration->vhdl->scope);
+                                // The object's element constraint applies
+                                // to the selected element (5.3.3, 6.3).
+                                subtype = semantic::vhdl::
+                                    constrained_element_subtype(subtype,
+                                        member->name,
+                                        compiled_vhdl_link_subtype(
+                                            port_actual_specialization,
+                                            member->subtype,
+                                            declaration->vhdl->scope));
                             }
                         }
                     }
@@ -22145,6 +22342,61 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
                 semantic::vhdl::SubtypeIndication index_subtype;
                 index_subtype.type_mark.spelling
                     = source_dimension.index_subtype;
+                // The formal's index subtype as analysis stored it: the
+                // index subtype name of its array type definition (5.3.2.2),
+                // or NATURAL / POSITIVE for STD.STANDARD's predefined arrays
+                // (16.3), so the metadata's spelling is not looked up again.
+                {
+                    const auto formal_linked = compiled_vhdl_link_subtype(
+                        child_interface_specialization,
+                        *formal_declaration.subtype,
+                        formal_declaration.scope);
+                    const auto* const formal_mark
+                        = formal_linked.written_type_mark
+                        ? &*formal_linked.written_type_mark
+                        : formal_declaration.subtype->written_type_mark
+                        ? &*formal_declaration.subtype->written_type_mark
+                        : nullptr;
+                    if (formal_linked.type_mark.target.valid()) {
+                        const auto array_type
+                            = child_interface_specialization.find_type(
+                                formal_linked.type_mark.target);
+                        if (array_type && array_type->vhdl != nullptr
+                            && array_type->vhdl->form
+                                == semantic::vhdl::TypeForm::array
+                            && !array_type->vhdl->array_dimensions.empty()) {
+                            const auto& dimension
+                                = array_type->vhdl->array_dimensions.front();
+                            if (!dimension.implied_index_subtype
+                                && (dimension.index_subtype.analyzed
+                                    || dimension.index_subtype.exemption
+                                        != semantic::vhdl::AnalysisExemption::none)) {
+                                index_subtype.type_mark.spelling
+                                    = dimension.index_subtype.text();
+                                index_subtype.written_type_mark
+                                    = dimension.index_subtype;
+                            }
+                        }
+                    } else if (formal_mark != nullptr && formal_mark->analyzed) {
+                        using SD = support::StandardDeclaration;
+                        switch (formal_mark->standard) {
+                        case SD::bit_vector:
+                        case SD::boolean_vector:
+                        case SD::integer_vector:
+                        case SD::real_vector:
+                        case SD::time_vector:
+                            index_subtype.type_mark.spelling = "natural";
+                            set_vhdl_standard_mark(index_subtype, SD::natural);
+                            break;
+                        case SD::string:
+                            index_subtype.type_mark.spelling = "positive";
+                            set_vhdl_standard_mark(index_subtype, SD::positive);
+                            break;
+                        default:
+                            break;
+                        }
+                    }
+                }
                 index_subtype = compiled_vhdl_link_subtype(
                     child_interface_specialization,
                     std::move(index_subtype),
@@ -27681,11 +27933,8 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
             const semantic::CompiledDesignResolver resolver {
                 working_specialization
             };
-            const auto& mark = declaration.subtype->type_mark;
-            const auto provided = mark.target.valid()
-                ? resolver.vhdl_provided_type_of(mark.target)
-                : resolver.resolve_vhdl_provided_type(
-                      mark.spelling, declaration.scope);
+            const auto provided = stored_subtype_provided_type(
+                resolver, *declaration.subtype, declaration.scope);
             using Provided = semantic::CompiledVhdlProvidedType;
             switch (provided) {
             case Provided::string:
@@ -31002,10 +31251,10 @@ bool HierarchyBuilder::validate_compiled_vhdl_subtype_declarations(
                     != semantic::CompiledVhdlProvidedType::none
                 ? linked_subtype.provided_type
             : scope
-                ? semantic::CompiledDesignResolver {
-                      *compiled_, architecture.id, &*specialized }
-                      .resolve_vhdl_provided_type(
-                          linked_subtype.type_mark.spelling, *scope)
+                ? stored_subtype_provided_type(
+                      semantic::CompiledDesignResolver {
+                          *compiled_, architecture.id, &*specialized },
+                      linked_subtype, *scope)
                 : semantic::CompiledVhdlProvidedType::none);
         if (profile.type_class == SubtypeClass::unknown
             && scope

@@ -275,10 +275,17 @@ const semantic::vhdl::TypeDefinition* find_protected_type(
     const semantic::SpecializedHirUnit& unit,
     const semantic::vhdl::SubtypeIndication& subtype);
 
+// The object `name` denotes in `scope`. `stored` is the analyzed name that
+// denotes that object itself (IEEE 1076-2019 12.3, 12.4): the prefix
+// expression's referenced name, or a whole name that is the object. A
+// prefix of a selected name is never read from the whole name's selection,
+// which denotes the member. An analyzed unit with no such name keeps the
+// spelling lookup and reports it.
 std::optional<semantic::DeclarationId> find_vhdl_object(
     const semantic::SpecializedHirUnit& unit,
     const semantic::ScopeId scope,
-    const std::string_view name)
+    const std::string_view name,
+    const semantic::vhdl::Name* stored = nullptr)
 {
     semantic::vhdl::Name reference;
     reference.spelling = std::string { name };
@@ -293,24 +300,61 @@ std::optional<semantic::DeclarationId> find_vhdl_object(
                   && !declaration.subtype && !declaration.alias_signature
                   && declaration.alias_target;
           };
+    const auto is_object = [&](const semantic::vhdl::Declaration& declaration) {
+        if (plain_object_alias(declaration)) {
+            return true;
+        }
+        if (!declaration.subtype) {
+            return false;
+        }
+        const auto form = declaration.form;
+        return semantic::vhdl::is_value_object_form(form)
+            || form == Form::file || form == Form::alias;
+    };
     const semantic::CompiledDeclarationPredicate object
         = [&](const semantic::CompiledDeclarationView& candidate) {
-              if (candidate.vhdl == nullptr) {
-                  return false;
-              }
-              if (plain_object_alias(*candidate.vhdl)) {
-                  return true;
-              }
-              if (!candidate.vhdl->subtype) {
-                  return false;
-              }
-              const auto form = candidate.vhdl->form;
-              return semantic::vhdl::is_value_object_form(form)
-                  || form == Form::file || form == Form::alias;
+              return candidate.vhdl != nullptr && is_object(*candidate.vhdl);
           };
-    auto found = semantic::CompiledDesignResolver { unit }
-        .resolve_vhdl(reference, scope, object)
-        .unique();
+    const semantic::CompiledDesignResolver resolver { unit };
+    std::optional<semantic::DeclarationId> found;
+    if (stored != nullptr && stored->analyzed && stored->selected) {
+        const auto specialized = unit.find_declaration(*stored->selected);
+        const auto* declaration = specialized && specialized->vhdl != nullptr
+            ? specialized->vhdl
+            : semantic::find_by_id(
+                  unit.design().vhdl_hir.declarations(), *stored->selected);
+        // Name analysis stops at the first object of a selected name
+        // (8.3): the stored selection is the object `name` denotes when it
+        // is an object whose designator is the last part of `name`.
+        const auto last = name.substr(name.find_last_of('.') == std::string_view::npos
+                ? 0U : name.find_last_of('.') + 1U);
+        if (declaration == nullptr || !is_object(*declaration)
+            || support::vhdl_symbol(last)
+                != support::vhdl_symbol(declaration->name)) {
+            // No part of the name is an object (a unit, package or type
+            // selection), or the text selects within the object (a record
+            // element, 8.3): it names no declared object.
+            return std::nullopt;
+        }
+        found = *stored->selected;
+    } else if (stored != nullptr && stored->analyzed
+        && resolver.vhdl_scope_analyzed(scope)) {
+        // Name analysis found no object for the name (subprograms, STANDARD
+        // entities, 12.3): it names no declared object.
+        return std::nullopt;
+    }
+    if (!found) {
+        if (resolver.vhdl_scope_analyzed(scope)) {
+            if (stored != nullptr) {
+                semantic::note_vhdl_unstored_name(
+                    "find_vhdl_object", *stored, scope);
+            } else {
+                semantic::note_vhdl_unstored_reference(
+                    "find_vhdl_object", name, scope);
+            }
+        }
+        found = resolver.resolve_vhdl(reference, scope, object).unique();
+    }
     const auto declaration_of = [&](const semantic::DeclarationId id)
         -> const semantic::vhdl::Declaration* {
         const auto specialized = unit.find_declaration(id);
@@ -329,7 +373,7 @@ std::optional<semantic::DeclarationId> find_vhdl_object(
             ? std::optional { *target_name.selected }
             : [&] {
                   target_name.overloads.clear();
-                  return semantic::CompiledDesignResolver { unit }
+                  return resolver
                       .resolve_vhdl(target_name, alias->scope, object)
                       .unique();
               }();
@@ -372,10 +416,52 @@ struct ProtectedMethodAlias {
 std::optional<ProtectedMethodAlias> find_protected_method_alias(
     const semantic::SpecializedHirUnit& unit,
     const semantic::ScopeId scope,
-    const std::string_view name)
+    const std::string_view name,
+    const semantic::vhdl::Name* stored = nullptr)
 {
     if (name.find_first_of(".:") != std::string_view::npos) {
         return std::nullopt;
+    }
+    const auto method_alias = [](const semantic::vhdl::Declaration* declaration) {
+        return declaration != nullptr
+            && declaration->form == semantic::vhdl::DeclarationForm::alias
+            && declaration->alias_signature && declaration->alias_target;
+    };
+    if (stored != nullptr && stored->analyzed
+        && semantic::CompiledDesignResolver { unit }.vhdl_scope_analyzed(scope)) {
+        // The declarations name analysis found for the call's name (12.3):
+        // a subprogram alias of a protected method among them (6.6.3).
+        const semantic::vhdl::Declaration* found = nullptr;
+        const auto consider = [&](const semantic::DeclarationId id) {
+            const auto* declaration = find_vhdl_declaration(unit, id);
+            if (method_alias(declaration)) {
+                found = found == nullptr || found == declaration ? declaration : nullptr;
+            }
+        };
+        if (stored->selected) {
+            consider(*stored->selected);
+        }
+        for (const auto id : stored->overloads) {
+            consider(id);
+        }
+        const auto target = found != nullptr
+            ? selected_vhdl_name(found->alias_target->text())
+            : std::nullopt;
+        if (!target) {
+            return std::nullopt;
+        }
+        return ProtectedMethodAlias { found, *target };
+    }
+    if (semantic::CompiledDesignResolver { unit }.vhdl_scope_analyzed(scope)) {
+        // Protected-type method calls are unmodeled by compile-time typing
+        // (IEEE 1076-2019 5.6.2, 9.3.4), so no name is stored for them.
+        if (stored != nullptr) {
+            semantic::note_vhdl_unstored_name(
+                "find_protected_method_alias", *stored, scope);
+        } else {
+            semantic::note_vhdl_unstored_reference(
+                "find_protected_method_alias", name, scope);
+        }
     }
     semantic::vhdl::Name reference;
     reference.spelling = std::string { name };
@@ -543,10 +629,11 @@ bool contains_hir_protected_call(
 } // namespace
 
 const semantic::vhdl::TypeDefinition* Lowerer::hir_vhdl_protected_type(
-    const semantic::ScopeId scope, const std::string_view object) const
+    const semantic::ScopeId scope, const std::string_view object,
+    const semantic::vhdl::Name* stored) const
 {
     const auto object_id = find_vhdl_object(
-        *specialized_hir_unit_, scope, object);
+        *specialized_hir_unit_, scope, object, stored);
     const auto declaration = object_id
         ? specialized_hir_unit_->find_declaration(*object_id)
         : std::nullopt;
@@ -597,10 +684,11 @@ Lowerer::hir_vhdl_designated_protected_type(
 
 const semantic::vhdl::TypeDefinition*
 Lowerer::hir_vhdl_access_protected_type(
-    const semantic::ScopeId scope, const std::string_view object) const
+    const semantic::ScopeId scope, const std::string_view object,
+    const semantic::vhdl::Name* stored) const
 {
     const auto object_id = find_vhdl_object(
-        *specialized_hir_unit_, scope, object);
+        *specialized_hir_unit_, scope, object, stored);
     const auto declaration = object_id
         ? specialized_hir_unit_->find_declaration(*object_id)
         : std::nullopt;
@@ -722,7 +810,8 @@ RegisterId Lowerer::lower_hir_vhdl_protected_allocator(
 }
 
 std::optional<RegisterId> Lowerer::hir_vhdl_protected_call_receiver(
-    const std::string_view call_name, const semantic::ScopeId scope) const
+    const std::string_view call_name, const semantic::ScopeId scope,
+    const semantic::vhdl::Name* stored) const
 {
     const auto selected = selected_vhdl_name(call_name);
     if (!selected) {
@@ -733,11 +822,12 @@ std::optional<RegisterId> Lowerer::hir_vhdl_protected_call_receiver(
                   .vhdl_protected_index
             : std::nullopt;
     }
-    if (hir_vhdl_access_protected_type(scope, selected->object) == nullptr) {
+    if (hir_vhdl_access_protected_type(scope, selected->object, stored)
+        == nullptr) {
         return std::nullopt;
     }
     const auto object_id = find_vhdl_object(
-        *specialized_hir_unit_, scope, selected->object);
+        *specialized_hir_unit_, scope, selected->object, stored);
     const auto binding = object_id
         ? hir_runtime_binding(*object_id, hir_process_scope_, true)
         : std::nullopt;
@@ -746,10 +836,11 @@ std::optional<RegisterId> Lowerer::hir_vhdl_protected_call_receiver(
 
 std::optional<semantic::CompiledVhdlPackageMember>
 Lowerer::hir_vhdl_protected_instance(
-    const semantic::ScopeId scope, const std::string_view object) const
+    const semantic::ScopeId scope, const std::string_view object,
+    const semantic::vhdl::Name* stored) const
 {
     const auto object_id = find_vhdl_object(
-        *specialized_hir_unit_, scope, object);
+        *specialized_hir_unit_, scope, object, stored);
     const auto declaration = object_id
         ? specialized_hir_unit_->find_declaration(*object_id)
         : std::nullopt;
@@ -818,23 +909,35 @@ Lowerer::hir_vhdl_protected_method_resolutions(
         || !hir_vhdl_design_has_protected_types()) {
         return result;
     }
+    // In an analyzed unit a method is denoted by a name name analysis
+    // resolved (12.3), or by a method alias the typing selected (6.6.3,
+    // 12.5); an operator symbol, attribute designator or other text that
+    // is no analyzed name denotes no method (5.6.2).
+    if (!name.analyzed && hir_resolver().vhdl_scope_analyzed(scope)) {
+        return result;
+    }
     auto selected = selected_vhdl_name(name.text());
     auto object_scope = scope;
+    // The object's stored name: the call's own name, or the alias target
+    // of a method alias (6.6.3).
+    const semantic::vhdl::Name* object_name = &name;
     const auto method_alias = selected
         ? find_protected_member_alias(*specialized_hir_unit_,
-              hir_vhdl_protected_type(scope, selected->object),
+              hir_vhdl_protected_type(scope, selected->object, &name),
               selected->member)
         : find_protected_method_alias(
-              *specialized_hir_unit_, scope, name.text());
+              *specialized_hir_unit_, scope, name.text(), &name);
     if (method_alias) {
         selected = method_alias->target;
         object_scope = method_alias->alias->scope;
+        object_name = method_alias->alias->alias_target
+            ? &*method_alias->alias->alias_target : nullptr;
     }
     if (!selected) {
         return result;
     }
     const auto* body = protected_body_of(*specialized_hir_unit_,
-        hir_vhdl_protected_type(object_scope, selected->object));
+        hir_vhdl_protected_type(object_scope, selected->object, object_name));
     if (body == nullptr) {
         return result;
     }
@@ -844,7 +947,7 @@ Lowerer::hir_vhdl_protected_method_resolutions(
     std::vector<semantic::DeclarationId> enclosing_package_instances;
     semantic::CompiledBindingFrame generic_bindings;
     if (const auto instance
-        = hir_vhdl_protected_instance(object_scope, selected->object)) {
+        = hir_vhdl_protected_instance(object_scope, selected->object, object_name)) {
         package_instance = instance->package_instance;
         enclosing_package_instances = instance->enclosing_package_instances;
         generic_bindings = instance->generic_bindings;
@@ -909,15 +1012,16 @@ bool Lowerer::is_hir_vhdl_protected_expression(
 }
 
 std::optional<ContainerObjectId> Lowerer::hir_vhdl_protected_anchor(
-    const std::string_view object, const semantic::ScopeId scope) const
+    const std::string_view object, const semantic::ScopeId scope,
+    const semantic::vhdl::Name* stored) const
 {
     if (const auto* designated = hir_vhdl_access_protected_type(
-            scope, object)) {
+            scope, object, stored)) {
         return find_hir_vhdl_protected_pool(*designated);
     }
     std::optional<ContainerObjectId> anchor;
     if (const auto object_id = find_vhdl_object(
-            *specialized_hir_unit_, scope, object)) {
+            *specialized_hir_unit_, scope, object, stored)) {
         // A protected-type formal denotes its actual object.
         for (auto frame = active_hir_callable_; frame;) {
             const auto& active = hir_callable_frames_[*frame];
@@ -980,7 +1084,7 @@ std::optional<ContainerObjectId> Lowerer::hir_vhdl_protected_anchor(
         // body's subprograms, which run in their callers' units: find the
         // elaborated object its declaration made, when only one did.
         const auto object_id = find_vhdl_object(
-            *specialized_hir_unit_, scope, object);
+            *specialized_hir_unit_, scope, object, stored);
         const auto* declaration = object_id
             ? find_vhdl_declaration(*specialized_hir_unit_, *object_id)
             : nullptr;
@@ -1032,7 +1136,7 @@ std::optional<ContainerObjectId> Lowerer::hir_vhdl_protected_anchor(
     if (!anchor) {
         // An object alias reaches the aliased object's anchor.
         const auto object_id = find_vhdl_object(
-            *specialized_hir_unit_, scope, object);
+            *specialized_hir_unit_, scope, object, stored);
         const auto* declaration = object_id
             ? find_vhdl_declaration(*specialized_hir_unit_, *object_id)
             : nullptr;
@@ -1054,31 +1158,55 @@ Lowerer::hir_vhdl_subtype_protected_type(
         : nullptr;
 }
 
+std::optional<semantic::vhdl::Name>
+Lowerer::hir_vhdl_operator_call_name(
+    const semantic::vhdl::Expression& call) const
+{
+    using Kind = semantic::vhdl::ExpressionKind;
+    if (call.kind == Kind::name || call.kind == Kind::call
+        || !call.referenced_name
+        || !hir_resolver().vhdl_scope_analyzed(call.scope)) {
+        return std::nullopt;
+    }
+    auto name = *call.referenced_name;
+    name.selected = call.resolved_declaration;
+    name.overloads.clear();
+    name.analyzed = true;
+    name.selected_parts = 0;
+    return name;
+}
+
 std::optional<std::vector<Lowerer::HirVhdlProtectedMember>>
 Lowerer::hir_vhdl_protected_call_members(const std::string_view call_name,
     const semantic::ScopeId scope,
-    const semantic::DeclarationId method) const
+    const semantic::DeclarationId method,
+    const semantic::vhdl::Name* stored) const
 {
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
     }
     auto selected = selected_vhdl_name(call_name);
     auto object_scope = scope;
+    // The object's stored name: the call's own name, or the alias target
+    // of a method alias (6.6.3).
+    const semantic::vhdl::Name* object_name = stored;
     if (!selected) {
         if (const auto method_alias = find_protected_method_alias(
-                *specialized_hir_unit_, scope, call_name)) {
+                *specialized_hir_unit_, scope, call_name, stored)) {
             selected = method_alias->target;
             object_scope = method_alias->alias->scope;
+            object_name = method_alias->alias->alias_target
+                ? &*method_alias->alias->alias_target : nullptr;
         }
     }
     const auto member_alias = selected
         ? find_protected_member_alias(*specialized_hir_unit_,
-              hir_vhdl_protected_type(object_scope, selected->object),
+              hir_vhdl_protected_type(object_scope, selected->object, object_name),
               selected->member)
         : std::nullopt;
     const auto* body = selected
         ? protected_body_of(*specialized_hir_unit_,
-              hir_vhdl_protected_type(object_scope, selected->object))
+              hir_vhdl_protected_type(object_scope, selected->object, object_name))
         : nullptr;
     if (body == nullptr) {
         // An unprefixed call of a sibling method runs on the active
@@ -1102,12 +1230,12 @@ Lowerer::hir_vhdl_protected_call_members(const std::string_view call_name,
     }
     auto* const lowerer = const_cast<Lowerer*>(this);
     if (const auto* designated = hir_vhdl_access_protected_type(
-            object_scope, selected->object)) {
+            object_scope, selected->object, object_name)) {
         (void)lowerer->hir_vhdl_protected_pool(
             *designated, frontend::SourceSpan { });
     }
     const auto anchor = hir_vhdl_protected_anchor(
-        selected->object, object_scope);
+        selected->object, object_scope, object_name);
     if (!anchor) {
         return std::nullopt;
     }
@@ -1115,7 +1243,7 @@ Lowerer::hir_vhdl_protected_call_members(const std::string_view call_name,
     // formal denotes its actual, whose path is recorded where it is named.
     if (!hir_vhdl_protected_paths_.contains(*anchor)) {
         const auto object_id = find_vhdl_object(
-            *specialized_hir_unit_, object_scope, selected->object);
+            *specialized_hir_unit_, object_scope, selected->object, object_name);
         const auto* declaration = object_id
             ? find_vhdl_declaration(*specialized_hir_unit_, *object_id)
             : nullptr;
@@ -1138,7 +1266,7 @@ Lowerer::hir_vhdl_protected_call_members(const std::string_view call_name,
     // Private variables of a protected type from a generic package
     // instance are typed by that instance's generic actuals.
     const auto instance = hir_vhdl_protected_instance(
-        object_scope, selected->object);
+        object_scope, selected->object, object_name);
     if (instance) {
         lowerer->hir_generic_binding_frames_.push_back(
             instance->generic_bindings);
@@ -1154,10 +1282,12 @@ Lowerer::hir_vhdl_protected_call_members(const std::string_view call_name,
     // The alias's method runs on the private variable it names.
     const auto& target = member_alias->target;
     const auto nested_scope = member_alias->alias->scope;
+    const auto* nested_name = member_alias->alias->alias_target
+        ? &*member_alias->alias->alias_target : nullptr;
     const auto nested_id = find_vhdl_object(
-        *specialized_hir_unit_, nested_scope, target.object);
+        *specialized_hir_unit_, nested_scope, target.object, nested_name);
     const auto* nested_body = protected_body_of(*specialized_hir_unit_,
-        hir_vhdl_protected_type(nested_scope, target.object));
+        hir_vhdl_protected_type(nested_scope, target.object, nested_name));
     const auto nested = nested_id
         ? std::ranges::find(*storage, *nested_id,
               &HirVhdlProtectedMember::declaration)
@@ -4115,7 +4245,8 @@ bool Lowerer::is_hir_vhdl_reflection_expression(
         return false;
     }
     const auto object_id = find_vhdl_object(
-        *specialized_hir_unit_, source.scope, selected->object);
+        *specialized_hir_unit_, source.scope, selected->object,
+        source.referenced_name ? &*source.referenced_name : nullptr);
     const auto object = object_id
         ? specialized_hir_unit_->find_declaration(*object_id)
         : std::nullopt;
@@ -4175,7 +4306,9 @@ std::optional<bool> Lowerer::hir_vhdl_reflection_numeric_result(
         return std::nullopt;
     }
     const auto object_id = find_vhdl_object(
-        *specialized_hir_unit_, expression->vhdl->scope, selected->object);
+        *specialized_hir_unit_, expression->vhdl->scope, selected->object,
+        expression->vhdl->referenced_name
+            ? &*expression->vhdl->referenced_name : nullptr);
     const auto object = object_id
         ? specialized_hir_unit_->find_declaration(*object_id)
         : std::nullopt;
@@ -4245,7 +4378,9 @@ bool Lowerer::is_hir_vhdl_reflection_string_expression(
     }
     const auto object_id = find_vhdl_object(
         *specialized_hir_unit_, expression->vhdl->scope,
-        selected->object);
+        selected->object,
+        expression->vhdl->referenced_name
+            ? &*expression->vhdl->referenced_name : nullptr);
     const auto object = object_id
         ? specialized_hir_unit_->find_declaration(*object_id)
         : std::nullopt;
@@ -4288,7 +4423,10 @@ Lowerer::lower_hir_vhdl_reflection_expression(
             ? find_vhdl_object(
                   *specialized_hir_unit_,
                   operand->vhdl->scope,
-                  operand->vhdl->text)
+                  operand->vhdl->text,
+                  operand->vhdl->referenced_name
+                      ? &*operand->vhdl->referenced_name
+                      : nullptr)
             : std::nullopt;
         auto declaration_id = reflected_object
             ? reflected_object
@@ -4671,7 +4809,8 @@ Lowerer::lower_hir_vhdl_reflection_expression(
         return std::nullopt;
     }
     const auto object_id = find_vhdl_object(
-        *specialized_hir_unit_, source.scope, selected->object);
+        *specialized_hir_unit_, source.scope, selected->object,
+        source.referenced_name ? &*source.referenced_name : nullptr);
     const auto object = object_id
         ? specialized_hir_unit_->find_declaration(*object_id)
         : std::nullopt;
@@ -4784,7 +4923,9 @@ Lowerer::lower_hir_vhdl_reflection_string_expression(
     const auto kind = reflection_string_operation(selected->member);
     const auto object_id = find_vhdl_object(
         *specialized_hir_unit_, expression->vhdl->scope,
-        selected->object);
+        selected->object,
+        expression->vhdl->referenced_name
+            ? &*expression->vhdl->referenced_name : nullptr);
     const auto binding = object_id
         ? hir_runtime_binding(*object_id, hir_process_scope_, true)
         : std::nullopt;

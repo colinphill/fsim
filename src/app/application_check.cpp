@@ -1358,6 +1358,8 @@ static std::optional<CompilationWorkspace> check_project_pass(
     return std::nullopt;
   }
   vhdl_folding_deferral.reset();
+  std::optional<semantic::VhdlTypingAuthority> vhdl_typing_authority;
+  vhdl_typing_authority.emplace();
   if (!semantic::normalize_compiled_design(checked)) {
     diagnostics.error(
         "FSIM-SEM-0002",
@@ -1368,6 +1370,7 @@ static std::optional<CompilationWorkspace> check_project_pass(
     return std::nullopt;
   }
   semantic::stamp_vhdl_analysis(checked, checked.source_units);
+  vhdl_typing_authority.reset();
   install_compiled_class_specializations(checked, diagnostics);
   checked.systemverilog_uvm_provenance.release = governed_release;
   checked.systemverilog_uvm_provenance.source_identity =

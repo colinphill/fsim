@@ -8,6 +8,7 @@
 #include "fsim/elaboration/elaborator.hpp"
 #include "fsim/frontend/preprocessor.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
+#include "fsim/semantic/compiled_design_vhdl_analysis_stamp.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 #include "application_workspace.hpp"
@@ -698,6 +699,10 @@ static int workspace_compile(const cli::Invocation& invocation, const project::C
     // Workspace objects and libraries are checksummed compiled HIR; the new
     // object's state is still checked when it is serialized.
     const semantic::TrustedCompiledHirLoad trusted_objects;
+    // Environment objects built on a unit this compile analyzes again are
+    // obsolete and leave the library with this transaction (IEEE 1076-2019
+    // 13.5); the compile's own links resolve them again meanwhile.
+    const semantic::VhdlObsoleteUnitsLeftUnstamped obsolete_environment_units;
     if (config.source_sets.size() != 1) {
         workspace_error(diagnostics, "compile requires one source language per invocation");
         return 1;

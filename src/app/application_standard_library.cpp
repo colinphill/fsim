@@ -1038,6 +1038,9 @@ end context ieee_std_context;
                     "vitalperiodpulsecheck",
                     "vitalinphaseskewcheck",
                     "vitaloutphaseskewcheck",
+                    // IEEE 1076.4-2000 4.1: the level attributes.
+                    "vital_level0",
+                    "vital_level1",
                 };
             } else if (unit.primary_name.empty()
                 && package == "vital_primitives") {

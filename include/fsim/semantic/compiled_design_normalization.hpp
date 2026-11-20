@@ -28,6 +28,24 @@ public:
     VhdlFoldingDeferral& operator=(const VhdlFoldingDeferral&) = delete;
 };
 
+/// While an instance is alive on the calling thread, the link-time VHDL
+/// resolution keeps the declaration and type the compile-time typing stored
+/// on an expression (vhdl::Expression::interpretation set; IEEE 1076-2019
+/// 12.5) instead of recomputing them. The normalization that follows
+/// analyze_vhdl_names, before the analyzed units are stamped, runs under it;
+/// later links of unstamped units recompute (their typed results are not
+/// anchored).
+class VhdlTypingAuthority {
+public:
+    VhdlTypingAuthority() noexcept;
+    ~VhdlTypingAuthority();
+    VhdlTypingAuthority(const VhdlTypingAuthority&) = delete;
+    VhdlTypingAuthority& operator=(const VhdlTypingAuthority&) = delete;
+};
+
+/// True while a VhdlTypingAuthority is alive on the calling thread.
+[[nodiscard]] bool vhdl_typing_authority_active() noexcept;
+
 /// True when the design declares a VHDL function with this operator
 /// designator outside the STD and IEEE libraries, so the operator cannot be
 /// evaluated as the predefined one.

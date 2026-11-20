@@ -107,7 +107,7 @@ public:
             generate(region);
         }
         for (auto& component : owner->component_configurations) {
-            component_configuration(component, scope);
+            specification(component, scope);
         }
         if (owner->configuration) {
             block_configuration(*owner->configuration, scope);
@@ -123,7 +123,7 @@ private:
         if (name.text().empty()) {
             return;
         }
-        visit_(NameSite { &name, scope, role });
+        visit_(NameSite { &name, scope_override_.value_or(scope), role });
     }
 
     void emit(std::optional<vhdl::Name>& name, const ScopeId scope,
@@ -156,7 +156,8 @@ private:
         // The type mark of an external name's subtype indication (8.7), as
         // written; set by analysis, a type mark is resolved by visibility.
         if (node->qualified_type_mark
-            && node->marker != support::ExpressionMarker::vhdl_qualified) {
+            && node->marker != support::ExpressionMarker::vhdl_qualified
+            && node->marker != support::ExpressionMarker::vhdl_subtype) {
             emit(*node->qualified_type_mark, node->scope, NameRole::ordinary);
         }
         children(*node);
@@ -209,10 +210,23 @@ private:
     // name use.
     void own_name(vhdl::Expression& node)
     {
-        if (node.marker == support::ExpressionMarker::vhdl_qualified) {
+        if (node.marker == support::ExpressionMarker::vhdl_qualified
+            || node.marker == support::ExpressionMarker::vhdl_subtype) {
             // A qualified expression T'(e) (9.3.5) names its type mark T:
             // qualified_type_mark when analysis has set it, else the
-            // referenced_name the front end made of the mark.
+            // referenced_name the front end made of the mark. The subtype
+            // indication of an allocator `new T` (9.3.7) or of an external
+            // name (8.7) carries its mark as written only: analysis makes it
+            // the node's qualified_type_mark, resolved by visibility.
+            if (!node.qualified_type_mark && !node.referenced_name
+                && !node.marker_argument.empty()) {
+                vhdl::Name mark;
+                mark.spelling = node.marker_argument;
+                mark.canonical = mark.spelling;
+                mark.source = node.source;
+                mark.symbol = support::vhdl_symbol(mark.text());
+                node.qualified_type_mark = std::move(mark);
+            }
             if (node.qualified_type_mark) {
                 emit(*node.qualified_type_mark, node.scope, NameRole::ordinary);
             } else {
@@ -443,6 +457,9 @@ private:
         }
         if (node->attribute) {
             subtype(node->attribute->subtype, scope);
+            // A specification's attribute designator denotes a visible
+            // attribute declaration (7.2).
+            emit(node->attribute->designator, scope, NameRole::ordinary);
             // An attribute specification's entity designators denote named
             // entities declared immediately within the same declarative
             // part (7.2): resolved there by context, not by visibility.
@@ -492,8 +509,9 @@ private:
         expression(node->guard);
         expression(node->report);
         expression(node->severity);
-        for (const auto& sensitivity : node->sensitivities) {
+        for (auto& sensitivity : node->sensitivities) {
             expression(sensitivity.expression);
+            emit(sensitivity.name, scope, NameRole::ordinary);
         }
         // The called procedure (11.7); the formals of its association list
         // (ProcedureAssociation::formal) are context-resolved.
@@ -538,8 +556,9 @@ private:
         for (const auto child : node->declarations) {
             declaration(child);
         }
-        for (const auto& sensitivity : node->sensitivities) {
+        for (auto& sensitivity : node->sensitivities) {
             expression(sensitivity.expression);
+            emit(sensitivity.name, node->scope, NameRole::ordinary);
         }
         for (const auto child : node->statements) {
             statement(child);
@@ -608,6 +627,52 @@ private:
         }
     }
 
+    // A configuration specification (7.3.1) is written where its component
+    // name is visible: the name denotes the component declaration, and the
+    // actuals of the binding's maps are expressions read in the component's
+    // region, where its local generics and ports are visible (7.3.2.2,
+    // 7.3.2.3) as well as the names visible at the specification.
+    void specification(vhdl::ComponentConfiguration& value, const ScopeId scope)
+    {
+        emit(value.component, scope, NameRole::specification_component);
+        const auto* const component = value.component.selected
+            ? declarations_.find(*value.component.selected)
+            : nullptr;
+        if (component == nullptr || component->form != vhdl::DeclarationForm::component
+            || !component->nested_scope) {
+            component_configuration(value, scope);
+            return;
+        }
+        auto& binding = value.binding;
+        emit(binding.entity, scope, NameRole::unit_reference);
+        emit(binding.configuration, scope, NameRole::unit_reference);
+        const auto actuals = [&](std::vector<vhdl::Association>& map) {
+            for (auto& association : map) {
+                if (association.formal_conversion
+                    || association.kind != vhdl::AssociationKind::expression) {
+                    continue;
+                }
+                const auto saved = scope_override_;
+                scope_override_ = *component->nested_scope;
+                expression(association.expression);
+                scope_override_ = saved;
+            }
+        };
+        actuals(binding.generic_map);
+        actuals(binding.port_map);
+        for (auto& association : binding.port_map) {
+            for (const auto id : association.formal_conversion_calls) {
+                auto* const call = expressions_.find(id);
+                if (call != nullptr && call->referenced_name) {
+                    emit(*call->referenced_name, scope, NameRole::conversion_function);
+                }
+            }
+        }
+        if (value.block_configuration) {
+            block_configuration(*value.block_configuration, scope);
+        }
+    }
+
     void binding(vhdl::BindingIndication& value, const ScopeId scope)
     {
         // The architecture of a binding indication is a string: its name is
@@ -618,7 +683,34 @@ private:
         // The actuals of a binding indication's maps are the local generics
         // and ports of the component (7.3.2.2, 7.3.2.3): resolved against
         // the component declaration when the binding is linked, not by
-        // visibility at the configuration.
+        // visibility at the configuration. The function of a formal
+        // conversion f(s) is a name visible here (6.5.7.1).
+        for (auto& association : value.generic_map) {
+            if (association.expression) {
+                auto* const actual = expressions_.find(*association.expression);
+                if (actual != nullptr && actual->kind == vhdl::ExpressionKind::name
+                    && actual->referenced_name) {
+                    emit(*actual->referenced_name, scope, NameRole::binding_type_actual);
+                }
+            }
+        }
+        for (auto& association : value.port_map) {
+            // An actual part f(c) / T(c) converts a local port (6.5.7.1):
+            // its function or type mark is visible here.
+            if (association.expression) {
+                auto* const actual = expressions_.find(*association.expression);
+                if (actual != nullptr && actual->kind == vhdl::ExpressionKind::call
+                    && actual->operands.size() == 1U && actual->referenced_name) {
+                    emit(*actual->referenced_name, scope, NameRole::conversion_function);
+                }
+            }
+            for (const auto id : association.formal_conversion_calls) {
+                auto* const call = expressions_.find(id);
+                if (call != nullptr && call->referenced_name) {
+                    emit(*call->referenced_name, scope, NameRole::conversion_function);
+                }
+            }
+        }
     }
 
     void component_configuration(
@@ -647,6 +739,9 @@ private:
     }
 
     const std::function<void(const NameSite&)>& visit_;
+    // The region a configuration specification's binding actuals are read
+    // in (the component's, 7.3.2.2).
+    std::optional<ScopeId> scope_override_;
     Table<vhdl::Unit, UnitId> units_;
     Table<vhdl::Declaration, DeclarationId> declarations_;
     Table<vhdl::TypeDefinition, TypeId> types_;

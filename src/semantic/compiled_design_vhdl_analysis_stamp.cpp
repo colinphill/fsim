@@ -13,6 +13,7 @@
 #include <array>
 #include <cstddef>
 #include <map>
+#include <set>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -45,6 +46,9 @@
 // again, as it did before the stamp existed.
 namespace fsim::semantic {
 namespace {
+
+// Live VhdlObsoleteUnitsLeftUnstamped scopes on this thread.
+thread_local std::size_t obsolete_units_left_unstamped { };
 
 using vhdl::AnchoredSlot;
 using vhdl::AnchorSpace;
@@ -200,6 +204,8 @@ struct Target {
     const vhdl::Unit* unit { };
     AnchorSpace space { AnchorSpace::declarations };
     std::uint32_t ordinal { };
+    /// recomputed: the target is a member of a compiler-projected package.
+    bool projected { };
 };
 
 class AnchorTargets final {
@@ -270,10 +276,14 @@ private:
             return { };
         }
         const auto* target = vhdl_unit(design_, unit);
-        if (target == nullptr
-            || target->standard_package_form
-                == support::VhdlStandardPackageForm::projection) {
+        if (target == nullptr) {
             return { Target::Kind::recomputed };
+        }
+        if (target->standard_package_form
+            == support::VhdlStandardPackageForm::projection) {
+            Target result { Target::Kind::recomputed };
+            result.projected = true;
+            return result;
         }
         const auto& items = unit_items(design_, *target);
         const auto& positions = space == AnchorSpace::declarations
@@ -300,7 +310,83 @@ struct UnitStamp {
     std::vector<vhdl::DeclarationAnchor> anchors;
     std::vector<vhdl::AnchoredReference> anchored;
     std::vector<vhdl::RecomputedSlot> recomputed;
+    /// Written type marks (slot, absolute item position, part) selecting a
+    /// member of a compiler-projected package: object projection drops the
+    /// selection, so the mark carries that recorded reason (owner 11-20: R2,
+    /// BD2 analyzes those packages' sources).
+    std::vector<std::tuple<AnchoredSlot, std::uint32_t, std::uint32_t>> projected_marks;
 };
+
+[[nodiscard]] constexpr bool name_slot(const AnchoredSlot slot) noexcept
+{
+    return slot == AnchoredSlot::expression_name_selected
+        || slot == AnchoredSlot::expression_name_overload
+        || slot == AnchoredSlot::statement_procedure_selected
+        || slot == AnchoredSlot::statement_procedure_overload
+        || slot == AnchoredSlot::statement_sensitivity_selected
+        || slot == AnchoredSlot::process_sensitivity_selected
+        || slot == AnchoredSlot::declaration_attribute_designator_selected
+        || slot == AnchoredSlot::instance_generic_formal_selected
+        || slot == AnchoredSlot::instance_port_formal_selected;
+}
+
+// The unit items (by ordinal) an anchored slot's item indexes.
+[[nodiscard]] const std::vector<std::uint32_t>& slot_items(
+    const CompiledVhdlUnitItems& items, const AnchoredSlot slot)
+{
+    switch (slot) {
+    case AnchoredSlot::statement_resolved_procedure:
+    case AnchoredSlot::statement_procedure_selected:
+    case AnchoredSlot::statement_procedure_overload:
+    case AnchoredSlot::statement_sensitivity_selected:
+        return items.statements;
+    case AnchoredSlot::process_sensitivity_selected:
+        return items.processes;
+    case AnchoredSlot::instance_generic_formal_selected:
+    case AnchoredSlot::instance_port_formal_selected:
+        return items.instances;
+    case AnchoredSlot::declaration_subtype_mark_selected:
+    case AnchoredSlot::declaration_attribute_designator_selected:
+        return items.declarations;
+    case AnchoredSlot::type_subtype_mark_selected:
+    case AnchoredSlot::type_index_subtype_selected:
+        return items.types;
+    case AnchoredSlot::expression_resolved_declaration:
+    case AnchoredSlot::expression_qualified_mark_selected:
+    case AnchoredSlot::expression_type_declared:
+    case AnchoredSlot::expression_name_selected:
+    case AnchoredSlot::expression_name_overload:
+        return items.expressions;
+    }
+    throw std::logic_error { "VHDL analysis anchors: unknown slot" };
+}
+
+// Which analyzed Name a name slot rebinds: the slot's Name kind, the item's
+// position and, for sensitivity lists, the entry (`part`).
+using NameKey = std::tuple<std::uint8_t, std::uint32_t, std::uint32_t>;
+
+[[nodiscard]] NameKey name_key(const AnchoredSlot slot,
+    const std::uint32_t position, const std::uint32_t part)
+{
+    switch (slot) {
+    case AnchoredSlot::expression_name_selected:
+    case AnchoredSlot::expression_name_overload:
+        return { 0U, position, 0U };
+    case AnchoredSlot::statement_procedure_selected:
+    case AnchoredSlot::statement_procedure_overload:
+        return { 1U, position, 0U };
+    case AnchoredSlot::statement_sensitivity_selected:
+        return { 2U, position, part };
+    case AnchoredSlot::process_sensitivity_selected:
+        return { 3U, position, part };
+    case AnchoredSlot::instance_generic_formal_selected:
+        return { 5U, position, part };
+    case AnchoredSlot::instance_port_formal_selected:
+        return { 6U, position, part };
+    default:
+        return { 4U, position, 0U };
+    }
+}
 
 [[nodiscard]] UnitStamp stamp_unit(const CompiledDesign& design,
     const std::size_t position, AnchorTargets& targets)
@@ -318,13 +404,20 @@ struct UnitStamp {
             return;
         }
         if (target.kind == Target::Kind::recomputed) {
+            if (target.projected
+                && (slot == AnchoredSlot::declaration_subtype_mark_selected
+                    || slot == AnchoredSlot::type_subtype_mark_selected)) {
+                stamp.projected_marks.emplace_back(
+                    slot, slot_items(items, slot).at(item), part);
+            }
             // A written type mark into a compiler-served package is not
             // recomputed: the typing of a loaded unit leaves it open.
             if (slot == AnchoredSlot::expression_resolved_declaration
                 || slot == AnchoredSlot::expression_type_declared
                 || slot == AnchoredSlot::expression_qualified_mark_selected
-                || slot == AnchoredSlot::statement_resolved_procedure) {
-                stamp.recomputed.push_back({ slot, item });
+                || slot == AnchoredSlot::statement_resolved_procedure
+                || name_slot(slot)) {
+                stamp.recomputed.push_back({ slot, item, part });
             }
             return;
         }
@@ -358,6 +451,11 @@ struct UnitStamp {
             mark(declaration_subtype_mark_selected, item,
                 declaration.callable->return_type->written_type_mark,
                 vhdl::return_part);
+        }
+        if (declaration.attribute && declaration.attribute->subtype) {
+            mark(declaration_subtype_mark_selected, item,
+                declaration.attribute->subtype->written_type_mark,
+                vhdl::attribute_part);
         }
         if (declaration.alias_signature) {
             const auto& signature = *declaration.alias_signature;
@@ -405,6 +503,22 @@ struct UnitStamp {
             }
         }
     }
+    // An analyzed name's selection and overload set (12.3, gate BD D6'):
+    // object projection drops their cross-unit ids, the link rebinds them.
+    const auto names = [&](const vhdl::Name& name, const std::uint32_t item,
+                           const AnchoredSlot selected_slot,
+                           const AnchoredSlot overload_slot) {
+        if (!name.analyzed) {
+            return;
+        }
+        if (name.selected) {
+            add(selected_slot, item, targets.declaration(*name.selected, unit.id));
+        }
+        for (std::uint32_t index { }; index < name.overloads.size(); ++index) {
+            add(overload_slot, item,
+                targets.declaration(name.overloads[index], unit.id), index);
+        }
+    };
     const auto& expressions = design.vhdl_hir.expressions();
     for (std::uint32_t item { }; item < items.expressions.size(); ++item) {
         const auto& expression = expressions.at(items.expressions[item]);
@@ -422,6 +536,11 @@ struct UnitStamp {
             add(AnchoredSlot::expression_type_declared, item,
                 targets.type(expression.type.declared, unit.id));
         }
+        if (expression.referenced_name) {
+            names(*expression.referenced_name, item,
+                AnchoredSlot::expression_name_selected,
+                AnchoredSlot::expression_name_overload);
+        }
     }
     const auto& statements = design.vhdl_hir.statements();
     for (std::uint32_t item { }; item < items.statements.size(); ++item) {
@@ -429,6 +548,55 @@ struct UnitStamp {
         if (statement.resolved_procedure) {
             add(AnchoredSlot::statement_resolved_procedure, item,
                 targets.declaration(*statement.resolved_procedure, unit.id));
+        }
+        names(statement.procedure, item,
+            AnchoredSlot::statement_procedure_selected,
+            AnchoredSlot::statement_procedure_overload);
+        for (std::uint32_t entry { }; entry < statement.sensitivities.size();
+            ++entry) {
+            const auto& name = statement.sensitivities[entry].name;
+            if (name && name->analyzed && name->selected) {
+                add(AnchoredSlot::statement_sensitivity_selected, item,
+                    targets.declaration(*name->selected, unit.id), entry);
+            }
+        }
+    }
+    const auto& processes = design.vhdl_hir.processes();
+    for (std::uint32_t item { }; item < items.processes.size(); ++item) {
+        const auto& process = processes.at(items.processes[item]);
+        for (std::uint32_t entry { }; entry < process.sensitivities.size();
+            ++entry) {
+            const auto& name = process.sensitivities[entry].name;
+            if (name && name->analyzed && name->selected) {
+                add(AnchoredSlot::process_sensitivity_selected, item,
+                    targets.declaration(*name->selected, unit.id), entry);
+            }
+        }
+    }
+    const auto& instances = design.vhdl_hir.instances();
+    for (std::uint32_t item { }; item < items.instances.size(); ++item) {
+        const auto& instance = instances.at(items.instances[item]);
+        const auto formals = [&](const std::vector<vhdl::Association>& map,
+                                 const AnchoredSlot slot) {
+            for (std::uint32_t entry { }; entry < map.size(); ++entry) {
+                const auto& formal = map[entry].formal;
+                if (formal && formal->analyzed && formal->selected) {
+                    add(slot, item, targets.declaration(*formal->selected, unit.id),
+                        entry);
+                }
+            }
+        };
+        formals(instance.generic_map, AnchoredSlot::instance_generic_formal_selected);
+        formals(instance.port_map, AnchoredSlot::instance_port_formal_selected);
+    }
+    for (std::uint32_t item { }; item < items.declarations.size(); ++item) {
+        const auto& declaration = declarations.at(items.declarations[item]);
+        if (declaration.attribute && declaration.attribute->designator
+            && declaration.attribute->designator->analyzed
+            && declaration.attribute->designator->selected) {
+            add(AnchoredSlot::declaration_attribute_designator_selected, item,
+                targets.declaration(
+                    *declaration.attribute->designator->selected, unit.id));
         }
     }
     return stamp;
@@ -466,6 +634,9 @@ private:
         throw std::logic_error { "VHDL analysis anchors: an anchored written "
                                  "type mark is missing" };
     }
+    // A written mark's one selection bound again is its analysis result
+    // once more (object projection cleared `analyzed` when it dropped it).
+    subtype.written_type_mark->analyzed = true;
     return subtype.written_type_mark->selected;
 }
 
@@ -514,6 +685,13 @@ private:
     if (part == vhdl::subtype_part) {
         return present(declaration.subtype);
     }
+    if (part == vhdl::attribute_part) {
+        if (!declaration.attribute) {
+            throw std::logic_error { "VHDL analysis anchors: an anchored "
+                                     "attribute declaration is missing" };
+        }
+        return present(declaration.attribute->subtype);
+    }
     if (part == vhdl::return_part) {
         if (!declaration.callable) {
             throw std::logic_error { "VHDL analysis anchors: an anchored "
@@ -544,6 +722,26 @@ struct AnchorWrite {
     std::uint32_t part { };
 };
 
+// Writes an anchored selection or overload into `name`: an overload the
+// projection dropped returns to its position (Name::overloads keeps the
+// analysis order); one already present is kept (links rebind repeatedly).
+void rebind_name(vhdl::Name& name, const AnchorWrite& write)
+{
+    const auto id = DeclarationId::from_index(write.target);
+    if (write.slot == AnchoredSlot::expression_name_selected
+        || write.slot == AnchoredSlot::statement_procedure_selected) {
+        name.selected = id;
+        return;
+    }
+    if (std::ranges::find(name.overloads, id) != name.overloads.end()) {
+        return;
+    }
+    const auto position = std::min<std::size_t>(write.part, name.overloads.size());
+    name.overloads.insert(name.overloads.begin()
+            + static_cast<std::ptrdiff_t>(position),
+        id);
+}
+
 [[nodiscard]] std::string slot_name(const AnchoredSlot slot)
 {
     switch (slot) {
@@ -561,6 +759,24 @@ struct AnchorWrite {
         return "index_subtype.selected";
     case AnchoredSlot::expression_type_declared:
         return "type.declared";
+    case AnchoredSlot::expression_name_selected:
+        return "referenced_name.selected";
+    case AnchoredSlot::expression_name_overload:
+        return "referenced_name.overloads";
+    case AnchoredSlot::statement_procedure_selected:
+        return "procedure.selected";
+    case AnchoredSlot::statement_procedure_overload:
+        return "procedure.overloads";
+    case AnchoredSlot::statement_sensitivity_selected:
+        return "statement sensitivity name.selected";
+    case AnchoredSlot::process_sensitivity_selected:
+        return "process sensitivity name.selected";
+    case AnchoredSlot::declaration_attribute_designator_selected:
+        return "attribute.designator.selected";
+    case AnchoredSlot::instance_generic_formal_selected:
+        return "generic map formal.selected";
+    case AnchoredSlot::instance_port_formal_selected:
+        return "port map formal.selected";
     }
     return "?";
 }
@@ -613,7 +829,13 @@ struct AnchorWrite {
         return "-";
     }
     return "'" + std::string { name->text() } + "' "
-        + declaration_text(design, name->selected);
+        + declaration_text(design, name->selected) + " overloads="
+        + std::to_string(name->overloads.size()) + " standard="
+        + std::to_string(static_cast<unsigned>(name->standard)) + " analyzed="
+        + (name->analyzed ? "1" : "0") + " exemption="
+        + std::to_string(static_cast<unsigned>(name->exemption)) + " symbol="
+        + std::to_string(name->symbol.index()) + " source="
+        + std::to_string(name->source.value());
 }
 
 // The provided-type stamps of every subtype indication the resolution pass
@@ -837,7 +1059,9 @@ void stamp_vhdl_analysis(
     const auto primary_units = primary_unit_keys(design);
     for (std::size_t position { }; position < units.size(); ++position) {
         const auto& unit = units[position];
-        if (!unit.analyzed
+        // A package instance's expansion is not analyzed by name analysis
+        // or typing (re-analysis of an instance: gate BD2 V4).
+        if (!unit.analyzed && !unit.package_instance_expansion
             && unit.standard_package_form
                 != support::VhdlStandardPackageForm::projection
             && unit.id.valid() && sources.contains(unit.id.value())
@@ -855,6 +1079,21 @@ void stamp_vhdl_analysis(
         AnchorTargets targets { design };
         for (const auto position : positions) {
             stamps.push_back(stamp_unit(design, position, targets));
+        }
+    }
+    {
+        auto& declarations = design.vhdl_hir.mutable_declarations();
+        auto& types = design.vhdl_hir.mutable_types();
+        for (const auto& stamp : stamps) {
+            for (const auto& [slot, position, part] : stamp.projected_marks) {
+                auto& subtype = slot == AnchoredSlot::declaration_subtype_mark_selected
+                    ? indication(declarations.at(position), part)
+                    : indication(types.at(position), part);
+                if (subtype.written_type_mark) {
+                    subtype.written_type_mark->exemption
+                        = vhdl::AnalysisExemption::projected_package;
+                }
+            }
         }
     }
     auto& stamped = design.vhdl_hir.mutable_units();
@@ -905,6 +1144,16 @@ void unstamp_vhdl_units_anchored_to(CompiledDesign& design,
     design.refresh_lookup_indexes();
 }
 
+VhdlObsoleteUnitsLeftUnstamped::VhdlObsoleteUnitsLeftUnstamped() noexcept
+{
+    ++obsolete_units_left_unstamped;
+}
+
+VhdlObsoleteUnitsLeftUnstamped::~VhdlObsoleteUnitsLeftUnstamped()
+{
+    --obsolete_units_left_unstamped;
+}
+
 std::string rebind_vhdl_declaration_anchors(
     CompiledDesign& design, [[maybe_unused]] const AnchorRebind mode)
 {
@@ -920,14 +1169,37 @@ std::string rebind_vhdl_declaration_anchors(
     const UnitDirectory directory { design };
     std::unordered_map<std::uint32_t, std::string> digests;
     std::vector<AnchorWrite> writes;
+    // The expression and statement positions of analyzed names with an
+    // anchored selection, and those of which a target is not in this link
+    // or is compiler-served (the name stays not analyzed).
+    std::set<NameKey> named;
+    std::set<NameKey> incomplete;
     // A stale or missing target is reachable from the objects a user links:
     // a diagnostic, not an internal error.
     std::string error;
-    for (const auto& unit : units) {
+    // Units analyzed against a library unit that was analyzed again since:
+    // obsolete (13.5). A library may hold them; only their use is an error,
+    // which the dependency checks of 13.5 report (FSIM-WS-002). Their stamp
+    // is dropped here, so nothing reads the outdated anchors.
+    std::vector<std::size_t> obsolete;
+    for (std::size_t unit_index { }; unit_index < units.size(); ++unit_index) {
+        const auto& unit = units[unit_index];
         if (!unit.analyzed || unit.anchors.empty()) {
             continue;
         }
+        const auto unit_writes = writes.size();
+        bool stale { };
         const auto& owner = unit_items(design, unit);
+        for (const auto& reference : unit.recomputed) {
+            if (!name_slot(reference.slot)) {
+                continue;
+            }
+            const auto& positions = slot_items(owner, reference.slot);
+            if (reference.item < positions.size()) {
+                incomplete.insert(name_key(reference.slot,
+                    positions[reference.item], reference.part));
+            }
+        }
         // By anchor: the target's ID, or none while the target unit is not
         // part of a projection.
         std::vector<std::optional<std::uint32_t>> resolved(unit.anchors.size());
@@ -963,11 +1235,15 @@ std::string rebind_vhdl_declaration_anchors(
                 digest->second = items_digest(design, target, items);
             }
             if (digest->second != anchor.target_digest) {
-                error = "VHDL unit " + describe(unit)
-                    + " is obsolete (IEEE 1076-2019 13.5): library unit "
-                    + describe(anchor)
-                    + " was analyzed again since; analyze "
-                    + describe(unit) + " again";
+                if (obsolete_units_left_unstamped == 0U) {
+                    error = "VHDL unit " + describe(unit)
+                        + " is obsolete (IEEE 1076-2019 13.5): library unit "
+                        + describe(anchor)
+                        + " was analyzed again since; analyze "
+                        + describe(unit) + " again";
+                    return std::nullopt;
+                }
+                stale = true;
                 return std::nullopt;
             }
             const auto& positions = anchor.space == AnchorSpace::declarations
@@ -998,18 +1274,20 @@ std::string rebind_vhdl_declaration_anchors(
             if (!error.empty()) {
                 return error;
             }
+            if (stale) {
+                break;
+            }
             if (!target) {
+                if (name_slot(reference.slot)) {
+                    const auto& positions = slot_items(owner, reference.slot);
+                    if (reference.item < positions.size()) {
+                        incomplete.insert(name_key(reference.slot,
+                            positions[reference.item], reference.part));
+                    }
+                }
                 continue;
             }
-            const auto& positions
-                = reference.slot == AnchoredSlot::statement_resolved_procedure
-                ? owner.statements
-                : reference.slot == AnchoredSlot::declaration_subtype_mark_selected
-                ? owner.declarations
-                : reference.slot == AnchoredSlot::type_subtype_mark_selected
-                    || reference.slot == AnchoredSlot::type_index_subtype_selected
-                ? owner.types
-                : owner.expressions;
+            const auto& positions = slot_items(owner, reference.slot);
             if (reference.item >= positions.size()) {
                 throw std::logic_error {
                     "VHDL analysis anchors: unit " + describe(unit)
@@ -1020,6 +1298,21 @@ std::string rebind_vhdl_declaration_anchors(
             writes.push_back({ reference.slot, positions[reference.item],
                 *target, reference.part });
         }
+        if (stale) {
+            writes.resize(unit_writes);
+            obsolete.push_back(unit_index);
+        }
+    }
+    if (!obsolete.empty()) {
+        auto& mutable_units = design.vhdl_hir.mutable_units();
+        for (const auto index : obsolete) {
+            auto& unit = mutable_units[index];
+            unit.analyzed = false;
+            unit.anchors.clear();
+            unit.anchored.clear();
+            unit.recomputed.clear();
+        }
+        design.refresh_lookup_indexes();
     }
     if (writes.empty()) {
         return { };
@@ -1028,6 +1321,38 @@ std::string rebind_vhdl_declaration_anchors(
     auto& statements = design.vhdl_hir.mutable_statements();
     auto& declarations = design.vhdl_hir.mutable_declarations();
     auto& types = design.vhdl_hir.mutable_types();
+    auto& processes = design.vhdl_hir.mutable_processes();
+    auto& instances = design.vhdl_hir.mutable_instances();
+    // The Name a sensitivity or attribute designator slot names.
+    const auto anchored_name = [&](const AnchorWrite& write) -> vhdl::Name& {
+        std::optional<vhdl::Name>* name { };
+        if (write.slot == AnchoredSlot::statement_sensitivity_selected) {
+            auto& entries = statements.at(write.position).sensitivities;
+            if (write.part < entries.size()) {
+                name = &entries[write.part].name;
+            }
+        } else if (write.slot == AnchoredSlot::process_sensitivity_selected) {
+            auto& entries = processes.at(write.position).sensitivities;
+            if (write.part < entries.size()) {
+                name = &entries[write.part].name;
+            }
+        } else if (write.slot == AnchoredSlot::instance_generic_formal_selected
+            || write.slot == AnchoredSlot::instance_port_formal_selected) {
+            auto& map = write.slot == AnchoredSlot::instance_port_formal_selected
+                ? instances.at(write.position).port_map
+                : instances.at(write.position).generic_map;
+            if (write.part < map.size()) {
+                name = &map[write.part].formal;
+            }
+        } else if (auto& attribute = declarations.at(write.position).attribute) {
+            name = &attribute->designator;
+        }
+        if (name == nullptr || !*name) {
+            throw std::logic_error { "VHDL analysis anchors: an anchored "
+                                     "name is missing" };
+        }
+        return **name;
+    };
     for (const auto& write : writes) {
         switch (write.slot) {
         case AnchoredSlot::expression_resolved_declaration:
@@ -1043,6 +1368,8 @@ std::string rebind_vhdl_declaration_anchors(
                 };
             }
             mark->selected = DeclarationId::from_index(write.target);
+            // The rebound mark is again the result analysis stored.
+            mark->analyzed = true;
             break;
         }
         case AnchoredSlot::statement_resolved_procedure:
@@ -1069,8 +1396,55 @@ std::string rebind_vhdl_declaration_anchors(
             }
             dimensions[write.part].index_subtype.selected
                 = DeclarationId::from_index(write.target);
+            dimensions[write.part].index_subtype.analyzed = true;
             break;
         }
+        case AnchoredSlot::expression_name_selected:
+        case AnchoredSlot::expression_name_overload: {
+            auto& name = expressions.at(write.position).referenced_name;
+            if (!name) {
+                throw std::logic_error { "VHDL analysis anchors: an anchored "
+                                         "name is missing" };
+            }
+            rebind_name(*name, write);
+            named.insert(name_key(write.slot, write.position, write.part));
+            break;
+        }
+        case AnchoredSlot::statement_procedure_selected:
+        case AnchoredSlot::statement_procedure_overload:
+            rebind_name(statements.at(write.position).procedure, write);
+            named.insert(name_key(write.slot, write.position, write.part));
+            break;
+        case AnchoredSlot::statement_sensitivity_selected:
+        case AnchoredSlot::process_sensitivity_selected:
+        case AnchoredSlot::declaration_attribute_designator_selected:
+        case AnchoredSlot::instance_generic_formal_selected:
+        case AnchoredSlot::instance_port_formal_selected:
+            anchored_name(write).selected
+                = DeclarationId::from_index(write.target);
+            named.insert(name_key(write.slot, write.position, write.part));
+            break;
+        }
+    }
+    // A name whose every cross-unit selection is bound again is the
+    // analysis result once more (object projection cleared `analyzed`).
+    for (const auto& key : named) {
+        if (incomplete.contains(key)) {
+            continue;
+        }
+        const auto [kind, position, part] = key;
+        if (kind == 0U) {
+            expressions.at(position).referenced_name->analyzed = true;
+        } else if (kind == 1U) {
+            statements.at(position).procedure.analyzed = true;
+        } else {
+            const auto slot = kind == 2U
+                ? AnchoredSlot::statement_sensitivity_selected
+                : kind == 3U ? AnchoredSlot::process_sensitivity_selected
+                : kind == 5U ? AnchoredSlot::instance_generic_formal_selected
+                : kind == 6U ? AnchoredSlot::instance_port_formal_selected
+                             : AnchoredSlot::declaration_attribute_designator_selected;
+            anchored_name({ slot, position, 0U, part }).analyzed = true;
         }
     }
     // The rebound slots are resolution results, which no index reads.
@@ -1132,6 +1506,11 @@ std::string verify_stamped_vhdl_analysis(const CompiledDesign& design)
     for (auto& unit : fresh.vhdl_hir.mutable_units()) {
         unit.analyzed = false;
     }
+    // The link resolution keeps what the compile-time typing decided
+    // (interpretation set); the fresh copy recomputes every expression.
+    for (auto& expression : fresh.vhdl_hir.mutable_expressions()) {
+        expression.interpretation = vhdl::Interpretation::none;
+    }
     try {
         if (!resolve_vhdl_expression_types(fresh)) {
             return "the fresh resolution could not refresh its lookup "
@@ -1188,8 +1567,16 @@ std::string verify_stamped_vhdl_analysis(const CompiledDesign& design)
                 stored.ambiguous_literal ? "true" : "false",
                 recomputed.ambiguous_literal ? "true" : "false");
         }
+        // What the mark denotes (12.3): its selection, overloads and STANDARD
+        // row; `analyzed` says only who resolved it.
+        const auto denotes = [](const std::optional<vhdl::Name>& mark) {
+            return mark ? std::optional { std::tuple { mark->selected, mark->overloads,
+                              mark->standard } }
+                        : std::nullopt;
+        };
         if (recomputed.qualified_type_mark
-            && stored.qualified_type_mark != recomputed.qualified_type_mark) {
+            && denotes(stored.qualified_type_mark)
+                != denotes(recomputed.qualified_type_mark)) {
             differences.add(*unit, item, "qualified_type_mark",
                 qualified_text(design, stored.qualified_type_mark),
                 qualified_text(fresh, recomputed.qualified_type_mark));

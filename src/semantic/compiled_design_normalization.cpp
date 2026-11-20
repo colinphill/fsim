@@ -913,6 +913,19 @@ void write_literal(Expression& expression, const ConstantValue value)
         expression.call_arguments.clear();
     }
     expression.decoded_string.reset();
+    if constexpr (std::is_same_v<Expression, vhdl::Expression>) {
+        // The folded node is a literal of the expression's type (12.5): the
+        // typing's call/operator results describe the unfolded expression,
+        // which unfolded_call keeps.
+        if (expression.interpretation != vhdl::Interpretation::none) {
+            expression.interpretation = vhdl::Interpretation::literal;
+        }
+        expression.resolved_declaration.reset();
+        expression.resolved_standard = { };
+        expression.predefined_operation = vhdl::PredefinedOperation::none;
+        expression.predefined_attribute.reset();
+        expression.resolved_formals.clear();
+    }
 }
 
 struct VhdlConstantGuardCache;
@@ -2781,6 +2794,25 @@ VhdlFoldingDeferral::VhdlFoldingDeferral() noexcept
 VhdlFoldingDeferral::~VhdlFoldingDeferral()
 {
     --vhdl_folding_deferrals;
+}
+
+namespace {
+thread_local unsigned vhdl_typing_authorities = 0U;
+} // namespace
+
+VhdlTypingAuthority::VhdlTypingAuthority() noexcept
+{
+    ++vhdl_typing_authorities;
+}
+
+VhdlTypingAuthority::~VhdlTypingAuthority()
+{
+    --vhdl_typing_authorities;
+}
+
+bool vhdl_typing_authority_active() noexcept
+{
+    return vhdl_typing_authorities != 0U;
 }
 
 } // namespace fsim::semantic
