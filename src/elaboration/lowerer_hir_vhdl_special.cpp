@@ -32,10 +32,134 @@ std::optional<SelectedVhdlName> selected_vhdl_name(
     return SelectedVhdlName { object, spelling.substr(separator + 1U) };
 }
 
-frontend::VhdlSimulatorApi vhdl_environment_type_api(
-    std::string_view spelling)
+// The STD.ENV type the type declaration `target` is. STD.ENV's types are
+// ordinary VHDL declarations (no native entry), so each is known as the
+// type a native STD.ENV item of its package takes or returns (IEEE
+// 1076-2019 16.5.5, 16.5.6, 16.5.7), by declaration identity.
+frontend::VhdlSimulatorApi vhdl_environment_declared_type_api(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::TypeId target)
 {
-    return frontend::vhdl_simulator_api(spelling);
+    using Api = frontend::VhdlSimulatorApi;
+    using Name = semantic::VhdlNativeName;
+    const auto definition = specialization.find_type(target);
+    const auto declared = definition && definition->vhdl != nullptr
+        ? specialization.find_declaration(definition->vhdl->declaration)
+        : std::nullopt;
+    const auto* unit = declared && declared->vhdl != nullptr
+        ? specialization.design().vhdl_scope_unit(declared->vhdl->scope)
+        : nullptr;
+    if (unit == nullptr) {
+        return Api::none;
+    }
+    const auto formal_type = [&](const semantic::vhdl::Declaration& callee,
+                                 const std::size_t index) {
+        if (!callee.callable || index >= callee.callable->formals.size()) {
+            return semantic::TypeId { };
+        }
+        const auto formal = specialization.find_declaration(
+            callee.callable->formals[index]);
+        return formal && formal->vhdl != nullptr && formal->vhdl->subtype
+            ? formal->vhdl->subtype->type_mark.target
+            : semantic::TypeId { };
+    };
+    const auto return_type = [](const semantic::vhdl::Declaration& callee) {
+        return callee.callable && callee.callable->return_type
+            ? callee.callable->return_type->type_mark.target
+            : semantic::TypeId { };
+    };
+    semantic::TypeId pointer;
+    for (const auto id : unit->declarations) {
+        const auto item = specialization.find_declaration(id);
+        if (item && item->vhdl != nullptr
+            && semantic::vhdl_native_is(*item->vhdl,
+                semantic::VhdlNativePackage::std_env, Name::get_call_path)) {
+            pointer = return_type(*item->vhdl);
+        }
+    }
+    if (pointer.valid() && pointer == target) {
+        return Api::call_path_vector_ptr;
+    }
+    if (pointer.valid()) {
+        const auto access = specialization.find_type(pointer);
+        if (access && access->vhdl != nullptr
+            && access->vhdl->designated_subtype
+            && access->vhdl->designated_subtype->type_mark.target == target) {
+            return Api::call_path_vector;
+        }
+    }
+    for (const auto id : unit->declarations) {
+        const auto item = specialization.find_declaration(id);
+        const auto* entry = item && item->vhdl != nullptr
+            ? semantic::vhdl_native_of(*item->vhdl)
+            : nullptr;
+        if (entry == nullptr
+            || entry->package_id != semantic::VhdlNativePackage::std_env
+            || !item->vhdl->callable) {
+            continue;
+        }
+        const auto& callee = *item->vhdl;
+        switch (entry->name) {
+        case Name::dir_close:
+            if (formal_type(callee, 0U) == target) {
+                return Api::directory;
+            }
+            break;
+        case Name::dir_open:
+            if (return_type(callee) == target) {
+                return Api::dir_open_status;
+            }
+            break;
+        case Name::dir_createdir:
+            if (return_type(callee) == target) {
+                return Api::dir_create_status;
+            }
+            break;
+        case Name::dir_deletedir:
+            if (return_type(callee) == target) {
+                return Api::dir_delete_status;
+            }
+            break;
+        case Name::dir_deletefile:
+            if (return_type(callee) == target) {
+                return Api::file_delete_status;
+            }
+            break;
+        case Name::to_string:
+            // The one-argument TO_STRING takes a CALL_PATH_ELEMENT.
+            if (callee.callable->formals.size() == 1U
+                && formal_type(callee, 0U) == target) {
+                return Api::call_path_element;
+            }
+            break;
+        default:
+            break;
+        }
+    }
+    return Api::none;
+}
+
+// The STD.ENV type `type` is or is a subtype of (5.3.2, 6.3).
+frontend::VhdlSimulatorApi vhdl_environment_native_type_api(
+    const semantic::SpecializedHirUnit& specialization,
+    semantic::TypeId type)
+{
+    std::unordered_set<std::uint32_t> visiting;
+    while (type.valid() && visiting.insert(type.value()).second) {
+        if (const auto api
+            = vhdl_environment_declared_type_api(specialization, type);
+            api != frontend::VhdlSimulatorApi::none) {
+            return api;
+        }
+        const auto definition = specialization.find_type(type);
+        if (!definition || definition->vhdl == nullptr
+            || (definition->vhdl->form != semantic::vhdl::TypeForm::subtype
+                && definition->vhdl->form != semantic::vhdl::TypeForm::alias)) {
+            break;
+        }
+        type = definition->vhdl->base.type_mark.target;
+    }
+    return frontend::VhdlSimulatorApi::none;
 }
 
 bool vhdl_environment_status_api(const frontend::VhdlSimulatorApi api)
@@ -66,79 +190,37 @@ bool vhdl_assert_procedure_api(const frontend::VhdlSimulatorApi api)
         || api == Api::set_vhdl_read_severity;
 }
 
-bool vhdl_environment_status_literal_name(const std::string_view spelling)
-{
-    const auto name = simple_name_of(spelling);
-    return equal_ignoring_ascii_case(name, "status_ok")
-        || equal_ignoring_ascii_case(name, "status_not_found")
-        || equal_ignoring_ascii_case(name, "status_no_directory")
-        || equal_ignoring_ascii_case(name, "status_item_exists")
-        || equal_ignoring_ascii_case(name, "status_not_empty")
-        || equal_ignoring_ascii_case(name, "status_no_file")
-        || equal_ignoring_ascii_case(name, "status_access_denied")
-        || equal_ignoring_ascii_case(name, "status_error");
-}
+struct VhdlEnvironmentStatusLiteral {
+    frontend::VhdlSimulatorApi api;
+    std::uint64_t ordinal;
+};
 
-std::optional<std::uint64_t> vhdl_environment_status_ordinal(
-    const frontend::VhdlSimulatorApi api,
-    const std::string_view spelling)
+// A name expression that is a literal of one of the STD.ENV status types
+// (IEEE 1076-2019 16.5.6): its type is a status type and its value is the
+// literal's position in that type's declaration, by the stored typing.
+std::optional<VhdlEnvironmentStatusLiteral> vhdl_environment_status_literal(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::vhdl::Expression& expression)
 {
-    using Api = frontend::VhdlSimulatorApi;
-    const auto name = simple_name_of(spelling);
-    if (equal_ignoring_ascii_case(name, "status_ok")) {
-        return 0U;
-    }
-    if (api == Api::dir_open_status) {
-        if (equal_ignoring_ascii_case(name, "status_not_found")) {
-            return 1U;
-        }
-        if (equal_ignoring_ascii_case(name, "status_no_directory")) {
-            return 2U;
-        }
-        if (equal_ignoring_ascii_case(name, "status_access_denied")) {
-            return 3U;
-        }
-        if (equal_ignoring_ascii_case(name, "status_error")) {
-            return 4U;
-        }
+    if (expression.kind != semantic::vhdl::ExpressionKind::name
+        || expression.type.kind
+            != semantic::vhdl::TypeIdentity::Kind::declared
+        || !expression.resolved_declaration) {
         return std::nullopt;
     }
-    if (api == Api::dir_create_status) {
-        if (equal_ignoring_ascii_case(name, "status_item_exists")) {
-            return 1U;
-        }
-        if (equal_ignoring_ascii_case(name, "status_access_denied")) {
-            return 2U;
-        }
-        if (equal_ignoring_ascii_case(name, "status_error")) {
-            return 3U;
-        }
+    const auto api = vhdl_environment_native_type_api(
+        specialization, expression.type.declared);
+    if (!vhdl_environment_status_api(api)) {
         return std::nullopt;
     }
-    if (api == Api::dir_delete_status) {
-        if (equal_ignoring_ascii_case(name, "status_no_directory")) {
-            return 1U;
-        }
-        if (equal_ignoring_ascii_case(name, "status_not_empty")) {
-            return 2U;
-        }
-        if (equal_ignoring_ascii_case(name, "status_access_denied")) {
-            return 3U;
-        }
-        if (equal_ignoring_ascii_case(name, "status_error")) {
-            return 4U;
-        }
+    const auto definition = specialization.find_type(
+        expression.type.declared);
+    if (!definition || definition->vhdl == nullptr) {
         return std::nullopt;
     }
-    if (api == Api::file_delete_status) {
-        if (equal_ignoring_ascii_case(name, "status_no_file")) {
-            return 1U;
-        }
-        if (equal_ignoring_ascii_case(name, "status_access_denied")) {
-            return 2U;
-        }
-        if (equal_ignoring_ascii_case(name, "status_error")) {
-            return 3U;
+    for (const auto& literal : definition->vhdl->enumeration_literals) {
+        if (literal.declaration == *expression.resolved_declaration) {
+            return VhdlEnvironmentStatusLiteral { api, literal.ordinal };
         }
     }
     return std::nullopt;
@@ -2240,91 +2322,38 @@ bool Lowerer::is_hir_vhdl_environment_status_literal(
     const auto expression = specialized_hir_unit_->find_expression(
         expression_id);
     return expression && expression->vhdl != nullptr
-        && expression->vhdl->kind
-            == semantic::vhdl::ExpressionKind::name
-        && vhdl_environment_status_literal_name(
-            expression->vhdl->text);
+        && vhdl_environment_status_literal(
+               *specialized_hir_unit_, *expression->vhdl)
+               .has_value();
 }
 
 std::optional<std::uint64_t>
 Lowerer::hir_vhdl_environment_status_literal(
     const semantic::ExpressionId expression_id,
-    const semantic::vhdl::SubtypeIndication& context) const
+    const semantic::vhdl::SubtypeIndication&) const
 {
-    if (!is_hir_vhdl_environment_status_literal(expression_id)) {
+    // The literal's own type is the status type (16.5.6).
+    if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
     }
     const auto expression = specialized_hir_unit_->find_expression(
         expression_id);
-    const auto status_api = [&](const auto& self,
-                                const semantic::vhdl::SubtypeIndication&
-                                    subtype,
-                                std::unordered_set<std::uint32_t>& visiting)
-        -> frontend::VhdlSimulatorApi {
-        const auto direct = vhdl_environment_type_api(
-            subtype.type_mark.spelling);
-        if (vhdl_environment_status_api(direct)) {
-            return direct;
-        }
-        if (!subtype.type_mark.target.valid()
-            || !visiting.insert(
-                    subtype.type_mark.target.value()).second) {
-            return frontend::VhdlSimulatorApi::none;
-        }
-        const auto type = specialized_hir_unit_->find_type(
-            subtype.type_mark.target);
-        if (!type || type->vhdl == nullptr) {
-            return frontend::VhdlSimulatorApi::none;
-        }
-        const auto named = vhdl_environment_type_api(type->vhdl->name);
-        if (vhdl_environment_status_api(named)) {
-            return named;
-        }
-        return self(self, type->vhdl->base, visiting);
-    };
-    std::unordered_set<std::uint32_t> visiting;
-    const auto api = status_api(status_api, context, visiting);
-    return vhdl_environment_status_api(api)
-        ? vhdl_environment_status_ordinal(
-              api, expression->vhdl->text)
-        : std::nullopt;
+    if (!expression || expression->vhdl == nullptr) {
+        return std::nullopt;
+    }
+    const auto literal = vhdl_environment_status_literal(
+        *specialized_hir_unit_, *expression->vhdl);
+    return literal ? std::optional { literal->ordinal } : std::nullopt;
 }
 
 std::optional<std::uint64_t>
 Lowerer::hir_vhdl_environment_call_status_literal(
     const semantic::ExpressionId literal,
-    const semantic::ExpressionId call) const
+    const semantic::ExpressionId) const
 {
-    if (!is_hir_vhdl_environment_status_literal(literal)) {
-        return std::nullopt;
-    }
-    const auto source = specialized_hir_unit_->find_expression(call);
-    const auto text = specialized_hir_unit_->find_expression(literal);
-    if (!source || source->vhdl == nullptr || !text
-        || text->vhdl == nullptr) {
-        return std::nullopt;
-    }
-    using Api = frontend::VhdlSimulatorApi;
-    // The status type each function form of STD.ENV returns (IEEE
-    // 1076-2019 16.5.6).
-    const auto status = [&]() -> Api {
-        switch (hir_vhdl_simulator_api(*source->vhdl)) {
-        case Api::dir_open:
-        case Api::dir_workingdir:
-            return Api::dir_open_status;
-        case Api::dir_createdir:
-            return Api::dir_create_status;
-        case Api::dir_deletedir:
-            return Api::dir_delete_status;
-        case Api::dir_deletefile:
-            return Api::file_delete_status;
-        default:
-            return Api::none;
-        }
-    }();
-    return status == Api::none
-        ? std::nullopt
-        : vhdl_environment_status_ordinal(status, text->vhdl->text);
+    // The status function's result type (16.5.6) is the literal's type.
+    return hir_vhdl_environment_status_literal(
+        literal, semantic::vhdl::SubtypeIndication { });
 }
 
 bool Lowerer::is_hir_vhdl_environment_directory(
@@ -2341,8 +2370,9 @@ bool Lowerer::is_hir_vhdl_environment_directory(
             != semantic::vhdl::ObjectClass::variable) {
         return false;
     }
-    const auto matches = [](const semantic::vhdl::SubtypeIndication& subtype) {
-        return vhdl_environment_type_api(subtype.type_mark.spelling)
+    const auto matches = [&](const semantic::vhdl::SubtypeIndication& subtype) {
+        return vhdl_environment_native_type_api(
+                   *specialized_hir_unit_, subtype.type_mark.target)
             == frontend::VhdlSimulatorApi::directory;
     };
     if (matches(*declaration->vhdl->subtype)) {
@@ -2377,10 +2407,10 @@ bool Lowerer::is_hir_vhdl_environment_call_path(
             != semantic::vhdl::ObjectClass::variable) {
         return false;
     }
-    const auto matches = [](const semantic::vhdl::SubtypeIndication& subtype) {
+    const auto matches = [&](const semantic::vhdl::SubtypeIndication& subtype) {
         using Api = frontend::VhdlSimulatorApi;
-        const auto api = vhdl_environment_type_api(
-            subtype.type_mark.spelling);
+        const auto api = vhdl_environment_native_type_api(
+            *specialized_hir_unit_, subtype.type_mark.target);
         return api == Api::call_path_element
             || api == Api::call_path_vector
             || api == Api::call_path_vector_ptr;
@@ -2851,9 +2881,13 @@ bool Lowerer::is_hir_vhdl_environment_directory_statement(
         return false;
     }
     using Api = frontend::VhdlSimulatorApi;
-    const auto api = frontend::vhdl_simulator_api(
-        hir_vhdl_std_env_procedure_spelling(
-            statement->vhdl->procedure, statement->vhdl->scope));
+    // The native STD.ENV procedure the call resolved to (16.5.6): the
+    // stored resolution, else the overloads the name denotes.
+    const auto& call = *statement->vhdl;
+    const auto api = std_env_candidates_api(*specialized_hir_unit_,
+        call.resolved_procedure
+            ? std::vector<semantic::DeclarationId> { *call.resolved_procedure }
+            : hir_vhdl_callable_candidates(call.procedure, call.scope));
     return api == Api::dir_open || api == Api::dir_close
         || api == Api::dir_workingdir || api == Api::dir_createdir
         || api == Api::dir_deletedir || api == Api::dir_deletefile;
@@ -2870,9 +2904,10 @@ bool Lowerer::lower_hir_vhdl_environment_directory_statement(
     const auto& source = *statement->vhdl;
     const auto span = hir_source_span(source.source);
     using Api = frontend::VhdlSimulatorApi;
-    const auto api = frontend::vhdl_simulator_api(
-        hir_vhdl_std_env_procedure_spelling(
-            source.procedure, source.scope));
+    const auto api = std_env_candidates_api(*specialized_hir_unit_,
+        source.resolved_procedure
+            ? std::vector<semantic::DeclarationId> { *source.resolved_procedure }
+            : hir_vhdl_callable_candidates(source.procedure, source.scope));
     if (vhdl_standard_ < frontend::VhdlStandard::Vhdl2019) {
         report(
             "FSIM-ELAB-VHENV-003",
@@ -3108,20 +3143,24 @@ Lowerer::hir_vhdl_assert_expression_api(
         && source.kind != semantic::vhdl::ExpressionKind::call) {
         return std::nullopt;
     }
-    const auto api = hir_vhdl_simulator_api(source);
-    if (!vhdl_assert_function_api(api)) {
-        return std::nullopt;
+    // The native STD.ENV function the call denotes (16.5.8): the stored
+    // resolution, else the overloads its name denotes.
+    auto callees = std::vector<semantic::DeclarationId> { };
+    if (source.resolved_declaration) {
+        callees.push_back(*source.resolved_declaration);
+    } else {
+        auto name = source.referenced_name.value_or(semantic::vhdl::Name { });
+        if (name.spelling.empty()) {
+            name.spelling = source.text;
+            name.canonical = source.text;
+            name.source = source.source;
+        }
+        callees = hir_vhdl_callable_candidates(name, source.scope);
     }
-    auto name = source.referenced_name.value_or(semantic::vhdl::Name { });
-    if (name.spelling.empty()) {
-        name.spelling = source.text;
-        name.canonical = source.text;
-        name.source = source.source;
-    }
-    const auto resolver = hir_resolver();
-    return resolver.vhdl_standard_package_member_visible(
-               name, source.scope)
-        ? std::optional { api } : std::nullopt;
+    const auto api = std_env_candidates_api(
+        *specialized_hir_unit_, callees);
+    return vhdl_assert_function_api(api) ? std::optional { api }
+                                         : std::nullopt;
 }
 
 bool Lowerer::is_hir_vhdl_assert_statement(
@@ -3138,22 +3177,13 @@ bool Lowerer::is_hir_vhdl_assert_statement(
         return false;
     }
     const auto& source = *statement->vhdl;
-    // A procedure imported by `use std.env.all` is named by its simple
-    // name (IEEE 1076-2019 16.5).
-    auto api = frontend::vhdl_simulator_api(
-        source.procedure.canonical.empty()
-            ? source.procedure.spelling
-            : source.procedure.canonical);
-    if (api == frontend::VhdlSimulatorApi::none) {
-        api = frontend::vhdl_simulator_api(hir_vhdl_std_env_procedure_spelling(
-            source.procedure, source.scope));
-    }
-    if (!vhdl_assert_procedure_api(api)) {
-        return false;
-    }
-    const auto resolver = hir_resolver();
-    return resolver.vhdl_standard_package_member_visible(
-        source.procedure, source.scope);
+    // The native STD.ENV procedure the call resolved to (16.5.8): the
+    // stored resolution, else the overloads its name denotes.
+    const auto api = std_env_candidates_api(*specialized_hir_unit_,
+        source.resolved_procedure
+            ? std::vector<semantic::DeclarationId> { *source.resolved_procedure }
+            : hir_vhdl_callable_candidates(source.procedure, source.scope));
+    return vhdl_assert_procedure_api(api);
 }
 
 std::optional<RegisterId> Lowerer::lower_hir_vhdl_assert_level(
@@ -3335,16 +3365,12 @@ bool Lowerer::lower_hir_vhdl_assert_statement(
         return true;
     }
     using Api = frontend::VhdlSimulatorApi;
-    // A procedure imported by `use std.env.all` is named by its simple
-    // name (IEEE 1076-2019 16.5).
-    auto api = frontend::vhdl_simulator_api(
-        source.procedure.canonical.empty()
-            ? source.procedure.spelling
-            : source.procedure.canonical);
-    if (api == frontend::VhdlSimulatorApi::none) {
-        api = frontend::vhdl_simulator_api(hir_vhdl_std_env_procedure_spelling(
-            source.procedure, source.scope));
-    }
+    // The native STD.ENV procedure the call resolved to (16.5.8): the
+    // stored resolution, else the overloads its name denotes.
+    const auto api = std_env_candidates_api(*specialized_hir_unit_,
+        source.resolved_procedure
+            ? std::vector<semantic::DeclarationId> { *source.resolved_procedure }
+            : hir_vhdl_callable_candidates(source.procedure, source.scope));
     const auto location = runtime_source_location(span);
     const auto& associations = source.procedure_arguments;
     if (api == Api::clear_vhdl_assert) {

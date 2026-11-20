@@ -127,6 +127,10 @@ enum class FileProcedure : std::uint8_t {
 // have no declaration of their own, so a call is recognized by its
 // spelling and its operands. Every STD.TEXTIO and IEEE.STD_LOGIC_1164
 // procedure is a native declaration instead (file_native_procedure).
+// Remaining spellings: READ, WRITE and FLUSH of a file type (5.5.2) have no
+// stored identity on a procedure-call Statement (needs a Statement
+// predefined-operation field, hub header); HREAD, HWRITE, OREAD and OWRITE
+// here are IEEE.STD_LOGIC_TEXTIO only, a projected package (BD2 V4).
 [[nodiscard]] FileProcedure vhdl_file_procedure_name(
     const std::string_view name) noexcept
 {
@@ -5070,12 +5074,12 @@ Lowerer::lower_hir_vhdl_slice_positions(const semantic::ExpressionId slice_id)
     if (!expression || expression->vhdl == nullptr
         || expression->vhdl->kind != semantic::vhdl::ExpressionKind::slice
         || expression->vhdl->operands.size() != 3U
-        || (expression->vhdl->text != "to"
-            && expression->vhdl->text != "downto")) {
+        || expression->vhdl->range_direction
+            == semantic::vhdl::WrittenRangeDirection::none) {
         return std::nullopt;
     }
     const auto& slice = *expression->vhdl;
-    const bool descending = slice.text == "downto";
+    const bool descending = slice.range_direction == semantic::vhdl::WrittenRangeDirection::downto;
     const auto prefix_subtype
         = hir_vhdl_expression_subtype(slice.operands.front());
     if (!prefix_subtype) {

@@ -444,19 +444,14 @@ namespace {
         catalog.artifacts.insert(catalog.artifacts.end(), records.begin(), records.end());
     }
 
-    // Several VHDL analysis rules (IEEE 1076-2008 9, 10, 11) are checked only
-    // where the elaborator types expressions. Elaborating each newly analyzed
-    // architecture on its own reports those violations at analysis time;
-    // diagnostics outside the analyzed files, and lowering gaps that do not
-    // identify an analysis rule, are not reported here.
-    bool check_vhdl_analysis_elaboration(const CheckedProject& checked,
+    // The analysis rules of each newly analyzed architecture (IEEE 1076-2019
+    // 9, 10, 11) on the unit as analyzed: nothing is elaborated, and a rule
+    // that needs a generic value or an actual is left to elaboration.
+    // Diagnostics outside the analyzed files are not reported here.
+    bool check_vhdl_analysis_rules(const CheckedProject& checked,
         std::span<const CompiledObject> groups, const project::SourceSet& sources,
         diagnostic::Engine& diagnostics)
     {
-        if (const auto* disabled = std::getenv("FSIM_NO_ANALYSIS_ELABORATION");
-            disabled != nullptr && *disabled != '\0') {
-            return true;
-        }
         std::set<std::uint64_t> analyzed;
         for (const auto& group : groups) {
             for (const auto& unit : group.units) {
@@ -467,194 +462,17 @@ namespace {
         for (const auto& file : sources.files) {
             files.insert(support::path_to_utf8(file.filename()));
         }
-        // Elaboration codes that identify a violated analysis rule. Other
-        // elaboration diagnostics may stem from a missing design context
-        // (generic values, bindings) or from bounded-runtime limits.
-        static const std::set<std::string, std::less<>> analysis_codes {
-            "FSIM-VHDL-SEM-129",
-            "FSIM-ELAB-048", "FSIM-ELAB-051", "FSIM-ELAB-053", "FSIM-ELAB-059",
-            "FSIM-ELAB-068", "FSIM-ELAB-074", "FSIM-ELAB-077", "FSIM-ELAB-079",
-            "FSIM-ELAB-082", "FSIM-ELAB-091", "FSIM-ELAB-092",
-            "FSIM-ELAB-DYNINDEX-002", "FSIM-ELAB-GEN-002", "FSIM-ELAB-PKG-009",
-            "FSIM-ELAB-VHNAME-014", "FSIM-ELAB-VHNAME-015",
-            "FSIM-ELAB-VHSTD-001",
-            "FSIM-ELAB-VHACCESS-009", "FSIM-ELAB-VHACCESS-020",
-            "FSIM-ELAB-VHAGG-001", "FSIM-ELAB-VHAGG-003", "FSIM-ELAB-VHAGG-008", "FSIM-ELAB-VHASSIGN-001", "FSIM-ELAB-VHASSIGN-002", "FSIM-ELAB-VHATTR-012", "FSIM-ELAB-VHACCESS-030", "FSIM-ELAB-VHLOOP-001",
-            "FSIM-ELAB-VHBODY-001", "FSIM-ELAB-VHCALL-001", "FSIM-ELAB-VHCALL-002", "FSIM-ELAB-VHCALL-003", "FSIM-ELAB-VHCALL-004", "FSIM-ELAB-VHRESOLVE-002", "FSIM-ELAB-INTEGER-002", "FSIM-ELAB-VHTIME-004", "FSIM-ELAB-VHASSIGN-003", "FSIM-ELAB-VHOPER-002", "FSIM-ELAB-VHOPER-003", "FSIM-ELAB-VHRANGE-002", "FSIM-ELAB-VHRANGE-003", "FSIM-ELAB-VHRANGE-004", "FSIM-ELAB-VHRANGE-005", "FSIM-ELAB-VHARRAY-011", "FSIM-ELAB-VHARRAY-012", "FSIM-ELAB-VHDLCASE-007", "FSIM-ELAB-VHDLCASE-008", "FSIM-ELAB-VHDLCASE-009", "FSIM-ELAB-VHDLCASE-010", "FSIM-ELAB-VHDLCASE-011",
-            "FSIM-ELAB-VHARRAY-003",
-            "FSIM-ELAB-VHARRAY-006", "FSIM-ELAB-VHARRAY-008",
-            "FSIM-ELAB-VHARRAYAGG-002", "FSIM-ELAB-VHARRAYAGG-003",
-            "FSIM-ELAB-VHARRAYAGG-004", "FSIM-ELAB-VHARRAYAGG-009",
-            "FSIM-ELAB-VHARRAYAGG-010",
-            "FSIM-ELAB-VHARRAYAGG-011",
-            "FSIM-ELAB-VHARRAYATTR-002",
-            "FSIM-ELAB-VHARRAYSEL-003", "FSIM-ELAB-VHARRAYSEL-004",
-            "FSIM-ELAB-VHCOMPOP-001",
-            "FSIM-ELAB-VHDLCASE-003", "FSIM-ELAB-VHDLCASE-005",
-            "FSIM-ELAB-VHENUM-002", "FSIM-ELAB-VHENUM-003",
-            "FSIM-ELAB-VHENUM-004",
-            "FSIM-ELAB-VHENUMRANGE-003", "FSIM-ELAB-VHFILE-013", "FSIM-ELAB-VHFILE-014", "FSIM-ELAB-VHENUMRANGE-004",
-            "FSIM-ELAB-VHLEGAL-002", "FSIM-ELAB-VHLEGAL-004",
-            "FSIM-ELAB-VHLEGAL-010", "FSIM-ELAB-VHNAME-002", "FSIM-ELAB-VHNAME-003", "FSIM-ELAB-VHOPER-001", "FSIM-ELAB-VHRANGE-001",
-            "FSIM-ELAB-VHPHYSICAL-003", "FSIM-ELAB-VHPHYSICAL-004",
-            "FSIM-ELAB-VHPHYSICAL-011", "FSIM-ELAB-VHPROC-014",
-            "FSIM-ELAB-VHPROC-018", "FSIM-ELAB-VHPROC-022",
-            "FSIM-ELAB-VHQUAL-002", "FSIM-ELAB-VHQUAL-003", "FSIM-ELAB-VHQUAL-005", "FSIM-ELAB-VHCONV-005", "FSIM-ELAB-VHCONV-006", "FSIM-ELAB-VHACCESS-031", "FSIM-ELAB-VHNAME-004", "FSIM-ELAB-VHACCESS-032", "FSIM-ELAB-VHFILE-015", "FSIM-ELAB-VHARRAY-009", "FSIM-ELAB-VHARRAY-010", "FSIM-ELAB-VHATTR-014", "FSIM-ELAB-VHATTR-015", "FSIM-ELAB-VHATTR-016", "FSIM-ELAB-VHFILE-016", "FSIM-ELAB-VHARRAYSEL-005", "FSIM-ELAB-VHALIAS-001", "FSIM-ELAB-VHALIAS-002", "FSIM-ELAB-VHASSIGN-004", "FSIM-ELAB-VHASSIGN-005", "FSIM-ELAB-VHRETURN-001", "FSIM-ELAB-VHAGG-017", "FSIM-ELAB-VHAGG-018", "FSIM-ELAB-VHAGG-019", "FSIM-ELAB-VHPASSIVE-001", "FSIM-ELAB-VHWAVE-001", "FSIM-ELAB-VHPORT-003", "FSIM-ELAB-VHPORT-004", "FSIM-ELAB-VHPORT-005", "FSIM-ELAB-VHPORT-006", "FSIM-ELAB-VHCOMP-016", "FSIM-ELAB-VHALIAS-003", "FSIM-ELAB-VHALIAS-004", "FSIM-ELAB-VHSENS-001", "FSIM-ELAB-VHACCESS-033", "FSIM-ELAB-VHACCESS-034", "FSIM-ELAB-VHAGG-020", "FSIM-ELAB-VHRECORD-003", "FSIM-ELAB-VHTYPE-006", "FSIM-ELAB-VHARRAYSEL-006", "FSIM-ELAB-VHAGG-012", "FSIM-ELAB-VHAGG-013", "FSIM-ELAB-VHAGG-014", "FSIM-ELAB-VHAGG-015", "FSIM-ELAB-VHAGG-016",
-            "FSIM-ELAB-VHRECORD-001", "FSIM-ELAB-VHREPORT-001", "FSIM-ELAB-VHREPORT-002",
-            "FSIM-ELAB-VHSLICE-002", "FSIM-ELAB-VHSUBTYPE-001",
-            "FSIM-ELAB-VHSUBTYPE-002", "FSIM-ELAB-VHSUBTYPE-003",
-            "FSIM-ELAB-VHSUBTYPE-004", "FSIM-ELAB-VHTYPE-005",
-        };
-        const auto analysis_rule = [](const std::string_view code) {
-            return analysis_codes.contains(code);
-        };
-        // A unit that needs generic values or other design context cannot be
-        // checked on its own.
-        const auto incomplete_context = [](const std::string_view code) {
-            // This call-site error is complete and must remain visible so
-            // analysis can report independent errors in the architecture.
-            if (code == "FSIM-ELAB-VHFUNC-010") {
-                return false;
-            }
-            // The generic (GENERIC) and function call (VHFUNC) families.
-            const auto family = code.substr(0, code.rfind('-'));
-            return family.ends_with("-GENERIC") || family.ends_with("-VHFUNC");
-        };
-        // Elaborating an architecture also elaborates everything it
-        // instantiates, which can cost more than the analysis itself; an
-        // architecture with instances (directly or in a generate statement)
-        // is left to `fsim elaborate`.
-        std::set<std::uint64_t> instantiating_units;
-        const auto& scopes = checked.semantics.scopes();
-        for (const auto& instance : checked.vhdl_hir.instances()) {
-            if (instance.scope.valid() && instance.scope.value() < scopes.size()) {
-                instantiating_units.insert(scopes[instance.scope.value()].unit.value());
-            }
-        }
         bool clean = true;
         for (const auto& unit : checked.vhdl_hir.units()) {
             if (unit.kind != semantic::vhdl::UnitKind::architecture
                 || !analyzed.contains(unit.id.value())) {
                 continue;
             }
-            if (instantiating_units.contains(unit.id.value())) {
-                // Name rules are checked without elaborating the instances.
-                for (const auto& input :
-                    elaboration::validate_vhdl_architecture_names(checked, unit.id)) {
-                    const auto file = support::path_to_utf8(
-                        std::filesystem::path { input.span.source_name.str() }.filename());
-                    if (!files.contains(file)) {
-                        continue;
-                    }
-                    diagnostics.error(input.code, input.message, span(input.span));
-                    clean = false;
-                }
-                continue;
-            }
-            const auto library = unit.library.empty()
-                ? std::string_view { "work" }
-                : std::string_view { unit.library };
-            // An unconstrained port takes its bounds from an actual
-            // (IEEE 1076-2008 6.5.6.3), which only a design that instantiates
-            // the entity supplies.
-            const auto unconstrained_port = std::ranges::any_of(
-                checked.vhdl_hir.units(), [&](const semantic::vhdl::Unit& entity) {
-                    if (entity.kind != semantic::vhdl::UnitKind::entity
-                        || entity.name != unit.primary_name) {
-                        return false;
-                    }
-                    return std::ranges::any_of(entity.declarations,
-                        [&](const semantic::DeclarationId id) {
-                            const auto& declarations
-                                = checked.vhdl_hir.declarations();
-                            const auto found = std::ranges::find(declarations,
-                                id, &semantic::vhdl::Declaration::id);
-                            if (found == declarations.end()
-                                || found->form
-                                    != semantic::vhdl::DeclarationForm::port
-                                || !found->subtype
-                                || !found->subtype->constraints.empty()) {
-                                return false;
-                            }
-                            if (found->subtype->unconstrained) {
-                                return true;
-                            }
-                            // Follow subtypes without constraints to an
-                            // unconstrained array type.
-                            const auto& types = checked.vhdl_hir.types();
-                            auto type_id = found->subtype->type_mark.target;
-                            if (!type_id.valid()) {
-                                auto spelling = std::string_view {
-                                    found->subtype->type_mark.spelling };
-                                if (const auto dot = spelling.find_last_of('.');
-                                    dot != std::string_view::npos) {
-                                    spelling.remove_prefix(dot + 1U);
-                                }
-                                static constexpr std::array<std::string_view, 10>
-                                    vectors { "std_logic_vector",
-                                        "std_ulogic_vector", "bit_vector",
-                                        "string", "signed", "unsigned",
-                                        "boolean_vector", "integer_vector",
-                                        "real_vector", "time_vector" };
-                                return std::ranges::any_of(vectors,
-                                    [&](const std::string_view name) {
-                                        return support::equal_ignoring_ascii_case(
-                                            spelling, name);
-                                    });
-                            }
-                            std::vector<decltype(type_id)> followed;
-                            while (type_id.valid()) {
-                                // A subtype chain that returns to a type
-                                // already followed is not unconstrained.
-                                if (std::ranges::find(followed, type_id)
-                                    != followed.end()) {
-                                    return false;
-                                }
-                                followed.push_back(type_id);
-                                const auto type = std::ranges::find(types,
-                                    type_id, &semantic::vhdl::TypeDefinition::id);
-                                if (type == types.end()) {
-                                    return false;
-                                }
-                                if (type->form == semantic::vhdl::TypeForm::array) {
-                                    return !type->array_dimensions.empty()
-                                        && std::ranges::all_of(
-                                            type->array_dimensions,
-                                            [](const auto& dimension) {
-                                                return dimension.unconstrained
-                                                    && !dimension.constraint;
-                                            });
-                                }
-                                if ((type->form
-                                        != semantic::vhdl::TypeForm::subtype
-                                    && type->form
-                                        != semantic::vhdl::TypeForm::alias)
-                                    || !type->base.constraints.empty()) {
-                                    return false;
-                                }
-                                type_id = type->base.type_mark.target;
-                            }
-                            return false;
-                        });
-                });
-            if (unconstrained_port) {
-                continue;
-            }
-            const auto top = "vhdl:" + std::string { library } + "."
-                + support::encode_vhdl_identifier(
-                    unit.primary_name, unit.extended_primary_name)
-                + "(" + support::encode_vhdl_identifier(
-                    unit.name, unit.extended_name) + ")";
-            const auto elaborated = elaboration::elaborate(checked, top);
-            if (std::ranges::any_of(elaborated.diagnostics, [&](const auto& input) {
-                    return incomplete_context(input.code);
-                })) {
-                continue;
-            }
-            for (const auto& input : elaborated.diagnostics) {
+            for (const auto& input :
+                elaboration::validate_vhdl_architecture_analysis(checked, unit.id)) {
                 const auto file = support::path_to_utf8(
                     std::filesystem::path { input.span.source_name.str() }.filename());
-                if (!analysis_rule(input.code) || !files.contains(file)) {
+                if (!files.contains(file)) {
                     continue;
                 }
                 diagnostics.error(input.code, input.message, span(input.span));
@@ -1015,7 +833,7 @@ static int workspace_compile(const cli::Invocation& invocation, const project::C
         return 1;
     }
     if (sources.language == project::Language::vhdl
-        && !check_vhdl_analysis_elaboration(checked, *groups, sources, diagnostics)) {
+        && !check_vhdl_analysis_rules(checked, *groups, sources, diagnostics)) {
         return 1;
     }
     auto& target = catalogs->front();

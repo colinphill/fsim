@@ -716,7 +716,8 @@ std::optional<ConstantValue> evaluate_vhdl_expression(
 }
 
 const vhdl::Declaration* defined_pure_function(
-    const CompiledDesign& design, const DeclarationId id)
+    const CompiledDesign& design, const DeclarationId id,
+    const ScopeId use_scope)
 {
     const auto* declaration = find_declaration(design.vhdl_hir, id);
     // A foreign function's body is never executed, so its calls do not
@@ -725,10 +726,16 @@ const vhdl::Declaration* defined_pure_function(
         && declaration->callable->foreign) {
         return nullptr;
     }
+    // A body in another design unit (a package body completing its
+    // package's declaration, 4.7) is not folded into the use: its result is
+    // not locally static (9.4.2), and the use depends on the package
+    // declaration only (13.5), so a new body must not leave it stale.
     if (declaration != nullptr && declaration->completion) {
         const auto* completion = find_declaration(
             design.vhdl_hir, *declaration->completion);
-        if (completion != nullptr) {
+        if (completion != nullptr
+            && design.vhdl_scope_unit(completion->scope)
+                == design.vhdl_scope_unit(use_scope)) {
             declaration = completion;
         }
     }
@@ -774,7 +781,8 @@ std::optional<ConstantValue> evaluate_pure_vhdl_call(
         selected = expression.referenced_name->overloads.front();
     }
     const auto* declaration = selected
-        ? defined_pure_function(design, *selected) : nullptr;
+        ? defined_pure_function(design, *selected, expression.scope)
+        : nullptr;
     if (declaration == nullptr
         || vhdl_call_targets_later_local_function(
             design, expression, *declaration)
@@ -1846,7 +1854,7 @@ bool add_initializer_dependencies(const CompiledDesign& design,
         return true;
     }
     const auto* declaration = defined_pure_function(
-        design, declaration_id);
+        design, declaration_id, expression.scope);
     if (declaration == nullptr || declaration->statements.size() != 1U) {
         return true;
     }

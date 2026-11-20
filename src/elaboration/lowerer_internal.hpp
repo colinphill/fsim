@@ -25,6 +25,7 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -493,6 +494,18 @@ struct HirCallableBodyRecording {
 [[nodiscard]] bool same_hir_callable_body(
     const HirCallableBodyRecording& left,
     const HirCallableBodyRecording& right);
+
+// The STD.ENV simulator API a native STD.ENV declaration is (IEEE 1076-2019
+// 16.5), by its native identity; none for any other entry
+// (lowerer_hir_callable.cpp).
+[[nodiscard]] frontend::VhdlSimulatorApi std_env_native_api(
+    const semantic::VhdlNativeIntrinsic& entry) noexcept;
+// The one STD.ENV simulator API every candidate is (the overloads of one
+// designator share it, 16.5); none when a candidate is not a native STD.ENV
+// declaration or the candidates differ.
+[[nodiscard]] frontend::VhdlSimulatorApi std_env_candidates_api(
+    const semantic::SpecializedHirUnit& unit,
+    std::span<const semantic::DeclarationId> candidates);
 
 class Lowerer;
 
@@ -5749,9 +5762,6 @@ private:
         semantic::ExpressionId left, semantic::ExpressionId right) const;
     [[nodiscard]] frontend::VhdlSimulatorApi hir_vhdl_simulator_api(
         const semantic::vhdl::Expression& source) const;
-    [[nodiscard]] std::string hir_vhdl_std_env_procedure_spelling(
-        const semantic::vhdl::Name& name,
-        semantic::ScopeId use_scope) const;
     [[nodiscard]] bool lower_hir_vhdl_procedure_call(
         semantic::StatementId statement);
     [[nodiscard]] bool lower_pending_hir_callables();

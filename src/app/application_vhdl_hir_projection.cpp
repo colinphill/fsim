@@ -111,6 +111,13 @@ std::optional<std::int64_t> VhdlHirBuilder::static_integer(
     output.scope = scope;
     output.kind = expression_kind(value);
     output.text = value.text;
+    // The parser keeps a range's or slice's reserved word, lowered, as the
+    // node's text (5.2.1, 8.5); the HIR stores the direction it means.
+    if (value.kind == frontend::ExpressionKind::Binary
+        || value.kind == frontend::ExpressionKind::Slice) {
+        output.range_direction
+            = vh::range_direction_of_reserved_word(value.text);
+    }
     output.source = span;
     output.origin = expression_origin;
     output.nominal_type = value.nominal_type;

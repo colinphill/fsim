@@ -522,9 +522,11 @@ struct Diagnostic {
     std::string system_call {};
 };
 
-/// The name checks of one VHDL architecture without elaborating what it
-/// instantiates (compile-time analysis of architectures with instances).
-[[nodiscard]] std::vector<Diagnostic> validate_vhdl_architecture_names(
+/// The analysis rules of one VHDL architecture (IEEE 1076-2019 9-11),
+/// checked at compile time on the unit as analyzed: no generic actuals and
+/// nothing it instantiates is elaborated. A rule whose decision needs a
+/// generic value or an actual is left to elaboration.
+[[nodiscard]] std::vector<Diagnostic> validate_vhdl_architecture_analysis(
     const semantic::CompiledDesign& compiled,
     semantic::UnitId architecture);
 

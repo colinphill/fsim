@@ -757,8 +757,7 @@ bool Lowerer::hir_vhdl_null_value(
                                 || choice->vhdl->kind
                                     != semantic::vhdl::ExpressionKind::binary
                                 || choice->vhdl->operands.size() != 2U
-                                || (choice->vhdl->text != "to"
-                                    && choice->vhdl->text != "downto")) {
+                                || (choice->vhdl->range_direction == semantic::vhdl::WrittenRangeDirection::none)) {
                                 return false;
                             }
                             const auto left = hir_constant_integer(
@@ -766,7 +765,8 @@ bool Lowerer::hir_vhdl_null_value(
                             const auto right = hir_constant_integer(
                                 choice->vhdl->operands[1]);
                             return left && right
-                                && (choice->vhdl->text == "to"
+                                && (choice->vhdl->range_direction
+                                            == semantic::vhdl::WrittenRangeDirection::to
                                         ? *left > *right
                                         : *left < *right);
                         });
@@ -1257,9 +1257,9 @@ std::optional<Lowerer::HirVhdlShape> Lowerer::compute_hir_vhdl_shape(
                     ? hir_constant_integer(source.operands[2])
                     : std::nullopt;
                 if (!slice.ranges.front() && left && right
-                    && (source.text == "to" || source.text == "downto")) {
+                    && (source.range_direction != semantic::vhdl::WrittenRangeDirection::none)) {
                     slice.ranges.front() = HirPackedRange { *left, *right,
-                        source.text == "downto" };
+                        source.range_direction == semantic::vhdl::WrittenRangeDirection::downto };
                 }
             }
             facts = std::move(slice);
@@ -1668,8 +1668,7 @@ std::optional<Lowerer::HirConstantSelection> Lowerer::hir_vhdl_value_slice(
     if (!expression || expression->vhdl == nullptr
         || expression->vhdl->kind != semantic::vhdl::ExpressionKind::slice
         || expression->vhdl->operands.size() != 3U
-        || (expression->vhdl->text != "to"
-            && expression->vhdl->text != "downto")) {
+        || (expression->vhdl->range_direction == semantic::vhdl::WrittenRangeDirection::none)) {
         return std::nullopt;
     }
     const auto& source = *expression->vhdl;
@@ -1683,7 +1682,7 @@ std::optional<Lowerer::HirConstantSelection> Lowerer::hir_vhdl_value_slice(
         return std::nullopt;
     }
     const auto& range = *prefix->ranges.front();
-    const auto descending = source.text == "downto";
+    const auto descending = source.range_direction == semantic::vhdl::WrittenRangeDirection::downto;
     const auto count = range.descending
         ? range.left - range.right + 1
         : range.right - range.left + 1;

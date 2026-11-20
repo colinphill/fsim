@@ -50,6 +50,7 @@
 #include <iostream>
 #include <new>
 #include <set>
+#include <stdexcept>
 #include <tuple>
 #include <algorithm>
 #include <bit>
@@ -332,6 +333,83 @@ namespace {
             });
     }
 
+    // The native declaration a call's declaration denotes, through
+    // subprogram aliases (IEEE 1076-2019 6.6.3); null when none.
+    const semantic::vhdl::Declaration* native_callee_declaration(
+        const semantic::SpecializedHirUnit& specialization,
+        std::optional<semantic::DeclarationId> id)
+    {
+        for (std::size_t steps = 0; id && steps < 16U; ++steps) {
+            const auto declaration = specialization.find_declaration(*id);
+            if (!declaration || declaration->vhdl == nullptr) {
+                return nullptr;
+            }
+            if (semantic::vhdl_native_of(*declaration->vhdl) != nullptr) {
+                return declaration->vhdl;
+            }
+            const auto& target = declaration->vhdl->alias_target;
+            if (!target || !target->selected) {
+                return nullptr;
+            }
+            id = target->selected;
+        }
+        return nullptr;
+    }
+
+    // The STD.ENV TIME_RECORD type `owner` denotes (a subtype chain ends at
+    // it); invalid when `owner` is not that record.
+    semantic::TypeId vhdl_environment_time_record_type(
+        const semantic::SpecializedHirUnit& specialization,
+        const semantic::vhdl::SubtypeIndication& owner)
+    {
+        // TIME_RECORD is the ordinary record type STD.ENV declares (IEEE
+        // 1076-2019 16.5.5); it is known as the result type of that package's
+        // native parameterless LOCALTIME, by declaration identity.
+        const auto time_record = [&](const semantic::TypeId target) {
+            const auto definition = specialization.find_type(target);
+            const auto declared = definition && definition->vhdl != nullptr
+                ? specialization.find_declaration(definition->vhdl->declaration)
+                : std::nullopt;
+            const auto* unit = declared && declared->vhdl != nullptr
+                ? specialization.design().vhdl_scope_unit(declared->vhdl->scope)
+                : nullptr;
+            return unit != nullptr
+                && std::ranges::any_of(unit->declarations, [&](const auto id) {
+                       const auto item = specialization.find_declaration(id);
+                       return item && item->vhdl != nullptr
+                           && semantic::vhdl_native_is(*item->vhdl,
+                               semantic::VhdlNativePackage::std_env,
+                               semantic::VhdlNativeName::localtime)
+                           && item->vhdl->callable
+                           && item->vhdl->callable->formals.empty()
+                           && item->vhdl->callable->return_type
+                           && item->vhdl->callable->return_type->type_mark.target
+                               == target;
+                   });
+        };
+        auto type = owner;
+        std::unordered_set<std::uint32_t> visiting;
+        while (type.type_mark.target.valid()) {
+            if (time_record(type.type_mark.target)) {
+                return type.type_mark.target;
+            }
+            if (!visiting.insert(type.type_mark.target.value()).second) {
+                return semantic::TypeId { };
+            }
+            const auto definition = specialization.find_type(
+                type.type_mark.target);
+            if (!definition || definition->vhdl == nullptr
+                || (definition->vhdl->form
+                        != semantic::vhdl::TypeForm::subtype
+                    && definition->vhdl->form
+                        != semantic::vhdl::TypeForm::alias)) {
+                return semantic::TypeId { };
+            }
+            type = definition->vhdl->base;
+    }
+    return semantic::TypeId { };
+    }
+
     struct VhdlEnvironmentTimeRecordMember {
         semantic::vhdl::SubtypeIndication subtype;
         std::size_t offset { };
@@ -350,8 +428,10 @@ namespace {
         // STD.ENV is compiler-owned and has no synthetic package/type unit in
         // compiled HIR. Keep its intrinsic packed record layout available to
         // ordinary HIR member selection without manufacturing an owning type.
-        if (!vhdl_environment_time_record_subtype(
-                specialization, owner, use_scope)) {
+        (void)use_scope;
+        const auto record_type
+            = vhdl_environment_time_record_type(specialization, owner);
+        if (!record_type.valid()) {
             return std::nullopt;
         }
 
@@ -382,9 +462,27 @@ namespace {
         }
 
         semantic::vhdl::SubtypeIndication subtype;
-        subtype.type_mark.spelling = selected->enumeration
-            ? "std.env.dayofweek" : "integer";
-        if (!selected->enumeration) {
+        if (selected->enumeration) {
+            // DAYOFWEEK is the declared type of the stored record element
+            // (IEEE 1076-2019 16.5.5), not a spelling.
+            const auto definition = specialization.find_type(record_type);
+            if (!definition || definition->vhdl == nullptr) {
+                throw std::logic_error(
+                    "STD.ENV TIME_RECORD has no stored definition");
+            }
+            const auto element = std::ranges::find_if(
+                definition->vhdl->record_elements,
+                [&](const semantic::vhdl::RecordElement& candidate) {
+                    return same_hir_identifier(
+                        candidate.name, member, true);
+                });
+            if (element == definition->vhdl->record_elements.end()) {
+                throw std::logic_error(
+                    "STD.ENV TIME_RECORD lacks a layout element");
+            }
+            subtype.type_mark = element->subtype.type_mark;
+        } else {
+            subtype.type_mark.spelling = "integer";
             set_vhdl_standard_mark(
                 subtype, support::StandardDeclaration::integer);
         }
@@ -1452,53 +1550,8 @@ bool vhdl_environment_time_record_subtype(
     const semantic::vhdl::SubtypeIndication& owner,
     const semantic::ScopeId use_scope)
 {
-    // TIME_RECORD is the ordinary record type STD.ENV declares (IEEE
-    // 1076-2019 16.5.5); it is known as the result type of that package's
-    // native parameterless LOCALTIME, by declaration identity.
-    const auto time_record = [&](const semantic::TypeId target) {
-        const auto definition = specialization.find_type(target);
-        const auto declared = definition && definition->vhdl != nullptr
-            ? specialization.find_declaration(definition->vhdl->declaration)
-            : std::nullopt;
-        const auto* unit = declared && declared->vhdl != nullptr
-            ? specialization.design().vhdl_scope_unit(declared->vhdl->scope)
-            : nullptr;
-        return unit != nullptr
-            && std::ranges::any_of(unit->declarations, [&](const auto id) {
-                   const auto item = specialization.find_declaration(id);
-                   return item && item->vhdl != nullptr
-                       && semantic::vhdl_native_is(*item->vhdl,
-                           semantic::VhdlNativePackage::std_env,
-                           semantic::VhdlNativeName::localtime)
-                       && item->vhdl->callable
-                       && item->vhdl->callable->formals.empty()
-                       && item->vhdl->callable->return_type
-                       && item->vhdl->callable->return_type->type_mark.target
-                           == target;
-               });
-    };
     (void)use_scope;
-    auto type = owner;
-    std::unordered_set<std::uint32_t> visiting;
-    while (type.type_mark.target.valid()) {
-        if (time_record(type.type_mark.target)) {
-            return true;
-        }
-        if (!visiting.insert(type.type_mark.target.value()).second) {
-            return false;
-        }
-        const auto definition = specialization.find_type(
-            type.type_mark.target);
-        if (!definition || definition->vhdl == nullptr
-            || (definition->vhdl->form
-                    != semantic::vhdl::TypeForm::subtype
-                && definition->vhdl->form
-                    != semantic::vhdl::TypeForm::alias)) {
-            return false;
-        }
-        type = definition->vhdl->base;
-    }
-    return false;
+    return vhdl_environment_time_record_type(specialization, owner).valid();
 }
 
 void Lowerer::set_ancestor_systemverilog_specializations(
@@ -2355,7 +2408,7 @@ std::optional<std::int64_t> Lowerer::hir_vhdl_elaborated_constant_element(
         && prefix->vhdl->kind == semantic::vhdl::ExpressionKind::slice
         && prefix->vhdl->operands.size() == 3U
         && expression->vhdl->operands.size() == 2U
-        && (prefix->vhdl->text == "to" || prefix->vhdl->text == "downto")) {
+        && prefix->vhdl->range_direction != semantic::vhdl::WrittenRangeDirection::none) {
         return hir_vhdl_elaborated_slice_constant_element(expression_id);
     }
     const auto named = prefix && prefix->vhdl != nullptr
@@ -4162,7 +4215,8 @@ std::optional<Lowerer::HirPackedRange> Lowerer::hir_expression_direct_range(
             && expression->vhdl->operands.size() == 3U) {
             const auto left = hir_constant_integer(expression->vhdl->operands[1]);
             const auto right = hir_constant_integer(expression->vhdl->operands[2]);
-            const bool descending = expression->vhdl->text == "downto";
+            const bool descending
+                = expression->vhdl->range_direction == semantic::vhdl::WrittenRangeDirection::downto;
             if (left && right && *left != *right
                 && descending == (*left > *right)
                 && *width % (index_distance(*left, *right) + 1U) == 0U) {
@@ -4883,6 +4937,9 @@ Lowerer::hir_constant_element_selection(
     }
     std::span<const semantic::ExpressionId> operands;
     std::string_view operation;
+    // The direction a VHDL range or slice was written with (IEEE 1076-2019
+    // 5.2.1); SystemVerilog keeps its select operator in `operation`.
+    semantic::vhdl::WrittenRangeDirection direction { semantic::vhdl::WrittenRangeDirection::none };
     bool index = false;
     bool slice = false;
     if (expression->systemverilog != nullptr) {
@@ -4894,7 +4951,7 @@ Lowerer::hir_constant_element_selection(
     } else {
         const auto& source = *expression->vhdl;
         operands = source.operands;
-        operation = source.text;
+        direction = source.range_direction;
         index = source.kind == semantic::vhdl::ExpressionKind::index;
         slice = source.kind == semantic::vhdl::ExpressionKind::slice;
         // An element of a multidimensional array with static indices
@@ -5134,10 +5191,10 @@ Lowerer::hir_constant_element_selection(
                 }
                 const auto left = hir_constant_integer(operands[1]);
                 const auto right = hir_constant_integer(operands[2]);
-                const auto explicit_direction = operation == "to"
-                    || operation == "downto";
+                const auto explicit_direction
+                    = direction != semantic::vhdl::WrittenRangeDirection::none;
                 const auto selected_descending = explicit_direction
-                    ? operation == "downto"
+                    ? direction == semantic::vhdl::WrittenRangeDirection::downto
                     : left && right && *left > *right;
                 if (left && right && in_range(*left) && in_range(*right)
                     && selected_descending == range->descending) {
@@ -5242,11 +5299,11 @@ Lowerer::hir_constant_element_selection(
         width = static_cast<std::uint64_t>(*second);
     } else {
         const auto explicit_direction = expression->vhdl != nullptr
-            && (operation == "to" || operation == "downto");
+            && direction != semantic::vhdl::WrittenRangeDirection::none;
         // A one-element part-select `[i:i]` agrees with either direction
         // (IEEE 1800-2017 11.5.1).
         const auto selected_descending = explicit_direction
-            ? operation == "downto"
+            ? direction == semantic::vhdl::WrittenRangeDirection::downto
             : left == right ? range->descending
             : left > right;
         if (selected_descending != range->descending) {
@@ -6946,6 +7003,7 @@ std::optional<std::string> Lowerer::hir_vhdl_array_type_family(
             = standard_family_for_identity(identity.builtin_type)) {
             return family;
         }
+        // Projected fixed/float packages: no compile-time analysis (BD2 V4).
         for (const auto& provided : provided_families) {
             if (resolver.vhdl_denotes_provided_package_member(spelling,
                     "ieee", provided.package, provided.member, scope)) {
@@ -6988,6 +7046,7 @@ std::optional<std::string> Lowerer::hir_vhdl_array_type_family(
         if (const auto native = family_of_native(*declaration->vhdl)) {
             return native;
         }
+        // Projected fixed/float packages: no compile-time analysis (BD2 V4).
         for (const auto& provided : provided_families) {
             if (same_hir_identifier(definition.name, provided.member, true)
                 && specialized_hir_unit_->design().vhdl_scope_in_package(
@@ -7527,6 +7586,20 @@ std::optional<semantic::VhdlNativeName> Lowerer::hir_vhdl_edge_function(
     if (hir_referenced_declaration(expression_id)) {
         return std::nullopt;
     }
+    if (hir_resolver().vhdl_scope_analyzed(expression->vhdl->scope)) {
+        // The STANDARD function name analysis stored for the call (16.3).
+        using SD = support::StandardDeclaration;
+        switch (expression->vhdl->resolved_standard) {
+        case SD::rising_edge_bit:
+        case SD::rising_edge_boolean: return Name::rising_edge;
+        case SD::falling_edge_bit:
+        case SD::falling_edge_boolean: return Name::falling_edge;
+        default: return std::nullopt;
+        }
+    }
+    // BD2 V4: a unit compile-time analysis does not cover (a generic package
+    // instance expansion) stores no STANDARD identity; it keeps the link-time
+    // spelling and operand-type test.
     auto name = std::string_view { expression->vhdl->text };
     if (const auto separator = name.find_last_of('.');
         separator != std::string_view::npos) {
@@ -13907,14 +13980,14 @@ bool Lowerer::hir_expression_is_string(
             && source.referenced_name
             && vhdl_standard_ >= frontend::VhdlStandard::Vhdl2008
             && [&] {
-                   const auto& name = *source.referenced_name;
-                   const auto spelling = name.text();
-                   const auto member = simple_name_of(spelling);
-                   return same_hir_identifier(member, "justify", true);
-               }()
-            && hir_resolver()
-                   .vhdl_standard_package_member_visible(
-                       *source.referenced_name, source.scope)) {
+                   // STD.TEXTIO's native JUSTIFY (IEEE 1076-2008 16.4).
+                   const auto* const native
+                       = hir_vhdl_native_callee(expression_id);
+                   return native != nullptr
+                       && native->package_id
+                           == semantic::VhdlNativePackage::std_textio
+                       && native->name == semantic::VhdlNativeName::justify;
+               }()) {
             const auto resolution = resolve_hir_vhdl_function_call(
                 expression_id, process_scope, 0U);
             if (!resolution) {
@@ -15532,6 +15605,8 @@ Lowerer::hir_vhdl_attribute_profile(
             != semantic::CompiledResolutionStatus::not_found) {
             return false;
         }
+        // Only the projected fixed/float arrays reach here (ieee_member):
+        // compiler-projected packages, BD2 V4.
         return resolver.vhdl_builtin_type_visible(
             terminal_qualified_spelling, terminal_scope);
     }();
@@ -23504,10 +23579,8 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
                     if (choice_expression && choice_expression->vhdl != nullptr
                         && choice_expression->vhdl->kind
                             == semantic::vhdl::ExpressionKind::binary
-                        && (equal_ignoring_ascii_case(
-                                choice_expression->vhdl->text, "to")
-                            || equal_ignoring_ascii_case(
-                                choice_expression->vhdl->text, "downto"))
+                        && choice_expression->vhdl->range_direction
+                            != semantic::vhdl::WrittenRangeDirection::none
                         && choice_expression->vhdl->operands.size() == 2U) {
                         range_choice = true;
                         const auto left = hir_constant_integer(
@@ -23516,8 +23589,8 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
                             choice_expression->vhdl->operands.back());
                         if (left && right) {
                             const bool descending
-                                = equal_ignoring_ascii_case(
-                                    choice_expression->vhdl->text, "downto");
+                                = choice_expression->vhdl->range_direction
+                                == semantic::vhdl::WrittenRangeDirection::downto;
                             const bool null_range = descending
                                 ? *left < *right
                                 : *left > *right;
@@ -25360,7 +25433,8 @@ Lowerer::hir_vhdl_standard_function_profile(
     };
     if (native == nullptr) {
         // A projected Synopsys function: overload resolution cannot tell
-        // it from a user homograph, so the visible declarations decide.
+        // it from a user homograph, so the visible declarations decide
+        // (compiler-projected package, BD2 V4).
         auto resolver = hir_resolver();
         if (!resolver.vhdl_standard_package_member_visible(
                 *source.referenced_name, source.scope)) {
@@ -26905,16 +26979,24 @@ Lowerer::compute_hir_vhdl_expression_subtype(
             const bool ascending = name == Name::to_x01
                 || name == Name::to_x01z || name == Name::to_ux01;
             semantic::vhdl::SubtypeIndication result;
-            result.type_mark.spelling = bit_result
-                ? "std.standard.bit_vector"
-                : logic_vector_result
-                ? "ieee.std_logic_1164.std_logic_vector"
-                : "ieee.std_logic_1164.std_ulogic_vector";
-            result.type_mark.source = source.source;
             if (bit_result) {
+                result.type_mark.spelling = "std.standard.bit_vector";
                 set_vhdl_standard_mark(
                     result, support::StandardDeclaration::bit_vector);
+            } else {
+                // The vector type the native function declares as its result
+                // (IEEE 1076-2019 16.7), not a spelling.
+                const auto* const callee = native_callee_declaration(
+                    *specialized_hir_unit_,
+                    hir_referenced_declaration(expression_id));
+                if (callee == nullptr || !callee->callable
+                    || !callee->callable->return_type) {
+                    throw std::logic_error(
+                        "STD_LOGIC_1164 conversion has no stored result type");
+                }
+                result.type_mark = callee->callable->return_type->type_mark;
             }
+            result.type_mark.source = source.source;
             result.builtin_type = bit_result
                 ? Identity::std_standard_bit_vector
                 : logic_vector_result
@@ -27331,8 +27413,7 @@ Lowerer::compute_hir_vhdl_expression_subtype(
         }
         if (source.kind == semantic::vhdl::ExpressionKind::slice) {
             if (source.operands.size() != 3U
-                || (source.text != "to"
-                    && source.text != "downto")) {
+                || source.range_direction == semantic::vhdl::WrittenRangeDirection::none) {
                 return base;
             }
             auto selected = *base;
@@ -27342,7 +27423,8 @@ Lowerer::compute_hir_vhdl_expression_subtype(
             constraint.right_expression = source.operands[2];
             constraint.left = hir_constant_integer(source.operands[1]);
             constraint.right = hir_constant_integer(source.operands[2]);
-            constraint.descending = source.text == "downto";
+            constraint.descending
+                = source.range_direction == semantic::vhdl::WrittenRangeDirection::downto;
             constraint.source = source.source;
             if (constraint.left && constraint.right) {
                 constraint.null = constraint.descending
@@ -28924,8 +29006,8 @@ Lowerer::compute_hir_vhdl_array_selection(
         const auto range_operand = operand && operand->vhdl != nullptr
                 && operand->vhdl->kind
                     == semantic::vhdl::ExpressionKind::binary
-                && (operand->vhdl->text == "to"
-                    || operand->vhdl->text == "downto")
+                && operand->vhdl->range_direction
+                    != semantic::vhdl::WrittenRangeDirection::none
                 && operand->vhdl->operands.size() == 2U
             ? operand->vhdl
             : nullptr;
@@ -29279,7 +29361,7 @@ Lowerer::compute_hir_vhdl_array_selection(
                 : hir_constant_integer(range_operand->operands.back());
             const auto selected_descending = attribute_range
                 ? attribute_range->descending
-                : range_operand->text == "downto";
+                : range_operand->range_direction == semantic::vhdl::WrittenRangeDirection::downto;
             if (index + 1U != selectors.size()
                 || (attribute_range && selectors.size() != 1U)
                 || !selected_left || !selected_right

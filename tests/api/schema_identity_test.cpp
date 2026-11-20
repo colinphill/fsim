@@ -27,7 +27,7 @@ static_assert(fsim::app::kCompiledHirBundleSchema == 14);
 static_assert(fsim::app::kSystemVerilogConstraintHirStateSchema == 47);
 static_assert(fsim::app::kSystemVerilogCoverageStateSchema == 10);
 static_assert(fsim::app::kSystemVerilogUvmStateSchema == 3);
-static_assert(fsim::app::kVhdlHirStateSchema == 26);
+static_assert(fsim::app::kVhdlHirStateSchema == 27);
 
 int main()
 {

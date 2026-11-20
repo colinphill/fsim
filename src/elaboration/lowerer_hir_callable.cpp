@@ -15417,8 +15417,7 @@ Lowerer::hir_vhdl_shaped_formal_profile(
     const bool slice
         = expression->vhdl->kind == semantic::vhdl::ExpressionKind::slice
         && expression->vhdl->operands.size() == 3U
-        && (expression->vhdl->text == "to"
-            || expression->vhdl->text == "downto");
+        && expression->vhdl->range_direction != semantic::vhdl::WrittenRangeDirection::none;
     if (slice) {
         if (const auto shape = hir_vhdl_shape(actual);
             shape && shape->complete()) {
@@ -17784,8 +17783,7 @@ Lowerer::hir_vhdl_function_result_proof(
                 == semantic::vhdl::ExpressionKind::slice
             && value->vhdl->operands.size() == 3U
             && return_subtype->element_constraints.empty()
-            && (value->vhdl->text == "to"
-                || value->vhdl->text == "downto")
+            && value->vhdl->range_direction != semantic::vhdl::WrittenRangeDirection::none
             && standard_natural_index()) {
             const auto& slice = *value->vhdl;
             const auto prefix = specialized_hir_unit_->find_expression(
@@ -18014,7 +18012,8 @@ Lowerer::hir_vhdl_function_result_proof(
                 const auto right = static_slice_bound(2U);
                 if (actual_is_constrained_name && nested_shape_valid
                     && left && right && *left >= 0 && *right >= 0) {
-                    const bool descending = slice.text == "downto";
+                    const bool descending
+                        = slice.range_direction == semantic::vhdl::WrittenRangeDirection::downto;
                     const bool null_range = descending
                         ? *left < *right : *left > *right;
                     const auto low = std::min(
@@ -19537,8 +19536,7 @@ bool Lowerer::hir_vhdl_actual_matches_formal(
         && actual->vhdl->kind
             == semantic::vhdl::ExpressionKind::slice
         && actual->vhdl->operands.size() == 3U
-        && (actual->vhdl->text == "to"
-            || actual->vhdl->text == "downto")) {
+        && actual->vhdl->range_direction != semantic::vhdl::WrittenRangeDirection::none) {
         // A slice of a named object can retain its exact bounds and packed
         // width even when the generic expression-subtype query has no
         // selected subtype for the plain object name. Recover the declared
@@ -19617,7 +19615,7 @@ bool Lowerer::hir_vhdl_actual_matches_formal(
                 ? base_range->left >= base_range->right
                 : base_range->left <= base_range->right;
             const bool selected_descending
-                = actual->vhdl->text == "downto";
+                = actual->vhdl->range_direction == semantic::vhdl::WrittenRangeDirection::downto;
             const bool selected_nonnull = selected_descending
                 ? *selected_left >= *selected_right
                 : *selected_left <= *selected_right;
@@ -26388,62 +26386,117 @@ bool Lowerer::hir_vhdl_string_comparison_operands(
             && (file_line(left) || aggregate_against(left, right)));
 }
 
-frontend::VhdlSimulatorApi Lowerer::hir_vhdl_simulator_api(
-    const semantic::vhdl::Expression& source) const
+/// The STD.ENV simulator API a native STD.ENV declaration is (IEEE 1076-2019
+/// 16.5); none for a native entry that is not a simulator API.
+frontend::VhdlSimulatorApi std_env_native_api(
+    const semantic::VhdlNativeIntrinsic& entry) noexcept
 {
-    if (const auto api = frontend::vhdl_simulator_api(source.text);
-        api != frontend::VhdlSimulatorApi::none) {
-        return api;
+    using Api = frontend::VhdlSimulatorApi;
+    using Name = semantic::VhdlNativeName;
+    if (entry.package_id != semantic::VhdlNativePackage::std_env) {
+        return Api::none;
     }
-    if ((source.kind != semantic::vhdl::ExpressionKind::name
-            && source.kind != semantic::vhdl::ExpressionKind::call)
-        || source.text.empty()
-        || source.text.find_first_of(".:'") != std::string::npos) {
-        return frontend::VhdlSimulatorApi::none;
+    switch (entry.name) {
+    case Name::stop: return Api::stop;
+    case Name::finish: return Api::finish;
+    case Name::resolution_limit: return Api::resolution_limit;
+    case Name::localtime: return Api::localtime;
+    case Name::gmtime: return Api::gmtime;
+    case Name::epoch: return Api::epoch;
+    case Name::time_to_seconds: return Api::time_to_seconds;
+    case Name::seconds_to_time: return Api::seconds_to_time;
+    case Name::to_string: return Api::to_string;
+    case Name::getenv: return Api::getenv;
+    case Name::vhdl_version: return Api::vhdl_version;
+    case Name::tool_type: return Api::tool_type;
+    case Name::tool_vendor: return Api::tool_vendor;
+    case Name::tool_name: return Api::tool_name;
+    case Name::tool_edition: return Api::tool_edition;
+    case Name::tool_version: return Api::tool_version;
+    case Name::get_call_path: return Api::get_call_path;
+    case Name::file_name: return Api::file_name;
+    case Name::file_path: return Api::file_path;
+    case Name::file_line: return Api::file_line;
+    case Name::dir_open: return Api::dir_open;
+    case Name::dir_close: return Api::dir_close;
+    case Name::dir_itemexists: return Api::dir_itemexists;
+    case Name::dir_itemisdir: return Api::dir_itemisdir;
+    case Name::dir_itemisfile: return Api::dir_itemisfile;
+    case Name::dir_workingdir: return Api::dir_workingdir;
+    case Name::dir_createdir: return Api::dir_createdir;
+    case Name::dir_deletedir: return Api::dir_deletedir;
+    case Name::dir_deletefile: return Api::dir_deletefile;
+    case Name::dir_separator: return Api::dir_separator;
+    case Name::pslassertfailed: return Api::psl_assert_failed;
+    case Name::psliscovered: return Api::psl_is_covered;
+    case Name::getpslcoverassert: return Api::get_psl_cover_assert;
+    case Name::pslisassertcovered: return Api::psl_is_assert_covered;
+    case Name::setpslcoverassert: return Api::set_psl_cover_assert;
+    case Name::clearpslstate: return Api::clear_psl_state;
+    case Name::isvhdlassertfailed: return Api::is_vhdl_assert_failed;
+    case Name::getvhdlassertcount: return Api::get_vhdl_assert_count;
+    case Name::clearvhdlassert: return Api::clear_vhdl_assert;
+    case Name::setvhdlassertenable: return Api::set_vhdl_assert_enable;
+    case Name::getvhdlassertenable: return Api::get_vhdl_assert_enable;
+    case Name::setvhdlassertformat: return Api::set_vhdl_assert_format;
+    case Name::getvhdlassertformat: return Api::get_vhdl_assert_format;
+    case Name::setvhdlreadseverity: return Api::set_vhdl_read_severity;
+    case Name::getvhdlreadseverity: return Api::get_vhdl_read_severity;
+    default: return Api::none;
     }
-    // Only a name of an STD.ENV subprogram can denote one; any other name
-    // needs no resolution.
-    if (frontend::vhdl_simulator_api(
-            "std.env." + support::ascii_lower(source.text))
-        == frontend::VhdlSimulatorApi::none) {
-        return frontend::VhdlSimulatorApi::none;
-    }
-    semantic::vhdl::Name name;
-    name.spelling = source.text;
-    name.canonical = support::ascii_lower(source.text);
-    const auto spelling
-        = hir_vhdl_std_env_procedure_spelling(name, source.scope);
-    return spelling == source.text ? frontend::VhdlSimulatorApi::none
-                                   : frontend::vhdl_simulator_api(spelling);
 }
 
-std::string Lowerer::hir_vhdl_std_env_procedure_spelling(
-    const semantic::vhdl::Name& name,
-    const semantic::ScopeId use_scope) const
+/// The one STD.ENV simulator API every candidate of a call names (the
+/// overloads of STOP, FINISH, ... share one API, 16.5); none when a
+/// candidate is not a native STD.ENV declaration or they differ.
+frontend::VhdlSimulatorApi std_env_candidates_api(
+    const semantic::SpecializedHirUnit& unit,
+    const std::span<const semantic::DeclarationId> candidates)
 {
-    // A name whose visible subprograms are all one native STD.ENV
-    // procedure or function (STOP, FINISH, ... with their overloads, IEEE
-    // 1076-2019 16.5) names that simulator API.
-    if (specialized_hir_unit_ == nullptr || name.spelling.empty()
-        || name.spelling.find_first_of(".:") != std::string::npos) {
-        return name.spelling;
-    }
-    const semantic::VhdlNativeIntrinsic* common = nullptr;
-    for (const auto id : hir_vhdl_callable_candidates(name, use_scope)) {
-        const auto declaration = specialized_hir_unit_->find_declaration(id);
+    auto common = frontend::VhdlSimulatorApi::none;
+    for (const auto id : candidates) {
+        const auto declaration = unit.find_declaration(id);
         const auto* entry = declaration && declaration->vhdl != nullptr
             ? semantic::vhdl_native_of(*declaration->vhdl)
             : nullptr;
-        if (entry == nullptr
-            || entry->package_id != semantic::VhdlNativePackage::std_env
-            || (common != nullptr && entry->name != common->name)) {
-            return name.spelling;
+        const auto api = entry != nullptr ? std_env_native_api(*entry)
+                                          : frontend::VhdlSimulatorApi::none;
+        if (api == frontend::VhdlSimulatorApi::none
+            || (common != frontend::VhdlSimulatorApi::none && api != common)) {
+            return frontend::VhdlSimulatorApi::none;
         }
-        common = entry;
+        common = api;
     }
-    return common != nullptr
-        ? "std.env." + std::string { semantic::vhdl_native_designator(*common) }
-        : name.spelling;
+    return common;
+}
+
+frontend::VhdlSimulatorApi Lowerer::hir_vhdl_simulator_api(
+    const semantic::vhdl::Expression& source) const
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return frontend::VhdlSimulatorApi::none;
+    }
+    // The callee is the declaration the design's resolution stored for the
+    // call (12.5), else the declarations its name denotes (12.3, 12.4); the
+    // API is that declaration's native STD.ENV identity.
+    if (source.resolved_declaration) {
+        const std::array one { *source.resolved_declaration };
+        return std_env_candidates_api(*specialized_hir_unit_, one);
+    }
+    if ((source.kind != semantic::vhdl::ExpressionKind::name
+            && source.kind != semantic::vhdl::ExpressionKind::call)
+        || !source.referenced_name) {
+        return frontend::VhdlSimulatorApi::none;
+    }
+    // A name the analysis selected (12.3): a non-overloadable STD.ENV
+    // declaration such as the deferred constant DIR_SEPARATOR (16.5.7).
+    if (source.referenced_name->selected) {
+        const std::array one { *source.referenced_name->selected };
+        return std_env_candidates_api(*specialized_hir_unit_, one);
+    }
+    const auto candidates = hir_vhdl_callable_candidates(
+        *source.referenced_name, source.scope);
+    return std_env_candidates_api(*specialized_hir_unit_, candidates);
 }
 
 bool Lowerer::lower_hir_vhdl_procedure_call(
@@ -26502,16 +26555,20 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
     if (const auto lowered = lower_hir_vhdl_math_real_uniform(statement_id)) {
         return *lowered;
     }
-    const auto procedure_spelling = hir_vhdl_std_env_procedure_spelling(
-        statement->vhdl->procedure, statement->vhdl->scope);
-    const auto set_psl_cover_assert = same_hir_identifier(
-        procedure_spelling, "std.env.setpslcoverassert", true);
-    const auto clear_psl_state = same_hir_identifier(
-        procedure_spelling, "std.env.clearpslstate", true);
-    const auto stop = same_hir_identifier(
-        procedure_spelling, "std.env.stop", true);
-    const auto finish = same_hir_identifier(
-        procedure_spelling, "std.env.finish", true);
+    // The callee the analysis stored (10.7, 12.5), else the name's visible
+    // procedures (a unit without stored results, BD2 V4).
+    const auto environment_api = statement->vhdl->resolved_procedure
+        ? std_env_candidates_api(*specialized_hir_unit_,
+              std::array { *statement->vhdl->resolved_procedure })
+        : std_env_candidates_api(*specialized_hir_unit_,
+              hir_vhdl_callable_candidates(
+                  statement->vhdl->procedure, statement->vhdl->scope));
+    const auto set_psl_cover_assert
+        = environment_api == frontend::VhdlSimulatorApi::set_psl_cover_assert;
+    const auto clear_psl_state
+        = environment_api == frontend::VhdlSimulatorApi::clear_psl_state;
+    const auto stop = environment_api == frontend::VhdlSimulatorApi::stop;
+    const auto finish = environment_api == frontend::VhdlSimulatorApi::finish;
     if (set_psl_cover_assert || clear_psl_state || stop || finish) {
         const auto& associations = statement->vhdl->procedure_arguments;
         // STOP and FINISH are VHDL-2008 (IEEE 1076-2008 16.5); the PSL

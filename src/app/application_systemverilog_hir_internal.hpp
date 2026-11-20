@@ -10,6 +10,7 @@
 #include "fsim/frontend/token.hpp"
 #include "fsim/semantic/model.hpp"
 #include "fsim/semantic/systemverilog_hir.hpp"
+#include "fsim/support/symbol.hpp"
 #include <algorithm>
 #include <cstddef>
 #include <functional>
@@ -322,12 +323,6 @@ systemverilog_class_parameter_actuals(const frontend::Type& input,
     const frontend::SystemVerilogClassMethod& input);
 [[nodiscard]] frontend::TaskDeclaration class_task(
     const frontend::SystemVerilogClassMethod& input);
-[[nodiscard]] semantic::TypeId find_systemverilog_hir_type(
-    const semantic::Model& model,
-    const sv::Hir& hir,
-    semantic::ScopeId scope,
-    std::string_view spelling,
-    std::uint64_t source_order = 0U) noexcept;
 
 /// An omitted call argument, positional `f(, 1)` or named `f(.s())`,
 /// takes the formal's default (IEEE 1800-2017 13.5.3). The returned flags
@@ -488,6 +483,234 @@ private:
     std::size_t indexed_ { };
     mutable std::unordered_map<std::uint32_t, support::SymbolId> unit_symbols_;
 };
+
+// A written type name `T`, `p::T`, or `lib::p::T` as linked HIR spells a
+// package of another library (IEEE 1800-2023 26.3), split once at its last
+// `::` and interned (5.6: exact text). `whole` is the full text.
+struct SystemVerilogTypeName {
+    support::SymbolId whole;
+    support::SymbolId qualifier;
+    support::SymbolId simple;
+};
+
+[[nodiscard]] inline SystemVerilogTypeName systemverilog_type_name(
+    const std::string_view spelling)
+{
+    SystemVerilogTypeName result;
+    if (spelling.empty()) {
+        return result;
+    }
+    result.whole = support::systemverilog_symbol(spelling);
+    const auto separator = spelling.rfind("::");
+    if (separator == std::string_view::npos) {
+        result.simple = result.whole;
+        return result;
+    }
+    result.qualifier = support::systemverilog_symbol(spelling.substr(0U, separator));
+    result.simple = support::systemverilog_symbol(spelling.substr(separator + 2U));
+    return result;
+}
+
+// Model types by scope and interned name, and by source and name; Model
+// values and instances by scope, source and name; HIR packages by library
+// and name. Extended over the records appended since the last lookup (the
+// builders only append). Each name is interned once, when indexed.
+class SystemVerilogModelSymbols final {
+public:
+    SystemVerilogModelSymbols(
+        const semantic::Model& model, const sv::Hir& hir) noexcept
+        : model_ { model }
+        , hir_ { hir }
+    {
+    }
+
+    // The types named `name` declared in `scope`, in model order.
+    [[nodiscard]] std::span<const semantic::TypeId> named(
+        const semantic::ScopeId scope, const support::SymbolId name)
+    {
+        extend_types();
+        const auto found = by_scope_.find(key(scope.value(), name));
+        return found == by_scope_.end()
+            ? std::span<const semantic::TypeId> { }
+            : std::span<const semantic::TypeId> { found->second };
+    }
+
+    // The types named `name` declared at `source`, in model order.
+    [[nodiscard]] std::span<const semantic::TypeId> from_source(
+        const semantic::SourceSpanId source, const support::SymbolId name)
+    {
+        extend_types();
+        const auto found = by_source_.find(key(source.value(), name));
+        return found == by_source_.end()
+            ? std::span<const semantic::TypeId> { }
+            : std::span<const semantic::TypeId> { found->second };
+    }
+
+    // The first package, in HIR order, that `reference` names from a unit
+    // of `library`: a package of that library with that name, or one
+    // spelled `library::package` (any library).
+    [[nodiscard]] const sv::Unit* package(
+        const support::SymbolId library, const support::SymbolId reference)
+    {
+        extend_units();
+        const auto local = local_packages_.find(key(library.index(), reference));
+        const auto qualified = qualified_packages_.find(reference.index());
+        std::size_t position = hir_.units().size();
+        if (local != local_packages_.end()) {
+            position = local->second;
+        }
+        if (qualified != qualified_packages_.end()) {
+            position = std::min(position, qualified->second);
+        }
+        return position == hir_.units().size() ? nullptr : &hir_.units()[position];
+    }
+
+    // The Model value or instance named `name` that the semantic pass
+    // recorded in `scope` for the declaration at `source`.
+    [[nodiscard]] semantic::ValueId value(const semantic::ScopeId scope,
+        const semantic::SourceSpanId source, const support::SymbolId name)
+    {
+        const auto& values = model_.values();
+        for (; values_indexed_ < values.size(); ++values_indexed_) {
+            const auto& value = values[values_indexed_];
+            values_.try_emplace(record_key(value.scope, value.source,
+                                    support::systemverilog_symbol(value.name)),
+                value.id);
+        }
+        const auto found = values_.find(record_key(scope, source, name));
+        return found == values_.end() ? semantic::ValueId { } : found->second;
+    }
+
+    [[nodiscard]] semantic::InstanceId instance(const semantic::ScopeId scope,
+        const semantic::SourceSpanId source, const support::SymbolId name)
+    {
+        const auto& instances = model_.instances();
+        for (; instances_indexed_ < instances.size(); ++instances_indexed_) {
+            const auto& instance = instances[instances_indexed_];
+            instances_.try_emplace(record_key(instance.scope, instance.source,
+                                       support::systemverilog_symbol(instance.name)),
+                instance.id);
+        }
+        const auto found = instances_.find(record_key(scope, source, name));
+        return found == instances_.end() ? semantic::InstanceId { } : found->second;
+    }
+
+    // The interned library name of a Model unit, once per unit.
+    [[nodiscard]] support::SymbolId library(const semantic::Unit& unit)
+    {
+        const auto [found, inserted] = model_libraries_.try_emplace(unit.id.value());
+        if (inserted) {
+            found->second = support::systemverilog_symbol(unit.library);
+        }
+        return found->second;
+    }
+
+private:
+    [[nodiscard]] static std::uint64_t key(
+        const std::uint32_t owner, const support::SymbolId name) noexcept
+    {
+        return (static_cast<std::uint64_t>(owner) << 32U) | name.index();
+    }
+
+    struct RecordKey {
+        std::uint32_t scope;
+        std::uint32_t source;
+        std::uint32_t name;
+        bool operator==(const RecordKey&) const = default;
+    };
+    struct RecordKeyHash {
+        std::size_t operator()(const RecordKey& key) const noexcept
+        {
+            return std::hash<std::uint64_t> { }(
+                       (static_cast<std::uint64_t>(key.scope) << 32U) | key.source)
+                ^ (std::hash<std::uint32_t> { }(key.name) * 0x9e3779b97f4a7c15ULL);
+        }
+    };
+    [[nodiscard]] static RecordKey record_key(const semantic::ScopeId scope,
+        const semantic::SourceSpanId source, const support::SymbolId name) noexcept
+    {
+        return { scope.value(), source.value(), name.index() };
+    }
+
+    void extend_types()
+    {
+        const auto& types = model_.types();
+        if (types.size() < types_indexed_) {
+            by_scope_.clear();
+            by_source_.clear();
+            types_indexed_ = 0U;
+        }
+        for (; types_indexed_ < types.size(); ++types_indexed_) {
+            const auto& type = types[types_indexed_];
+            if (type.name.empty()) {
+                continue;
+            }
+            const auto name = support::systemverilog_symbol(type.name);
+            by_scope_[key(type.scope.value(), name)].push_back(type.id);
+            by_source_[key(type.source.value(), name)].push_back(type.id);
+        }
+    }
+
+    void extend_units()
+    {
+        const auto& units = hir_.units();
+        if (units.size() < units_indexed_) {
+            local_packages_.clear();
+            qualified_packages_.clear();
+            units_indexed_ = 0U;
+        }
+        for (; units_indexed_ < units.size(); ++units_indexed_) {
+            const auto& unit = units[units_indexed_];
+            if (unit.kind != sv::UnitKind::package) {
+                continue;
+            }
+            local_packages_.try_emplace(
+                key(support::systemverilog_symbol(unit.library).index(),
+                    support::systemverilog_symbol(unit.name)),
+                units_indexed_);
+            qualified_packages_.try_emplace(
+                support::systemverilog_symbol(unit.library + "::" + unit.name).index(),
+                units_indexed_);
+        }
+    }
+
+    const semantic::Model& model_;
+    const sv::Hir& hir_;
+    std::unordered_map<std::uint64_t, std::vector<semantic::TypeId>> by_scope_;
+    std::unordered_map<std::uint64_t, std::vector<semantic::TypeId>> by_source_;
+    std::size_t types_indexed_ { };
+    std::unordered_map<std::uint64_t, std::size_t> local_packages_;
+    std::unordered_map<std::uint32_t, std::size_t> qualified_packages_;
+    std::size_t units_indexed_ { };
+    std::unordered_map<std::uint32_t, support::SymbolId> model_libraries_;
+    std::unordered_map<RecordKey, semantic::ValueId, RecordKeyHash> values_;
+    std::size_t values_indexed_ { };
+    std::unordered_map<RecordKey, semantic::InstanceId, RecordKeyHash> instances_;
+    std::size_t instances_indexed_ { };
+};
+
+// A named type visible from `scope` (IEEE 1800-2023 6.18, 26.3): declared
+// in the scope or an enclosing one; `p::T` from package p (also through
+// its exports, 26.6); otherwise imported into the owning unit before
+// `source_order` (explicit imports hide wildcard ones). None when no or
+// more than one type is found.
+[[nodiscard]] semantic::TypeId find_systemverilog_hir_type(
+    const semantic::Model& model,
+    const sv::Hir& hir,
+    SystemVerilogModelSymbols& symbols,
+    semantic::ScopeId scope,
+    const SystemVerilogTypeName& name,
+    std::uint64_t source_order = 0U) noexcept;
+
+// The type `package::simple` of the package `package` names from `scope`'s
+// unit (26.3), as find_systemverilog_hir_type finds a qualified name.
+[[nodiscard]] semantic::TypeId find_systemverilog_package_type(
+    const semantic::Model& model,
+    const sv::Hir& hir,
+    SystemVerilogModelSymbols& symbols,
+    semantic::ScopeId scope,
+    support::SymbolId package,
+    support::SymbolId simple) noexcept;
 
 // A Name of `spelling` with its interned symbol (IEEE 1800-2023 5.6).
 [[nodiscard]] inline sv::Name systemverilog_name(
@@ -872,6 +1095,7 @@ private:
     semantic::Model& model_;
     sv::Hir& hir_;
     mutable SystemVerilogScopeSymbols scope_symbols_ { hir_ };
+    mutable SystemVerilogModelSymbols model_symbols_ { model_, hir_ };
     // The genvar of each loop-generate block scope, which hides outer
     // declarations of its name inside the block (IEEE 1800-2017 27.4).
     std::map<semantic::ScopeId, support::SymbolId> genvar_scopes_;

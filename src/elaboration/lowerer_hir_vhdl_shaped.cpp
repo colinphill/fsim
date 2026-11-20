@@ -225,7 +225,7 @@ std::optional<std::size_t> Lowerer::hir_vhdl_symbolic_slice_length(
         || (first.base && !same(same, *first.base, *last.base, 0U))) {
         return std::nullopt;
     }
-    const auto distance = slice->vhdl->text == "downto"
+    const auto distance = slice->vhdl->range_direction == semantic::vhdl::WrittenRangeDirection::downto
         ? first.constant - last.constant
         : last.constant - first.constant;
     return distance >= 0
@@ -966,8 +966,7 @@ std::optional<Lowerer::HirVhdlShapedSlice> Lowerer::hir_vhdl_shaped_slice(
     if (!expression || expression->vhdl == nullptr
         || expression->vhdl->kind != semantic::vhdl::ExpressionKind::slice
         || expression->vhdl->operands.size() != 3U
-        || (expression->vhdl->text != "to"
-            && expression->vhdl->text != "downto")) {
+        || (expression->vhdl->range_direction == semantic::vhdl::WrittenRangeDirection::none)) {
         return std::nullopt;
     }
     const auto* local = hir_vhdl_shaped_prefix(expression->vhdl->operands[0]);
@@ -975,7 +974,7 @@ std::optional<Lowerer::HirVhdlShapedSlice> Lowerer::hir_vhdl_shaped_slice(
         return std::nullopt;
     }
     return HirVhdlShapedSlice { local, expression->vhdl->operands[1],
-        expression->vhdl->operands[2], expression->vhdl->text == "downto" };
+        expression->vhdl->operands[2], expression->vhdl->range_direction == semantic::vhdl::WrittenRangeDirection::downto };
 }
 
 std::optional<VhdlShaped> Lowerer::lower_hir_vhdl_shaped_slice(
@@ -1890,7 +1889,7 @@ Lowerer::lower_hir_vhdl_shaped_string_value(
             : std::nullopt;
         if (choice && choice->vhdl != nullptr
             && choice->vhdl->kind == semantic::vhdl::ExpressionKind::binary
-            && (choice->vhdl->text == "to" || choice->vhdl->text == "downto")
+            && (choice->vhdl->range_direction != semantic::vhdl::WrittenRangeDirection::none)
             && choice->vhdl->operands.size() == 2U) {
             std::vector<RegisterId> bounds;
             for (const auto bound : choice->vhdl->operands) {
@@ -1902,7 +1901,7 @@ Lowerer::lower_hir_vhdl_shaped_string_value(
                 }
                 bounds.push_back(*lowered);
             }
-            if (choice->vhdl->text == "downto") {
+            if (choice->vhdl->range_direction == semantic::vhdl::WrittenRangeDirection::downto) {
                 std::swap(bounds[0], bounds[1]);
             }
             // A character literal is a CHARACTER here even where it could
@@ -2023,7 +2022,7 @@ Lowerer::lower_hir_vhdl_shaped_string_value(
     // A slice has the bounds and direction of its discrete range (8.5).
     if (source.kind == semantic::vhdl::ExpressionKind::slice
         && source.operands.size() == 3U
-        && (source.text == "to" || source.text == "downto")) {
+        && (source.range_direction != semantic::vhdl::WrittenRangeDirection::none)) {
         const auto text = lower_hir_string_expression(value_id);
         const auto first = source.operands[1];
         const auto left = text
@@ -2035,7 +2034,7 @@ Lowerer::lower_hir_vhdl_shaped_string_value(
             return Result { std::optional<ContainerRegisterId> { } };
         }
         const auto container = lower_hir_vhdl_shaped_text(
-            profile, *text, *left, source.text == "downto");
+            profile, *text, *left, source.range_direction == semantic::vhdl::WrittenRangeDirection::downto);
         check_hir_vhdl_shaped_string_bounds(container, span);
         return Result { container };
     }
@@ -2248,7 +2247,7 @@ Lowerer::lower_hir_vhdl_shaped_container(
             { },
             conform_hir_vhdl_shaped_domain(*element, profile->element_domain),
             std::move(bounds),
-            { static_cast<std::uint8_t>(choice->vhdl->text == "downto" ? 1U : 0U) },
+            { static_cast<std::uint8_t>(choice->vhdl->range_direction == semantic::vhdl::WrittenRangeDirection::downto ? 1U : 0U) },
             profile->type,
             0U,
             VhdlShapedAttribute::length,

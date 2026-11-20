@@ -239,19 +239,34 @@ void test_context_dependency_fingerprints(const semantic::CompiledDesign& design
         design, architecture_owner, catalogs);
     assert(has_dependency(architecture.dependencies, context, context.fingerprint));
     assert(has_dependency(architecture.dependencies, specification, specification.fingerprint));
-    assert(has_dependency(architecture.dependencies, body, body.fingerprint));
+    // A package user depends on the package declaration only (IEEE
+    // 1076-2019 13.5): the body is never one of its dependencies.
+    assert(!has_dependency(architecture.dependencies, body, body.fingerprint));
+    assert(!has_dependency(context.dependencies, body, body.fingerprint));
     fsim::diagnostic::Engine consistent;
     assert(detail::validate_workspace_dependencies(catalogs, consistent));
     assert(!consistent.has_error());
 
-    const auto old_body_fingerprint = body.fingerprint;
+    // A new body leaves the context and the architecture current.
     const auto context_fingerprint = context.fingerprint;
     body.fingerprint = body.id + "-v2";
     context.dependencies = detail::workspace_dependencies(
         design, context_owner, catalogs);
     assert(context.fingerprint == context_fingerprint);
-    assert(has_dependency(context.dependencies, body, body.fingerprint));
-    assert(has_dependency(architecture.dependencies, body, old_body_fingerprint));
+    assert(!has_dependency(context.dependencies, body, body.fingerprint));
+    fsim::diagnostic::Engine replaced_body;
+    assert(detail::validate_workspace_dependencies(catalogs, replaced_body));
+    assert(!replaced_body.has_error());
+
+    // A new package declaration makes them obsolete (13.5).
+    const auto old_specification_fingerprint = specification.fingerprint;
+    specification.fingerprint = specification.id + "-v2";
+    context.dependencies = detail::workspace_dependencies(
+        design, context_owner, catalogs);
+    assert(has_dependency(context.dependencies, specification,
+        specification.fingerprint));
+    assert(has_dependency(architecture.dependencies, specification,
+        old_specification_fingerprint));
     fsim::diagnostic::Engine stale;
     assert(!detail::validate_workspace_dependencies(catalogs, stale));
     assert(has_code(stale, "FSIM-WS-002"));

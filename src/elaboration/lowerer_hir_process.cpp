@@ -6833,8 +6833,8 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
                 if (choice && choice->vhdl != nullptr
                     && choice->vhdl->kind
                         == semantic::vhdl::ExpressionKind::binary
-                    && (choice->vhdl->text == "to"
-                        || choice->vhdl->text == "downto")
+                    && choice->vhdl->range_direction
+                        != semantic::vhdl::WrittenRangeDirection::none
                     && choice->vhdl->operands.size() == 2U) {
                     first = hir_constant_integer(choice->vhdl->operands[0]);
                     last = hir_constant_integer(choice->vhdl->operands[1]);

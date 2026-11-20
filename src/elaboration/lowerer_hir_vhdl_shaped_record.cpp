@@ -697,7 +697,7 @@ std::optional<ContainerRegisterId> Lowerer::lower_hir_vhdl_shaped_materialize(
     // index range (8.5): the prefix's value is sliced when it is evaluated.
     if (source->vhdl->kind == semantic::vhdl::ExpressionKind::slice
         && source->vhdl->operands.size() == 3U
-        && (source->vhdl->text == "to" || source->vhdl->text == "downto")
+        && (source->vhdl->range_direction != semantic::vhdl::WrittenRangeDirection::none)
         && profile.constraints.size() == 1U && profile.outer_rank == 0U
         && [&] {
                const auto shape = hir_vhdl_shape(value);
@@ -726,7 +726,7 @@ std::optional<ContainerRegisterId> Lowerer::lower_hir_vhdl_shaped_materialize(
             { },
             std::move(bounds),
             { static_cast<std::uint8_t>(
-                source->vhdl->text == "downto" ? 1U : 0U) },
+                source->vhdl->range_direction == semantic::vhdl::WrittenRangeDirection::downto ? 1U : 0U) },
             profile.type,
             0U,
             VhdlShapedAttribute::length,

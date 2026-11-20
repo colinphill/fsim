@@ -6859,6 +6859,23 @@ if(TARGET fsim)
   endforeach()
 endif()
 
+# Compile orders around a VHDL package body (IEEE 1076-2019 4.7, 4.8, 13.5).
+if(TARGET fsim)
+  foreach(package_body_order IN ITEMS
+      replace_body deferred_a deferred_b deferred_c deferred_d deferred_e)
+    add_test(
+      NAME "fsim.package-body-order.${package_body_order}"
+      COMMAND "${CMAKE_COMMAND}"
+        "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+        "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/compliance/package_body_order"
+        "-DFSIM_SCENARIO=${package_body_order}"
+        -P "${PROJECT_SOURCE_DIR}/tests/fixtures/compliance/package_body_order/RunPackageBodyOrder.cmake")
+    set_tests_properties("fsim.package-body-order.${package_body_order}" PROPERTIES
+      LABELS "application;compliance"
+      TIMEOUT 300)
+  endforeach()
+endif()
+
 # Invalid SystemVerilog designs that elaboration must reject, each with the
 # diagnostic code, top and required text named in its header.
 if(TARGET fsim)

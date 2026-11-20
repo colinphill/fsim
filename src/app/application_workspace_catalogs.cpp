@@ -106,7 +106,8 @@ namespace {
         switch (reference.kind) {
         case Kind::package:
         case Kind::import:
-            if (unit.kind != "package" && unit.kind != "package_body") {
+            // The declaration, never a VHDL package body (13.5).
+            if (unit.kind != "package" || !unit.primary_name.empty()) {
                 return false;
             }
             break;
@@ -505,22 +506,10 @@ std::vector<workspace::UnitDependency> workspace_dependencies(
             const auto library = target->identity->library.empty()
                 ? std::string_view { "work" }
                 : std::string_view { target->identity->library };
-            if (target->vhdl && target->vhdl->kind == semantic::vhdl::UnitKind::package) {
-                // The body can supply folded constants and subprogram results.
-                // Its own imports must remain part of the consumer's identity.
-                for (const auto& unit : design.vhdl_units()) {
-                    if (unit.kind == semantic::vhdl::UnitKind::package
-                        && workspace_name_equal(unit.library, library, "vhdl")
-                        && unit.extended_name
-                            == target->vhdl->extended_name
-                        && (unit.extended_name
-                                ? unit.name == target->vhdl->name
-                                : workspace_name_equal(
-                                      unit.name, target->vhdl->name, "vhdl"))) {
-                        pending_units.push_back(unit.id);
-                    }
-                }
-            }
+            // A VHDL package user depends on the package declaration only
+            // (IEEE 1076-2019 13.5): nothing of the body is folded into it
+            // (compiled_design_normalization defined_pure_function), so a
+            // new body leaves it current.
             for (const auto& catalog : catalogs) {
                 if (catalog.location.name != library) {
                     continue;

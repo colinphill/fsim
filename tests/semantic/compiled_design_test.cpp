@@ -1371,6 +1371,7 @@ ExpressionId add_vhdl_dependent_expression(LinkBundleBuilder& builder,
     expression.scope = scope;
     expression.kind = vhdl::ExpressionKind::name;
     expression.text = text;
+    expression.range_direction = vhdl::range_direction_of_reserved_word(expression.text);
     expression.source = builder.source;
     expression.origin = builder.origin;
     expression.dependencies = std::move(dependencies);
@@ -5200,6 +5201,7 @@ void test_compiled_vhdl_resolver_enumeration_array_bounds()
         expression.scope = scope;
         expression.kind = kind;
         expression.text = text;
+        expression.range_direction = vhdl::range_direction_of_reserved_word(expression.text);
         expression.source = builder.source;
         expression.origin = builder.origin;
         expression.operands = std::move(operands);
@@ -6648,6 +6650,7 @@ void test_specialized_hir_vhdl_while_function()
               expression.scope = expression_scope;
               expression.kind = kind;
               expression.text = std::move(text);
+              expression.range_direction = vhdl::range_direction_of_reserved_word(expression.text);
               expression.operands = std::move(operands);
               expression.source = builder.source;
               expression.origin = builder.origin;
@@ -7030,6 +7033,7 @@ void test_specialized_hir_vhdl_integer_exponentiation()
               expression.scope = scope;
               expression.kind = kind;
               expression.text = std::move(text);
+              expression.range_direction = vhdl::range_direction_of_reserved_word(expression.text);
               expression.operands = std::move(operands);
               expression.source = builder.source;
               expression.origin = builder.origin;
@@ -7503,6 +7507,7 @@ void test_specialized_hir_vhdl_packed_constant_function()
               expression.scope = expression_scope;
               expression.kind = kind;
               expression.text = std::move(text);
+              expression.range_direction = vhdl::range_direction_of_reserved_word(expression.text);
               expression.operands = std::move(operands);
               expression.source = builder.source;
               expression.origin = builder.origin;
@@ -8119,6 +8124,7 @@ void test_specialized_hir_vhdl_generated_packed_constant_iterator()
               expression.scope = scope;
               expression.kind = kind;
               expression.text = std::move(text);
+              expression.range_direction = vhdl::range_direction_of_reserved_word(expression.text);
               expression.operands = std::move(operands);
               expression.source = builder.source;
               expression.origin = builder.origin;
@@ -8305,6 +8311,7 @@ void test_specialized_hir_vhdl_selection_constant_function()
               expression.scope = scope;
               expression.kind = kind;
               expression.text = std::move(text);
+              expression.range_direction = vhdl::range_direction_of_reserved_word(expression.text);
               expression.operands = std::move(operands);
               expression.source = builder.source;
               expression.origin = builder.origin;
@@ -8523,6 +8530,7 @@ void test_specialized_hir_vhdl_local_array_constant_function()
               expression.scope = expression_scope;
               expression.kind = kind;
               expression.text = std::move(text);
+              expression.range_direction = vhdl::range_direction_of_reserved_word(expression.text);
               expression.operands = std::move(operands);
               expression.source = builder.source;
               expression.origin = builder.origin;
@@ -8930,6 +8938,7 @@ void test_specialized_hir_vhdl_integer_array_constant_function()
         expression.scope = expression_scope;
         expression.kind = kind;
         expression.text = std::move(text);
+        expression.range_direction = vhdl::range_direction_of_reserved_word(expression.text);
         expression.operands = std::move(operands);
         expression.source = builder.source;
         expression.origin = builder.origin;
@@ -9565,6 +9574,7 @@ void test_specialized_hir_vhdl_packed_array_projection()
               expression.scope = scope;
               expression.kind = kind;
               expression.text = std::move(text);
+              expression.range_direction = vhdl::range_direction_of_reserved_word(expression.text);
               expression.operands = std::move(operands);
               expression.source = builder.source;
               expression.origin = builder.origin;
@@ -10816,6 +10826,7 @@ void test_vhdl_nominal_constant_provenance()
         expression.scope = scope;
         expression.kind = kind;
         expression.text = std::move(text);
+        expression.range_direction = vhdl::range_direction_of_reserved_word(expression.text);
         expression.source = unit->source;
         expression.origin = unit->origin;
         expression.operands = std::move(operands);
@@ -12643,6 +12654,7 @@ void test_vhdl_builtin_std_logic_1164_provenance()
             expression.scope = scope;
             expression.kind = kind;
             expression.text = text;
+            expression.range_direction = vhdl::range_direction_of_reserved_word(expression.text);
             expression.source = builder.source;
             expression.origin = builder.origin;
             expression.operands = std::move(operands);

@@ -119,6 +119,21 @@ NOT_COUNTED = (
     " spelling until implicit-operation identities (gate BD build D4); they"
     " count when written as literals.",
 )
+# Counted sites that identify nothing (gate BD D7 round 2): they stay in the
+# ceilings, so a count is read with them.
+#   lowerer_hir_vhdl_special.cpp "std.textio.line" / "std.env.call_path_element":
+#     kernel container nominal names (generated output);
+#   lowerer_hir_vhdl_special.cpp "to_integer": STD.REFLECTION mirror methods
+#     (VALUE_MIRROR.to_integer, 2019 16.7), not NUMERIC_STD;
+#   lowerer_hir_callable.cpp `method.name == "write"`: SystemVerilog UVM
+#     analysis-port method;
+#   compiled_design_specialization.cpp "ieee.std_logic_1164.std_*logic_vector"
+#     and "signed"/"unsigned": profile/hash identity text of a type already
+#     identified;
+#   vhdl_scope_in_package(...) with variable arguments (resolver use-clause
+#     type operators, projected-member loop): generic package membership;
+#   lowerer_hir_capability.cpp vhdl_builtin_package_member_imported("std",
+#     "reflection", ...): STD.REFLECTION, not one of the 8 packages.
 # Package predicates; a hit whose argument window names a projected stub
 # package or STD.STANDARD is a keeper and is not counted.
 PREDICATE_NAMES = ("vhdl_scope_in_package", "is_package")
@@ -146,23 +161,22 @@ CEILINGS: dict[str, int] = {
     "src/app/application_vhdl_analysis.cpp": 3,
     "src/app/application_vhdl_executable_hir.cpp": 4,
     "src/app/application_vhdl_hir_projection.cpp": 2,
-    "src/app/application_workspace_compile.cpp": 4,
     "src/elaboration/hierarchy_packages.cpp": 5,
     "src/elaboration/hierarchy_resolution.cpp": 5,
-    "src/elaboration/lowerer_hir_callable.cpp": 10,
-    "src/elaboration/lowerer_hir_capability.cpp": 16,
+    "src/elaboration/lowerer_hir_callable.cpp": 1,
+    "src/elaboration/lowerer_hir_capability.cpp": 12,
     "src/elaboration/lowerer_hir_expression.cpp": 2,
     "src/elaboration/lowerer_hir_file.cpp": 7,
     "src/elaboration/lowerer_hir_statement.cpp": 2,
     "src/elaboration/lowerer_hir_vhdl_shaped.cpp": 1,
-    "src/elaboration/lowerer_hir_vhdl_special.cpp": 21,
+    "src/elaboration/lowerer_hir_vhdl_special.cpp": 5,
     "src/elaboration/lowerer_hir_vhdl_vital.cpp": 4,
     "src/elaboration/lowerer_hir_vhdl_vital_state.cpp": 1,
     "src/elaboration/lowerer_vhdl_vital_names.hpp": 8,
-    "src/elaboration/vhdl_hir_type_validation.cpp": 31,
+    "src/elaboration/vhdl_hir_type_validation.cpp": 6,
     "src/semantic/compiled_design.cpp": 2,
     "src/semantic/compiled_design_resolver.cpp": 22,
-    "src/semantic/compiled_design_specialization.cpp": 9,
+    "src/semantic/compiled_design_specialization.cpp": 6,
     "src/semantic/compiled_design_vhdl_resolution.cpp": 8,
 }
 

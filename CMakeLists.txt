@@ -1041,6 +1041,9 @@ endif()
       src/elaboration/hierarchy_systemc.cpp
       src/elaboration/hierarchy_udp.cpp
       src/elaboration/vhdl_hir_type_validation.cpp
+      src/elaboration/vhdl_analysis_rules_choice.cpp
+      src/elaboration/vhdl_analysis_rules_physical.cpp
+      src/elaboration/vhdl_analysis_rules_subprogram.cpp
       src/elaboration/virtual_interface_definition.cpp
       src/elaboration/lowerer_driver_regions.cpp
       src/elaboration/lowerer_hir_capability.cpp

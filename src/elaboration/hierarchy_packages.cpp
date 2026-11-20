@@ -7811,11 +7811,6 @@ provided_type_of_stored_identity(
             }
             return found;
         };
-        const auto lowered = [](std::string text) {
-            lowercase_ascii(text);
-            return text;
-        };
-
         const auto element_bits = [&](const semantic::ExpressionId id)
             -> std::optional<std::string> {
             const auto& element = array.element_types.front();
@@ -7927,8 +7922,8 @@ provided_type_of_stored_identity(
                     const auto& choice_source = *choice->vhdl;
                     if (choice_source.kind
                             == semantic::vhdl::ExpressionKind::binary
-                        && (lowered(choice_source.text) == "to"
-                            || lowered(choice_source.text) == "downto")
+                        && choice_source.range_direction
+                            != semantic::vhdl::WrittenRangeDirection::none
                         && choice_source.operands.size() == 2U) {
                         const auto first = index_value(
                             choice_source.operands.front(), metadata);
@@ -8681,8 +8676,8 @@ provided_type_of_stored_identity(
                 if (choice && choice->vhdl != nullptr
                     && choice->vhdl->kind
                         == semantic::vhdl::ExpressionKind::binary
-                    && (choice->vhdl->text == "to"
-                        || choice->vhdl->text == "downto")
+                    && choice->vhdl->range_direction
+                        != semantic::vhdl::WrittenRangeDirection::none
                     && choice->vhdl->operands.size() == 2U) {
                     const auto first
                         = specialization.evaluate_integral_expression(
@@ -8693,7 +8688,8 @@ provided_type_of_stored_identity(
                     if (!first || !last) {
                         return std::nullopt;
                     }
-                    const auto descending = choice->vhdl->text == "downto";
+                    const auto descending
+                        = choice->vhdl->range_direction == semantic::vhdl::WrittenRangeDirection::downto;
                     if ((descending && *first < *last)
                         || (!descending && *first > *last)) {
                         continue;
@@ -22541,15 +22537,16 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
                         const auto& choice_source = *choice->vhdl;
                         if (choice_source.kind
                                 == semantic::vhdl::ExpressionKind::binary
-                            && (choice_source.text == "to"
-                                || choice_source.text == "downto")
+                            && choice_source.range_direction
+                                != semantic::vhdl::WrittenRangeDirection::none
                             && choice_source.operands.size() == 2U) {
                             first = static_index(
                                 choice_source.operands.front());
                             last = static_index(
                                 choice_source.operands.back());
                             const bool slice_descending
-                                = choice_source.text == "downto";
+                                = choice_source.range_direction
+                                == semantic::vhdl::WrittenRangeDirection::downto;
                             slice_choice_descending = slice_descending;
                             if (first && last
                                 && ((slice_descending && *first < *last)

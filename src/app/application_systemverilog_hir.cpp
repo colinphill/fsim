@@ -126,167 +126,163 @@ namespace systemverilog_hir_detail {
             : sv::Lifetime::implicit;
     }
 
-    [[nodiscard]] semantic::TypeId find_systemverilog_hir_type(
-        const semantic::Model& model,
-        const sv::Hir& hir,
-        const semantic::ScopeId scope,
-        const std::string_view spelling,
-        const std::uint64_t source_order) noexcept
+    namespace {
+    // The types `simple` that package `package` provides (IEEE 1800-2023
+    // 26.3, 26.6): its own declaration, else what it exports of the
+    // packages it imports. Appends each distinct type once.
+    void collect_systemverilog_package_types(
+        const sv::Hir& hir, SystemVerilogModelSymbols& symbols,
+        const support::SymbolId owner_library, const sv::Unit& package,
+        const support::SymbolId simple,
+        std::unordered_set<std::uint32_t>& visiting,
+        std::vector<semantic::TypeId>& candidates)
     {
-        // An anonymous type has no name; an empty spelling names nothing.
-        if (spelling.empty()) {
-            return { };
+        if (!visiting.insert(package.id.value()).second) {
+            return;
         }
-        const auto parent_scope = [&](const semantic::ScopeId candidate)
-            -> std::optional<semantic::ScopeId> {
-            if (!candidate.valid()
-                || candidate.value() >= model.scopes().size()) {
-                return std::nullopt;
-            }
-            return model.scopes()[candidate.value()].parent;
-        };
-        auto visible_scope = std::optional { scope };
-        while (visible_scope) {
-            const auto found = std::ranges::find_if(
-                model.types(), [&](const semantic::Type& type) {
-                    return type.scope == *visible_scope
-                        && type.name == spelling;
-                });
-            if (found != model.types().end()) {
-                return found->id;
-            }
-            visible_scope = parent_scope(*visible_scope);
-        }
-
-        const auto owner_id = scope.valid()
-                && scope.value() < model.scopes().size()
-            ? std::optional { model.scopes()[scope.value()].unit }
-            : std::nullopt;
-        if (!owner_id || owner_id->value() >= model.units().size()) {
-            return { };
-        }
-        const auto& semantic_owner = model.units()[owner_id->value()];
-        const auto owner = std::ranges::find(
-            hir.units(), *owner_id, &sv::Unit::id);
-
-        const auto separator = spelling.rfind("::");
-        const auto package_name = separator == std::string_view::npos
-            ? std::string_view { }
-            : spelling.substr(0U, separator);
-        const auto simple_name = separator == std::string_view::npos
-            ? spelling
-            : spelling.substr(separator + 2U);
-        // A package of the owner's library, or `library::package` as
-        // linked HIR spells a package of any library.
-        const auto find_package = [&](const std::string_view name) {
-            return std::ranges::find_if(
-                hir.units(), [&](const sv::Unit& candidate) {
-                    if (candidate.kind != sv::UnitKind::package) {
-                        return false;
-                    }
-                    if (candidate.library == semantic_owner.library
-                        && candidate.name == name) {
-                        return true;
-                    }
-                    return name.size()
-                            == candidate.library.size() + 2U
-                                + candidate.name.size()
-                        && name.starts_with(candidate.library)
-                        && name.substr(candidate.library.size(), 2U) == "::"
-                        && name.ends_with(candidate.name);
-                });
-        };
-        const auto direct_type = [&](const sv::Unit& package) {
-            const auto found = std::ranges::find_if(
-                model.types(), [&](const semantic::Type& type) {
-                    return type.scope == package.scope
-                        && type.name == simple_name;
-                });
-            return found == model.types().end()
-                ? semantic::TypeId { }
-                : found->id;
-        };
-        const auto collect = [&](const auto& self,
-                                 const sv::Unit& package,
-                                 std::unordered_set<std::uint32_t>& visiting,
-                                 std::vector<semantic::TypeId>& candidates)
-            -> void {
-            if (!visiting.insert(package.id.value()).second) {
-                return;
-            }
-            if (const auto direct = direct_type(package); direct.valid()) {
-                candidates.push_back(direct);
-                visiting.erase(package.id.value());
-                return;
-            }
-            for (const auto& exported : package.exports) {
-                if ((exported.package.spelling == "*" && exported.member)
-                    || (exported.member
-                        && exported.member->spelling != simple_name)) {
-                    continue;
-                }
-                for (const auto& imported : package.imports) {
-                    if ((exported.package.spelling != "*"
-                            && exported.package.spelling
-                                != imported.package.spelling)
-                        || (imported.member
-                            && imported.member->spelling != simple_name)) {
-                        continue;
-                    }
-                    const auto source = find_package(
-                        imported.package.spelling);
-                    if (source != hir.units().end()) {
-                        self(self, *source, visiting, candidates);
-                    }
-                }
-            }
+        if (const auto direct = symbols.named(package.scope, simple);
+            !direct.empty()) {
+            candidates.push_back(direct.front());
             visiting.erase(package.id.value());
-        };
-        std::vector<semantic::TypeId> candidates;
-        const auto append_package = [&](const std::string_view name) {
-            const auto package = find_package(name);
-            if (package == hir.units().end()) {
-                return;
+            return;
+        }
+        const auto all = support::systemverilog_symbol("*");
+        for (const auto& exported : package.exports) {
+            if ((exported.package.symbol == all && exported.member)
+                || (exported.member && exported.member->symbol != simple)) {
+                continue;
             }
-            std::unordered_set<std::uint32_t> visiting;
-            collect(collect, *package, visiting, candidates);
-        };
-        if (!package_name.empty()) {
-            append_package(package_name);
-        } else if (owner != hir.units().end()) {
-            bool explicit_import { };
-            for (const auto& imported : owner->imports) {
-                if (source_order != 0U && imported.source_order != 0U
-                    && imported.source_order >= source_order) {
+            for (const auto& imported : package.imports) {
+                if ((exported.package.symbol != all
+                        && exported.package.symbol != imported.package.symbol)
+                    || (imported.member && imported.member->symbol != simple)) {
                     continue;
                 }
-                if (imported.wildcard || !imported.member
-                    || imported.member->spelling != simple_name) {
-                    continue;
-                }
-                explicit_import = true;
-                append_package(imported.package.spelling);
-            }
-            if (!explicit_import) {
-                for (const auto& imported : owner->imports) {
-                    if (source_order != 0U && imported.source_order != 0U
-                        && imported.source_order >= source_order) {
-                        continue;
-                    }
-                    if (imported.wildcard) {
-                        append_package(imported.package.spelling);
-                    }
+                if (const auto* source
+                    = symbols.package(owner_library, imported.package.symbol)) {
+                    collect_systemverilog_package_types(hir, symbols,
+                        owner_library, *source, simple, visiting, candidates);
                 }
             }
         }
-        std::ranges::sort(
-            candidates, { }, [](const semantic::TypeId id) {
-                return id.value();
-            });
+        visiting.erase(package.id.value());
+    }
+
+    [[nodiscard]] semantic::TypeId unique_systemverilog_type(
+        std::vector<semantic::TypeId>& candidates)
+    {
+        std::ranges::sort(candidates, { },
+            [](const semantic::TypeId id) { return id.value(); });
         const auto unique = std::ranges::unique(candidates);
         candidates.erase(unique.begin(), unique.end());
         return candidates.size() == 1U ? candidates.front()
                                        : semantic::TypeId { };
+    }
+
+    [[nodiscard]] const semantic::Unit* systemverilog_scope_owner(
+        const semantic::Model& model, const semantic::ScopeId scope)
+    {
+        if (!scope.valid() || scope.value() >= model.scopes().size()) {
+            return nullptr;
+        }
+        const auto owner = model.scopes()[scope.value()].unit;
+        return owner.value() < model.units().size()
+            ? &model.units()[owner.value()]
+            : nullptr;
+    }
+    } // namespace
+
+    semantic::TypeId find_systemverilog_package_type(
+        const semantic::Model& model,
+        const sv::Hir& hir,
+        SystemVerilogModelSymbols& symbols,
+        const semantic::ScopeId scope,
+        const support::SymbolId package,
+        const support::SymbolId simple) noexcept
+    {
+        const auto* owner = systemverilog_scope_owner(model, scope);
+        if (owner == nullptr || !package.valid() || !simple.valid()) {
+            return { };
+        }
+        const auto library = symbols.library(*owner);
+        const auto* unit = symbols.package(library, package);
+        if (unit == nullptr) {
+            return { };
+        }
+        std::vector<semantic::TypeId> candidates;
+        std::unordered_set<std::uint32_t> visiting;
+        collect_systemverilog_package_types(
+            hir, symbols, library, *unit, simple, visiting, candidates);
+        return unique_systemverilog_type(candidates);
+    }
+
+    semantic::TypeId find_systemverilog_hir_type(
+        const semantic::Model& model,
+        const sv::Hir& hir,
+        SystemVerilogModelSymbols& symbols,
+        const semantic::ScopeId scope,
+        const SystemVerilogTypeName& name,
+        const std::uint64_t source_order) noexcept
+    {
+        // An anonymous type has no name; an empty spelling names nothing.
+        if (!name.whole.valid()) {
+            return { };
+        }
+        auto visible_scope = std::optional { scope };
+        while (visible_scope) {
+            if (const auto local = symbols.named(*visible_scope, name.whole);
+                !local.empty()) {
+                return local.front();
+            }
+            if (!visible_scope->valid()
+                || visible_scope->value() >= model.scopes().size()) {
+                break;
+            }
+            visible_scope = model.scopes()[visible_scope->value()].parent;
+        }
+        if (name.qualifier.valid()) {
+            return find_systemverilog_package_type(
+                model, hir, symbols, scope, name.qualifier, name.simple);
+        }
+        const auto* semantic_owner = systemverilog_scope_owner(model, scope);
+        if (semantic_owner == nullptr) {
+            return { };
+        }
+        const auto owner = std::ranges::find(
+            hir.units(), semantic_owner->id, &sv::Unit::id);
+        if (owner == hir.units().end()) {
+            return { };
+        }
+        const auto library = symbols.library(*semantic_owner);
+        std::vector<semantic::TypeId> candidates;
+        const auto append_package = [&](const support::SymbolId package) {
+            if (const auto* unit = symbols.package(library, package)) {
+                std::unordered_set<std::uint32_t> visiting;
+                collect_systemverilog_package_types(hir, symbols, library,
+                    *unit, name.simple, visiting, candidates);
+            }
+        };
+        const auto before_use = [&](const sv::Import& imported) {
+            return source_order == 0U || imported.source_order == 0U
+                || imported.source_order < source_order;
+        };
+        bool explicit_import { };
+        for (const auto& imported : owner->imports) {
+            if (!before_use(imported) || imported.wildcard || !imported.member
+                || imported.member->symbol != name.simple) {
+                continue;
+            }
+            explicit_import = true;
+            append_package(imported.package.symbol);
+        }
+        if (!explicit_import) {
+            for (const auto& imported : owner->imports) {
+                if (before_use(imported) && imported.wildcard) {
+                    append_package(imported.package.symbol);
+                }
+            }
+        }
+        return unique_systemverilog_type(candidates);
     }
 
     SystemVerilogHirBuilder::SystemVerilogHirBuilder(
@@ -842,30 +838,29 @@ namespace systemverilog_hir_detail {
         if (type_name.empty()) {
             return { };
         }
-        const auto qualifier_separator = type_name.rfind("::");
-        const auto simple_name = qualifier_separator
-                == std::string_view::npos
-            ? type_name
-            : type_name.substr(qualifier_separator + 2U);
+        // The written name, split once and interned (IEEE 1800-2023 5.6).
+        const auto written = systemverilog_type_name(type_name);
+        const auto before_use = [&](const std::uint64_t import_order) {
+            return source_order == 0U || import_order == 0U
+                || import_order < source_order;
+        };
         auto visible_scope = std::optional<semantic::ScopeId> { scope };
         while (visible_scope) {
-            for (const auto& type : model_.types()) {
-                if (type.scope == *visible_scope && type.name == type_name
-                    && (!exact_source || type.source == *exact_source)) {
-                    return type.id;
+            for (const auto id : model_symbols_.named(*visible_scope, written.whole)) {
+                if (!exact_source || model_.types()[id.value()].source == *exact_source) {
+                    return id;
                 }
             }
             if (exact_source) {
                 break;
             }
-            if (qualifier_separator == std::string_view::npos) {
+            if (!written.qualifier.valid()) {
                 std::vector<semantic::TypeId> candidates;
                 bool explicit_import { };
                 const auto append = [&](const sv::Import& imported) {
-                    const auto qualified = imported.package.spelling + "::"
-                        + std::string { simple_name };
-                    const auto selected = find_systemverilog_hir_type(
-                        model_, hir_, *visible_scope, qualified);
+                    const auto selected = find_systemverilog_package_type(
+                        model_, hir_, model_symbols_, *visible_scope,
+                        imported.package.symbol, written.simple);
                     if (selected.valid()
                         && std::ranges::find(candidates, selected)
                             == candidates.end()) {
@@ -873,13 +868,9 @@ namespace systemverilog_hir_detail {
                     }
                 };
                 for (const auto& [import_scope, imported] : statement_imports_) {
-                    if (import_scope != *visible_scope
-                        || !imported.member
-                        || imported.member->spelling != simple_name) {
-                        continue;
-                    }
-                    if (source_order != 0U && imported.source_order != 0U
-                        && imported.source_order >= source_order) {
+                    if (import_scope != *visible_scope || !imported.member
+                        || imported.member->symbol != written.simple
+                        || !before_use(imported.source_order)) {
                         continue;
                     }
                     explicit_import = true;
@@ -887,15 +878,10 @@ namespace systemverilog_hir_detail {
                 }
                 if (!explicit_import) {
                     for (const auto& [import_scope, imported] : statement_imports_) {
-                        if (import_scope != *visible_scope
-                            || !imported.wildcard) {
-                            continue;
+                        if (import_scope == *visible_scope && imported.wildcard
+                            && before_use(imported.source_order)) {
+                            append(imported);
                         }
-                        if (source_order != 0U && imported.source_order != 0U
-                            && imported.source_order >= source_order) {
-                            continue;
-                        }
-                        append(imported);
                     }
                 }
                 if (explicit_import || !candidates.empty()) {
@@ -911,37 +897,34 @@ namespace systemverilog_hir_detail {
             visible_scope = model_.scopes()[visible_scope->value()].parent;
         }
         if (exact_source) {
+            const auto found = model_symbols_.from_source(*exact_source, written.simple);
             semantic::TypeId selected;
-            for (const auto& type : model_.types()) {
-                if (type.source != *exact_source
-                    || type.name != simple_name) {
-                    continue;
-                }
-                if (selected.valid() && selected != type.id) {
+            for (const auto id : found) {
+                if (selected.valid() && selected != id) {
                     return { };
                 }
-                selected = type.id;
+                selected = id;
             }
             return selected;
         }
         if (const auto selected = find_systemverilog_hir_type(
-                model_, hir_, scope, type_name, source_order);
+                model_, hir_, model_symbols_, scope, written, source_order);
             selected.valid()) {
             return selected;
         }
+        // The imports of the unit being built, before its HIR unit exists.
         for (const auto& imported : current_imports_) {
-            if (source_order != 0U
-                && imported.systemverilog_source_order != 0U
-                && imported.systemverilog_source_order >= source_order) {
+            if (!before_use(imported.systemverilog_source_order)) {
                 continue;
             }
-            if (!imported.name.empty() && imported.name != simple_name) {
+            if (!imported.name.empty()
+                && support::systemverilog_symbol(imported.name) != written.simple) {
                 continue;
             }
-            const auto qualified = imported.package + "::"
-                + std::string { simple_name };
-            if (const auto selected = find_systemverilog_hir_type(
-                    model_, hir_, scope, qualified);
+            if (const auto selected = find_systemverilog_package_type(model_,
+                    hir_, model_symbols_, scope,
+                    support::systemverilog_symbol(imported.package),
+                    written.simple);
                 selected.valid()) {
                 return selected;
             }
@@ -954,13 +937,8 @@ namespace systemverilog_hir_detail {
         const std::string_view value_name,
         const semantic::SourceSpanId exact_source) const noexcept
     {
-        for (const auto& value : model_.values()) {
-            if (value.scope == scope && value.source == exact_source
-                && value.name == value_name) {
-                return value.id;
-            }
-        }
-        return { };
+        return model_symbols_.value(
+            scope, exact_source, support::systemverilog_symbol(value_name));
     }
 
     [[nodiscard]] sv::PackedRange SystemVerilogHirBuilder::packed_range(
@@ -983,14 +961,8 @@ namespace systemverilog_hir_detail {
         const semantic::OriginId parent)
     {
         const auto instance_source = source(input.span);
-        semantic::InstanceId id;
-        for (const auto& instance : model_.instances()) {
-            if (instance.scope == scope && instance.source == instance_source
-                && instance.name == input.name) {
-                id = instance.id;
-                break;
-            }
-        }
+        semantic::InstanceId id = model_symbols_.instance(
+            scope, instance_source, support::systemverilog_symbol(input.name));
         const auto instance_origin = origin(instance_source, parent, input.name);
         if (!id.valid()) {
             id = model_.add_instance(scope, input.name, input.unit_name,

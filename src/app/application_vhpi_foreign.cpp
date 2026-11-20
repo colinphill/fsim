@@ -6822,7 +6822,7 @@ private:
                 return prefix;
             }
             auto* const part = sliced(*prefix,
-                Range { *left, *right, same_name(expression->text, "downto") });
+                Range { *left, *right, expression->range_direction == semantic::vhdl::WrittenRangeDirection::downto });
             return part != nullptr ? part : prefix;
         }
         default:
@@ -7077,7 +7077,7 @@ private:
                 return nullptr;
             }
             return sliced(*base,
-                Range { *left, *right, same_name(expression->text, "downto") });
+                Range { *left, *right, expression->range_direction == semantic::vhdl::WrittenRangeDirection::downto });
         }
         case vhdl::ExpressionKind::name: {
             // `x.f.g`: the record elements of a signal parameter.
@@ -8539,7 +8539,7 @@ private:
             const auto right = integer_literal(expression->operands[2]);
             if (left && right) {
                 return sliced(*prefix,
-                    Range { *left, *right, expression->text == "downto" });
+                    Range { *left, *right, expression->range_direction == semantic::vhdl::WrittenRangeDirection::downto });
             }
             return dynamic_name(scope, id, *expression, *prefix);
         }
@@ -9068,7 +9068,7 @@ private:
             if (!left || !right) {
                 return nullptr;
             }
-            return sliced(*prefix, Range { *left, *right, expression.text == "downto" });
+            return sliced(*prefix, Range { *left, *right, expression.range_direction == semantic::vhdl::WrittenRangeDirection::downto });
         }
         return nullptr;
     }
@@ -10539,7 +10539,7 @@ private:
                 return nullptr;
             }
             return sliced(*prefix,
-                Range { *left, *right, expression->text == "downto" });
+                Range { *left, *right, expression->range_direction == semantic::vhdl::WrittenRangeDirection::downto });
         }
         case vhdl::ExpressionKind::index: {
             if (expression->operands.size() < 2U) {

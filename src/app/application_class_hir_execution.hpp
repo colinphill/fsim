@@ -27,6 +27,9 @@
 #include <string_view>
 
 namespace fsim::app::application_detail {
+namespace systemverilog_hir_detail {
+class SystemVerilogModelSymbols;
+} // namespace systemverilog_hir_detail
 
 /// Executes the parser-independent subset of specialized class bodies. The
 /// owning frontend specialization is deliberately absent from this type.
@@ -906,6 +909,9 @@ private:
     const semantic::sv::Hir& hir_;
     const semantic::Model* semantics_ { };
     mutable std::optional<HirLookupIndex> hir_index_;
+    // Type names of semantics_ by symbol (made on the first type lookup).
+    mutable std::shared_ptr<systemverilog_hir_detail::SystemVerilogModelSymbols>
+        model_symbols_;
     const runtime::SystemVerilogClassHeap& heap_;
     std::uint64_t invocations_ { };
     std::map<std::string, std::uint64_t> invocation_sites_;

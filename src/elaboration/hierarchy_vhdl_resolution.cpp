@@ -362,7 +362,7 @@ bool vhdl_static_signal_name(
             source.operands[index]);
         if (bound && bound->vhdl != nullptr
             && bound->vhdl->kind == Kind::binary
-            && (bound->vhdl->text == "to" || bound->vhdl->text == "downto")
+            && bound->vhdl->range_direction != semantic::vhdl::WrittenRangeDirection::none
             && bound->vhdl->operands.size() == 2U) {
             if (!specialization.evaluate_integral_expression(
                     bound->vhdl->operands[0])

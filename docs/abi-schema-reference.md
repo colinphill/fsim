@@ -208,7 +208,9 @@ model `none`; enabled foundation coverage uses
 rejected directly.
 
 The compiled-HIR bundle is schema 14 and embeds semantic schema 9,
-SystemVerilog HIR schema 47, and VHDL HIR schema 26. VHDL HIR schema 26
+SystemVerilog HIR schema 47, and VHDL HIR schema 27. VHDL HIR schema 27
+adds `Expression::range_direction`: the direction a range or slice node was
+written with, decided when the HIR is built. VHDL HIR schema 26
 adds `Name::analyzed`: compile-time name analysis resolved the name, and its
 stored selection is the complete result. VHDL HIR schema 25
 keeps one stored expression type, `Expression::type` (the link resolution's

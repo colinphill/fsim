@@ -582,8 +582,7 @@ bool Lowerer::lower_hir_vhdl_vital_delay_call(
                     }
                     if (choice_source.kind
                             == semantic::vhdl::ExpressionKind::binary
-                        && (choice_source.text == "to"
-                            || choice_source.text == "downto")
+                        && (choice_source.range_direction != semantic::vhdl::WrittenRangeDirection::none)
                         && choice_source.operands.size() == 2U) {
                         const auto left = hir_constant_integer(
                             choice_source.operands.front());
@@ -599,7 +598,7 @@ bool Lowerer::lower_hir_vhdl_vital_delay_call(
                             continue;
                         }
                         const bool descending
-                            = choice_source.text == "downto";
+                            = choice_source.range_direction == semantic::vhdl::WrittenRangeDirection::downto;
                         if ((descending && *left < *right)
                             || (!descending && *left > *right)) {
                             continue;

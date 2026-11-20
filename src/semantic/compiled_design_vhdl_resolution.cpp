@@ -2524,7 +2524,7 @@ private:
             // The bounds of a slice's discrete range take the index type of
             // its one-dimensional prefix as their context (8.5, 12.5).
             if (record->operands.size() != 3U
-                || (record->text != "to" && record->text != "downto")) {
+                || record->range_direction == vhdl::WrittenRangeDirection::none) {
                 break;
             }
             const auto* prefix = expression(record->operands.front());
@@ -2857,7 +2857,7 @@ private:
                 if (range != nullptr && range->operands.size() == 2U
                     && (range->kind == vhdl::ExpressionKind::binary
                         || range->kind == vhdl::ExpressionKind::slice)
-                    && (range->text == "to" || range->text == "downto")) {
+                    && range->range_direction != vhdl::WrittenRangeDirection::none) {
                     for (const auto bound : range->operands) {
                         resolve(bound, choice_context);
                     }

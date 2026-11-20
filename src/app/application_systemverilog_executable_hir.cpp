@@ -1429,19 +1429,17 @@ namespace {
             if (spelling.empty()) {
                 return { };
             }
+            // The written name, split once and interned (IEEE 1800-2023 5.6).
+            const auto written = systemverilog_hir_detail::systemverilog_type_name(spelling);
             auto visible_scope = std::optional { scope };
             while (visible_scope) {
-                const auto local = std::ranges::find_if(
-                    model_.types(), [&](const semantic::Type& type) {
-                        return type.scope == *visible_scope
-                            && type.name == spelling;
-                    });
-                if (local != model_.types().end()) {
-                    return local->id;
+                if (const auto local = model_symbols_.named(*visible_scope, written.whole);
+                    !local.empty()) {
+                    return local.front();
                 }
-
                 const auto block = block_imports_.find(*visible_scope);
                 if (block != block_imports_.end()) {
+                    // Block-level imports (26.3): explicit ones hide wildcards.
                     const auto resolve_imports = [&](const bool explicit_only) {
                         std::vector<semantic::TypeId> candidates;
                         bool explicit_import { };
@@ -1453,24 +1451,23 @@ namespace {
                             }
                             if (explicit_only
                                 ? !import.member
-                                    || import.member->spelling != spelling
+                                    || import.member->symbol != written.whole
                                 : !import.wildcard) {
                                 continue;
                             }
                             explicit_import = explicit_import || explicit_only;
-                            const auto qualified = import.package.spelling
-                                + "::" + std::string { spelling };
-                            const auto selected
-                                = systemverilog_hir_detail::find_systemverilog_hir_type(
-                                    model_, hir_, *visible_scope, qualified);
+                            const auto selected = written.qualifier.valid()
+                                ? semantic::TypeId { }
+                                : systemverilog_hir_detail::find_systemverilog_package_type(
+                                    model_, hir_, model_symbols_, *visible_scope,
+                                    import.package.symbol, written.simple);
                             if (selected.valid()
                                 && std::ranges::find(candidates, selected)
                                     == candidates.end()) {
                                 candidates.push_back(selected);
                             }
                         }
-                        return std::pair {
-                            std::move(candidates), explicit_import };
+                        return std::pair { candidates, explicit_import };
                     };
                     auto [candidates, explicit_import]
                         = resolve_imports(true);
@@ -1486,7 +1483,7 @@ namespace {
                 visible_scope = parent_scope(*visible_scope);
             }
             return systemverilog_hir_detail::find_systemverilog_hir_type(
-                model_, hir_, scope, spelling, source_order);
+                model_, hir_, model_symbols_, scope, written, source_order);
         }
 
         [[nodiscard]] sv::TypeReference type_reference(
@@ -3190,6 +3187,7 @@ namespace {
         sv::Hir& hir_;
         systemverilog_hir_detail::SystemVerilogHirBuilder& type_builder_;
         mutable systemverilog_hir_detail::SystemVerilogScopeSymbols scope_symbols_ { hir_ };
+        mutable systemverilog_hir_detail::SystemVerilogModelSymbols model_symbols_ { model_, hir_ };
         std::vector<support::SymbolId> scope_symbols_by_id_;
         std::map<semantic::ScopeId, std::vector<sv::Import>> block_imports_;
         // The assertion declarations of the unit or generate block whose

@@ -8252,31 +8252,30 @@ CompiledDesignResolver::bind_vhdl_generics(
                         || range->vhdl->kind
                             != vhdl::ExpressionKind::binary
                         || range->vhdl->operands.size() != 2U
-                        || (!same_vhdl_identifier(range->vhdl->text, "to")
-                            && !same_vhdl_identifier(
-                                range->vhdl->text, "downto"))) {
+                        || range->vhdl->range_direction
+                            == vhdl::WrittenRangeDirection::none) {
                         return std::nullopt;
                     }
                     vhdl::RangeConstraint constraint;
                     constraint.kind = vhdl::RangeKind::array_index;
                     constraint.left_expression = range->vhdl->operands[0];
                     constraint.right_expression = range->vhdl->operands[1];
-                    constraint.descending = same_vhdl_identifier(
-                        range->vhdl->text, "downto");
+                    constraint.descending = range->vhdl->range_direction
+                        == vhdl::WrittenRangeDirection::downto;
                     constraint.source = range->vhdl->source;
                     return constraint;
                 };
                 const auto& written = *expression->vhdl;
                 if (written.kind == vhdl::ExpressionKind::slice
                     && written.operands.size() == 3U
-                    && (same_vhdl_identifier(written.text, "to")
-                        || same_vhdl_identifier(written.text, "downto"))) {
+                    && written.range_direction
+                        != vhdl::WrittenRangeDirection::none) {
                     vhdl::RangeConstraint constraint;
                     constraint.kind = vhdl::RangeKind::array_index;
                     constraint.left_expression = written.operands[1];
                     constraint.right_expression = written.operands[2];
-                    constraint.descending
-                        = same_vhdl_identifier(written.text, "downto");
+                    constraint.descending = written.range_direction
+                        == vhdl::WrittenRangeDirection::downto;
                     constraint.source = written.source;
                     actual_constraints.push_back(std::move(constraint));
                     expression = find_expression(

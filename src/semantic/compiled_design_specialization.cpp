@@ -2633,12 +2633,21 @@ public:
                                 callee.overloads, function))) {
                         return true;
                     }
-                    // A function of a governed standard package has no
-                    // retained declaration (TO_X01 of STD_LOGIC_1164).
+                    // A call whose analyzed name has no declaration is an
+                    // implicit STANDARD operation (5.2.6, 5.3.2.4; Name::
+                    // analyzed). Every STD_LOGIC_1164 function (TO_X01) is a
+                    // declared artifact function, found above. A member of a
+                    // compiler-projected package (fixed/float, Synopsys) or
+                    // of a non-analyzed unit has no stored result: BD2 V4.
                     if (!callee.selected && callee.overloads.empty()
-                        && CompiledDesignResolver { unit_ }
-                               .vhdl_standard_package_member_visible(
-                                   callee, prefix->vhdl->scope)) {
+                        && ((prefix->vhdl->kind
+                                    == vhdl::ExpressionKind::call
+                                && callee.analyzed
+                                && callee.exemption
+                                    == vhdl::AnalysisExemption::none)
+                            || CompiledDesignResolver { unit_ }
+                                   .vhdl_projected_package_member_visible(
+                                       callee, prefix->vhdl->scope))) {
                         return true;
                     }
                 }
@@ -4842,15 +4851,14 @@ private:
                 && (choice->vhdl->kind == vhdl::ExpressionKind::binary
                     || choice->vhdl->kind == vhdl::ExpressionKind::slice)
                 && choice->vhdl->operands.size() == 2U
-                && (support::equal_ignoring_ascii_case(choice->vhdl->text, "to")
-                    || support::equal_ignoring_ascii_case(
-                        choice->vhdl->text, "downto"))) {
+                && choice->vhdl->range_direction
+                    != vhdl::WrittenRangeDirection::none) {
                 const auto left = vhdl_integer_expression(
                     choice->vhdl->operands[0]);
                 const auto right = vhdl_integer_expression(
                     choice->vhdl->operands[1]);
-                const bool descending = support::equal_ignoring_ascii_case(
-                    choice->vhdl->text, "downto");
+                const bool descending = choice->vhdl->range_direction
+                    == vhdl::WrittenRangeDirection::downto;
                 const auto fill = evaluate_vhdl_value(association.value);
                 const auto width = left && right
                         && (descending ? *left >= *right : *left <= *right)
@@ -7102,9 +7110,8 @@ private:
         if (expression->vhdl->kind == vhdl::ExpressionKind::slice) {
             const auto& slice = *expression->vhdl;
             if (slice.operands.size() != 3U
-                || (!support::equal_ignoring_ascii_case(slice.text, "to")
-                    && !support::equal_ignoring_ascii_case(
-                        slice.text, "downto"))) {
+                || slice.range_direction
+                    == vhdl::WrittenRangeDirection::none) {
                 return std::nullopt;
             }
             // A VHDL array slice retains the prefix's array type. The value
@@ -7652,8 +7659,9 @@ private:
             && expression.operands.size() >= 2U
             && expression.operands.size() <= 5U
             && expression.operands.size() != 4U
+            // IEEE.FIXED_PKG is compiler-projected: BD2 V4.
             && CompiledDesignResolver { unit_ }
-                   .vhdl_standard_package_member_visible(
+                   .vhdl_projected_package_member_visible(
                        *expression.referenced_name, expression.scope)) {
             std::array<std::int64_t, 4> bounds { };
             auto operation = 'X';
@@ -18354,13 +18362,13 @@ std::optional<InferredVhdlTypeActual> infer_vhdl_type_actual(
         -> bool {
         if (constraint.kind != vhdl::ExpressionKind::binary
             || constraint.operands.size() != 2U
-            || (!support::equal_ignoring_ascii_case(constraint.text, "to")
-                && !support::equal_ignoring_ascii_case(
-                    constraint.text, "downto"))) {
+            || constraint.range_direction
+                == vhdl::WrittenRangeDirection::none) {
             return false;
         }
         append_identity_component(identity,
-            support::equal_ignoring_ascii_case(constraint.text, "downto")
+            constraint.range_direction
+                    == vhdl::WrittenRangeDirection::downto
                 ? "downto"
                 : "to");
         append_identity_component(identity,
@@ -18374,8 +18382,7 @@ std::optional<InferredVhdlTypeActual> infer_vhdl_type_actual(
 
     if (record.kind == vhdl::ExpressionKind::slice
         && record.operands.size() == 3U
-        && (support::equal_ignoring_ascii_case(record.text, "to")
-            || support::equal_ignoring_ascii_case(record.text, "downto"))) {
+        && record.range_direction != vhdl::WrittenRangeDirection::none) {
         const auto type_mark = design.find_expression(
             record.operands.front());
         if (!type_mark || type_mark->vhdl == nullptr
@@ -18391,7 +18398,7 @@ std::optional<InferredVhdlTypeActual> infer_vhdl_type_actual(
         std::string identity { "vhdl-type-constraint-v1;" };
         append_identity_component(identity, inferred->identity);
         append_identity_component(identity,
-            support::equal_ignoring_ascii_case(record.text, "downto")
+            record.range_direction == vhdl::WrittenRangeDirection::downto
                 ? "downto"
                 : "to");
         append_identity_component(identity,
@@ -18406,7 +18413,8 @@ std::optional<InferredVhdlTypeActual> infer_vhdl_type_actual(
             if (left && right) {
                 identity += ";enum-range=" + std::to_string(*left)
                     + ":" + std::to_string(*right) + ":"
-                    + (support::equal_ignoring_ascii_case(record.text, "downto")
+                    + (record.range_direction
+                                == vhdl::WrittenRangeDirection::downto
                             ? "1"
                             : "0");
             }
@@ -18416,8 +18424,8 @@ std::optional<InferredVhdlTypeActual> infer_vhdl_type_actual(
             constraint.kind = vhdl::RangeKind::discrete;
             constraint.left_expression = record.operands[1];
             constraint.right_expression = record.operands[2];
-            constraint.descending = support::equal_ignoring_ascii_case(
-                record.text, "downto");
+            constraint.descending = record.range_direction
+                == vhdl::WrittenRangeDirection::downto;
             constraint.source = record.source;
             inferred->subtype->constraints = { std::move(constraint) };
             inferred->subtype->unconstrained = false;
@@ -18453,8 +18461,8 @@ std::optional<InferredVhdlTypeActual> infer_vhdl_type_actual(
             range.kind = vhdl::RangeKind::discrete;
             range.left_expression = constraint->vhdl->operands[0];
             range.right_expression = constraint->vhdl->operands[1];
-            range.descending = support::equal_ignoring_ascii_case(
-                constraint->vhdl->text, "downto");
+            range.descending = constraint->vhdl->range_direction
+                == vhdl::WrittenRangeDirection::downto;
             range.source = constraint->vhdl->source;
             inferred->subtype->constraints.push_back(std::move(range));
             inferred->subtype->unconstrained = false;
@@ -18476,8 +18484,8 @@ std::optional<InferredVhdlTypeActual> infer_vhdl_type_actual(
                 identity += ";enum-range="
                     + std::to_string(*left) + ":"
                     + std::to_string(*right) + ":"
-                    + (support::equal_ignoring_ascii_case(
-                           constraint->vhdl->text, "downto")
+                    + (constraint->vhdl->range_direction
+                                == vhdl::WrittenRangeDirection::downto
                             ? "1"
                             : "0");
             }
@@ -19408,14 +19416,20 @@ SpecializedHirAssociationResult resolve_specialized_hir_associations_impl(
                         *source.referenced_name, source.scope);
                 const bool function
                     = formal_declaration->vhdl->callable->function;
-                // A member of a compiler-provided standard package
-                // (IEEE.STD_LOGIC_1164 RISING_EDGE) has no declaration: the
-                // formal stays bound to the actual expression, and its calls
-                // are that predefined function (IEEE 1076-2019 6.5.7.1).
+                // An implicit STANDARD function (RISING_EDGE of BIT, 2008:
+                // an analyzed name with no declaration) or a member of a
+                // compiler-projected package (BD2 V4) has no declaration:
+                // the formal stays bound to the actual expression, and its
+                // calls are that predefined function (IEEE 1076-2019
+                // 6.5.7.1). IEEE.STD_LOGIC_1164 RISING_EDGE is a declared
+                // artifact function, found in `visible`.
                 const bool predefined_actual = visible.candidates.empty()
                     && function
-                    && resolver.vhdl_standard_package_member_visible(
-                        *source.referenced_name, source.scope);
+                    && ((source.referenced_name->analyzed
+                            && source.referenced_name->exemption
+                                == vhdl::AnalysisExemption::none)
+                        || resolver.vhdl_projected_package_member_visible(
+                            *source.referenced_name, source.scope));
                 if (!predefined_actual) {
                     std::vector<DeclarationId> same_kind;
                     std::vector<CompiledVhdlCallableResolution>

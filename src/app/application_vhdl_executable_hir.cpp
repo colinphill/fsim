@@ -164,6 +164,13 @@ class VhdlExecutableBuilder final {
           output.kind = vh::ExpressionKind::call;
       }
       output.text = input.text;
+      // The parser keeps a range's or slice's reserved word, lowered, as the
+      // node's text (5.2.1, 8.5); the HIR stores the direction it means.
+      if (input.kind == frontend::ExpressionKind::Binary
+          || input.kind == frontend::ExpressionKind::Slice) {
+        output.range_direction
+            = vh::range_direction_of_reserved_word(input.text);
+      }
       output.source = expression_source;
       output.origin = expression_origin;
       output.nominal_type = input.nominal_type;
@@ -1951,6 +1958,9 @@ class VhdlExecutableBuilder final {
         const auto right = bound("'right");
         expression.kind = vh::ExpressionKind::slice;
         expression.text = *descending ? "downto" : "to";
+        expression.range_direction = *descending
+            ? vh::WrittenRangeDirection::downto
+            : vh::WrittenRangeDirection::to;
         expression.operands = { expression.operands[0], left, right };
       }
       hir_.mutable_expressions().insert(hir_.mutable_expressions().end(),

@@ -812,8 +812,14 @@ semantic::TypeId SystemVerilogClassHirExecution::named_type_target(
         || type.value_form == semantic::sv::TypeForm::string) {
         return { };
     }
-    return systemverilog_hir_detail::find_systemverilog_hir_type(
-        *semantics_, hir_, scope, spelling, type.source_order);
+    if (!model_symbols_) {
+        model_symbols_ = std::make_shared<
+            systemverilog_hir_detail::SystemVerilogModelSymbols>(*semantics_, hir_);
+    }
+    return systemverilog_hir_detail::find_systemverilog_hir_type(*semantics_,
+        hir_, *model_symbols_, scope,
+        systemverilog_hir_detail::systemverilog_type_name(spelling),
+        type.source_order);
 }
 
 bool SystemVerilogClassHirExecution::four_state_type(

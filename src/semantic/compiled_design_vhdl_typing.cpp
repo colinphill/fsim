@@ -108,19 +108,6 @@ struct Interpretations {
     return 0;
 }
 
-/// The reserved words of a range's direction (5.2.1), interned once.
-[[nodiscard]] support::SymbolId to_symbol()
-{
-    static const auto symbol = support::vhdl_symbol("to");
-    return symbol;
-}
-
-[[nodiscard]] support::SymbolId downto_symbol()
-{
-    static const auto symbol = support::vhdl_symbol("downto");
-    return symbol;
-}
-
 class Typing {
 public:
     Typing(CompiledDesign& design, const Regions& regions, const Lookup& lookup,
@@ -1055,7 +1042,7 @@ private:
     }
 
     /// Whether `e` is a range `L to R` / `L downto R` (5.2.1): the parser
-    /// gives it as a binary node of the direction's reserved word.
+    /// gives it as a binary node with a stored direction.
     [[nodiscard]] static bool range_node(const Expression& e)
     {
         if (e.kind != ExpressionKind::binary || e.operands.size() != 2U) {
@@ -1067,8 +1054,7 @@ private:
         if (e.marker != Marker::none) {
             return false;
         }
-        const auto symbol = support::vhdl_symbol(e.text);
-        return symbol == to_symbol() || symbol == downto_symbol();
+        return e.range_direction != vhdl::WrittenRangeDirection::none;
     }
 
     /// A range's interpretations: one per type both bounds can have (5.2.1,

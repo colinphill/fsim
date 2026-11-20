@@ -3,7 +3,10 @@
 # Analyzes one invalid VHDL unit with `fsim compile` and requires analysis to
 # fail with the diagnostic code named on the fixture's first line:
 #
-#   -- fsim-expect: <code> [std=<standard>]
+#   -- fsim-expect: <code> [std=<standard>] [after=<file>]
+#
+# With after=<file>, prerequisites/<file> is compiled first (it must be
+# accepted), so a unit analyzed after its primary unit is checked alone.
 
 if(NOT DEFINED FSIM_EXECUTABLE OR NOT EXISTS "${FSIM_EXECUTABLE}")
   message(FATAL_ERROR "FSIM_EXECUTABLE must name the built fsim command")
@@ -30,6 +33,22 @@ set(workspace
 file(MAKE_DIRECTORY "${workspace}")
 file(COPY_FILE "${FSIM_FIXTURE}" "${workspace}/${fixture_file}")
 
+if(header MATCHES "after=([A-Za-z0-9_.]+)")
+  get_filename_component(fixture_directory "${FSIM_FIXTURE}" DIRECTORY)
+  set(prerequisite "${fixture_directory}/prerequisites/${CMAKE_MATCH_1}")
+  file(COPY_FILE "${prerequisite}" "${workspace}/${CMAKE_MATCH_1}")
+  execute_process(
+    COMMAND "${FSIM_EXECUTABLE}" compile -q --lang vhdl ${standard_args}
+      "${CMAKE_MATCH_1}"
+    WORKING_DIRECTORY "${workspace}"
+    RESULT_VARIABLE prerequisite_result
+    OUTPUT_VARIABLE prerequisite_output
+    ERROR_VARIABLE prerequisite_output)
+  if(NOT prerequisite_result STREQUAL "0")
+    message(FATAL_ERROR "${fixture_name}: prerequisite ${CMAKE_MATCH_1} "
+      "failed:\n${prerequisite_output}\nworkspace: ${workspace}")
+  endif()
+endif()
 execute_process(
   COMMAND "${FSIM_EXECUTABLE}" compile -q --lang vhdl ${standard_args}
     "${fixture_file}"

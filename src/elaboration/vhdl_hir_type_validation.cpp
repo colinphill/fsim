@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "vhdl_hir_type_validation.hpp"
+#include "vhdl_analysis_rules.hpp"
 #include "fsim/support/stack_growth.hpp"
 #include "fsim/support/symbol.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
@@ -141,6 +142,16 @@ public:
         lowering_index_ = index;
     }
 
+    // Analysis mode (`fsim compile`): the validator decides only from the
+    // unit as analyzed. Generic constants (even with a default, 9.4.3),
+    // generic types, actuals and the bounds of unconstrained interface
+    // objects (6.5.6.2, 6.5.7) are unknown, and an unknown value or type
+    // reports nothing. Elaboration leaves the mode off.
+    void set_analysis_mode(const bool analysis) noexcept
+    {
+        analysis_ = analysis;
+    }
+
     // An analysis-only validator: the expression rules it answers read no
     // entity or architecture state.
     explicit Validator(const semantic::SpecializedHirUnit& specialization)
@@ -154,13 +165,6 @@ public:
         std::unordered_set<std::uint32_t> active_declarations;
         return locally_static_expression(
             id, active_expressions, active_declarations);
-    }
-
-    // Check only the VHNAME name rules, skipping the type
-    // checks that need generic values.
-    void set_names_only() noexcept
-    {
-        names_only_ = true;
     }
 
     [[nodiscard]] std::vector<VhdlHirTypeValidationIssue> run()
@@ -195,11 +199,6 @@ public:
         }
         collect_unit_types(entity_);
         collect_unit_types(architecture_);
-        if (names_only_) {
-            // The name rules are all checked while walking the operations.
-            validate_operations();
-            return std::move(issues_);
-        }
         validate_unit_objects(entity_);
         validate_unit_objects(architecture_);
         validate_attribute_specifications();
@@ -772,10 +771,28 @@ private:
             && contextual_result_declaration(definition->declaration);
     }
 
+    // The integral value of an expression for a compile-time rule. In
+    // analysis mode only a locally static expression has one (9.4.2): a
+    // generic constant is globally static only (9.4.3), whatever its
+    // default.
+    std::optional<std::int64_t> evaluate_integral(
+        const semantic::ExpressionId id) const
+    {
+        if (analysis_ && !locally_static(id)) {
+            return std::nullopt;
+        }
+        return specialization_.evaluate_integral_expression(id);
+    }
+
     std::optional<std::int64_t> static_integer(
         const semantic::ExpressionId id,
         std::unordered_set<std::uint32_t>& active) const
     {
+        // The outermost call decides whether the value is known at analysis;
+        // the recursion below then folds parts of a locally static value.
+        if (analysis_ && active.empty() && !locally_static(id)) {
+            return std::nullopt;
+        }
         if (const auto folded
             = specialization_.evaluate_integral_expression(id)) {
             return folded;
@@ -1043,7 +1060,10 @@ private:
         const std::optional<std::int64_t> value,
         const std::optional<semantic::ExpressionId> expression) const
     {
-        if (value || !expression) {
+        // In analysis mode a written bound is decided from its expression:
+        // the specialization folds bounds with generic defaults when it has
+        // no actuals, and a generic is not locally static (9.4.2, 9.4.3).
+        if ((value && !(analysis_ && expression)) || !expression) {
             return value;
         }
         std::unordered_set<std::uint32_t> active;
@@ -1787,45 +1807,6 @@ private:
             expression.text, expression.scope);
     }
 
-    // The compiler-provided type a canonical identity such as
-    // "std.standard.string" or "ieee.std_logic_1164.std_ulogic" names.
-    static semantic::CompiledVhdlProvidedType provided_type_of_identity(
-        const std::string_view identity)
-    {
-        using Provided = semantic::CompiledVhdlProvidedType;
-        const auto dot = identity.find_last_of('.');
-        if (dot == std::string_view::npos) {
-            return Provided::none;
-        }
-        const auto package = identity.substr(0U, dot);
-        const auto name = identity.substr(dot + 1U);
-        for (auto value = static_cast<unsigned>(Provided::boolean);
-             value <= static_cast<unsigned>(Provided::std_logic_arith_signed);
-             ++value) {
-            const auto type = static_cast<Provided>(value);
-            if (!equal_ignoring_ascii_case(
-                    semantic::vhdl_provided_type_name(type), name)) {
-                continue;
-            }
-            const std::string_view owner = type <= Provided::time_vector
-                ? "std.standard"
-                : type <= Provided::std_logic_vector ? "ieee.std_logic_1164"
-                : type <= Provided::numeric_std_signed ? "ieee.numeric_std"
-                : type <= Provided::numeric_bit_signed ? "ieee.numeric_bit"
-                : type == Provided::sfixed || type == Provided::ufixed
-                ? "ieee.fixed_pkg"
-                : type == Provided::ieee_float ? "ieee.float_pkg"
-                : type == Provided::std_logic_arith_unsigned
-                    || type == Provided::std_logic_arith_signed
-                ? "ieee.std_logic_arith"
-                : "std.textio";
-            if (equal_ignoring_ascii_case(owner, package)) {
-                return type;
-            }
-        }
-        return Provided::none;
-    }
-
     // A subtype indication for a type mark written at `scope` (a qualified
     // expression's or a nominal type's mark), with the type it denotes
     // there: a retained declaration, or the provided type it names.
@@ -1961,7 +1942,8 @@ private:
         const semantic::ScopeId scope) const
     {
         // The compiler provides these packages without retained type
-        // declarations; a visible package member names the IEEE type.
+        // declarations; a visible package member names the IEEE type
+        // (BD2 V4: projected IEEE fixed/float packages, not analyzed).
         const auto canonical = lowercase_ascii_copy(
             simple_name_of(subtype.type_mark.spelling));
         const semantic::CompiledDesignResolver resolver { specialization_ };
@@ -2712,7 +2694,7 @@ private:
                                       const std::optional<semantic::ExpressionId> id)
             -> std::optional<std::int64_t> {
             return value ? value
-                : id     ? specialization_.evaluate_integral_expression(*id)
+                : id     ? evaluate_integral(*id)
                          : std::nullopt;
         };
         // IEEE 1076-1993 3.1.1, 3.1.2, 3.1.4: the range of an integer,
@@ -3093,11 +3075,15 @@ private:
             return;
         }
         if (!type.element_subtype) {
-            report(
-                "FSIM-ELAB-VHARRAY-001",
-                "VHDL array type '" + type.name
-                    + "' does not retain a concrete element subtype",
-                type.source);
+            // An element subtype this unit does not retain is unknown at
+            // analysis.
+            if (!analysis_) {
+                report(
+                    "FSIM-ELAB-VHARRAY-001",
+                    "VHDL array type '" + type.name
+                        + "' does not retain a concrete element subtype",
+                    type.source);
+            }
             return;
         }
         // The element subtype names what is visible at the type
@@ -3130,7 +3116,9 @@ private:
             }
             return false;
         };
-        if (element.kind == ProfileKind::unknown
+        // A generic type or an unprofiled subtype is an unknown element at
+        // analysis (6.5.3); only a known unbounded element is reported.
+        if ((element.kind == ProfileKind::unknown && !analysis_)
             || (element.kind == ProfileKind::string && !unbounded_elements
                 && !constrained_string())
             || (element.kind == ProfileKind::array && !unbounded_elements
@@ -3290,7 +3278,20 @@ private:
                 = resolver.effective_vhdl_subtype(indication, scope);
             return effective && !effective->unconstrained;
         };
+        // At analysis the lengths of the two subtypes are compared only when
+        // both have locally static bounds (9.4.2): a bound that reads a
+        // generic is known at elaboration.
+        const auto static_at_analysis = [&](const SubtypeIndication& indication,
+                                            const semantic::ScopeId scope) {
+            std::unordered_set<std::uint32_t> active_expressions;
+            std::unordered_set<std::uint32_t> active_declarations;
+            return !analysis_
+                || locally_static_subtype(indication, scope,
+                    active_expressions, active_declarations, 0U);
+        };
         if (value_subtype
+            && static_at_analysis(*declaration.subtype, declaration.scope)
+            && static_at_analysis(value_subtype->first, value_subtype->second)
             && constrained(*declaration.subtype, declaration.scope)
             && constrained(value_subtype->first, value_subtype->second)
             && !resolver
@@ -3677,8 +3678,7 @@ private:
                 return selector && selector->vhdl != nullptr
                     && ((selector->vhdl->kind
                                 == semantic::vhdl::ExpressionKind::binary
-                            && (equal_ignoring_ascii_case(selector->vhdl->text, "to")
-                                || equal_ignoring_ascii_case(selector->vhdl->text, "downto")))
+                            && (selector->vhdl->range_direction != semantic::vhdl::WrittenRangeDirection::none))
                         || selector->vhdl->text.ends_with("'range")
                         || selector->vhdl->text.ends_with("'reverse_range"));
             });
@@ -4401,7 +4401,7 @@ private:
             }
             if (value.kind == semantic::vhdl::ExpressionKind::slice) {
                 if (value.operands.size() != 3U
-                    || (value.text != "to" && value.text != "downto")) {
+                    || (value.range_direction == semantic::vhdl::WrittenRangeDirection::none)) {
                     return base;
                 }
                 // A slice keeps the array type but has its own index range.
@@ -4411,7 +4411,7 @@ private:
                 range.kind = semantic::vhdl::RangeKind::array_index;
                 range.left_expression = value.operands[1];
                 range.right_expression = value.operands[2];
-                range.descending = value.text == "downto";
+                range.descending = value.range_direction == semantic::vhdl::WrittenRangeDirection::downto;
                 range.source = value.source;
                 if (sliced.constraints.empty()) {
                     sliced.constraints.push_back(range);
@@ -4654,18 +4654,14 @@ private:
         // 1076-2019 16.8.5.1; Synopsys STD_LOGIC_ARITH declares its own), so
         // an operation mixing two packages' types is a type error (9.2);
         // the roots are those of the retained declarations.
+        // The root is the provided type's own number: distinct per package.
         case Provided::numeric_std_unsigned:
-            return "ieee.numeric_std.unsigned";
         case Provided::numeric_bit_unsigned:
-            return "ieee.numeric_bit.unsigned";
         case Provided::std_logic_arith_unsigned:
-            return "ieee.std_logic_arith.unsigned";
         case Provided::numeric_std_signed:
-            return "ieee.numeric_std.signed";
         case Provided::numeric_bit_signed:
-            return "ieee.numeric_bit.signed";
         case Provided::std_logic_arith_signed:
-            return "ieee.std_logic_arith.signed";
+            return "provided:" + std::to_string(static_cast<unsigned>(type));
         case Provided::textio_line:
             return "line";
         case Provided::textio_text:
@@ -4925,8 +4921,7 @@ private:
                        const auto operand = specialization_.find_expression(id);
                        return operand && operand->vhdl != nullptr
                            && operand->vhdl->kind == Kind::binary
-                           && (operand->vhdl->text == "to"
-                               || operand->vhdl->text == "downto");
+                           && (operand->vhdl->range_direction != semantic::vhdl::WrittenRangeDirection::none);
                    })) {
                 return { };
             }
@@ -5456,7 +5451,7 @@ private:
             const auto effective_qualified_type
                 = semantic::CompiledDesignResolver { specialization_ }
                       .effective_vhdl_subtype(subtype, expression.scope);
-            std::optional<std::string> qualified_array_identity;
+            std::optional<semantic::CompiledVhdlProvidedType> qualified_array_identity;
             if (effective_qualified_type) {
                 qualified_array_identity = predefined_array_identity(
                     *effective_qualified_type, expression.scope);
@@ -5464,9 +5459,14 @@ private:
             if (effective_qualified_type
                 && !effective_qualified_type->constraints.empty()
                 && qualified_array_identity
-                && *qualified_array_identity == "std.standard.string") {
-                const auto value
-                    = specialization_.evaluate_string_expression(
+                && *qualified_array_identity
+                    == semantic::CompiledVhdlProvidedType::string) {
+                // A string value is known at analysis only when it is
+                // locally static (9.4.2); a generic's default is not.
+                const auto value = analysis_
+                        && !locally_static(expression.operands.front())
+                    ? std::optional<std::string> { }
+                    : specialization_.evaluate_string_expression(
                         expression.operands.front());
                 if (value
                     && effective_qualified_type->constraints.size() == 1U
@@ -5958,6 +5958,14 @@ private:
             return finish(!equal_ignoring_ascii_case(
                 expression.nominal_type, "time"));
         case Kind::name: {
+            // An enumeration literal of STD.STANDARD (16.3: TRUE, NOTE, '0',
+            // ...) that compile-time typing chose is a literal (9.4.2 a).
+            if (expression.interpretation
+                    == semantic::vhdl::Interpretation::enumeration_literal
+                && expression.resolved_standard
+                    != support::StandardDeclaration::none) {
+                return finish(true);
+            }
             const auto declaration_id = expression.referenced_name
                     && expression.referenced_name->selected
                 ? expression.referenced_name->selected
@@ -6002,8 +6010,7 @@ private:
             if (expression.operands.size() != 2U) {
                 return finish(false);
             }
-            if (equal_ignoring_ascii_case(expression.text, "to")
-                || equal_ignoring_ascii_case(expression.text, "downto")) {
+            if (expression.range_direction != semantic::vhdl::WrittenRangeDirection::none) {
                 // Aggregate discrete ranges are encoded as binary nodes, but
                 // their direction keyword is range syntax rather than a
                 // callable operator. Only their bounds need to be locally
@@ -6073,6 +6080,73 @@ private:
                 result.type_mark.target = *type_id;
                 return result;
             };
+            // A type mark denoting a STANDARD scalar type or subtype
+            // (16.3) denotes a locally static subtype (9.4.2: its range
+            // is given by literals).
+            const auto standard_scalar = [](const semantic::vhdl::Name& name) {
+                using S = support::StandardDeclaration;
+                switch (name.standard) {
+                case S::boolean: case S::bit: case S::character:
+                case S::severity_level: case S::integer: case S::real:
+                case S::time: case S::delay_length: case S::natural:
+                case S::positive: case S::file_open_kind:
+                case S::file_open_status: case S::file_open_state:
+                case S::file_origin_kind: case S::range_direction:
+                    return !name.selected;
+                default:
+                    return false;
+                }
+            };
+            const auto operand_static = [&](const semantic::ExpressionId operand) {
+                return support::with_stack([&] { return locally_static_expression(
+                    operand, active_expressions, active_declarations,
+                    depth + 1U); });
+            };
+            const auto standard_scalar_name = [&](const semantic::ExpressionId id) {
+                const auto named = specialization_.find_expression(id);
+                return named && named->vhdl != nullptr
+                    && named->vhdl->kind == Kind::name
+                    && named->vhdl->referenced_name
+                    && standard_scalar(*named->vhdl->referenced_name);
+            };
+            // A physical literal of a type other than TIME (9.4.2 a).
+            if (expression.marker == support::ExpressionMarker::vhdl_physical
+                && expression.operands.size() == 1U
+                && expression.type.kind != semantic::vhdl::TypeIdentity::Kind::none
+                && !(expression.type.kind
+                        == semantic::vhdl::TypeIdentity::Kind::standard
+                    && expression.type.standard == support::StandardDeclaration::time)) {
+                return finish(operand_static(expression.operands.front()));
+            }
+            if (expression.marker == support::ExpressionMarker::vhdl_qualified
+                && expression.operands.size() == 1U
+                && expression.qualified_type_mark
+                && standard_scalar(*expression.qualified_type_mark)) {
+                return finish(operand_static(expression.operands.front()));
+            }
+            if (expression.predefined_attribute
+                && !expression.operands.empty()
+                && standard_scalar_name(expression.operands.front())) {
+                using A = semantic::vhdl::PredefinedAttribute;
+                switch (*expression.predefined_attribute) {
+                case A::left: case A::right: case A::low: case A::high:
+                case A::ascending: case A::pos: case A::val: case A::succ:
+                case A::pred: case A::leftof: case A::rightof:
+                    // 9.4.2 e: a predefined attribute of a locally static
+                    // subtype that is a value or a function, with locally
+                    // static actual parameters.
+                    return finish(std::ranges::all_of(
+                        std::span { expression.operands }.subspan(1U),
+                        operand_static));
+                default:
+                    break;
+                }
+            }
+            if (expression.operands.size() == 1U && expression.referenced_name
+                && standard_scalar(*expression.referenced_name)) {
+                // A type conversion to a STANDARD scalar type (9.3.6).
+                return finish(operand_static(expression.operands.front()));
+            }
             if (expression.marker == support::ExpressionMarker::vhdl_qualified
                 && expression.operands.size() == 1U) {
                 // The type mark analysis resolved (9.3.5, 12.3, 12.4).
@@ -6424,7 +6498,7 @@ private:
                         const auto globally_static = [&](const auto& self,
                                                          const semantic::ExpressionId id,
                                                          const std::size_t depth) -> bool {
-                            if (specialization_.evaluate_integral_expression(id)) {
+                            if (evaluate_integral(id)) {
                                 return true;
                             }
                             const auto operand = specialization_.find_expression(id);
@@ -6449,8 +6523,12 @@ private:
                                         == semantic::ScopeRole::loop_parameters) {
                                     return false;
                                 }
+                                // A generate parameter is globally static
+                                // (IEEE 1076-1993 7.4.2).
                                 return declaration->vhdl->form
                                         == semantic::vhdl::DeclarationForm::generic_constant
+                                    || declaration->vhdl->form
+                                        == semantic::vhdl::DeclarationForm::generate_parameter
                                     || declaration->vhdl->form
                                         == semantic::vhdl::DeclarationForm::constant;
                             }
@@ -6890,6 +6968,119 @@ private:
         } else if (accepted.size() == 1U) {
             validate_aggregate_actuals(
                 *accepted.begin(), actuals);
+            if (analysis_) {
+                validate_variable_formal_actuals(statement);
+            }
+        }
+    }
+
+    // Whether an actual is positively not a variable: a literal or an
+    // operator result, or a name of a signal, constant, generic, enumeration
+    // literal or generate parameter. A name or form this unit does not
+    // classify is not decided (unknown reports nothing).
+    bool actual_is_not_variable(
+        const semantic::ExpressionId id, const std::size_t depth = 0U) const
+    {
+        const auto found = specialization_.find_expression(id);
+        if (!found || found->vhdl == nullptr) {
+            return false;
+        }
+        const auto& value = *found->vhdl;
+        using Kind = semantic::vhdl::ExpressionKind;
+        using Form = semantic::vhdl::DeclarationForm;
+        switch (value.kind) {
+        case Kind::integer_literal:
+        case Kind::real_literal:
+        case Kind::boolean_literal:
+        case Kind::logic_literal:
+        case Kind::string_literal:
+        case Kind::unary:
+        case Kind::binary:
+        case Kind::concatenation:
+            return true;
+        case Kind::aggregate:
+            return std::ranges::any_of(value.associations,
+                [&](const semantic::vhdl::AggregateAssociation& item) {
+                    return item.choices.size() <= 1U
+                        && support::with_stack([&] { return actual_is_not_variable(
+                            item.value, depth + 1U); });
+                });
+        case Kind::index:
+        case Kind::slice:
+            return !value.operands.empty()
+                && support::with_stack([&] { return actual_is_not_variable(
+                    value.operands.front(), depth + 1U); });
+        case Kind::call:
+            return value.marker == support::ExpressionMarker::vhdl_member
+                && !value.operands.empty()
+                && support::with_stack([&] { return actual_is_not_variable(
+                    value.operands.front(), depth + 1U); });
+        case Kind::name: {
+            if (!value.referenced_name || !value.referenced_name->selected) {
+                return false;
+            }
+            const auto declaration = specialization_.find_declaration(
+                *value.referenced_name->selected);
+            if (!declaration || declaration->vhdl == nullptr) {
+                return false;
+            }
+            const auto form = declaration->vhdl->form;
+            if (form == Form::port) {
+                return declaration->vhdl->object_class
+                    != semantic::vhdl::ObjectClass::variable
+                    && declaration->vhdl->object_class
+                        != semantic::vhdl::ObjectClass::file;
+            }
+            return form == Form::signal || form == Form::constant
+                || form == Form::generic_constant
+                || form == Form::generate_parameter
+                || form == Form::enumeration_literal;
+        }
+        default:
+            return false;
+        }
+    }
+
+    // IEEE 1076-2008 4.2.2.3, 6.5.7.1 (IEEE 1076-1993 2.1.1.1): the actual
+    // associated with a formal parameter of class variable is a variable,
+    // whatever the formal's mode. This is decided from the actual's kind and
+    // the class of the object it names, never from a value.
+    void validate_variable_formal_actuals(const semantic::vhdl::Statement& statement)
+    {
+        // The procedure and the formal of each association that
+        // compile-time typing chose (12.5; resolved_formals are positions).
+        if (!statement.resolved_procedure
+            || statement.resolved_formals.size()
+                != statement.procedure_arguments.size()) {
+            return;
+        }
+        const auto declaration
+            = specialization_.find_declaration(*statement.resolved_procedure);
+        if (!declaration || declaration->vhdl == nullptr
+            || !declaration->vhdl->callable) {
+            return;
+        }
+        const auto& formals = declaration->vhdl->callable->formals;
+        for (std::size_t position { };
+             position < statement.procedure_arguments.size(); ++position) {
+            const auto index = statement.resolved_formals[position];
+            if (index == semantic::vhdl::no_formal || index >= formals.size()) {
+                continue;
+            }
+            const auto actual = statement.procedure_arguments[position].actual;
+            const auto formal = specialization_.find_declaration(formals[index]);
+            if (!formal || formal->vhdl == nullptr
+                || formal->vhdl->object_class
+                    != semantic::vhdl::ObjectClass::variable
+                || !actual_is_not_variable(actual)) {
+                continue;
+            }
+            const auto written = specialization_.find_expression(actual);
+            report("FSIM-ELAB-VHPROC-018",
+                "variable-class procedure formal '" + formal->vhdl->name
+                    + "' requires a variable-class actual",
+                written && written->vhdl != nullptr ? written->vhdl->source
+                                                    : semantic::SourceSpanId { });
         }
     }
 
@@ -7847,7 +8038,7 @@ private:
                                 != semantic::vhdl::ExpressionKind::integer_literal) {
                             continue;
                         }
-                        const auto value = specialization_.evaluate_integral_expression(choice);
+                        const auto value = evaluate_integral(choice);
                         if (!value) {
                             continue;
                         }
@@ -7989,7 +8180,7 @@ private:
                         || found->vhdl->kind != semantic::vhdl::ExpressionKind::integer_literal) {
                         continue;
                     }
-                    const auto value = specialization_.evaluate_integral_expression(choice);
+                    const auto value = evaluate_integral(choice);
                     if (value && !chosen.insert(*value).second) {
                         report("FSIM-ELAB-VHAGG-013",
                             "a VHDL aggregate choice is given more than once",
@@ -8066,15 +8257,13 @@ private:
                         && choice->vhdl->kind
                             == semantic::vhdl::ExpressionKind::binary
                         && choice->vhdl->operands.size() == 2U
-                        && (choice->vhdl->text == "to"
-                            || choice->vhdl->text == "downto")) {
+                        && (choice->vhdl->range_direction != semantic::vhdl::WrittenRangeDirection::none)) {
                         const auto left = bound(
                             std::nullopt, choice->vhdl->operands[0]);
                         const auto right = bound(
                             std::nullopt, choice->vhdl->operands[1]);
                         const bool null_choice = left && right
-                            && (choice->vhdl->text == "to"
-                                ? *left > *right
+                            && (choice->vhdl->range_direction == semantic::vhdl::WrittenRangeDirection::to ? *left > *right
                                 : *left < *right);
                         const auto context_profile
                             = profile(context);
@@ -8333,10 +8522,10 @@ private:
         const auto bound_value = [&](const std::optional<std::int64_t> value,
                                      const std::optional<semantic::ExpressionId> expression)
             -> std::optional<std::int64_t> {
-            if (value) {
+            if (value && !(analysis_ && expression)) {
                 return value;
             }
-            return expression ? specialization_.evaluate_integral_expression(*expression)
+            return expression ? evaluate_integral(*expression)
                               : std::nullopt;
         };
         const auto type = subtype_operand_type(subtype, 0U);
@@ -8393,7 +8582,7 @@ private:
                 if ((stored.form == Form::constant || stored.form == Form::variable
                         || stored.form == Form::signal)
                     && stored.initializer && !null_range) {
-                    if (const auto value = specialization_.evaluate_integral_expression(
+                    if (const auto value = evaluate_integral(
                             *stored.initializer);
                         value && (*value < low || *value > high)) {
                         report("FSIM-ELAB-VHRANGE-003",
@@ -8500,7 +8689,7 @@ private:
                                               const std::optional<semantic::ExpressionId> id)
                         -> std::optional<std::int64_t> {
                         return value ? value
-                            : id ? specialization_.evaluate_integral_expression(*id)
+                            : id ? evaluate_integral(*id)
                                  : std::nullopt;
                     };
                     const auto left = evaluate(constraint.left, constraint.left_expression);
@@ -8588,7 +8777,7 @@ private:
                 return false;
             }
             if (range) {
-                if (const auto value = specialization_.evaluate_integral_expression(choice);
+                if (const auto value = evaluate_integral(choice);
                     value && (*value < range->first || *value > range->second)) {
                     report("FSIM-ELAB-VHDLCASE-009",
                         "a VHDL case choice lies outside the subtype of the case expression",
@@ -8609,7 +8798,7 @@ private:
                 }
                 const bool range_choice = found->vhdl->operands.size() == 2U
                     && ((found->vhdl->kind == semantic::vhdl::ExpressionKind::binary
-                            && (found->vhdl->text == "to" || found->vhdl->text == "downto"))
+                            && (found->vhdl->range_direction != semantic::vhdl::WrittenRangeDirection::none))
                         || (found->vhdl->kind == semantic::vhdl::ExpressionKind::call
                             && support::vhdl_case_range(found->vhdl->marker)));
                 if (range_choice) {
@@ -8649,7 +8838,7 @@ private:
                 // prefix of a slice is still an array.
                 if (index && index->vhdl != nullptr
                     && index->vhdl->kind == semantic::vhdl::ExpressionKind::binary
-                    && (index->vhdl->text == "to" || index->vhdl->text == "downto")) {
+                    && (index->vhdl->range_direction != semantic::vhdl::WrittenRangeDirection::none)) {
                     validate_slice_prefix(found->vhdl->operands.front(), found->vhdl->source);
                     if (index->vhdl->operands.size() == 2U) {
                         validate_slice_bounds(found->vhdl->operands.front(),
@@ -8659,7 +8848,7 @@ private:
                 }
                 if (!index || index->vhdl == nullptr
                     || (index->vhdl->kind == semantic::vhdl::ExpressionKind::binary
-                        && (index->vhdl->text == "to" || index->vhdl->text == "downto"))
+                        && (index->vhdl->range_direction != semantic::vhdl::WrittenRangeDirection::none))
                     || (index->vhdl->kind == semantic::vhdl::ExpressionKind::name
                         && index->vhdl->referenced_name
                         && index->vhdl->referenced_name->selected
@@ -8778,8 +8967,8 @@ private:
             if (slice && slice->vhdl != nullptr
                 && slice->vhdl->kind == semantic::vhdl::ExpressionKind::slice
                 && slice->vhdl->operands.size() == 3U) {
-                const auto low = specialization_.evaluate_integral_expression(slice->vhdl->operands[1]);
-                const auto high = specialization_.evaluate_integral_expression(slice->vhdl->operands[2]);
+                const auto low = evaluate_integral(slice->vhdl->operands[1]);
+                const auto high = evaluate_integral(slice->vhdl->operands[2]);
                 std::optional<std::int64_t> alias_length;
                 for (const auto& constraint : alias.subtype->constraints) {
                     if (constraint.kind != semantic::vhdl::RangeKind::array_index) {
@@ -8787,11 +8976,11 @@ private:
                     }
                     const auto left = constraint.left ? constraint.left
                         : constraint.left_expression
-                        ? specialization_.evaluate_integral_expression(*constraint.left_expression)
+                        ? evaluate_integral(*constraint.left_expression)
                         : std::nullopt;
                     const auto right = constraint.right ? constraint.right
                         : constraint.right_expression
-                        ? specialization_.evaluate_integral_expression(*constraint.right_expression)
+                        ? evaluate_integral(*constraint.right_expression)
                         : std::nullopt;
                     if (left && right) {
                         alias_length = std::max<std::int64_t>(
@@ -8840,7 +9029,7 @@ private:
         if (target.kind == semantic::vhdl::ExpressionKind::slice
             && target.operands.size() == 3U) {
             return SliceBounds { target.operands[1U], target.operands[2U],
-                target.text == "downto" };
+                target.range_direction == semantic::vhdl::WrittenRangeDirection::downto };
         }
         if (target.kind != semantic::vhdl::ExpressionKind::index
             || target.operands.size() != 2U) {
@@ -8849,12 +9038,12 @@ private:
         const auto range = specialization_.find_expression(target.operands[1U]);
         if (!range || range->vhdl == nullptr
             || range->vhdl->kind != semantic::vhdl::ExpressionKind::binary
-            || (range->vhdl->text != "to" && range->vhdl->text != "downto")
+            || (range->vhdl->range_direction == semantic::vhdl::WrittenRangeDirection::none)
             || range->vhdl->operands.size() != 2U) {
             return std::nullopt;
         }
         return SliceBounds { range->vhdl->operands[0U],
-            range->vhdl->operands[1U], range->vhdl->text == "downto" };
+            range->vhdl->operands[1U], range->vhdl->range_direction == semantic::vhdl::WrittenRangeDirection::downto };
     }
 
     // Return the subtype determined by a slice target. When its bounds are
@@ -8875,8 +9064,8 @@ private:
             return std::nullopt;
         }
         const auto [left, right, descending] = *bounds;
-        const auto low = specialization_.evaluate_integral_expression(left);
-        const auto high = specialization_.evaluate_integral_expression(right);
+        const auto low = evaluate_integral(left);
+        const auto high = evaluate_integral(right);
         auto context = expression_subtype(target->vhdl->operands.front());
         if (!context) {
             const auto prefix = specialization_.find_expression(
@@ -8950,8 +9139,8 @@ private:
         if (const auto context = slice_assignment_context(target_id)) {
             validate_aggregate(value_id, *context);
         }
-        const auto low = specialization_.evaluate_integral_expression(left);
-        const auto high = specialization_.evaluate_integral_expression(right);
+        const auto low = evaluate_integral(left);
+        const auto high = evaluate_integral(right);
         if (!low || !high) {
             return;
         }
@@ -9327,10 +9516,11 @@ private:
             }
             const auto identity = predefined_array_identity(
                 *subtype, value->vhdl->scope);
-            return identity == "ieee.numeric_std.signed"
-                || identity == "ieee.numeric_std.unsigned"
-                || identity == "ieee.std_logic_arith.signed"
-                || identity == "ieee.std_logic_arith.unsigned";
+            using Provided = semantic::CompiledVhdlProvidedType;
+            return identity == Provided::numeric_std_signed
+                || identity == Provided::numeric_std_unsigned
+                || identity == Provided::std_logic_arith_signed
+                || identity == Provided::std_logic_arith_unsigned;
         };
         // STRING has no arithmetic, and BIT_VECTOR has none before
         // VHDL-2008 (NUMERIC_BIT_UNSIGNED); string and bit-string literals
@@ -9581,8 +9771,7 @@ private:
         if (value->vhdl->kind
             == semantic::vhdl::ExpressionKind::slice) {
             if (value->vhdl->operands.size() != 3U
-                || (value->vhdl->text != "to"
-                    && value->vhdl->text != "downto")
+                || (value->vhdl->range_direction == semantic::vhdl::WrittenRangeDirection::none)
                 || unit_standard(value->vhdl->scope)
                     < std::string_view { "2008" }) {
                 return std::nullopt;
@@ -9600,7 +9789,7 @@ private:
             if (!left || !right) {
                 return std::nullopt;
             }
-            const bool descending = value->vhdl->text == "downto";
+            const bool descending = value->vhdl->range_direction == semantic::vhdl::WrittenRangeDirection::downto;
             if ((descending && *left < *right)
                 || (!descending && *left > *right)) {
                 return std::uint64_t { 0U };
@@ -9748,20 +9937,46 @@ private:
     // UNRESOLVED_ forms of NUMERIC_STD denote the one UNSIGNED/SIGNED
     // identity (the resolved subtype is the same array, IEEE 1076-2019
     // 16.8.5.1).
-    static std::optional<std::string> native_array_identity(
-        const semantic::VhdlNativeIntrinsic& entry)
+    // The provided array type a compiler-owned predefined vector identity
+    // denotes.
+    static semantic::CompiledVhdlProvidedType provided_array_of_builtin(
+        const semantic::vhdl::BuiltinTypeIdentity identity)
+    {
+        using Builtin = semantic::vhdl::BuiltinTypeIdentity;
+        using Provided = semantic::CompiledVhdlProvidedType;
+        switch (identity) {
+        case Builtin::ieee_std_logic_1164_std_logic_vector:
+            return Provided::std_logic_vector;
+        case Builtin::ieee_std_logic_1164_std_ulogic_vector:
+            return Provided::std_ulogic_vector;
+        case Builtin::std_standard_string: return Provided::string;
+        case Builtin::std_standard_bit_vector: return Provided::bit_vector;
+        case Builtin::std_standard_boolean_vector:
+            return Provided::boolean_vector;
+        case Builtin::std_standard_integer_vector:
+            return Provided::integer_vector;
+        case Builtin::std_standard_real_vector: return Provided::real_vector;
+        case Builtin::std_standard_time_vector: return Provided::time_vector;
+        case Builtin::none: break;
+        }
+        return Provided::none;
+    }
+
+    static std::optional<semantic::CompiledVhdlProvidedType>
+    native_array_identity(const semantic::VhdlNativeIntrinsic& entry)
     {
         using Package = semantic::VhdlNativePackage;
         using Name = semantic::VhdlNativeName;
+        using Provided = semantic::CompiledVhdlProvidedType;
         if (entry.kind != semantic::VhdlNativeKind::type) {
             return std::nullopt;
         }
         if (entry.package_id == Package::ieee_std_logic_1164) {
             if (entry.name == Name::std_logic_vector) {
-                return std::string { "ieee.std_logic_1164.std_logic_vector" };
+                return Provided::std_logic_vector;
             }
             if (entry.name == Name::std_ulogic_vector) {
-                return std::string { "ieee.std_logic_1164.std_ulogic_vector" };
+                return Provided::std_ulogic_vector;
             }
             return std::nullopt;
         }
@@ -9771,18 +9986,18 @@ private:
         }
         if (entry.name == Name::signed_
             || (numeric_std && entry.name == Name::unresolved_signed)) {
-            return std::string { numeric_std ? "ieee.numeric_std.signed"
-                                             : "ieee.numeric_bit.signed" };
+            return numeric_std ? Provided::numeric_std_signed
+                               : Provided::numeric_bit_signed;
         }
         if (entry.name == Name::unsigned_
             || (numeric_std && entry.name == Name::unresolved_unsigned)) {
-            return std::string { numeric_std ? "ieee.numeric_std.unsigned"
-                                             : "ieee.numeric_bit.unsigned" };
+            return numeric_std ? Provided::numeric_std_unsigned
+                               : Provided::numeric_bit_unsigned;
         }
         return std::nullopt;
     }
 
-    std::optional<std::string> predefined_array_identity(
+    std::optional<semantic::CompiledVhdlProvidedType> predefined_array_identity(
         const SubtypeIndication& subtype,
         const semantic::ScopeId scope,
         std::unordered_set<std::uint32_t>* visiting = nullptr) const
@@ -9841,10 +10056,7 @@ private:
             }
         }
         if (builtin_type != semantic::vhdl::BuiltinTypeIdentity::none) {
-            return std::string { semantic::vhdl::builtin_type_package(
-                       builtin_type) }
-                + "." + std::string { semantic::vhdl::builtin_type_name(
-                    builtin_type) };
+            return provided_array_of_builtin(builtin_type);
         }
         if (target) {
             const auto* retained = type_definition(*target);
@@ -9878,16 +10090,22 @@ private:
             }
         }
         constexpr std::array standard_arrays {
-            std::string_view { "string" },
-            std::string_view { "bit_vector" },
-            std::string_view { "boolean_vector" },
-            std::string_view { "integer_vector" },
-            std::string_view { "real_vector" },
-            std::string_view { "time_vector" },
+            std::pair { std::string_view { "string" },
+                semantic::CompiledVhdlProvidedType::string },
+            std::pair { std::string_view { "bit_vector" },
+                semantic::CompiledVhdlProvidedType::bit_vector },
+            std::pair { std::string_view { "boolean_vector" },
+                semantic::CompiledVhdlProvidedType::boolean_vector },
+            std::pair { std::string_view { "integer_vector" },
+                semantic::CompiledVhdlProvidedType::integer_vector },
+            std::pair { std::string_view { "real_vector" },
+                semantic::CompiledVhdlProvidedType::real_vector },
+            std::pair { std::string_view { "time_vector" },
+                semantic::CompiledVhdlProvidedType::time_vector },
         };
         const auto standard_array = [&](const std::string_view name) {
-            return std::ranges::find(standard_arrays, name)
-                != standard_arrays.end();
+            return std::ranges::any_of(standard_arrays,
+                [&](const auto& entry) { return entry.first == name; });
         };
         const auto standard_revision_available = [&](const std::string_view name) {
             return (name != "boolean_vector" && name != "integer_vector"
@@ -9895,7 +10113,8 @@ private:
                 || unit_standard(scope) >= std::string_view { "2008" };
         };
         const auto standard_qualified_name = [&](const std::string_view name) {
-            return "std.standard." + std::string { name };
+            return std::ranges::find_if(standard_arrays,
+                [&](const auto& entry) { return entry.first == name; })->second;
         };
         if (target) {
             // A retained array declaration is authoritative, including a
@@ -9937,7 +10156,12 @@ private:
                 if (semantic::vhdl::is_package(
                         owner, "ieee", "std_logic_arith")
                     && (type_name == "signed" || type_name == "unsigned")) {
-                    return "ieee.std_logic_arith." + type_name;
+                    // BD2 V4: the Synopsys package is a compiler-projected
+                    // package, outside compile-time analysis.
+                    // (type_name is "signed" or "unsigned" here.)
+                    return type_name.size() == 6U
+                        ? semantic::CompiledVhdlProvidedType::std_logic_arith_signed
+                        : semantic::CompiledVhdlProvidedType::std_logic_arith_unsigned;
                 }
                 // Compiler-created predefined array roots can carry a
                 // TypeDefinition without a source declaration or owner unit.
@@ -10123,16 +10347,16 @@ private:
             : operand_scope;
         if (const auto identity
             = predefined_array_identity(expected_array, type_scope)) {
-            if (*identity == "std.standard.string") {
+            using Provided = semantic::CompiledVhdlProvidedType;
+            if (*identity == Provided::string) {
                 return true;
             }
-            const auto allowed = *identity == "std.standard.bit_vector"
+            const auto allowed = *identity == Provided::bit_vector
                 ? std::string_view { "01" }
-                : (*identity == "ieee.std_logic_1164.std_logic_vector"
-                      || *identity
-                          == "ieee.std_logic_1164.std_ulogic_vector"
-                      || *identity == "ieee.numeric_std.signed"
-                      || *identity == "ieee.numeric_std.unsigned")
+                : (*identity == Provided::std_logic_vector
+                      || *identity == Provided::std_ulogic_vector
+                      || *identity == Provided::numeric_std_signed
+                      || *identity == Provided::numeric_std_unsigned)
                 ? std::string_view { "UX01ZWLH-" }
                 : std::string_view { };
             return !allowed.empty()
@@ -10274,38 +10498,40 @@ private:
         if (!identity) {
             return std::nullopt;
         }
-        std::string_view element;
-        if (*identity == "std.standard.string") {
-            element = "std.standard.character";
-        } else if (*identity == "std.standard.bit_vector") {
-            element = "std.standard.bit";
-        } else if (*identity == "std.standard.boolean_vector") {
-            element = "std.standard.boolean";
-        } else if (*identity == "std.standard.integer_vector") {
-            element = "std.standard.integer";
-        } else if (*identity == "std.standard.real_vector") {
-            element = "std.standard.real";
-        } else if (*identity == "std.standard.time_vector") {
-            element = "std.standard.time";
-        } else if (*identity
-            == "ieee.std_logic_1164.std_logic_vector") {
-            element = "ieee.std_logic_1164.std_logic";
-        } else if (*identity
-            == "ieee.std_logic_1164.std_ulogic_vector") {
-            element = "ieee.std_logic_1164.std_ulogic";
-        } else if (*identity == "ieee.numeric_std.signed"
-            || *identity == "ieee.numeric_std.unsigned") {
-            element = "ieee.std_logic_1164.std_ulogic";
-        } else {
-            return std::nullopt;
+        using Provided = semantic::CompiledVhdlProvidedType;
+        // The element type of each predefined array (IEEE 1076-2019 5.3.2.2,
+        // 16.3, 16.7, 16.8).
+        Provided element = Provided::none;
+        switch (*identity) {
+        case Provided::string: element = Provided::character; break;
+        case Provided::bit_vector: element = Provided::bit; break;
+        case Provided::boolean_vector: element = Provided::boolean; break;
+        case Provided::integer_vector: element = Provided::integer; break;
+        case Provided::real_vector: element = Provided::real; break;
+        case Provided::time_vector: element = Provided::time; break;
+        case Provided::std_logic_vector: element = Provided::std_logic; break;
+        case Provided::std_ulogic_vector:
+        case Provided::numeric_std_signed:
+        case Provided::numeric_std_unsigned:
+            element = Provided::std_ulogic;
+            break;
+        default: return std::nullopt;
         }
         SubtypeIndication result;
-        result.type_mark.spelling = std::string { element };
-        result.provided_type = provided_type_of_identity(element);
-        if (const auto row
-            = semantic::standard_declaration_of(result.provided_type)) {
+        if (const auto row = semantic::standard_declaration_of(element)) {
+            result.type_mark.spelling = "std.standard."
+                + std::string { semantic::vhdl_provided_type_name(element) };
+            result.provided_type = element;
             set_standard_mark(result, *row);
+            return result;
         }
+        // BD2 V4: only an array with no retained declaration (a bundle that
+        // omits the IEEE package) reaches this; an analyzed unit's native
+        // arrays are declarations and take array_element_subtype.
+        result.type_mark.spelling = element == Provided::std_logic
+            ? "ieee.std_logic_1164.std_logic"
+            : "ieee.std_logic_1164.std_ulogic";
+        result.provided_type = element;
         return result;
     }
 
@@ -11008,7 +11234,7 @@ private:
                 }
                 const auto& value = *choice->vhdl;
                 if (value.kind == semantic::vhdl::ExpressionKind::binary
-                    && (value.text == "to" || value.text == "downto")
+                    && (value.range_direction != semantic::vhdl::WrittenRangeDirection::none)
                     && value.operands.size() == 2U) {
                     const auto left = array_aggregate_index_value(
                         array_definition, array_dimension_index,
@@ -11017,7 +11243,7 @@ private:
                         array_definition, array_dimension_index,
                         value.operands[1]);
                     if (!left || !right
-                        || (value.text == "to" ? *left > *right
+                        || (value.range_direction == semantic::vhdl::WrittenRangeDirection::to ? *left > *right
                                                : *left < *right)) {
                         return false;
                     }
@@ -11606,8 +11832,7 @@ private:
                 const auto& value = *choice->vhdl;
                 if (value.kind
                         == semantic::vhdl::ExpressionKind::binary
-                    && (value.text == "to"
-                        || value.text == "downto")
+                    && (value.range_direction != semantic::vhdl::WrittenRangeDirection::none)
                     && value.operands.size() == 2U) {
                     const auto left = array_aggregate_index_value(
                         array_definition, array_dimension_index,
@@ -11633,7 +11858,7 @@ private:
                             value.source);
                         return;
                     }
-                    const auto step = value.text == "downto" ? -1 : 1;
+                    const auto step = value.range_direction == semantic::vhdl::WrittenRangeDirection::downto ? -1 : 1;
                     if (!validate_array_range_direction(
                             association.value, step < 0, value.source)) {
                         return;
@@ -12121,10 +12346,11 @@ private:
                 return true;
             }
             // A generic takes them from its actual or default value
-            // (6.5.6.2).
+            // (6.5.6.2); at analysis the actual is not known, so a generic
+            // is an interface object whose bounds are unknown.
             if (vhdl_declaration.form
                 == semantic::vhdl::DeclarationForm::generic_constant) {
-                return vhdl_declaration.initializer.has_value()
+                return analysis_ || vhdl_declaration.initializer.has_value()
                     || std::ranges::any_of(
                         specialization_.specialization().actual_identities,
                         [&](const semantic::SpecializedHirActualIdentity&
@@ -12308,6 +12534,30 @@ private:
                     return !dimension.constrained;
                 })) {
             if (!contextual_result) {
+                // At analysis only a prefix that names an unconstrained type
+                // or subtype is illegal (16.2); an object of an
+                // unconstrained subtype is legal whatever its bounds.
+                const auto prefix_names_subtype = [&] {
+                    const auto named = specialization_.find_expression(
+                        expression.operands.front());
+                    if (!named || named->vhdl == nullptr
+                        || named->vhdl->kind
+                            != semantic::vhdl::ExpressionKind::name
+                        || !named->vhdl->referenced_name
+                        || !named->vhdl->referenced_name->selected) {
+                        return false;
+                    }
+                    const auto declaration = specialization_.find_declaration(
+                        *named->vhdl->referenced_name->selected);
+                    return declaration && declaration->vhdl != nullptr
+                        && (declaration->vhdl->form
+                                == semantic::vhdl::DeclarationForm::type
+                            || declaration->vhdl->form
+                                == semantic::vhdl::DeclarationForm::subtype);
+                };
+                if (analysis_ && !prefix_names_subtype()) {
+                    return;
+                }
                 if (elaboration_detail::trace_lowering_failures()) {
                     const auto traced = specialization_.find_expression(
                         expression.operands.front());
@@ -12341,11 +12591,18 @@ private:
         }
         if (expression.operands.size() == 2U) {
             const auto dimension
-                = specialization_.evaluate_integral_expression(
+                = evaluate_integral(
                     expression.operands[1]);
-            if (!dimension || *dimension <= 0
-                || static_cast<std::uint64_t>(*dimension)
-                    > prefix_profile.dimensions.size()) {
+            // The dimension is a locally static expression (16.2): one that
+            // is not (a generic, a unit name, a signal) is an analysis
+            // error; a locally static one this fold cannot evaluate is
+            // unknown here.
+            const bool unknown_dimension = analysis_ && !dimension
+                && locally_static(expression.operands[1]);
+            if (!unknown_dimension
+                && (!dimension || *dimension <= 0
+                    || static_cast<std::uint64_t>(*dimension)
+                        > prefix_profile.dimensions.size())) {
                 report(
                     "FSIM-ELAB-VHARRAYATTR-002",
                     "VHDL array attribute dimension is nonstatic or "
@@ -12388,8 +12645,7 @@ private:
         const auto& expression = *selector->vhdl;
         if (expression.kind == semantic::vhdl::ExpressionKind::slice) {
             if (expression.operands.size() != 3U
-                || (expression.text != "to"
-                    && expression.text != "downto")) {
+                || (expression.range_direction == semantic::vhdl::WrittenRangeDirection::none)) {
                 return std::nullopt;
             }
             RangeConstraint result;
@@ -12398,7 +12654,7 @@ private:
             result.right_expression = expression.operands[2];
             result.left = bound(std::nullopt, expression.operands[1]);
             result.right = bound(std::nullopt, expression.operands[2]);
-            result.descending = expression.text == "downto";
+            result.descending = expression.range_direction == semantic::vhdl::WrittenRangeDirection::downto;
             result.source = expression.source;
             result.null = result.left && result.right
                 && (result.descending
@@ -12408,15 +12664,14 @@ private:
         }
         if (expression.kind == semantic::vhdl::ExpressionKind::binary
             && expression.operands.size() == 2U
-            && (expression.text == "to"
-                || expression.text == "downto")) {
+            && (expression.range_direction != semantic::vhdl::WrittenRangeDirection::none)) {
             RangeConstraint result;
             result.kind = RangeKind::array_index;
             result.left_expression = expression.operands[0];
             result.right_expression = expression.operands[1];
             result.left = bound(std::nullopt, expression.operands[0]);
             result.right = bound(std::nullopt, expression.operands[1]);
-            result.descending = expression.text == "downto";
+            result.descending = expression.range_direction == semantic::vhdl::WrittenRangeDirection::downto;
             result.source = expression.source;
             result.null = result.left && result.right
                 && (result.descending
@@ -12642,8 +12897,7 @@ private:
                     && selector->vhdl != nullptr
                     && ((selector->vhdl->kind
                             == semantic::vhdl::ExpressionKind::binary
-                        && (selector->vhdl->text == "to"
-                            || selector->vhdl->text == "downto"))
+                        && (selector->vhdl->range_direction != semantic::vhdl::WrittenRangeDirection::none))
                         || (selector->vhdl->kind
                                 == semantic::vhdl::ExpressionKind::call
                             && (selector->vhdl->text == "'range"
@@ -12778,8 +13032,7 @@ private:
                 return selector && selector->vhdl != nullptr
                     && (selector->vhdl->kind == semantic::vhdl::ExpressionKind::slice
                         || (selector->vhdl->kind == semantic::vhdl::ExpressionKind::binary
-                            && (selector->vhdl->text == "to"
-                                || selector->vhdl->text == "downto"))
+                            && (selector->vhdl->range_direction != semantic::vhdl::WrittenRangeDirection::none))
                         || (selector->vhdl->kind
                                 == semantic::vhdl::ExpressionKind::call
                             && (selector->vhdl->text == "'range"
@@ -12826,8 +13079,7 @@ private:
                     == semantic::vhdl::ExpressionKind::slice
                 || (expression.kind
                         == semantic::vhdl::ExpressionKind::binary
-                    && (expression.text == "to"
-                        || expression.text == "downto"))
+                    && (expression.range_direction != semantic::vhdl::WrittenRangeDirection::none))
                 || range_attribute;
             if (slice) {
                 if (range_attribute) {
@@ -12965,7 +13217,7 @@ private:
                 const auto right = operands.size() > first + 1U
                     ? bound(std::nullopt, operands[first + 1U])
                     : std::nullopt;
-                const auto descending = expression.text == "downto";
+                const auto descending = expression.range_direction == semantic::vhdl::WrittenRangeDirection::downto;
                 // A null slice need not lie within the index range
                 // (IEEE 1076-2008 8.5).
                 const bool null_slice = left && right
@@ -13480,7 +13732,7 @@ private:
                 if (region.kind == semantic::vhdl::GenerateKind::conditional
                     && region.condition) {
                     const auto condition
-                        = specialization_.evaluate_integral_expression(
+                        = evaluate_integral(
                             *region.condition);
                     if (condition && *condition == 0) {
                         if (!inactive_generate_scope(region.scope)) {
@@ -14343,11 +14595,15 @@ private:
                             ? root_definition(scoped_context)
                             : nullptr;
                         if (predefined) {
-                            context->type_mark.spelling = *predefined;
+                            // A STANDARD array takes its row's mark below;
+                            // an IEEE array without a retained declaration
+                            // keeps its provided identity (BD2 V4).
+                            context->type_mark.spelling = std::string {
+                                semantic::vhdl_provided_type_name(
+                                    *predefined) };
                             context->type_mark.target
                                 = semantic::TypeId { };
-                            context->provided_type
-                                = provided_type_of_identity(*predefined);
+                            context->provided_type = *predefined;
                             context->written_type_mark.reset();
                             if (const auto row
                                 = semantic::standard_declaration_of(
@@ -14402,7 +14658,7 @@ private:
                 const auto divisor = specialization_.find_expression(expression.operands.back());
                 const bool zero = divisor && divisor->vhdl != nullptr
                     && ((divisor->vhdl->kind == semantic::vhdl::ExpressionKind::integer_literal
-                            && specialization_.evaluate_integral_expression(
+                            && evaluate_integral(
                                    expression.operands.back()) == std::optional<std::int64_t> { 0 })
                         || (divisor->vhdl->kind == semantic::vhdl::ExpressionKind::real_literal
                             && std::strtod(divisor->vhdl->text.c_str(), nullptr) == 0.0));
@@ -14411,7 +14667,7 @@ private:
                 const auto dividend = specialization_.find_expression(expression.operands.front());
                 const bool static_dividend = dividend && dividend->vhdl != nullptr
                     && (dividend->vhdl->kind == semantic::vhdl::ExpressionKind::real_literal
-                        || specialization_.evaluate_integral_expression(
+                        || evaluate_integral(
                             expression.operands.front()).has_value());
                 if (zero && static_dividend) {
                     report("FSIM-ELAB-VHOPER-002",
@@ -14731,7 +14987,7 @@ private:
         operator_result_subtypes_;
     bool name_check_ { true };
     bool operator_check_ { true };
-    bool names_only_ { };
+    bool analysis_ { };
     VhdlLoweringIndex* lowering_index_ { };
     std::optional<VhdlLoweringIndex::ValidationFacts> local_validation_facts_;
     std::optional<std::unordered_set<std::uint32_t>> callable_scopes_;
@@ -14943,7 +15199,7 @@ std::vector<VhdlHirTypeValidationIssue> validate_vhdl_hir_types(
     return validator.run();
 }
 
-std::vector<Diagnostic> validate_vhdl_architecture_names(
+std::vector<Diagnostic> validate_vhdl_architecture_analysis(
     const semantic::CompiledDesign& compiled,
     const semantic::UnitId architecture_id)
 {
@@ -14955,11 +15211,23 @@ std::vector<Diagnostic> validate_vhdl_architecture_names(
         || architecture->kind != semantic::vhdl::UnitKind::architecture) {
         return result;
     }
+    // The entity of the architecture (12.1 c): of its library, named by its
+    // entity name; unit names compared as symbols (15.4).
+    const auto unit_symbol = [](const std::string_view name, const bool extended) {
+        return support::vhdl_symbol(support::encode_vhdl_identifier(name, extended));
+    };
+    const auto library_symbol = [&](const semantic::vhdl::Unit& unit) {
+        return unit_symbol(unit.library.empty() ? std::string_view { "work" }
+                                                : std::string_view { unit.library },
+            false);
+    };
+    const auto wanted = unit_symbol(
+        architecture->primary_name, architecture->extended_primary_name);
     const auto entity = std::ranges::find_if(units,
         [&](const semantic::vhdl::Unit& candidate) {
             return candidate.kind == semantic::vhdl::UnitKind::entity
-                && candidate.library == architecture->library
-                && equal_ignoring_ascii_case(candidate.name, architecture->primary_name);
+                && library_symbol(candidate) == library_symbol(*architecture)
+                && unit_symbol(candidate.name, candidate.extended_name) == wanted;
         });
     if (entity == units.end()) {
         return result;
@@ -14971,22 +15239,18 @@ std::vector<Diagnostic> validate_vhdl_architecture_names(
         return result;
     }
     Validator validator { *specialization, *entity, *architecture };
-    validator.set_names_only();
-    for (const auto& issue : validator.run()) {
-        // Without generic values only name rules are decidable here.
-        if (issue.code != "FSIM-ELAB-VHNAME-002"
-            && issue.code != "FSIM-ELAB-VHNAME-004"
-            && issue.code != "FSIM-ELAB-VHNAME-015"
-            && issue.code != "FSIM-ELAB-VHCOMP-016"
-            && issue.code != "FSIM-ELAB-VHCALL-004"
-            && issue.code != "FSIM-ELAB-VHDLCASE-011"
-            && issue.code != "FSIM-ELAB-VHPORT-005"
-            && issue.code != "FSIM-ELAB-VHPORT-006") {
-            continue;
-        }
+    validator.set_analysis_mode(true);
+    auto issues = validator.run();
+    for (auto* const group : { &check_vhdl_choice_rules,
+             &check_vhdl_physical_name_rules, &check_vhdl_subprogram_rules }) {
+        auto more = (*group)(*specialization, *entity, *architecture);
+        issues.insert(issues.end(), std::make_move_iterator(more.begin()),
+            std::make_move_iterator(more.end()));
+    }
+    for (auto& issue : issues) {
         Diagnostic diagnostic;
-        diagnostic.code = issue.code;
-        diagnostic.message = issue.message;
+        diagnostic.code = std::move(issue.code);
+        diagnostic.message = std::move(issue.message);
         diagnostic.span = elaboration_detail::compiled_source_span(
             compiled, issue.source);
         result.push_back(std::move(diagnostic));

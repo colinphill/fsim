@@ -766,6 +766,9 @@ namespace codec_detail {
             return value >= semantic::vhdl::PredefinedAttribute::left
                 && value <= semantic::vhdl::PredefinedAttribute::structure;
         } else if constexpr (
+            std::same_as<T, semantic::vhdl::WrittenRangeDirection>) {
+            return value <= semantic::vhdl::WrittenRangeDirection::downto;
+        } else if constexpr (
             std::same_as<T, semantic::vhdl::PredefinedOperation>) {
             return value <= semantic::vhdl::PredefinedOperation::last;
         } else if constexpr (

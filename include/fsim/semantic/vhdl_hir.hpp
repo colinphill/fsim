@@ -263,6 +263,21 @@ enum class PredefinedAttribute : std::uint8_t {
     structure,
 };
 
+/// The direction a range or slice node was written with: `L to R` or
+/// `L downto R` (IEEE 1076-2019 5.2.1, 8.5); none for every other node.
+enum class WrittenRangeDirection : std::uint8_t { none, to, downto };
+
+/// The direction the parser's lowered reserved word of a range or slice node
+/// denotes; none for any other word. Called only by the HIR builders, which
+/// store the result (Expression::range_direction).
+[[nodiscard]] constexpr WrittenRangeDirection range_direction_of_reserved_word(
+    const std::string_view word) noexcept
+{
+    return word == "downto" ? WrittenRangeDirection::downto
+        : word == "to"      ? WrittenRangeDirection::to
+                            : WrittenRangeDirection::none;
+}
+
 enum class ExpressionKind : std::uint8_t {
     invalid,
     name,
@@ -634,6 +649,10 @@ struct Expression {
     std::vector<ExpressionId> operands;
     std::vector<std::string> argument_names;
     std::vector<AggregateAssociation> associations;
+    // A range (kind binary) or slice node: the direction it was written
+    // with, decided once from the reserved word when the HIR is built
+    // (gate BD F121c). `text` keeps the word for display only.
+    WrittenRangeDirection range_direction { WrittenRangeDirection::none };
     std::string nominal_type;
     // `nominal_type` names a predefined type the tool supplies (frontend
     // Type::builtin_nominal).
@@ -1807,5 +1826,13 @@ void intern_names(Hir& hir);
 /// This is shared by CompiledDesign and the standalone HIR codec.
 [[nodiscard]] bool top_level_hir_collections_well_formed(
     const Model& semantics, TopLevelHirView view);
+
+/// The direction of a range or slice node (IEEE 1076-2019 5.2.1, 8.5),
+/// stored as Expression::range_direction.
+[[nodiscard]] inline WrittenRangeDirection written_range_direction(
+    const Expression& expression) noexcept
+{
+    return expression.range_direction;
+}
 
 } // namespace fsim::semantic::vhdl

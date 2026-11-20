@@ -1707,8 +1707,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
                 const bool explicit_range = bound && bound->vhdl != nullptr
                     && bound->vhdl->kind
                         == semantic::vhdl::ExpressionKind::binary
-                    && (bound->vhdl->text == "to"
-                        || bound->vhdl->text == "downto")
+                    && (bound->vhdl->range_direction != semantic::vhdl::WrittenRangeDirection::none)
                     && bound->vhdl->operands.size() == 2U;
                 if (!explicit_range && bound && bound->vhdl != nullptr) {
                     auto discrete = [&]() -> std::optional<HirPackedRange> {
@@ -1742,7 +1741,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
                 range.kind = semantic::vhdl::RangeKind::array_index;
                 range.left_expression = bound->vhdl->operands[0];
                 range.right_expression = bound->vhdl->operands[1];
-                range.descending = bound->vhdl->text == "downto";
+                range.descending = bound->vhdl->range_direction == semantic::vhdl::WrittenRangeDirection::downto;
                 // A range attribute or subtype name keeps its endpoints as
                 // 'LEFT and 'RIGHT; their values give its direction.
                 const auto bound_attribute = [&](
@@ -2368,7 +2367,7 @@ std::optional<semantic::vhdl::RangeConstraint> Lowerer::hir_vhdl_range_choice(
         : std::nullopt;
     if (!bound || bound->vhdl == nullptr
         || bound->vhdl->kind != semantic::vhdl::ExpressionKind::binary
-        || (bound->vhdl->text != "to" && bound->vhdl->text != "downto")
+        || (bound->vhdl->range_direction == semantic::vhdl::WrittenRangeDirection::none)
         || bound->vhdl->operands.size() != 2U) {
         return std::nullopt;
     }
@@ -2378,7 +2377,7 @@ std::optional<semantic::vhdl::RangeConstraint> Lowerer::hir_vhdl_range_choice(
     range.right_expression = bound->vhdl->operands[1];
     range.left = hir_constant_integer(bound->vhdl->operands[0]);
     range.right = hir_constant_integer(bound->vhdl->operands[1]);
-    range.descending = bound->vhdl->text == "downto";
+    range.descending = bound->vhdl->range_direction == semantic::vhdl::WrittenRangeDirection::downto;
     range.source = bound->vhdl->source;
     return range;
 }
