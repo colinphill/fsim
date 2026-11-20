@@ -1,4 +1,4 @@
--- fsim-expect: FSIM-ELAB-VHOPER-003 std=1993
+-- fsim-expect: FSIM-VHDL-TYPE-002 std=1993
 -- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-2008 9.2.3: '0' is both a BIT and a CHARACTER literal, so the
 -- type of the comparison operands is ambiguous.

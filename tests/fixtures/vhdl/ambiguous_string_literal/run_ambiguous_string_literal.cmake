@@ -31,13 +31,18 @@ function(run_case SOURCE EXPECT_FAILURE)
     WORKING_DIRECTORY "${case_dir}"
     RESULT_VARIABLE compile_result
     OUTPUT_VARIABLE compile_out ERROR_VARIABLE compile_err)
-  # Compile already elaborates the design for its analysis checks, so the
-  # ambiguity may be reported there or by the elaborate step.
-  if(NOT "${compile_result}" STREQUAL "0")
-    if(EXPECT_FAILURE
-        AND "${compile_out}${compile_err}" MATCHES "FSIM-ELAB-VHENUM-004")
-      return()
+  # Analysis types every expression (9.3.2, 12.5): the ambiguity is a
+  # compile error (FSIM-VHDL-TYPE-002).
+  if(EXPECT_FAILURE)
+    if("${compile_result}" STREQUAL "0"
+        OR NOT "${compile_out}${compile_err}" MATCHES "FSIM-VHDL-TYPE-002")
+      message(FATAL_ERROR
+        "${SOURCE}: compile must fail with FSIM-VHDL-TYPE-002 "
+        "(${compile_result})\n${compile_out}${compile_err}")
     endif()
+    return()
+  endif()
+  if(NOT "${compile_result}" STREQUAL "0")
     message(FATAL_ERROR "${SOURCE}: compile failed\n${compile_out}${compile_err}")
   endif()
   execute_process(

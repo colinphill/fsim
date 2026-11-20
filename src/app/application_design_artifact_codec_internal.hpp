@@ -684,7 +684,7 @@ namespace codec_detail {
                     AcrossRange;
         } else if constexpr (std::same_as<T, semantic::vhdl::AnchoredSlot>) {
             return value >= semantic::vhdl::AnchoredSlot::expression_resolved_declaration
-                && value <= semantic::vhdl::AnchoredSlot::statement_resolved_procedure;
+                && value <= semantic::vhdl::AnchoredSlot::expression_type_declared;
         } else if constexpr (std::same_as<T, support::VhdlStandardPackageForm>) {
             return value >= support::VhdlStandardPackageForm::none
                 && value <= support::VhdlStandardPackageForm::projection;
@@ -761,7 +761,20 @@ namespace codec_detail {
         } else if constexpr (
             std::same_as<T, semantic::vhdl::PredefinedAttribute>) {
             return value >= semantic::vhdl::PredefinedAttribute::left
-                && value <= semantic::vhdl::PredefinedAttribute::element;
+                && value <= semantic::vhdl::PredefinedAttribute::structure;
+        } else if constexpr (
+            std::same_as<T, semantic::vhdl::PredefinedOperation>) {
+            return value <= semantic::vhdl::PredefinedOperation::last;
+        } else if constexpr (
+            std::same_as<T, semantic::vhdl::Interpretation>) {
+            return value <= semantic::vhdl::Interpretation::last;
+        } else if constexpr (
+            std::same_as<T, semantic::vhdl::TypeIdentity::Kind>) {
+            return value <= semantic::vhdl::TypeIdentity::Kind::universal_real;
+        } else if constexpr (
+            std::same_as<T, support::StandardDeclaration>) {
+            return static_cast<std::size_t>(value)
+                <= support::standard_declaration_count();
         } else if constexpr (std::same_as<T, semantic::vhdl::ExpressionKind>) {
             return value >= semantic::vhdl::ExpressionKind::invalid
                 && value <= semantic::vhdl::ExpressionKind::conditional;

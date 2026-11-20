@@ -492,7 +492,9 @@ end architecture;
     assert(!wrong_type);
     assert(std::ranges::any_of(
         wrong_type_diagnostics.diagnostics(), [](const auto& diagnostic) {
-            return diagnostic.code == "FSIM-ELAB-VHENV-003";
+            // 16.5.4: GMTIME's TIMER is REAL; analysis types the call
+            // (12.5), so a TIME actual fits no visible GMTIME.
+            return diagnostic.code == "FSIM-VHDL-TYPE-001";
         }));
 
     const auto expect_runtime_failure = [&directory](
@@ -788,7 +790,9 @@ end architecture;
         wrong_type_config, wrong_type_diagnostics));
     assert(std::ranges::any_of(
         wrong_type_diagnostics.diagnostics(), [](const auto& diagnostic) {
-            return diagnostic.code == "FSIM-ELAB-VHENV-006";
+            // 16.5.6: DIR_OPEN's DIR is of DIRECTORY; analysis types the
+            // call (12.5), so an INTEGER actual fits no visible DIR_OPEN.
+            return diagnostic.code == "FSIM-VHDL-TYPE-001";
         }));
     run(fsim::app::SimulationEngine::interpreter,
         fsim::project::Optimization::o0);
@@ -1028,7 +1032,9 @@ end architecture;
         wrong_type_diagnostics));
     assert(std::ranges::any_of(
         wrong_type_diagnostics.diagnostics(), [](const auto& diagnostic) {
-            return diagnostic.code == "FSIM-ELAB-VHENV-004";
+            // 16.5.3: GETENV's NAME is STRING; analysis types the call
+            // (12.5), so an integer actual fits no visible GETENV.
+            return diagnostic.code == "FSIM-VHDL-TYPE-001";
         }));
 
     run(fsim::app::SimulationEngine::interpreter,

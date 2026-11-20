@@ -244,7 +244,7 @@ struct Resolution {
     std::vector<UnitId> units;
     /// found: declarations of the compiler-served STD.STANDARD the name
     /// denotes (no vhdl::Declaration exists for them).
-    std::vector<support::StandardDeclaration> standard;
+    std::vector<StandardEntry> standard;
     /// found: the name denotes the compiler-served package STD.STANDARD
     /// itself (`STD.STANDARD` as a prefix, 8.3).
     bool standard_package { };

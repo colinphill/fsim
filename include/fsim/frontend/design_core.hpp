@@ -551,6 +551,10 @@ struct PackedMember {
 struct VhdlArrayDimension {
     std::string index_subtype;
     SourceSpan index_span;
+    // The dimension is a discrete range (`array (0 to 3)`): no index subtype
+    // is written; index_subtype names INTEGER for the existing layout path,
+    // while the index type is that of the range (IEEE 1076-2019 5.3.2.2).
+    bool index_subtype_implied { };
     std::optional<IntegerRange> index_base_range;
     std::optional<DiscreteRangeExpression> constraint;
     // Concrete source-direction range after specialization. Null ranges remain

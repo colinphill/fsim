@@ -6,10 +6,10 @@
 -- (IEEE Std 1076-2019 packages, tag 1076-2019, SHA-256 10e8bdc4fedc881a972f5900abe833d24397d686e07b566479c47495acf39721)
 -- by deleting the declarations and bodies that later revisions of the
 -- standard added and by the mechanical rewrites declared in the
--- tables below. The 134 removal rows and 4 rewrite rows applied to
+-- tables below. The 134 removal rows and 5 rewrite rows applied to
 -- this file are rows of scripts/vhdl_ieee_removals.tsv (standard 2002,
 -- package numeric_std) and scripts/vhdl_ieee_rewrites.tsv.
--- Rewrite rows (line numbers of the rewrites table): 68, 78, 79, 80.
+-- Rewrite rows (line numbers of the rewrites table): 68, 78, 79, 80, 101.
 --
 -- The 2019 file's own notice (Copyright 2019 IEEE P1076 WG Authors,
 -- Apache License, Version 2.0) follows unchanged and applies to this
@@ -2682,6 +2682,28 @@ package body NUMERIC_STD is
   --          correct form for exported functions,
   --          and to report if there is an element which
   --          is not in (0, 1, H, L).
+
+  function TO_01 (s : STD_ULOGIC_VECTOR; xmap : STD_ULOGIC := '0')
+    return STD_ULOGIC_VECTOR
+  is
+    variable RESULT      : STD_ULOGIC_VECTOR(s'length-1 downto 0);
+    variable BAD_ELEMENT : BOOLEAN := false;
+    alias XS             : STD_ULOGIC_VECTOR(s'length-1 downto 0) is s;
+  begin
+    for I in RESULT'range loop
+      case XS(I) is
+        when '0' | 'L' => RESULT(I)   := '0';
+        when '1' | 'H' => RESULT(I)   := '1';
+        when others    => BAD_ELEMENT := true;
+      end case;
+    end loop;
+    if BAD_ELEMENT then
+      for I in RESULT'range loop
+        RESULT(I) := xmap;              -- standard fixup
+      end loop;
+    end if;
+    return RESULT;
+  end function TO_01;
 
   -- Id: T.1
   function TO_01 (S : UNSIGNED; XMAP : STD_ULOGIC := '0')

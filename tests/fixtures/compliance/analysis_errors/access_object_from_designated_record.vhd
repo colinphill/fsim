@@ -1,4 +1,4 @@
--- fsim-expect: FSIM-ELAB-VHASSIGN-001 std=1993
+-- fsim-expect: FSIM-VHDL-TYPE-001 std=1993
 -- SPDX-License-Identifier: Apache-2.0
 -- A designated record value is not an access value; allocating it requires `new`.
 entity access_object_from_designated_record is

@@ -882,6 +882,9 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-VHDL-NAME-001` | error | A VHDL name has no visible declaration at its site (IEEE 1076-2019 12.3, 12.4). |
 | `FSIM-VHDL-NAME-002` | error | A VHDL name is ambiguous: potentially visible through more than one use clause (IEEE 1076-2019 12.4). |
 | `FSIM-VHDL-NAME-003` | error | The prefix of a VHDL expanded name has no member with the selected designator (IEEE 1076-2019 8.3). |
+| `FSIM-VHDL-TYPE-001` | error | No interpretation of a VHDL expression (operator, function call, literal, attribute, conversion) has the type its complete context requires (IEEE 1076-2019 9.3, 12.5). |
+| `FSIM-VHDL-TYPE-002` | error | More than one interpretation of a VHDL expression fits its complete context (IEEE 1076-2019 12.5). |
+| `FSIM-VHDL-TYPE-003` | error | The type of a VHDL string literal, aggregate, null literal or allocator is not determined by its context (IEEE 1076-2019 9.3.2, 9.3.3.1, 9.3.6). |
 | `FSIM-VHDL-SEM-002` | error | Duplicate port declaration. |
 | `FSIM-VHDL-SEM-003` | error | Duplicate signal declaration. |
 | `FSIM-VHDL-SEM-012` | error | A process combines a sensitivity list with an explicit wait statement. |

@@ -82,7 +82,7 @@ endif()
 check_variant(without_vital "${without_vital}")
 
 # A literal that fits more than one overload, with nothing in its context to
-# choose, is ambiguous (12.5): FSIM-ELAB-VHENUM-004, with and without the
+# choose, is ambiguous (12.5): FSIM-VHDL-TYPE-002 at analysis, with and without the
 # VITAL_MEMORY use clause. `?? '1'` fits BIT's and STD_ULOGIC's condition
 # operators; the operand of an unresolved TO_STRING call gives TO_X01('1') no
 # result type to choose its BIT or STD_ULOGIC overload by.
@@ -120,9 +120,9 @@ end architecture;
   if("${compile_result}" STREQUAL "0" AND "${elaborate_result}" STREQUAL "0")
     message(FATAL_ERROR "${NAME}: the ambiguous literal was accepted\n${all_output}")
   endif()
-  if(NOT all_output MATCHES "FSIM-ELAB-VHENUM-004")
+  if(NOT all_output MATCHES "FSIM-VHDL-TYPE-002")
     message(FATAL_ERROR
-      "${NAME}: the ambiguity was not reported as FSIM-ELAB-VHENUM-004\n${all_output}")
+      "${NAME}: the ambiguity was not reported as FSIM-VHDL-TYPE-002\n${all_output}")
   endif()
 endfunction()
 

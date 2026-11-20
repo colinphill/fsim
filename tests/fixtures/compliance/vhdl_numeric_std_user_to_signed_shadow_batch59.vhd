@@ -5,6 +5,7 @@ entity vhdl_numeric_std_user_to_signed_shadow_batch59 is
 end entity;
 
 library ieee;
+use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
 
 architecture test of vhdl_numeric_std_user_to_signed_shadow_batch59 is

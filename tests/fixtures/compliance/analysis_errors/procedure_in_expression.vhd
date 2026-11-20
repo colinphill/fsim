@@ -1,4 +1,4 @@
--- fsim-expect: FSIM-ELAB-VHCALL-004 std=1993
+-- fsim-expect: FSIM-VHDL-TYPE-001 std=1993
 -- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-2008 4.2: a procedure call is a statement, never an expression.
 entity procedure_in_expression is

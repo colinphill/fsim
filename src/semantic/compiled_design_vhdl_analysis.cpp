@@ -2,6 +2,7 @@
 #include "fsim/semantic/compiled_design_vhdl_analysis.hpp"
 
 #include "compiled_design_vhdl_analysis_internal.hpp"
+#include "compiled_design_vhdl_typing_internal.hpp"
 #include "fsim/project/project.hpp"
 #include "fsim/semantic/vhdl_native_intrinsics.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
@@ -73,6 +74,7 @@ public:
             }
             return ids;
         }();
+        std::vector<UnitId> analyzed;
         for (const auto& unit : design_.vhdl_hir.units()) {
             if (!unit.id.valid() || !wanted.contains(unit.id.value())
                 || unit.package_instance_expansion
@@ -81,8 +83,13 @@ public:
             }
             visit_names(design_.vhdl_hir, unit,
                 [&](const NameSite& site) { resolve(site); });
+            analyzed.push_back(unit.id);
         }
-        return !failed_;
+        if (failed_) {
+            return false;
+        }
+        // Expression typing (9.3, 12.5) on the resolved names.
+        return type_vhdl_expressions(design_, regions_, lookup_, analyzed, diagnostics_);
     }
 
 private:
@@ -104,7 +111,19 @@ private:
 
     void store(vhdl::Name& name, const Resolution& resolution) const
     {
-        if (resolution.status != Visibility::found || resolution.candidates.empty()) {
+        if (resolution.status != Visibility::found) {
+            return;
+        }
+        // One STANDARD type, subtype or attribute (16.3): no declaration
+        // exists for it; the typing (D4) reads its row.
+        if (resolution.candidates.empty() && resolution.standard.size() == 1U
+            && (resolution.standard.front().kind == StandardEntry::Kind::type
+                || resolution.standard.front().kind
+                    == StandardEntry::Kind::attribute)) {
+            name.standard = resolution.standard.front().declaration;
+            return;
+        }
+        if (resolution.candidates.empty()) {
             return;
         }
         const auto* const first

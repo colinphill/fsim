@@ -763,11 +763,20 @@ void expect_build_failure(
               << config.project.name << "'\n";
   }
   assert(!project);
-  assert(std::ranges::any_of(
+  const bool reported = std::ranges::any_of(
       diagnostics.diagnostics(),
       [&](const auto& diagnostic) {
         return diagnostic.code == expected_code;
-      }));
+      });
+  if (!reported) {
+    std::cerr << "expected " << expected_code << " for project '"
+              << config.project.name << "'; reported:\n";
+    for (const auto& diagnostic : diagnostics.diagnostics()) {
+      std::cerr << "  " << diagnostic.code << ": " << diagnostic.message
+                << "\n";
+    }
+  }
+  assert(reported);
 }
 
 void expect_build_success(const fsim::project::Config& config) {
@@ -918,6 +927,8 @@ entity Array_Child is
   );
 end entity;
 
+library ieee;
+use ieee.std_logic_1164.all;
 use work.array_types.all;
 architecture rtl of Array_Child is
 begin
@@ -1745,7 +1756,8 @@ end architecture;
           dead_arm_type_failure_source,
           "vhdl-dead-arm-type-failure",
           "vhdl:work.dead_arm_type_failure(rtl)"),
-      "FSIM-ELAB-VHARRAY-006");
+      // 12.5: analysis types the unreachable assignment too.
+      "FSIM-VHDL-TYPE-001");
 
   {
     std::ofstream output{slice_failure_source};

@@ -112,7 +112,7 @@ begin
     report "wide sdiv=" & integer'image(to_integer(g / to_signed(7, 8))) & ";";
     report "wide srem=" & integer'image(to_integer(g rem to_signed(7, 8))) & ";";
     report "wide smod=" & integer'image(to_integer(g mod to_signed(7, 8))) & ";";
-    report "wide match1=" & std_logic'image("10HL" ?= "10-0") & ";";
+    report "wide match1=" & std_logic'image(std_logic_vector'("10HL") ?= "10-0") & ";";
     report "wide match2=" & std_logic'image(std_logic_vector'("10HL") ?= std_logic_vector'("1H1L")) & ";";
     report "wide match3=" & std_logic'image(std_logic_vector'("10WL") ?= std_logic_vector'("1010")) & ";";
     mu := "1U0L";

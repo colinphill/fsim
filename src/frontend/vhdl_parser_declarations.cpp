@@ -818,6 +818,7 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
         }
       } else {
         dimension.index_subtype = "integer";
+        dimension.index_subtype_implied = true;
         dimension.index_span = index_start.span;
       }
 

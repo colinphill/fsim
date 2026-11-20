@@ -120,6 +120,8 @@ namespace fsim::app::application_detail {
     definition.declaration = id;
     definition.form = type_form(input.declaration_kind);
     definition.scalar_type = input.vhdl_scalar_type;
+    definition.floating_type = input.vhdl_scalar_type
+        && input.type.systemverilog_scalar == frontend::SystemVerilogScalarKind::Real;
     definition.name = input.name;
     definition.base = *output.subtype;
     definition.source = output.source;
@@ -310,6 +312,7 @@ void VhdlHirBuilder::add_array_payload(
         converted.index_subtype = name(
             dimension.index_subtype, dimension.index_span, scope);
         converted.unconstrained = dimension.unconstrained;
+        converted.implied_index_subtype = dimension.index_subtype_implied;
         converted.source = source(dimension.index_span);
         if (dimension.range) {
             converted.constraint = concrete_range(

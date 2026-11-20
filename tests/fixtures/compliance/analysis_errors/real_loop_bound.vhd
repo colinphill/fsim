@@ -1,4 +1,4 @@
--- fsim-expect: FSIM-ELAB-VHLOOP-001 std=1993
+-- fsim-expect: FSIM-VHDL-TYPE-001 std=1993
 -- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-2008 10.10: a loop parameter range is discrete; a real
 -- conversion or a physical unit is not.

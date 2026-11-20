@@ -1584,11 +1584,11 @@ begin
   end process;
   string_probe : process
   begin
-    report to_string("ULH-WZ01");
-    report to_ostring("00110101");
-    report to_hstring("10101100");
-    report to_string("11111111111111111111111111111111111111111111111111111111111111111");
-    report to_hstring("11111111111111111111111111111111111111111111111111111111111111111111");
+    report to_string(std_ulogic_vector'("ULH-WZ01"));
+    report to_ostring(std_ulogic_vector'("00110101"));
+    report to_hstring(std_ulogic_vector'("10101100"));
+    report to_string(std_ulogic_vector'("11111111111111111111111111111111111111111111111111111111111111111"));
+    report to_hstring(std_ulogic_vector'("11111111111111111111111111111111111111111111111111111111111111111111"));
     wait;
   end process;
 end architecture;
@@ -1696,6 +1696,11 @@ end architecture;
             fsim::project::Optimization::o0);
         fsim::diagnostic::Engine diagnostics;
         const auto checked = fsim::app::check_project(config, diagnostics);
+        if (!checked || diagnostics.has_error()) {
+            for (const auto& diagnostic : diagnostics.diagnostics()) {
+                std::cerr << diagnostic.code << ": " << diagnostic.message << "\n";
+            }
+        }
         assert(checked);
         assert(!diagnostics.has_error());
         assert(checked->source_count == 1);

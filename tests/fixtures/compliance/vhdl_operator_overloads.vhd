@@ -51,7 +51,8 @@ end entity;
 architecture sim of vhdl_operator_overloads is
   type small is range 0 to 100;
   type ratio is range -1.0 to 1.0;
-  constant scaled : real := 2.5 * 2;
+  -- 9.3.6, 9.5: 2.5 * 2 is universal_real, not a convertible operand.
+  constant scaled : real := real(2.5 * 2);
 
   function "-" (l, r : character) return integer is
   begin

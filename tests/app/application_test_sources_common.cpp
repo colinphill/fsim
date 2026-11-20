@@ -1274,7 +1274,7 @@ begin
     quotient <= lhs / rhs;
     remainder <= lhs rem rhs;
     modulo <= lhs mod rhs;
-    less <= lhs < rhs;
+    less <= '1' when lhs < rhs else '0'; -- "<" is BOOLEAN (9.2.3)
     shifted_left <= lhs sll 1;
     shifted_right <= lhs srl 1;
     shifted_arithmetic <= lhs sra 1;
@@ -1319,7 +1319,7 @@ begin
     quotient <= lhs / rhs;
     remainder <= lhs rem rhs;
     modulo <= lhs mod rhs;
-    less <= lhs < rhs;
+    less <= '1' when lhs < rhs else '0'; -- "<" is BOOLEAN (9.2.3)
     shifted_left <= lhs sll 1;
     shifted_right <= lhs srl 1;
     shifted_arithmetic <= lhs sra 1;
@@ -1512,7 +1512,9 @@ begin
     else
       boolean_expression_case <= false;
     end if;
-    case "10" is
+    -- 10.9: a case expression is typed without context; a string
+    -- literal needs a qualification.
+    case std_logic_vector'("10") is
       when "00" | "01" =>
         sequential_case_result <= "00";
       when "10" =>

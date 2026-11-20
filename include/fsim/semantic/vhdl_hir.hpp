@@ -9,6 +9,7 @@
 #include "fsim/support/vhdl_standard_package_form.hpp"
 #include "fsim/support/vhdl_formal_conversion.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
+#include "fsim/support/vhdl_standard_declaration.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -234,6 +235,28 @@ enum class PredefinedAttribute : std::uint8_t {
     designated_subtype,
     reflect,
     element,
+    // Appended for gate BD D4 (12.5 typing of every attribute name, 16.2):
+    // signal attributes (16.2.4), named-entity attributes (16.2.5), the
+    // 1987 BEHAVIOR/STRUCTURE (1076-1987 14.1), 2019 SUBTYPE/CONVERSE/BASE.
+    base,
+    subtype,
+    converse,
+    event,
+    active,
+    last_event,
+    last_active,
+    last_value,
+    driving,
+    driving_value,
+    stable,
+    quiet,
+    transaction,
+    delayed,
+    simple_name,
+    instance_name,
+    path_name,
+    behavior,
+    structure,
 };
 
 enum class ExpressionKind : std::uint8_t {
@@ -296,6 +319,10 @@ struct Name {
     /// text(). Lookup compares symbols, never text. Left out of equality:
     /// a Name built by the compiler may not carry one yet.
     support::SymbolId symbol { };
+    /// The compiler-served STD.STANDARD declaration (16.3) the name denotes
+    /// when visibility gives exactly one non-overloadable one (a type,
+    /// subtype or attribute; gate BD D3/D4); none otherwise.
+    support::StandardDeclaration standard { support::StandardDeclaration::none };
 
     /// The canonical text, or the source spelling when there is none.
     [[nodiscard]] std::string_view text() const noexcept
@@ -308,7 +335,7 @@ struct Name {
     {
         return spelling == other.spelling && canonical == other.canonical
             && source == other.source && selected == other.selected
-            && overloads == other.overloads;
+            && overloads == other.overloads && standard == other.standard;
     }
 };
 
@@ -392,6 +419,85 @@ enum class BuiltinOperatorIdentity : std::uint8_t {
     ieee_std_logic_1164_nor,
     ieee_std_logic_1164_xor,
     ieee_std_logic_1164_xnor,
+};
+
+/// The type (IEEE 1076-2019 5.1: a base type, never a subtype) the
+/// compile-time typing of 12.5 gives an expression (gate BD D4).
+/// No formal (Expression/Statement::resolved_formals).
+inline constexpr std::uint32_t no_formal = 0xffffffffU;
+
+struct TypeIdentity {
+    enum class Kind : std::uint8_t {
+        none,
+        /// A type a design declaration declares: `declared` is the
+        /// TypeDefinition of the base type (subtypes and aliases followed).
+        declared,
+        /// A type of the compiler-served STD.STANDARD (16.3): `standard` is
+        /// its type row (BOOLEAN, INTEGER, STRING, ..., never a subtype).
+        standard,
+        /// The anonymous universal types (5.2.3.1, 5.2.5.1, 9.3.6).
+        universal_integer,
+        universal_real,
+    };
+    Kind kind { Kind::none };
+    TypeId declared;
+    support::StandardDeclaration standard { support::StandardDeclaration::none };
+
+    [[nodiscard]] explicit operator bool() const noexcept
+    {
+        return kind != Kind::none;
+    }
+    bool operator==(const TypeIdentity&) const = default;
+};
+
+/// A predefined operation that a type declaration implicitly declares (IEEE
+/// 1076-2019 5.2.6, 5.3.2.4, 5.4.3, 5.5.2, 5.6, 5.7, 9.2): the operation
+/// alone; its operand and result types are those of the expression and its
+/// operands (Expression::type), e.g. `concatenate` covers the array-array,
+/// array-element, element-array and element-element forms, a logical
+/// operator with one operand is the reduction (9.2.2, 2008).
+enum class PredefinedOperation : std::uint8_t {
+    none,
+    eq, ne, lt, le, gt, ge,
+    match_eq, match_ne, match_lt, match_le, match_gt, match_ge,
+    logical_and, logical_or, logical_nand, logical_nor, logical_xor,
+    logical_xnor, logical_not,
+    add, subtract, multiply, divide, modulus, remainder, power, absolute,
+    identity, negation,
+    concatenate,
+    shift_sll, shift_srl, shift_sla, shift_sra, shift_rol, shift_ror,
+    condition,
+    minimum, maximum, to_string,
+    deallocate,
+    file_open, file_close, read, write, endfile, flush, file_rewind,
+    file_seek, file_truncate, file_state, file_mode, file_position,
+    file_size, file_canseek,
+    last = file_canseek,
+};
+
+/// What a typed expression node is (12.5, 8.x, 9.3): a `call` node of the
+/// HIR is a function call, a type conversion, an indexed or sliced name or
+/// an attribute name; the typing records which.
+enum class Interpretation : std::uint8_t {
+    none,
+    object,
+    function_call,
+    enumeration_literal,
+    operation,
+    conversion,
+    qualified,
+    index,
+    slice,
+    member,
+    dereference,
+    attribute,
+    literal,
+    aggregate,
+    allocator,
+    null_value,
+    physical_literal,
+    type_mark,
+    last = type_mark,
 };
 
 /// A type or subtype whose declaration the compiler provides (IEEE
@@ -548,6 +654,22 @@ struct Expression {
     // e.g. the prefix TIME of TIME'VALUE; set by analysis through
     // visibility (12.3, 12.4), never from the spelling.
     std::optional<ProvidedType> denoted_provided_type;
+    // Compile-time typing (gate BD D4, IEEE 1076-2019 9.3, 12.5): the
+    // expression's type, what the node is, the STANDARD function, literal or
+    // unit it denotes (no vhdl::Declaration exists for one), the implicitly
+    // declared operation it applies, its predefined attribute, and for a
+    // call the formal each operand is associated with: its position in the
+    // callee's formal list (CallableProfile::formals, or the STANDARD
+    // function's parameters), parallel to `operands`, no_formal for an
+    // operand associated with none; empty for an operation.
+    TypeIdentity type;
+    Interpretation interpretation { Interpretation::none };
+    support::StandardDeclaration resolved_standard {
+        support::StandardDeclaration::none
+    };
+    PredefinedOperation predefined_operation { PredefinedOperation::none };
+    std::optional<PredefinedAttribute> predefined_attribute;
+    std::vector<std::uint32_t> resolved_formals;
 };
 
 struct DelayValue {
@@ -653,6 +775,11 @@ struct Statement {
     // The procedure the design's context-typed resolution pass selected for
     // a procedure call (IEEE 1076-2008 12.5); unset when it could not.
     std::optional<DeclarationId> resolved_procedure;
+    // The formal of resolved_procedure each procedure_arguments element is
+    // associated with: its position in the procedure's formal list
+    // (gate BD D4, 4.2.2.1, 6.5.7.1; no_formal for none). Positions, not
+    // declarations, so a callee in another library unit needs no anchor.
+    std::vector<std::uint32_t> resolved_formals;
 };
 
 struct Process {
@@ -741,6 +868,10 @@ struct ArrayDimension {
     Name index_subtype;
     std::optional<RangeConstraint> constraint;
     bool unconstrained { };
+    // A discrete range without an index subtype name (5.3.2.2): the index
+    // type is the type of the range; index_subtype is the front end's
+    // INTEGER placeholder.
+    bool implied_index_subtype { };
     SourceSpanId source;
 };
 
@@ -778,6 +909,9 @@ struct TypeDefinition {
     // `type T is range L to R`: an integer or floating type declaration kept
     // as a subtype of its predefined base (IEEE 1076-2019 5.2.3.1, 5.2.5.1).
     bool scalar_type { };
+    // With scalar_type: a floating type definition (5.2.5.1; else an
+    // integer type definition, 5.2.3.1). The class of the declared type.
+    bool floating_type { };
     std::vector<DeclarationId> protected_members;
     std::vector<PhysicalUnit> physical_units;
     std::vector<PredefinedAttribute> attributes;
@@ -1251,7 +1385,33 @@ enum class AnchoredSlot : std::uint8_t {
     expression_resolved_type,
     expression_qualified_mark_selected,
     statement_resolved_procedure,
+    /// The written type mark's selected declaration of a subtype indication
+    /// of a declaration (6.3); item = the declaration's ordinal, part =
+    /// which one (subtype_part, return_part, alias_result_part, then alias
+    /// signature parameter i at alias_parameter_part + i).
+    declaration_subtype_mark_selected,
+    /// The written type mark's selected declaration of a subtype indication
+    /// of a type definition; item = the type's ordinal, part = which one
+    /// (vhdl::type_indication_part).
+    type_subtype_mark_selected,
+    /// The index subtype name of an array type's dimension `part` (5.3.2.1);
+    /// item = the type's ordinal.
+    type_index_subtype_selected,
+    /// Expression::type.declared (the 12.5 typing, gate BD D4).
+    expression_type_declared,
 };
+
+/// The subtype indications of a type definition an anchored
+/// type_subtype_mark_selected names: base (a subtype or alias), element,
+/// designated, then record element i at record_element_part + i.
+inline constexpr std::uint32_t base_indication_part = 0U;
+inline constexpr std::uint32_t element_indication_part = 1U;
+inline constexpr std::uint32_t designated_indication_part = 2U;
+inline constexpr std::uint32_t record_element_part = 3U;
+inline constexpr std::uint32_t subtype_part = 0U;
+inline constexpr std::uint32_t return_part = 1U;
+inline constexpr std::uint32_t alias_result_part = 2U;
+inline constexpr std::uint32_t alias_parameter_part = 3U;
 
 /// Slot `slot` of the owning unit's item `item` (its ordinal in the unit's
 /// items), resolved again at every link instead of kept: its target is in
@@ -1268,6 +1428,9 @@ struct AnchoredReference {
     AnchoredSlot slot { AnchoredSlot::expression_resolved_declaration };
     std::uint32_t item { };
     std::uint32_t anchor { };
+    /// Which field of the item (type_subtype_mark_selected,
+    /// type_index_subtype_selected); 0 otherwise.
+    std::uint32_t part { };
     bool operator==(const AnchoredReference&) const = default;
 };
 

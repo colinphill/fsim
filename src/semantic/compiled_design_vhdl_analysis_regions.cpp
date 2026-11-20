@@ -127,11 +127,26 @@ namespace {
         break;
     case vhdl::TypeForm::enumeration:
         add({ "=", "/=", "<", "<=", ">", ">=" });
+        if (year >= 2008U) {
+            // 9.2.3: matching relational operators (of BIT and STD_ULOGIC;
+            // the profiles decide which types).
+            add({ "?=", "?/=", "?<", "?<=", "?>", "?>=" });
+        }
         break;
     case vhdl::TypeForm::array:
         add({ "=", "/=" });
         if (one_dimensional) {
             add({ "<", "<=", ">", ">=", "&" });
+            // 9.2.2, 9.2.4: logical and shift operators of one-dimensional
+            // arrays of BIT or BOOLEAN; 9.2.3 matching of BIT and STD_ULOGIC
+            // arrays (the profiles decide which element types).
+            add({ "and", "or", "nand", "nor", "xor", "not" });
+            if (year >= 1993U) {
+                add({ "xnor", "sll", "srl", "sla", "sra", "rol", "ror" });
+            }
+            if (year >= 2008U) {
+                add({ "?=", "?/=" });
+            }
         }
         break;
     }
@@ -808,7 +823,11 @@ struct Regions::State {
         // 5.x: the operations each type declaration implicitly declares in
         // its region (overloadable; an explicit homograph hides one, 12.3).
         for (const auto& declaration : source_design.vhdl_hir.declarations()) {
-            if (declaration.form != vhdl::DeclarationForm::type
+            // `type T is range ...` is held as a subtype declaration of its
+            // predefined base marked scalar_type (a type declaration all the
+            // same, 5.2.3.1, 5.2.5.1).
+            if ((declaration.form != vhdl::DeclarationForm::type
+                    && declaration.form != vhdl::DeclarationForm::subtype)
                 || !declaration.declared_type) {
                 continue;
             }
@@ -817,14 +836,21 @@ struct Regions::State {
                 = source_design.vhdl_hir.find_type(*declaration.declared_type);
             const auto* const unit
                 = region == nullptr ? nullptr : unit_by_id(region->unit);
-            if (region == nullptr || type == nullptr || unit == nullptr) {
+            if (region == nullptr || type == nullptr || unit == nullptr
+                || (declaration.form == vhdl::DeclarationForm::subtype
+                    && !type->scalar_type)) {
                 continue;
             }
             const auto standard = project::parse_vhdl_standard(unit->standard);
             if (!standard) {
                 continue;
             }
-            for (const auto designator : implicit_designators(type->form,
+            // `type T is range ...` declares a distinct integer or floating
+            // type (5.2.3.1, 5.2.5.1), kept as a subtype of its predefined
+            // base (TypeDefinition::scalar_type): it has the scalar
+            // operations.
+            const auto form = type->scalar_type ? vhdl::TypeForm::scalar : type->form;
+            for (const auto designator : implicit_designators(form,
                      standard_year(*standard),
                      type->array_dimensions.size() == 1U)) {
                 region->implicit[support::vhdl_symbol(designator).index()]

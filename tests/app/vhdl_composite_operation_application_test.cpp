@@ -287,8 +287,8 @@ begin
     Record_Different <= Left_Cell /= Right_Cell;
     Pair_Equal <= Pair_Value = (Left_Cell & Right_Cell);
     Length_Different <= Short_Value /= Long_Value;
-    Match_Equal <= Logic_Value ?= "1---";
-    Match_Different <= Logic_Value ?/= "0---";
+    Match_Equal <= ?? (Logic_Value ?= "1---");
+    Match_Different <= ?? (Logic_Value ?/= "0---");
     case Right_Cell.Mode is
       when Busy => Case_Result <= Pair_Value(0).Mode;
       when others => Case_Result <= Idle;

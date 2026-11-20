@@ -312,12 +312,19 @@ struct UnitStamp {
         std::uint32_t>
         anchors;
     const auto add = [&](const AnchoredSlot slot, const std::uint32_t item,
-                         const Target& target) {
+                         const Target& target, const std::uint32_t part = 0U) {
         if (target.kind == Target::Kind::same_unit) {
             return;
         }
         if (target.kind == Target::Kind::recomputed) {
-            stamp.recomputed.push_back({ slot, item });
+            // A written type mark into a compiler-served package is not
+            // recomputed: the typing of a loaded unit leaves it open.
+            if (slot == AnchoredSlot::expression_resolved_declaration
+                || slot == AnchoredSlot::expression_resolved_type
+                || slot == AnchoredSlot::expression_qualified_mark_selected
+                || slot == AnchoredSlot::statement_resolved_procedure) {
+                stamp.recomputed.push_back({ slot, item });
+            }
             return;
         }
         const auto key = std::tuple { target.unit->id.value(), target.space,
@@ -327,8 +334,76 @@ struct UnitStamp {
         if (inserted) {
             stamp.anchors.push_back(targets.anchor(target));
         }
-        stamp.anchored.push_back({ slot, item, found->second });
+        stamp.anchored.push_back({ slot, item, found->second, part });
     };
+    // The written type marks of subtype indications (6.3) and index subtype
+    // names (5.3.2.1): a loaded unit's declarations keep their types.
+    const auto mark = [&](const AnchoredSlot slot, const std::uint32_t item,
+                          const std::optional<vhdl::Name>& written,
+                          const std::uint32_t part) {
+        if (written && written->selected) {
+            add(slot, item, targets.declaration(*written->selected, unit.id), part);
+        }
+    };
+    const auto& declarations = design.vhdl_hir.declarations();
+    for (std::uint32_t item { }; item < items.declarations.size(); ++item) {
+        const auto& declaration = declarations.at(items.declarations[item]);
+        using vhdl::AnchoredSlot::declaration_subtype_mark_selected;
+        if (declaration.subtype) {
+            mark(declaration_subtype_mark_selected, item,
+                declaration.subtype->written_type_mark, vhdl::subtype_part);
+        }
+        if (declaration.callable && declaration.callable->return_type) {
+            mark(declaration_subtype_mark_selected, item,
+                declaration.callable->return_type->written_type_mark,
+                vhdl::return_part);
+        }
+        if (declaration.alias_signature) {
+            const auto& signature = *declaration.alias_signature;
+            if (signature.result) {
+                mark(declaration_subtype_mark_selected, item,
+                    signature.result->written_type_mark,
+                    vhdl::alias_result_part);
+            }
+            for (std::uint32_t parameter { };
+                parameter < signature.parameters.size(); ++parameter) {
+                mark(declaration_subtype_mark_selected, item,
+                    signature.parameters[parameter].written_type_mark,
+                    vhdl::alias_parameter_part + parameter);
+            }
+        }
+    }
+    const auto& types = design.vhdl_hir.types();
+    for (std::uint32_t item { }; item < items.types.size(); ++item) {
+        const auto& type = types.at(items.types[item]);
+        using vhdl::AnchoredSlot::type_subtype_mark_selected;
+        mark(type_subtype_mark_selected, item, type.base.written_type_mark,
+            vhdl::base_indication_part);
+        if (type.element_subtype) {
+            mark(type_subtype_mark_selected, item,
+                type.element_subtype->written_type_mark,
+                vhdl::element_indication_part);
+        }
+        if (type.designated_subtype) {
+            mark(type_subtype_mark_selected, item,
+                type.designated_subtype->written_type_mark,
+                vhdl::designated_indication_part);
+        }
+        for (std::uint32_t element { }; element < type.record_elements.size();
+            ++element) {
+            mark(type_subtype_mark_selected, item,
+                type.record_elements[element].subtype.written_type_mark,
+                vhdl::record_element_part + element);
+        }
+        for (std::uint32_t dimension { };
+            dimension < type.array_dimensions.size(); ++dimension) {
+            const auto& index = type.array_dimensions[dimension].index_subtype;
+            if (index.selected) {
+                add(AnchoredSlot::type_index_subtype_selected, item,
+                    targets.declaration(*index.selected, unit.id), dimension);
+            }
+        }
+    }
     const auto& expressions = design.vhdl_hir.expressions();
     for (std::uint32_t item { }; item < items.expressions.size(); ++item) {
         const auto& expression = expressions.at(items.expressions[item]);
@@ -345,6 +420,10 @@ struct UnitStamp {
             add(AnchoredSlot::expression_qualified_mark_selected, item,
                 targets.declaration(
                     *expression.qualified_type_mark->selected, unit.id));
+        }
+        if (expression.type.kind == vhdl::TypeIdentity::Kind::declared) {
+            add(AnchoredSlot::expression_type_declared, item,
+                targets.type(expression.type.declared, unit.id));
         }
     }
     const auto& statements = design.vhdl_hir.statements();
@@ -382,10 +461,90 @@ private:
     std::unordered_map<std::string, std::vector<const vhdl::Unit*>> units_;
 };
 
+// The written type mark's selected slot of an anchored subtype indication.
+[[nodiscard]] std::optional<DeclarationId>& written_mark(
+    vhdl::SubtypeIndication& subtype)
+{
+    if (!subtype.written_type_mark) {
+        throw std::logic_error { "VHDL analysis anchors: an anchored written "
+                                 "type mark is missing" };
+    }
+    return subtype.written_type_mark->selected;
+}
+
+// The subtype indication `part` of a type definition
+// (vhdl::base_indication_part ...).
+[[nodiscard]] vhdl::SubtypeIndication& indication(
+    vhdl::TypeDefinition& type, const std::uint32_t part)
+{
+    const auto present = [](std::optional<vhdl::SubtypeIndication>& value)
+        -> vhdl::SubtypeIndication& {
+        if (!value) {
+            throw std::logic_error { "VHDL analysis anchors: an anchored "
+                                     "subtype indication is missing" };
+        }
+        return *value;
+    };
+    if (part == vhdl::base_indication_part) {
+        return type.base;
+    }
+    if (part == vhdl::element_indication_part) {
+        return present(type.element_subtype);
+    }
+    if (part == vhdl::designated_indication_part) {
+        return present(type.designated_subtype);
+    }
+    const auto element = part - vhdl::record_element_part;
+    if (element >= type.record_elements.size()) {
+        throw std::logic_error { "VHDL analysis anchors: an anchored record "
+                                 "element is missing" };
+    }
+    return type.record_elements[element].subtype;
+}
+
+// The subtype indication `part` of a declaration (vhdl::subtype_part ...).
+[[nodiscard]] vhdl::SubtypeIndication& indication(
+    vhdl::Declaration& declaration, const std::uint32_t part)
+{
+    const auto present = [](std::optional<vhdl::SubtypeIndication>& value)
+        -> vhdl::SubtypeIndication& {
+        if (!value) {
+            throw std::logic_error { "VHDL analysis anchors: an anchored "
+                                     "subtype indication is missing" };
+        }
+        return *value;
+    };
+    if (part == vhdl::subtype_part) {
+        return present(declaration.subtype);
+    }
+    if (part == vhdl::return_part) {
+        if (!declaration.callable) {
+            throw std::logic_error { "VHDL analysis anchors: an anchored "
+                                     "return type is missing" };
+        }
+        return present(declaration.callable->return_type);
+    }
+    if (!declaration.alias_signature) {
+        throw std::logic_error { "VHDL analysis anchors: an anchored alias "
+                                 "signature is missing" };
+    }
+    auto& signature = *declaration.alias_signature;
+    if (part == vhdl::alias_result_part) {
+        return present(signature.result);
+    }
+    const auto parameter = part - vhdl::alias_parameter_part;
+    if (parameter >= signature.parameters.size()) {
+        throw std::logic_error { "VHDL analysis anchors: an anchored alias "
+                                 "signature parameter is missing" };
+    }
+    return signature.parameters[parameter];
+}
+
 struct AnchorWrite {
     AnchoredSlot slot { AnchoredSlot::expression_resolved_declaration };
     std::uint32_t position { };
     std::uint32_t target { };
+    std::uint32_t part { };
 };
 
 [[nodiscard]] std::string slot_name(const AnchoredSlot slot)
@@ -399,6 +558,14 @@ struct AnchorWrite {
         return "qualified_type_mark.selected";
     case AnchoredSlot::statement_resolved_procedure:
         return "resolved_procedure";
+    case AnchoredSlot::declaration_subtype_mark_selected:
+        return "subtype.written_type_mark.selected";
+    case AnchoredSlot::type_subtype_mark_selected:
+        return "type indication written_type_mark.selected";
+    case AnchoredSlot::type_index_subtype_selected:
+        return "index_subtype.selected";
+    case AnchoredSlot::expression_type_declared:
+        return "type.declared";
     }
     return "?";
 }
@@ -835,6 +1002,11 @@ std::string rebind_vhdl_declaration_anchors(
             const auto& positions
                 = reference.slot == AnchoredSlot::statement_resolved_procedure
                 ? owner.statements
+                : reference.slot == AnchoredSlot::declaration_subtype_mark_selected
+                ? owner.declarations
+                : reference.slot == AnchoredSlot::type_subtype_mark_selected
+                    || reference.slot == AnchoredSlot::type_index_subtype_selected
+                ? owner.types
                 : owner.expressions;
             if (reference.item >= positions.size()) {
                 throw std::logic_error {
@@ -843,8 +1015,8 @@ std::string rebind_vhdl_declaration_anchors(
                     + " for its " + slot_name(reference.slot)
                 };
             }
-            writes.push_back(
-                { reference.slot, positions[reference.item], *target });
+            writes.push_back({ reference.slot, positions[reference.item],
+                *target, reference.part });
         }
     }
     if (writes.empty()) {
@@ -852,6 +1024,8 @@ std::string rebind_vhdl_declaration_anchors(
     }
     auto& expressions = design.vhdl_hir.mutable_expressions();
     auto& statements = design.vhdl_hir.mutable_statements();
+    auto& declarations = design.vhdl_hir.mutable_declarations();
+    auto& types = design.vhdl_hir.mutable_types();
     for (const auto& write : writes) {
         switch (write.slot) {
         case AnchoredSlot::expression_resolved_declaration:
@@ -877,6 +1051,28 @@ std::string rebind_vhdl_declaration_anchors(
             statements.at(write.position).resolved_procedure
                 = DeclarationId::from_index(write.target);
             break;
+        case AnchoredSlot::declaration_subtype_mark_selected:
+            written_mark(indication(declarations.at(write.position), write.part))
+                = DeclarationId::from_index(write.target);
+            break;
+        case AnchoredSlot::type_subtype_mark_selected:
+            written_mark(indication(types.at(write.position), write.part))
+                = DeclarationId::from_index(write.target);
+            break;
+        case AnchoredSlot::expression_type_declared:
+            expressions.at(write.position).type.declared
+                = TypeId::from_index(write.target);
+            break;
+        case AnchoredSlot::type_index_subtype_selected: {
+            auto& dimensions = types.at(write.position).array_dimensions;
+            if (write.part >= dimensions.size()) {
+                throw std::logic_error { "VHDL analysis anchors: an anchored "
+                                         "index subtype is missing" };
+            }
+            dimensions[write.part].index_subtype.selected
+                = DeclarationId::from_index(write.target);
+            break;
+        }
         }
     }
     // The rebound slots are resolution results, which no index reads.

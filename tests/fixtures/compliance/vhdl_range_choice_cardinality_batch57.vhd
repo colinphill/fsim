@@ -20,6 +20,7 @@ end entity;
 architecture test of vhdl_range_choice_cardinality_batch57 is
     type row_t is array (3 downto 0) of bit;
     type matrix_t is array (natural range <>) of row_t;
+    subtype quad_t is matrix_t(3 downto 0);
     signal input8 : bit_vector(7 downto 0) := X"55";
     signal padded8 : bit_vector(31 downto 0);
     signal input12 : bit_vector(11 downto 0) := X"ABC";
@@ -67,8 +68,10 @@ begin
             severity failure;
 
         -- Concatenation appends the right operand after the left operand.
-        rows := (3 downto 0 => row_t'('1', '0', '1', '0'))
-            & (3 downto 0 => row_t'('0', '1', '0', '1'));
+        -- 9.3.3.1: an aggregate operand of "&" is typed by context alone
+        -- (MATRIX_T or ROW_T for either operand), so each is qualified.
+        rows := quad_t'(3 downto 0 => row_t'('1', '0', '1', '0'))
+            & quad_t'(3 downto 0 => row_t'('0', '1', '0', '1'));
         for index in 0 to 3 loop
             assert rows(index) = row_t'('1', '0', '1', '0')
                     and rows(index + 4) = row_t'('0', '1', '0', '1')

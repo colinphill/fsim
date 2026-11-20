@@ -358,7 +358,9 @@ begin
   begin
     v := unsigned(acc_r);
     for i in 0 to 3 loop
-      v := v xor unsigned(s(i) & s(3 - i));
+      -- 9.3.6: the operand is typed alone; s(i) & s(3 - i) also fits
+      -- lane_t's element & element.
+      v := v xor unsigned(std_logic_vector'(s(i) & s(3 - i)));
     end loop;
     n := popcount(std_logic_vector(v), 8);
     mix <= std_logic_vector(v);

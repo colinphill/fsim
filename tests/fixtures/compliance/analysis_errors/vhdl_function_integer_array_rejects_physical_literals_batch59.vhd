@@ -1,4 +1,4 @@
--- fsim-expect: FSIM-ELAB-VHAGG-014 std=2008
+-- fsim-expect: FSIM-VHDL-TYPE-001 std=2008
 -- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-2008 9.3.3: physical literals retain their nominal scalar type
 -- and cannot supply INTEGER elements in a function-result aggregate.

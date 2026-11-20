@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "compiled_design_vhdl_analysis_internal.hpp"
+#include "fsim/project/project.hpp"
+#include "fsim/semantic/compiled_design.hpp"
+#include "fsim/semantic/vhdl_standard_declaration.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
 
 #include <algorithm>
@@ -337,6 +340,80 @@ void expand_region(const CompiledDesign& design, const Region& region,
     }
 }
 
+/// 12.4 (1076-2008 and later): `use P.T` where T denotes a type or subtype
+/// also makes potentially visible the enumeration literals and units of
+/// the base type and the implicit declarations of predefined operations for
+/// the type (those of `designator` here).
+void expand_type_member(const Regions& regions, const UseClause& clause,
+    const support::SymbolId designator, const vhdl::Unit* from,
+    std::vector<Potential>& out)
+{
+    if (from == nullptr) {
+        return;
+    }
+    const auto standard = project::parse_vhdl_standard(from->standard);
+    if (!standard || standard_year(*standard) < 2008U) {
+        return;
+    }
+    const auto& design = regions.design();
+    const auto scope = regions.unit_scope(clause.unit);
+    const auto* const region
+        = scope ? regions.find(*scope) : static_cast<const Region*>(nullptr);
+    if (region == nullptr) {
+        return;
+    }
+    const auto accept = [](const vhdl::Declaration&) { return true; };
+    std::vector<TypeId> types;
+    for (const auto* named : gather(design, *region, clause.member, accept).declarations) {
+        if ((named->form != vhdl::DeclarationForm::type
+                && named->form != vhdl::DeclarationForm::subtype)
+            || !named->declared_type) {
+            continue;
+        }
+        types.push_back(*named->declared_type);
+        // A subtype's base type (5.1): its literals and units.
+        if (const auto* definition = design.vhdl_hir.find_type(*named->declared_type);
+            definition != nullptr && definition->form == vhdl::TypeForm::subtype
+            && definition->base.type_mark.target.valid()) {
+            types.push_back(definition->base.type_mark.target);
+        }
+    }
+    if (types.empty()) {
+        return;
+    }
+    const auto named_type = [&](const TypeId id) {
+        return std::ranges::find(types, id) != types.end();
+    };
+    for (const auto* type : implicit_in(design, *region, designator, accept)) {
+        if (type->declared_type && named_type(*type->declared_type)) {
+            Potential entry;
+            entry.declaration = type;
+            entry.clause = clause.source;
+            entry.implicit = true;
+            out.push_back(entry);
+        }
+    }
+    for (const auto* declaration : gather(design, *region, designator, accept).declarations) {
+        bool of_type = declaration->form == vhdl::DeclarationForm::enumeration_literal
+            && declaration->subtype && named_type(declaration->subtype->type_mark.target);
+        for (const auto id : types) {
+            const auto* definition = design.vhdl_hir.find_type(id);
+            if (definition == nullptr) {
+                continue;
+            }
+            for (const auto& unit : definition->physical_units) {
+                of_type = of_type || unit.declaration == declaration->id;
+            }
+        }
+        if (of_type) {
+            Potential entry;
+            entry.declaration = declaration;
+            entry.clause = clause.source;
+            out.push_back(entry);
+        }
+    }
+}
+
 void expand_use(const Regions& regions, const UseClause& clause,
     const support::SymbolId designator, const vhdl::Unit* from,
     std::vector<Potential>& out)
@@ -380,6 +457,7 @@ void expand_use(const Regions& regions, const UseClause& clause,
     case UseClause::Kind::all_of_package: {
         if (clause.kind == UseClause::Kind::member
             && !(clause.member == designator)) {
+            expand_type_member(regions, clause, designator, from, out);
             return;
         }
         const auto scope = regions.unit_scope(clause.unit);
@@ -649,7 +727,7 @@ void collect(const Regions& regions, const support::SymbolId designator,
         } else if (entry.implicit) {
             resolution.implicit.push_back(entry.declaration->id);
         } else if (entry.standard) {
-            resolution.standard.push_back(entry.standard->declaration);
+            resolution.standard.push_back(*entry.standard);
         } else if (entry.declaration != nullptr) {
             resolution.candidates.push_back(entry.declaration->id);
         } else {
@@ -818,7 +896,7 @@ Resolution Lookup::member(const Denotation& prefix,
             return resolution;
         }
         for (const auto& entry : regions_.standard_declarations(designator, *unit)) {
-            resolution.standard.push_back(entry.declaration);
+            resolution.standard.push_back(entry);
         }
         resolution.status = resolution.standard.empty() ? Visibility::not_found
                                                         : Visibility::found;

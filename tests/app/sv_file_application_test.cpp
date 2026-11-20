@@ -484,9 +484,10 @@ begin
     write(output_line, 7, right, 4);
     write(output_line, true);
     write(output_line, digit, left, 3);
-    write(output_line, "|");
+    -- 9.3.2: WRITE of STRING and of BIT_VECTOR both fit a string literal.
+    write(output_line, string'("|"));
     writeline(text_output, output_line);
-    write(output_line, "X");
+    write(output_line, string'("X"));
     writeline(text_output, output_line);
     file_open(status, output_file, "vhdl-output.txt", write_mode);
     assert status = open_ok report "open status" severity failure;

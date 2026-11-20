@@ -318,6 +318,7 @@ entity Subtype_Top is
 end entity;
 
 library ieee;
+use ieee.std_logic_1164.all;
 use work.subtype_types.all;
 architecture rtl of subtype_top is
   subtype Actual_Count_T is Count_T range 4 to 7;

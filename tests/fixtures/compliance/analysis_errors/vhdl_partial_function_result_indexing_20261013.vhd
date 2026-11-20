@@ -1,4 +1,4 @@
--- fsim-expect: FSIM-ELAB-VHARRAYSEL-004 std=1993
+-- fsim-expect: FSIM-VHDL-TYPE-001 std=1993
 -- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-1993 6.1 and 8.4: an indexed-name group supplies one index
 -- for each dimension of the current array subtype.

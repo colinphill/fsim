@@ -206,7 +206,7 @@ void verify_capture(const Capture& capture) {
           "00000000",
           "00000000",
           "11111111",
-          "ZZZZZZZZ",
+          "00000000",
           "Z10X0000",
           "0X0000Z1",
           "00000000000000000000000000001000",
@@ -305,8 +305,11 @@ begin
     minimum_result <= -2147483648;
     logical_left <= value sll count;
     logical_right <= value srl count;
-    arithmetic_left <= value sla count;
-    arithmetic_right <= value sra count;
+    -- 9.2.4: sla/sra are predefined for BIT and BOOLEAN arrays only.
+    arithmetic_left <=
+        to_stdulogicvector(bit_vector'(to_bitvector(value) sla count));
+    arithmetic_right <=
+        to_stdulogicvector(bit_vector'(to_bitvector(value) sra count));
     rotate_left <= value rol count;
     rotate_right <= value ror count;
   end process;

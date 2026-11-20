@@ -10541,3 +10541,45 @@ if(TARGET fsim)
     LABELS "application;compliance;vhdl"
     TIMEOUT 120)
 endif()
+
+# VHDL expression typing at compile time (IEEE 1076-2019 9.3, 12.5): every
+# expression of a compiled unit has exactly one interpretation in its complete
+# context; FSIM-VHDL-TYPE-001/002/003 are reported by `fsim compile`. Each line
+# of CASES.txt is `name<TAB>file<TAB>standard<TAB>expected code | OK`; lines
+# starting with `#` are comments.
+if(TARGET fsim)
+  set(vhdl_type_analysis_dir
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/type_analysis")
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${vhdl_type_analysis_dir}/CASES.txt")
+  file(STRINGS "${vhdl_type_analysis_dir}/CASES.txt" vhdl_type_cases)
+  list(FILTER vhdl_type_cases EXCLUDE REGEX "^#")
+  foreach(vhdl_type_case IN LISTS vhdl_type_cases)
+    string(REPLACE "\t" ";" vhdl_type_fields "${vhdl_type_case}")
+    list(LENGTH vhdl_type_fields vhdl_type_field_count)
+    if(NOT vhdl_type_field_count EQUAL 4)
+      message(FATAL_ERROR "malformed type-analysis case: ${vhdl_type_case}")
+    endif()
+    list(GET vhdl_type_fields 0 vhdl_type_name)
+    list(GET vhdl_type_fields 1 vhdl_type_file)
+    list(GET vhdl_type_fields 2 vhdl_type_standard)
+    list(GET vhdl_type_fields 3 vhdl_type_expected)
+    string(REPLACE "_" "-" vhdl_type_test "${vhdl_type_name}")
+    set(vhdl_type_expect_arguments)
+    if(NOT vhdl_type_expected STREQUAL "OK")
+      set(vhdl_type_expect_arguments "-DFSIM_EXPECT_CODE=${vhdl_type_expected}")
+    endif()
+    add_test(
+      NAME fsim.vhdl-type-analysis.${vhdl_type_test}
+      COMMAND "${CMAKE_COMMAND}"
+        "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+        "-DFSIM_FIXTURE=${vhdl_type_analysis_dir}/${vhdl_type_file}"
+        "-DFSIM_STANDARD=${vhdl_type_standard}"
+        ${vhdl_type_expect_arguments}
+        -P "${vhdl_type_analysis_dir}/run_type_case.cmake")
+    set_tests_properties(
+      fsim.vhdl-type-analysis.${vhdl_type_test} PROPERTIES
+      LABELS "application;compliance;vhdl"
+      TIMEOUT 120)
+  endforeach()
+endif()

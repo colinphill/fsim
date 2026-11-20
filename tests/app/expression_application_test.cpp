@@ -750,9 +750,10 @@ begin
     wrapped_rotate_right <= value ror 9;
     absolute_unknown <= abs value;
     absolute_known <= abs known_value;
-    power_positive <= "00000011" ** 4;
-    power_negative <= "11111110" ** 3;
-    power_zero <= "00000111" ** 0;
+    -- NUMERIC_STD declares no "**" (16.8.5): the powers are INTEGER ones.
+    power_positive <= to_unsigned(3 ** 4, 8);
+    power_negative <= to_signed((-2) ** 3, 8);
+    power_zero <= to_unsigned(7 ** 0, 8);
     conditional_true <=
       8X"A5" when true else 8X"5A";
     conditional_false <=
@@ -777,12 +778,14 @@ begin
   external_name_expression <=
     << signal .shift_rotate_app.known_value : signed(7 downto 0) >>;
 
-  choose_known: with "01" select
+  -- 10.5.4, 10.9: a selector of a character array type is typed without
+  -- context; a string literal needs a qualification.
+  choose_known: with std_logic_vector'("01") select
     selected_choice <=
       8O"245" when "00" | "01",
       8D"90" when others;
 
-  choose_default: with "10" select
+  choose_default: with std_logic_vector'("10") select
     selected_default <=
       "10100101" when "00" | "01",
       "01011010" when others;
@@ -1206,8 +1209,9 @@ begin
     redundant_start := redundant'transaction;
     single_start := single'transaction;
     wait for 2 ns;
-    elapsed <= clk'last_event;
-    active_elapsed <= redundant'last_active;
+    -- 'LAST_EVENT / 'LAST_ACTIVE are TIME (16.2.4): counted in ns.
+    elapsed <= to_signed(clk'last_event / 1 ns, 64);
+    active_elapsed <= to_signed(redundant'last_active / 1 ns, 64);
     foreign_driving <= driven'driving;
     wait for 0 ns;
     stable_window_early <= clk'stable(2 ns);
