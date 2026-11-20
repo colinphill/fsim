@@ -1992,8 +1992,8 @@ std::optional<std::int64_t> Lowerer::hir_vhdl_bound_position(
         return hir_vhdl_bound_position(bound->vhdl->operands.front());
     }
     if (bound->vhdl->kind == semantic::vhdl::ExpressionKind::logic_literal) {
-        const auto type = support::find_vhdl_intrinsic_enumeration(
-            bound->vhdl->resolved_builtin_type);
+        const auto type = semantic::vhdl_intrinsic_enumeration_of(
+            *specialized_hir_unit_, bound->vhdl->type);
         return type ? support::vhdl_intrinsic_enumeration_position(
                           *type, bound->vhdl->text)
                     : std::nullopt;
@@ -2625,8 +2625,8 @@ std::optional<std::int64_t> Lowerer::hir_constant_integer(
             // So is one the context-typing pass gave STD_ULOGIC its
             // STD_ULOGIC position, '1' is 3 (9.3.2, 16.7), as an index or
             // a slice bound uses it (8.4, 8.5), never its value encoding.
-            if (support::find_vhdl_intrinsic_enumeration(
-                    literal->vhdl->resolved_builtin_type)
+            if (semantic::vhdl_intrinsic_enumeration_of(
+                    *specialized_hir_unit_, literal->vhdl->type)
                 == support::VhdlIntrinsicEnumeration::std_ulogic) {
                 return finish(support::vhdl_intrinsic_enumeration_position(
                     support::VhdlIntrinsicEnumeration::std_ulogic,
@@ -6220,8 +6220,8 @@ Lowerer::hir_vhdl_intrinsic_loop_parameter(
         // A character literal is of the type the context-typing pass gave
         // it (9.3.2).
         if (bound->vhdl->kind == semantic::vhdl::ExpressionKind::logic_literal) {
-            return support::find_vhdl_intrinsic_enumeration(
-                bound->vhdl->resolved_builtin_type);
+            return semantic::vhdl_intrinsic_enumeration_of(
+                *specialized_hir_unit_, bound->vhdl->type);
         }
         // T'LEFT, T'RIGHT, T'LOW or T'HIGH of a type mark is a value of the
         // base type of T (16.2.2).
@@ -7373,8 +7373,10 @@ Lowerer::hir_referenced_declaration(
             return record.resolved_declaration;
         }
         if (record.kind == semantic::vhdl::ExpressionKind::logic_literal
-            && (record.resolved_builtin_type == "character"
-                || record.resolved_builtin_type == "bit")) {
+            && (semantic::vhdl_standard_type_is(record.type,
+                    support::StandardDeclaration::character)
+                || semantic::vhdl_standard_type_is(record.type,
+                    support::StandardDeclaration::bit))) {
             return std::nullopt;
         }
         // Typed STD_ULOGIC (9.3.2, 12.5): only a retained declaration of
@@ -7382,7 +7384,8 @@ Lowerer::hir_referenced_declaration(
         // type (a VITAL symbol's 'Z') is a homograph, so the lookup that
         // follows must not reach it by another route.
         if (record.kind == semantic::vhdl::ExpressionKind::logic_literal
-            && !record.resolved_builtin_type.empty()) {
+            && semantic::vhdl_intrinsic_enumeration_of(*specialized_hir_unit_, record.type)
+                == support::VhdlIntrinsicEnumeration::std_ulogic) {
             return hir_resolver().resolve_expression_name(expression_id)
                 .unique();
         }
@@ -21091,10 +21094,9 @@ std::optional<std::uint64_t> Lowerer::hir_vhdl_character_literal_code(
     // The design's context-typed resolution decides a literal's type when it
     // could (IEEE 1076-2008 9.3.2, 12.5).
     if (expression->vhdl->kind == semantic::vhdl::ExpressionKind::logic_literal
-        && (expression->vhdl->resolved_type
-            || expression->vhdl->ambiguous_literal
-            || !expression->vhdl->resolved_builtin_type.empty())) {
-        if (expression->vhdl->resolved_builtin_type != "character"
+        && (expression->vhdl->type || expression->vhdl->ambiguous_literal)) {
+        if (!semantic::vhdl_standard_type_is(expression->vhdl->type,
+                support::StandardDeclaration::character)
             || (expected_width != 0U && expected_width != 8U)) {
             return std::nullopt;
         }
@@ -28470,11 +28472,11 @@ Lowerer::compute_hir_vhdl_array_selection(
             // type the context-typing pass gave the literal from the index
             // subtype (9.3.2, 12.5).
             if (!intrinsic && !type_id.valid()) {
-                if (literal.resolved_type) {
-                    type_id = *literal.resolved_type;
-                } else {
-                    intrinsic = support::find_vhdl_intrinsic_enumeration(
-                        literal.resolved_builtin_type);
+                intrinsic = semantic::vhdl_intrinsic_enumeration_of(
+                    *specialized_hir_unit_, literal.type);
+                if (!intrinsic
+                    && literal.type.kind == semantic::vhdl::TypeIdentity::Kind::declared) {
+                    type_id = literal.type.declared;
                 }
             }
             if (intrinsic) {
@@ -31672,7 +31674,14 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_enumeration_string(
     // The context-typed pass gave the literal a predefined array type
     // (STD_ULOGIC_VECTOR, BIT_VECTOR, STRING): its elements are not
     // positions of a retained enumeration whose literals share a spelling.
-    if (!expression->vhdl->resolved_builtin_type.empty()
+    const auto& literal_type = expression->vhdl->type;
+    const bool declared_literal_type
+        = literal_type.kind == semantic::vhdl::TypeIdentity::Kind::declared;
+    if (literal_type.kind == semantic::vhdl::TypeIdentity::Kind::standard
+        || (declared_literal_type
+            && semantic::vhdl_native_base_type_of(
+                   *specialized_hir_unit_, literal_type.declared)
+                != nullptr)
         || expression->vhdl->ambiguous_literal) {
         return std::nullopt;
     }
@@ -31726,9 +31735,8 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_enumeration_string(
     std::optional<std::string> bits;
     const auto subtype = hir_vhdl_expression_subtype_ref(expression_id);
     // The array type the context gave the literal decides its elements.
-    const auto* typed = expression->vhdl->resolved_type
-        ? vhdl_array_definition(
-              *specialized_hir_unit_, *expression->vhdl->resolved_type)
+    const auto* typed = declared_literal_type
+        ? vhdl_array_definition(*specialized_hir_unit_, literal_type.declared)
         : nullptr;
     if (typed != nullptr) {
         bits = encode(*typed);
@@ -31737,8 +31745,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_enumeration_string(
                   *specialized_hir_unit_, subtype->type_mark.target)
             : nullptr) {
         bits = encode(*array);
-    } else if (!subtype && expected_width != 0U
-        && !expression->vhdl->resolved_type) {
+    } else if (!subtype && expected_width != 0U && !declared_literal_type) {
         // Without a contextual type, use the one encoding that every array
         // type of the unit with such elements and this width agrees on.
         // STD.STANDARD.BIT_VECTOR is always visible and is one of them.

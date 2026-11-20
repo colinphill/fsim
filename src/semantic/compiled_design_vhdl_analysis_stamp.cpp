@@ -6,6 +6,7 @@
 #include "fsim/support/design_library.hpp"
 #include "fsim/support/payload_checksum.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
+#include "fsim/support/vhdl_standard_declaration.hpp"
 #include "fsim/support/vhdl_standard_package_form.hpp"
 
 #include <algorithm>
@@ -320,7 +321,7 @@ struct UnitStamp {
             // A written type mark into a compiler-served package is not
             // recomputed: the typing of a loaded unit leaves it open.
             if (slot == AnchoredSlot::expression_resolved_declaration
-                || slot == AnchoredSlot::expression_resolved_type
+                || slot == AnchoredSlot::expression_type_declared
                 || slot == AnchoredSlot::expression_qualified_mark_selected
                 || slot == AnchoredSlot::statement_resolved_procedure) {
                 stamp.recomputed.push_back({ slot, item });
@@ -410,10 +411,6 @@ struct UnitStamp {
         if (expression.resolved_declaration) {
             add(AnchoredSlot::expression_resolved_declaration, item,
                 targets.declaration(*expression.resolved_declaration, unit.id));
-        }
-        if (expression.resolved_type) {
-            add(AnchoredSlot::expression_resolved_type, item,
-                targets.type(*expression.resolved_type, unit.id));
         }
         if (expression.qualified_type_mark
             && expression.qualified_type_mark->selected) {
@@ -552,8 +549,6 @@ struct AnchorWrite {
     switch (slot) {
     case AnchoredSlot::expression_resolved_declaration:
         return "resolved_declaration";
-    case AnchoredSlot::expression_resolved_type:
-        return "resolved_type";
     case AnchoredSlot::expression_qualified_mark_selected:
         return "qualified_type_mark.selected";
     case AnchoredSlot::statement_resolved_procedure:
@@ -572,10 +567,17 @@ struct AnchorWrite {
 
 // ---- Verifier ---------------------------------------------------------------
 
-template <typename Id>
-[[nodiscard]] std::string id_text(const std::optional<Id>& id)
+[[nodiscard]] std::string type_identity_text(const vhdl::TypeIdentity& type)
 {
-    return id ? std::to_string(id->value()) : std::string { "-" };
+    using Kind = vhdl::TypeIdentity::Kind;
+    switch (type.kind) {
+    case Kind::none: return "none";
+    case Kind::declared: return "type " + std::to_string(type.declared.value());
+    case Kind::standard: return "STANDARD." + std::string { support::name(type.standard) };
+    case Kind::universal_integer: return "universal_integer";
+    case Kind::universal_real: return "universal_real";
+    }
+    return "?";
 }
 
 [[nodiscard]] std::string declaration_text(const CompiledDesign& design,
@@ -1032,10 +1034,6 @@ std::string rebind_vhdl_declaration_anchors(
             expressions.at(write.position).resolved_declaration
                 = DeclarationId::from_index(write.target);
             break;
-        case AnchoredSlot::expression_resolved_type:
-            expressions.at(write.position).resolved_type
-                = TypeId::from_index(write.target);
-            break;
         case AnchoredSlot::expression_qualified_mark_selected: {
             auto& mark = expressions.at(write.position).qualified_type_mark;
             if (!mark) {
@@ -1176,18 +1174,13 @@ std::string verify_stamped_vhdl_analysis(const CompiledDesign& design)
                 declaration_text(design, stored.resolved_declaration),
                 declaration_text(fresh, recomputed.resolved_declaration));
         }
-        if (recomputed.resolved_type
-            && stored.resolved_type != recomputed.resolved_type) {
-            differences.add(*unit, item, "resolved_type",
-                id_text(stored.resolved_type),
-                id_text(recomputed.resolved_type));
-        }
-        if (!recomputed.resolved_builtin_type.empty()
-            && stored.resolved_builtin_type
-                != recomputed.resolved_builtin_type) {
-            differences.add(*unit, item, "resolved_builtin_type",
-                "'" + stored.resolved_builtin_type + "'",
-                "'" + recomputed.resolved_builtin_type + "'");
+        // The type of an expression the compile-time typing left alone
+        // (interpretation none) is the link resolution's both times; a typed
+        // expression's type is analysis's and not recomputed here.
+        if (stored.interpretation == vhdl::Interpretation::none && recomputed.type
+            && stored.type != recomputed.type) {
+            differences.add(*unit, item, "type", type_identity_text(stored.type),
+                type_identity_text(recomputed.type));
         }
         if (!recomputed.ambiguous_literal
             && stored.ambiguous_literal != recomputed.ambiguous_literal) {

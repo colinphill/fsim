@@ -61,6 +61,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -19981,11 +19982,11 @@ Lowerer::compute_hir_vhdl_function_call(
         return std::nullopt;
     }
 
-    // An arithmetic operator the type resolution typed is the predefined
-    // operator: no user overload accepts it in its context (9.2.6, 12.5).
+    // An arithmetic operator typed without a selected declaration is the
+    // predefined operator: no user overload accepts it in its context
+    // (9.2.6, 12.5).
     if (expression->vhdl->kind == semantic::vhdl::ExpressionKind::binary
-        && (expression->vhdl->resolved_type
-            || !expression->vhdl->resolved_builtin_type.empty())) {
+        && expression->vhdl->type && !expression->vhdl->resolved_declaration) {
         const auto op = lowercase_ascii_copy(expression->vhdl->text);
         if (op == "+" || op == "-" || op == "*" || op == "/" || op == "mod"
             || op == "rem" || op == "**") {
@@ -20016,7 +20017,8 @@ Lowerer::compute_hir_vhdl_function_call(
     // A relation the type resolution typed BOOLEAN is not a user overload
     // returning another type (IEEE 1076-2008 9.2.3, 12.5).
     if (expression->vhdl->kind == semantic::vhdl::ExpressionKind::binary
-        && expression->vhdl->resolved_builtin_type == "boolean"
+        && semantic::vhdl_standard_type_is(
+            expression->vhdl->type, support::StandardDeclaration::boolean)
         && (expression->vhdl->text == "=" || expression->vhdl->text == "/="
             || expression->vhdl->text == "<" || expression->vhdl->text == "<="
             || expression->vhdl->text == ">"
@@ -20154,6 +20156,24 @@ Lowerer::compute_hir_vhdl_function_call(
             continue;
         }
         destination = resolution;
+    }
+    // Test-only agreement check (gate BD D4b, FSIM_VERIFY_VHDL_TYPING=1):
+    // the width-keyed pick must be the declaration the compile-time typing
+    // stored (12.5).
+    static const bool verify_typing = [] {
+        const char* text = std::getenv("FSIM_VERIFY_VHDL_TYPING");
+        return text != nullptr && std::string_view { text } == "1";
+    }();
+    if (const auto& stored = expression->vhdl->resolved_declaration;
+        verify_typing && stored && !ambiguous) {
+        const auto& pick = selected ? selected : contextual_fallback;
+        if (pick && pick->key != *stored && pick->body != *stored) {
+            throw std::logic_error { "VHDL typing agreement: expression "
+                + std::to_string(expression_id.value()) + " '"
+                + expression->vhdl->text + "' stored declaration "
+                + std::to_string(stored->value()) + ", lowerer picked "
+                + std::to_string(pick->key.value()) };
+        }
     }
     // The design's context-typed resolution (IEEE 1076-2008 12.5) selects
     // among the overloads whose profiles match the actuals, and decides a

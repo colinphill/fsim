@@ -630,10 +630,6 @@ struct Expression {
     // for a function call, enumeration literal or parameterless call (IEEE
     // 1076-2008 12.5); unset when the pass could not decide.
     std::optional<DeclarationId> resolved_declaration;
-    // The type that pass gave a literal from its context: the root type, or
-    // the name of a predefined type whose declaration is not retained.
-    std::optional<TypeId> resolved_type;
-    std::string resolved_builtin_type;
     // The pass found a character literal that fits more than one overload
     // (12.5); no type is recorded for it.
     bool ambiguous_literal { };
@@ -1382,7 +1378,6 @@ struct DeclarationAnchor {
 /// The field of an item of the owning unit an anchor fills.
 enum class AnchoredSlot : std::uint8_t {
     expression_resolved_declaration,
-    expression_resolved_type,
     expression_qualified_mark_selected,
     statement_resolved_procedure,
     /// The written type mark's selected declaration of a subtype indication

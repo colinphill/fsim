@@ -5034,11 +5034,12 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
     // context-typed resolution gave the aggregate applies (IEEE 1076-2008
     // 9.3.3.1).
     std::optional<semantic::vhdl::SubtypeIndication> resolved_context;
-    if (contextual_subtype == nullptr && aggregate.resolved_type) {
+    if (contextual_subtype == nullptr
+        && aggregate.type.kind == semantic::vhdl::TypeIdentity::Kind::declared) {
         semantic::vhdl::SubtypeIndication subtype;
-        subtype.type_mark.target = *aggregate.resolved_type;
+        subtype.type_mark.target = aggregate.type.declared;
         if (const auto type = specialized_hir_unit_->find_type(
-                *aggregate.resolved_type);
+                aggregate.type.declared);
             type && type->vhdl != nullptr) {
             subtype.type_mark.spelling = type->vhdl->name;
         }
@@ -5047,11 +5048,11 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
             contextual_subtype = &*resolved_context;
         }
     } else if (contextual_subtype == nullptr
-        && !aggregate.resolved_builtin_type.empty()) {
-        // A predefined array type (STRING, STD_LOGIC_VECTOR, UNSIGNED, ...)
-        // named by its visible type mark.
+        && aggregate.type.kind == semantic::vhdl::TypeIdentity::Kind::standard) {
+        // A STANDARD array type (STRING, BIT_VECTOR, ...; 16.3), which no
+        // declaration of the design holds: its designator.
         semantic::vhdl::SubtypeIndication subtype;
-        subtype.type_mark.spelling = aggregate.resolved_builtin_type;
+        subtype.type_mark.spelling = std::string { support::name(aggregate.type.standard) };
         resolved_context = hir_effective_vhdl_subtype(subtype);
         if (resolved_context) {
             contextual_subtype = &*resolved_context;

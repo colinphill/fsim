@@ -504,8 +504,7 @@ bool vhdl_predefined_operator_selected(const Expression& expression)
 {
     if constexpr (std::is_same_v<Expression, vhdl::Expression>) {
         return !expression.resolved_declaration
-            && (expression.resolved_type || expression.ambiguous_literal
-                || !expression.resolved_builtin_type.empty());
+            && (expression.type || expression.ambiguous_literal);
     } else {
         return false;
     }
@@ -6270,9 +6269,9 @@ private:
                     == support::VhdlIntrinsicEnumeration::std_ulogic) {
                 return vhdl_std_ulogic_record(literal->second);
             }
-            if (source.resolved_type && source.resolved_type->valid()) {
+            if (source.type.kind == vhdl::TypeIdentity::Kind::declared) {
                 if (const auto ordinal = vhdl_user_character_ordinal(
-                        *source.resolved_type, source.text)) {
+                        source.type.declared, source.text)) {
                     return vhdl_integer_value(*ordinal);
                 }
             }
@@ -13722,10 +13721,9 @@ private:
                 // that type, not a bit value. BIT, CHARACTER and the IEEE
                 // logic types keep their established encodings.
                 if (expression.kind == Kind::logic_literal
-                    && expression.resolved_type
-                    && expression.resolved_type->valid()) {
+                    && expression.type.kind == vhdl::TypeIdentity::Kind::declared) {
                     if (const auto ordinal = vhdl_user_character_ordinal(
-                            *expression.resolved_type, expression.text)) {
+                            expression.type.declared, expression.text)) {
                         return ordinal;
                     }
                 }
@@ -14978,8 +14976,8 @@ private:
             || literal->vhdl->kind != vhdl::ExpressionKind::logic_literal) {
             return std::nullopt;
         }
-        const auto type = support::find_vhdl_intrinsic_enumeration(
-            literal->vhdl->resolved_builtin_type);
+        const auto type
+            = vhdl_intrinsic_enumeration_of(unit_, literal->vhdl->type);
         if (!type) {
             return std::nullopt;
         }

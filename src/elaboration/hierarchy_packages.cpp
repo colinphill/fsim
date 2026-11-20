@@ -31349,8 +31349,8 @@ bool HierarchyBuilder::validate_compiled_vhdl_subtype_declarations(
                             != semantic::vhdl::ExpressionKind::logic_literal) {
                         return std::nullopt;
                     }
-                    const auto type = support::find_vhdl_intrinsic_enumeration(
-                        bound->vhdl->resolved_builtin_type);
+                    const auto type = semantic::vhdl_intrinsic_enumeration_of(
+                        *specialized, bound->vhdl->type);
                     return type ? support::vhdl_intrinsic_enumeration_position(
                                       *type, bound->vhdl->text)
                                 : std::nullopt;

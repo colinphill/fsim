@@ -9233,10 +9233,8 @@ private:
                 return standard_type("boolean");
             }
         }
-        if (!expression->resolved_builtin_type.empty()) {
-            if (auto* const type = standard_type(expression->resolved_builtin_type)) {
-                return type;
-            }
+        if (auto* const type = stored_standard_type(expression->type)) {
+            return type;
         }
         if (!expression->nominal_type.empty()) {
             if (auto* const type = type_by_mark(*expression, expression->nominal_type)) {
@@ -9383,9 +9381,7 @@ private:
                 text = "'" + text + "'";
             }
             object = make_object(vhpiEnumLiteralK, text, nullptr);
-            auto* const type = expression.resolved_builtin_type.empty()
-                ? nullptr
-                : standard_type(expression.resolved_builtin_type);
+            auto* const type = stored_standard_type(expression.type);
             if (type != nullptr && type->type_data != nullptr) {
                 const auto& literals = type->type_data->literals;
                 if (const auto found = std::ranges::find(literals, text);
@@ -14196,6 +14192,25 @@ private:
         object->full_case_name = "@" + lower(library) + ":" + lower(package)
             + ":" + object->case_name;
         return object;
+    }
+
+    // The STD.STANDARD or universal type an expression's stored type
+    // (Expression::type, 9.3, 12.5) is; null for a declared type.
+    [[nodiscard]] Object* stored_standard_type(const vhdl::TypeIdentity& type)
+    {
+        using Kind = vhdl::TypeIdentity::Kind;
+        switch (type.kind) {
+        case Kind::standard:
+            return standard_type(support::name(type.standard));
+        case Kind::universal_integer:
+            return standard_type("universal_integer");
+        case Kind::universal_real:
+            return standard_type("universal_real");
+        case Kind::none:
+        case Kind::declared:
+            break;
+        }
+        return nullptr;
     }
 
     // The predefined types of STD.STANDARD (IEEE 1076-2019 16.3), which

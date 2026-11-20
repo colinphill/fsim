@@ -10,6 +10,10 @@
 #include "fsim/semantic/vhdl_hir.hpp"
 #include "fsim/semantic/vhdl_native_intrinsics.hpp"
 
+#include "fsim/support/vhdl_standard_declaration.hpp"
+#include "fsim/support/vhdl_standard_enumeration.hpp"
+
+#include <optional>
 #include <unordered_set>
 
 namespace fsim::semantic {
@@ -120,6 +124,37 @@ template <typename Hir>
     const auto* entry = vhdl_native_base_type_of(hir, type);
     return entry != nullptr && entry->package_id == VhdlNativePackage::ieee_std_logic_1164
         && entry->name == VhdlNativeName::std_ulogic;
+}
+
+/// Whether a stored expression type (Expression::type) is the STANDARD type
+/// `row` (16.3).
+[[nodiscard]] inline bool vhdl_standard_type_is(
+    const vhdl::TypeIdentity& type, const support::StandardDeclaration row) noexcept
+{
+    return type.kind == vhdl::TypeIdentity::Kind::standard && type.standard == row;
+}
+
+/// The intrinsic enumeration a stored expression type is: STANDARD BOOLEAN,
+/// BIT or CHARACTER (16.3), or a base type of IEEE.STD_LOGIC_1164's
+/// STD_ULOGIC (16.7); none for any other type.
+template <typename Hir>
+[[nodiscard]] std::optional<support::VhdlIntrinsicEnumeration>
+vhdl_intrinsic_enumeration_of(const Hir& hir, const vhdl::TypeIdentity& type)
+{
+    using Kind = vhdl::TypeIdentity::Kind;
+    using SD = support::StandardDeclaration;
+    if (type.kind == Kind::standard) {
+        switch (type.standard) {
+        case SD::boolean: return support::VhdlIntrinsicEnumeration::boolean;
+        case SD::bit: return support::VhdlIntrinsicEnumeration::bit;
+        case SD::character: return support::VhdlIntrinsicEnumeration::character;
+        default: return std::nullopt;
+        }
+    }
+    if (type.kind == Kind::declared && vhdl_native_logic9(hir, type.declared)) {
+        return support::VhdlIntrinsicEnumeration::std_ulogic;
+    }
+    return std::nullopt;
 }
 
 } // namespace fsim::semantic

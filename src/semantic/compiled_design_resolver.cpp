@@ -4615,8 +4615,9 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
                 = find_expression(*design_, effective_, *residual);
                 literal && literal->vhdl != nullptr
                 && literal->vhdl->kind == vhdl::ExpressionKind::logic_literal) {
-                if (const auto type = support::find_vhdl_intrinsic_enumeration(
-                        literal->vhdl->resolved_builtin_type)) {
+                if (const auto type = effective_ != nullptr
+                        ? vhdl_intrinsic_enumeration_of(*effective_, literal->vhdl->type)
+                        : vhdl_intrinsic_enumeration_of(*design_, literal->vhdl->type)) {
                     if (const auto position
                         = support::vhdl_intrinsic_enumeration_position(
                             *type, literal->vhdl->text)) {
@@ -11953,15 +11954,16 @@ bool CompiledDesignResolver::vhdl_character_literal_fits_context(
     if (!type || type->vhdl == nullptr) {
         return true;
     }
-    if (expression.resolved_type) {
-        return root_of(*expression.resolved_type) == root;
+    if (expression.type.kind == vhdl::TypeIdentity::Kind::declared) {
+        return root_of(expression.type.declared) == root;
     }
     if (expression.ambiguous_literal) {
         return false;
     }
-    if (!expression.resolved_builtin_type.empty()) {
-        return same_vhdl_identifier(
-            type->vhdl->name, expression.resolved_builtin_type);
+    // A STANDARD type (16.3) has no retained declaration, so a retained
+    // enumeration literal is never of it.
+    if (expression.type) {
+        return false;
     }
     // The pass found no context type; the lookup's choice stands.
     return true;

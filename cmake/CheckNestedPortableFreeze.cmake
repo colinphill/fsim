@@ -130,7 +130,7 @@ fsim_require_nested_portable_tokens("${FSIM_SCHEMA_HEADER}"
   "kSystemVerilogConstraintHirStateSchema = 46"
   "kSystemVerilogCoverageStateSchema = 10"
   "kSystemVerilogUvmStateSchema = 3"
-  "kVhdlHirStateSchema = 24")
+  "kVhdlHirStateSchema = 25")
 fsim_require_nested_portable_tokens("${FSIM_DESIGN_CODEC_INTERNAL}"
   "support::with_stack([&] { write(value); })"
   "design state string exceeds the payload"
@@ -150,7 +150,7 @@ fsim_require_nested_portable_tokens("${FSIM_DESIGN_TEST}"
   "kSystemVerilogConstraintHirStateSchema == 46"
   "kSystemVerilogCoverageStateSchema == 10"
   "kSystemVerilogUvmStateSchema == 3"
-  "kVhdlHirStateSchema == 24"
+  "kVhdlHirStateSchema == 25"
   "future-coverage-state.bin"
   "truncated-coverage-state.bin"
   "future_uvm")

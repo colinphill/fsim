@@ -1030,8 +1030,8 @@ bool HierarchyBuilder::vhdl_statement_iteration_invariant(
                 || name_invariant(*value.referenced_name))
             && (!value.resolved_declaration
                 || declaration_invariant(*value.resolved_declaration))
-            && (!value.resolved_type
-                || type_invariant(*value.resolved_type))
+            && (value.type.kind != semantic::vhdl::TypeIdentity::Kind::declared
+                || type_invariant(value.type.declared))
             && std::ranges::all_of(
                 dependencies.parameters, declaration_invariant)
             && std::ranges::all_of(

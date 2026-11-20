@@ -3,6 +3,9 @@
 
 #include "fsim/semantic/compiled_design_resolver.hpp"
 #include "fsim/semantic/vhdl_native_identity.hpp"
+#include "fsim/semantic/vhdl_standard_catalog.hpp"
+#include "fsim/semantic/vhdl_standard_declaration.hpp"
+#include "fsim/support/symbol.hpp"
 #include "fsim/support/vhdl_standard_enumeration.hpp"
 #include "fsim/support/vhdl_time.hpp"
 
@@ -234,8 +237,7 @@ public:
                 expressions[index].resolved_declaration.reset();
             }
             if ((frozen & frozen_type) == 0) {
-                expressions[index].resolved_type.reset();
-                expressions[index].resolved_builtin_type.clear();
+                expressions[index].type = { };
                 expressions[index].ambiguous_literal = false;
             }
             if ((frozen & frozen_qualified) == 0) {
@@ -530,9 +532,8 @@ private:
     // ---- Stamped units -----------------------------------------------------
 
     // The fields of an expression of a stamped unit that keep their stored
-    // result (stamp_vhdl_analysis): the type bit covers resolved_type,
-    // resolved_builtin_type and ambiguous_literal together, which one
-    // annotation writes.
+    // result (stamp_vhdl_analysis): the type bit covers type and
+    // ambiguous_literal together, which one annotation writes.
     static constexpr std::uint8_t frozen_declaration = 1U;
     static constexpr std::uint8_t frozen_type = 2U;
     static constexpr std::uint8_t frozen_qualified = 4U;
@@ -617,7 +618,7 @@ private:
                 const auto bit = reference.slot
                         == Slot::expression_resolved_declaration
                     ? frozen_declaration
-                    : reference.slot == Slot::expression_resolved_type
+                    : reference.slot == Slot::expression_type_declared
                     ? frozen_type
                     : frozen_qualified;
                 auto& frozen = frozen_expressions_.at(
@@ -912,6 +913,114 @@ private:
         }
     }
 
+    // The vhdl::TypeIdentity of a key (gate BD D4b; Expression::type is the
+    // one stored type, the compile-time typing writes it in analyzed
+    // units): a declared root type, a STANDARD type row, a universal type,
+    // or the base type of the native declaration of a key of this pass in
+    // the edition of `scope`'s unit; none for a pseudo type.
+    [[nodiscard]] vhdl::TypeIdentity identity(const TypeKey& key, const ScopeId scope)
+    {
+        using Kind = vhdl::TypeIdentity::Kind;
+        vhdl::TypeIdentity result;
+        if (key.id.valid()) {
+            const auto* base = vhdl_base_type_definition(design_, key.id);
+            if (base == nullptr) {
+                return result;
+            }
+            result.kind = Kind::declared;
+            result.declared = base->id;
+            return result;
+        }
+        if (key.builtin.empty()) {
+            return result;
+        }
+        if (key.builtin == universal_integer || key.builtin == universal_real) {
+            result.kind = key.builtin == universal_integer ? Kind::universal_integer
+                                                           : Kind::universal_real;
+            return result;
+        }
+        const auto symbol = support::vhdl_symbol(key.builtin);
+        if (const auto row = standard_type_row(symbol)) {
+            result.kind = Kind::standard;
+            result.standard = *row;
+            return result;
+        }
+        const auto edition = scope_edition(scope);
+        if (!native_types_built_) {
+            build_native_types();
+        }
+        const auto found = native_types_.find({ symbol.index(), edition });
+        if (found != native_types_.end()) {
+            result.kind = Kind::declared;
+            result.declared = found->second;
+        }
+        return result;
+    }
+
+    // The STANDARD type row a key of this pass names (16.3): the rows of
+    // the catalog's types, interned once.
+    [[nodiscard]] static std::optional<support::StandardDeclaration> standard_type_row(
+        const support::SymbolId symbol)
+    {
+        static const auto table = [] {
+            std::unordered_map<std::uint32_t, support::StandardDeclaration> rows;
+            const auto catalog = vhdl_standard_catalog();
+            for (std::size_t value = 1U; value <= support::standard_declaration_count(); ++value) {
+                const auto row = static_cast<support::StandardDeclaration>(value);
+                const auto index = support::catalog_row(row);
+                if (index < catalog.size() && catalog[index].kind == 't') {
+                    rows.emplace(support::vhdl_symbol(support::name(row)).index(), row);
+                }
+            }
+            return rows;
+        }();
+        const auto found = table.find(symbol.index());
+        if (found == table.end()) {
+            return std::nullopt;
+        }
+        return found->second;
+    }
+
+    [[nodiscard]] std::uint16_t scope_edition(const ScopeId scope) const
+    {
+        const auto* unit = design_.vhdl_scope_unit(scope);
+        if (unit == nullptr) {
+            return 0U;
+        }
+        const auto standard = project::parse_vhdl_standard(unit->standard);
+        return standard ? standard_year(*standard) : std::uint16_t { };
+    }
+
+    // (key symbol, edition) -> the base type of the design's native type
+    // declarations with that key (16.4, 16.7, 16.8): a resolved subtype
+    // and its unresolved type share one; where two base types share a key
+    // (1993/2002 STD_LOGIC_VECTOR beside STD_ULOGIC_VECTOR) the unresolved
+    // one's.
+    void build_native_types()
+    {
+        native_types_built_ = true;
+        for (const auto& definition : design_.vhdl_hir.types()) {
+            const auto* entry = vhdl_native_type_of(design_, definition.id);
+            if (entry == nullptr) {
+                continue;
+            }
+            const auto key = native_type_key(*entry);
+            const auto* base = vhdl_base_type_definition(design_, definition.id);
+            const auto* owner = declaration(definition.declaration);
+            if (key.empty() || base == nullptr || owner == nullptr) {
+                continue;
+            }
+            const std::pair index { support::vhdl_symbol(key).index(), scope_edition(owner->scope) };
+            const auto provided = vhdl_native_provided_type(*entry);
+            const bool unresolved = provided == vhdl::ProvidedType::std_ulogic
+                || provided == vhdl::ProvidedType::std_ulogic_vector;
+            const auto [found, inserted] = native_types_.emplace(index, base->id);
+            if (!inserted && unresolved) {
+                found->second = base->id;
+            }
+        }
+    }
+
     void annotate_type(const ExpressionId id, const TypeKey& key)
     {
         const auto found = expression_index_.find(id.value());
@@ -920,12 +1029,10 @@ private:
             return;
         }
         auto& target = (*expressions_)[found->second];
-        if (key.id.valid()) {
-            target.resolved_type = key.id;
-        } else if (key.pseudo == PseudoType::ambiguous_literal) {
+        if (key.pseudo == PseudoType::ambiguous_literal) {
             target.ambiguous_literal = true;
         } else {
-            target.resolved_builtin_type = key.builtin;
+            target.type = identity(key, target.scope);
         }
         if (trace_) {
             std::fprintf(stderr,
@@ -2901,6 +3008,14 @@ private:
     }
 
     CompiledDesign& design_;
+    struct NativeKeyHash {
+        std::size_t operator()(const std::pair<std::uint32_t, std::uint16_t>& key) const noexcept
+        {
+            return std::hash<std::uint64_t> { }((static_cast<std::uint64_t>(key.first) << 16U) | key.second);
+        }
+    };
+    std::unordered_map<std::pair<std::uint32_t, std::uint16_t>, TypeId, NativeKeyHash> native_types_;
+    bool native_types_built_ { };
     bool trace_ { };
     std::vector<vhdl::Expression>* expressions_ { };
     std::vector<vhdl::Statement>* statements_ { };

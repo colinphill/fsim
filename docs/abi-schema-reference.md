@@ -208,7 +208,10 @@ model `none`; enabled foundation coverage uses
 rejected directly.
 
 The compiled-HIR bundle is schema 14 and embeds semantic schema 9,
-SystemVerilog HIR schema 46, and VHDL HIR schema 24. VHDL HIR schema 24
+SystemVerilog HIR schema 46, and VHDL HIR schema 25. VHDL HIR schema 25
+keeps one stored expression type, `Expression::type` (the link resolution's
+`resolved_type` and `resolved_builtin_type` are removed, and with them the
+`expression_resolved_type` anchored slot). VHDL HIR schema 24
 records the compile-time typing of every expression (`Expression::type`,
 `interpretation`, `resolved_standard`, `predefined_operation`,
 `predefined_attribute`, `resolved_formals`; `Statement::resolved_formals`;
