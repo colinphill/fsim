@@ -163,8 +163,12 @@ int build_uvm(const std::string_view release_text,
         if (!bytes) {
             return fail("cannot read '" + fsim::support::path_to_utf8(entry->path()) + "'");
         }
+        // The iterator spells entries below Windows' extended-length root
+        // (\\?\D:\...), which has another root name than kit_src: relate
+        // the entry's ordinary spelling to kit_src.
         const auto copy = output / "src"
-            / entry->path().lexically_relative(kit_src);
+            / fsim::support::native_fs::ordinary_entry_path(kit_src, entry->path())
+                  .lexically_relative(kit_src);
         std::error_code create;
         fsim::support::native_fs::create_directories(copy.parent_path(), create);
         auto stream = fsim::support::native_fs::open_ofstream(
