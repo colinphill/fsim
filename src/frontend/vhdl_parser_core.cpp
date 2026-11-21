@@ -1370,14 +1370,19 @@ Type VhdlParser::parse_vhdl_type(const bool allow_integer,
     if (!type.vhdl_unspecified && begin < tokens_.size()
         && tokens_[begin].kind == TokenKind::Identifier) {
         const auto end = position();
-        auto written = vhdl_name(tokens_[begin].text);
+        // An extended identifier keeps its written form (15.4.3): decoded,
+        // `\T\` would denote the basic identifier T.
+        const auto part = [&](const std::string& text) {
+            return text.starts_with('\\') ? text : vhdl_name(text);
+        };
+        auto written = part(tokens_[begin].text);
         auto last = tokens_[begin].span;
         for (auto index = begin + 1U; index + 1U < end
              && tokens_[index].kind == TokenKind::Dot
              && tokens_[index + 1U].kind == TokenKind::Identifier;
              index += 2U) {
             written += '.';
-            written += vhdl_name(tokens_[index + 1U].text);
+            written += part(tokens_[index + 1U].text);
             last = tokens_[index + 1U].span;
         }
         type.vhdl_written_type_mark = std::move(written);

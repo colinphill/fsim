@@ -289,11 +289,117 @@ private:
             begin, dot == std::string::npos ? std::string::npos : dot - begin);
     }
 
-    void resolve(const NameSite& site)
+    /// The scope `name` is resolved in (12.1, 12.3, 12.4). A name the front
+    /// end copied from another declaration (the element subtypes of a mode
+    /// view, 6.5.2; the value of a user attribute, 7.2; the subtype of an
+    /// implicit formal-conversion signal, 6.5.7.1) keeps the text position of
+    /// the declaration it was written in, and denotes what is visible there:
+    /// the innermost scope of the unit whose text holds that position, unless
+    /// that scope encloses the scope the copy is used in.
+    [[nodiscard]] ScopeId scope_of_source(
+        const NameSite& site, const vhdl::Name& name) const
     {
-        if (site.name == nullptr) {
+        if (site.role == NameRole::use_clause
+            || site.role == NameRole::specification_component) {
+            return site.scope;
+        }
+        const auto begin = regions_.begin(name.source);
+        if (!begin.ordered) {
+            return site.scope;
+        }
+        const auto within = [&](const SourceSpanId span) {
+            const auto from = regions_.begin(span);
+            const auto to = regions_.end(span);
+            return from.ordered && from.file == begin.file
+                && from.offset <= begin.offset && begin.offset <= to.offset;
+        };
+        // A component declaration's region (its local generics and ports,
+        // 4.5): the region a binding indication's actuals are resolved in
+        // (7.3.2.2, 7.3.2.3), though their text is the configuration
+        // specification's.
+        // The HIR gives a component declaration a nested scope with the
+        // declaration's own text (a block with only generics is no
+        // component: its generic map actuals belong to the enclosing region,
+        // 11.2).
+        const auto component_region = [&](const ScopeId candidate) {
+            const auto* const nested = design_.find_scope(candidate);
+            if (nested == nullptr || !nested->parent) {
+                return false;
+            }
+            const auto* const parent = regions_.find(*nested->parent);
+            if (parent == nullptr) {
+                return false;
+            }
+            return std::ranges::any_of(parent->declared, [&](const auto& entry) {
+                return std::ranges::any_of(entry.second, [&](const DeclarationId id) {
+                    const auto view = design_.find_declaration(id);
+                    return view && view->vhdl != nullptr
+                        && view->vhdl->form == vhdl::DeclarationForm::component
+                        && view->vhdl->source == nested->source;
+                });
+            });
+        };
+        if (component_region(site.scope)) {
+            return site.scope;
+        }
+        const auto* const scope = design_.find_scope(site.scope);
+        // A name written in the scope itself is resolved there (also the
+        // actuals of a block's generic map, resolved in the enclosing
+        // region); one whose text a nested component declaration holds (the
+        // port subtype of a component, which an implicit formal-conversion
+        // signal of the architecture copies, 6.5.7.1) was written in that
+        // component's region.
+        const auto holder = regions_.child_scope_holding(site.scope, name.source);
+        if (scope == nullptr
+            || (within(scope->source) && !(holder && component_region(*holder)))) {
+            return site.scope;
+        }
+        const auto* owner = regions_.unit_of(site.scope);
+        if (owner == nullptr) {
+            return site.scope;
+        }
+        if (!within(owner->source)) {
+            // Another design unit: the smallest one holding the position.
+            const vhdl::Unit* best = nullptr;
+            std::uint64_t best_width = 0;
+            for (const auto& unit : design_.vhdl_hir.units()) {
+                if (!unit.id.valid() || !within(unit.source)) {
+                    continue;
+                }
+                const auto width = regions_.end(unit.source).offset
+                    - regions_.begin(unit.source).offset;
+                if (best == nullptr || width < best_width) {
+                    best = &unit;
+                    best_width = width;
+                }
+            }
+            if (best == nullptr) {
+                return site.scope;
+            }
+            owner = best;
+        }
+        const auto written = regions_.innermost_scope(*owner, name.source);
+        std::optional<ScopeId> current = site.scope;
+        for (std::size_t steps = 0; current && steps < 4096U; ++steps) {
+            if (*current == written) {
+                return site.scope;
+            }
+            const auto* const region = regions_.find(*current);
+            if (region == nullptr) {
+                break;
+            }
+            current = region->enclosing;
+        }
+        return written;
+    }
+
+    void resolve(const NameSite& written_at)
+    {
+        if (written_at.name == nullptr) {
             return;
         }
+        NameSite site = written_at;
+        site.scope = scope_of_source(written_at, *written_at.name);
         vhdl::Name& name = *site.name;
         if (site.instance != nullptr && !site.instance->component
             && !site.instance->configuration

@@ -9,6 +9,7 @@
 #include "fsim/support/vhdl_standard_enumeration.hpp"
 
 #include <algorithm>
+#include <set>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -16,6 +17,7 @@
 #include <initializer_list>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 // Declarative regions of a VHDL design as symbol tables (gate BD build D3,
@@ -114,6 +116,10 @@ namespace {
         return result;
     case vhdl::TypeForm::record:
         add({ "=", "/=" });
+        if (year >= 2019U) {
+            // 1076-2019 5.3.3.3: TO_STRING of a representable record type.
+            add({ "to_string" });
+        }
         return result;
     case vhdl::TypeForm::scalar:
         add({ "=", "/=", "<", "<=", ">", ">=", "+", "-", "*", "/", "abs",
@@ -152,7 +158,10 @@ namespace {
     }
     if (year >= 2008U) {
         add({ "minimum", "maximum" });
-        if (form != vhdl::TypeForm::array || one_dimensional) {
+        // 1076-2008 5.3.2.4: TO_STRING of a one-dimensional array of a
+        // character type; 1076-2019 5.3.2.4: of any representable array
+        // (the profiles decide which).
+        if (form != vhdl::TypeForm::array || one_dimensional || year >= 2019U) {
             add({ "to_string" });
         }
     }
@@ -221,6 +230,9 @@ struct Regions::State {
     /// By vhdl::Unit::id value: the unit's scopes (other than its own) with
     /// the text they span.
     std::unordered_map<std::uint32_t, std::vector<ScopePosition>> scope_positions;
+    /// By scope id value: the text spans of its child scopes (the ones in
+    /// scope_positions), ordered by their beginning.
+    std::unordered_map<std::uint32_t, std::vector<ScopePosition>> child_positions;
     const CompiledDesign* design { };
     const std::vector<SourceSpan>* spans { };
     /// By scope id value; scope invalid for a scope that is not VHDL.
@@ -230,6 +242,9 @@ struct Regions::State {
     std::vector<support::SymbolId> libraries;
     std::vector<std::vector<support::SymbolId>> implicit_libraries;
     std::unordered_map<std::uint64_t, std::vector<UnitId>> primaries;
+    /// By the value of an enclosing package unit's id: the library units the
+    /// parser made of the package declarations nested in its text (4.7).
+    std::unordered_map<std::uint32_t, std::vector<UnitId>> nested_packages;
     support::SymbolId std_library;
     support::SymbolId work_library;
     support::SymbolId all_symbol;
@@ -298,6 +313,25 @@ struct Regions::State {
             }
             table[designator_symbol(name).index()].push_back(entry);
         }
+        // 1076-2008 5.3.2.4: STANDARD declares aliases of BIT_VECTOR's
+        // TO_STRING, TO_OSTRING and TO_HSTRING (`alias TO_BSTRING is
+        // TO_STRING [BIT_VECTOR return STRING]`): the alias designates that
+        // function, so its entry is the function's row under another
+        // designator.
+        using Row = support::StandardDeclaration;
+        for (const auto& [alias, target] :
+            std::initializer_list<std::pair<std::string_view, Row>> {
+                { "to_bstring", Row::to_string_bit_vector },
+                { "to_binary_string", Row::to_string_bit_vector },
+                { "to_octal_string", Row::to_ostring_bit_vector },
+                { "to_hex_string", Row::to_hstring_bit_vector } }) {
+            if (support::available(target, year)) {
+                StandardEntry entry;
+                entry.declaration = target;
+                entry.kind = StandardEntry::Kind::function;
+                table[designator_symbol(alias).index()].push_back(entry);
+            }
+        }
         const auto add = [&](const std::string_view type,
                              const std::string_view literal,
                              const StandardEntry::Kind kind) {
@@ -332,6 +366,15 @@ struct Regions::State {
         for (const auto literal : { "file_origin_begin",
                  "file_origin_current", "file_origin_end" }) {
             add("file_origin_kind", literal, StandardEntry::Kind::literal);
+        }
+        if (year >= 2019U) {
+            // 1076-2019 16.3: FILE_OPEN_KIND gains READ_WRITE_MODE (position
+            // 3) and FILE_OPEN_STATE is (STATE_OPEN, STATE_CLOSED).
+            add("file_open_kind", "read_write_mode",
+                StandardEntry::Kind::literal);
+            for (const auto literal : { "state_open", "state_closed" }) {
+                add("file_open_state", literal, StandardEntry::Kind::literal);
+            }
         }
         for (const auto unit : { "fs", "ps", "ns", "us", "ms", "sec", "min",
                  "hr" }) {
@@ -416,6 +459,35 @@ struct Regions::State {
             return nullptr;
         }
         return &regions[scope.value()];
+    }
+
+    /// 4.7, 12.4: a package declared in the declarative part of package P is
+    /// one of P's declarations, so `use L.P.all` (and `use L.P.N` for it)
+    /// makes it potentially visible too. The parser hoists it to a library
+    /// unit of its own (nested_packages); the unit is then made visible by
+    /// the same clause, as `use L.N` would.
+    void add_nested(Region& target, const UseClause& used,
+        const vhdl::Unit& package) const
+    {
+        const auto found = nested_packages.find(package.id.value());
+        if (found == nested_packages.end()) {
+            return;
+        }
+        for (const auto id : found->second) {
+            const auto* const nested = unit_by_id(id);
+            if (nested == nullptr
+                || (used.kind == UseClause::Kind::member
+                    && !(used.member
+                        == unit_symbol(nested->name, nested->extended_name)))) {
+                continue;
+            }
+            UseClause clause = used;
+            clause.kind = UseClause::Kind::unit_name;
+            clause.member = { };
+            clause.unit = nested->id;
+            clause.library = library_of(*nested);
+            target.uses.push_back(clause);
+        }
     }
 
     /// 12.4 and 13.2: `use L.P.X`, `L.P.all`, `L.all`, `L.P`.
@@ -518,6 +590,7 @@ struct Regions::State {
             clause.unit = unit->id;
             clause.library = library_of(*unit);
             target.uses.push_back(clause);
+            add_nested(target, clause, *unit);
         }
     }
 
@@ -615,10 +688,39 @@ struct Regions::State {
                     continue;
                 }
                 const auto begin = point(scope.source, false);
-                if (begin.ordered) {
-                    candidates.push_back(
-                        { scope.id, begin, point(scope.source, true) });
+                if (!begin.ordered) {
+                    continue;
                 }
+                const auto end = point(scope.source, true);
+                // A scope that spans exactly what its parent spans holds no
+                // text of its own: the else branch the HIR builder makes of
+                // every if-generate (11.8) is such a scope, beside the
+                // region whose declarative part a clause belongs to.
+                const auto* const parent = scope.parent
+                    ? design->find_scope(*scope.parent) : nullptr;
+                if (parent != nullptr && parent->id != unit.scope) {
+                    const auto parent_begin = point(parent->source, false);
+                    const auto parent_end = point(parent->source, true);
+                    if (parent_begin.ordered && parent_begin.file == begin.file
+                        && parent_begin.offset == begin.offset
+                        && parent_end.offset == end.offset) {
+                        continue;
+                    }
+                }
+                candidates.push_back({ scope.id, begin, end });
+                if (scope.parent) {
+                    child_positions[scope.parent->value()].push_back(
+                        { scope.id, begin, end });
+                }
+            }
+        }
+        std::set<std::uint32_t> parents;
+        for (const auto& candidate : candidates) {
+            const auto* const scope = design->find_scope(candidate.scope);
+            if (scope != nullptr && scope->parent
+                && parents.insert(scope->parent->value()).second) {
+                std::ranges::sort(child_positions[scope->parent->value()], {},
+                    [](const ScopePosition& child) { return child.begin.offset; });
             }
         }
         scope_positions[unit.id.value()] = candidates;
@@ -744,6 +846,76 @@ struct Regions::State {
             }
         }
 
+        // 13.1: a library holds one primary unit of a name. Analyzing a unit
+        // replaces the unit of the same library and name the library already
+        // holds (it is analyzed, the new one is not yet), whatever its kind.
+        for (auto& entry : primaries) {
+            auto& ids = entry.second;
+            if (ids.size() < 2U) {
+                continue;
+            }
+            const auto all = ids;
+            std::erase_if(ids, [&](const UnitId id) {
+                const auto* const old = unit_by_id(id);
+                return old != nullptr && old->analyzed
+                    && std::ranges::any_of(all, [&](const UnitId other) {
+                           const auto* const fresh = unit_by_id(other);
+                           return fresh != nullptr && !fresh->analyzed
+                               && fresh->standard == old->standard;
+                       });
+            });
+        }
+
+        // 4.7: the packages nested in a package's declarative part. The
+        // parser makes a library unit of each, whose text lies within the
+        // enclosing package's: sorted by position, the innermost package
+        // unit whose text contains a package unit's is its enclosing one.
+        {
+            struct Placed {
+                const vhdl::Unit* unit;
+                TextPoint begin;
+                TextPoint end;
+            };
+            std::vector<Placed> placed;
+            for (const auto& unit : hir_units) {
+                if (!unit.id.valid() || unit.kind != vhdl::UnitKind::package) {
+                    continue;
+                }
+                const auto begin = point(unit.source, false);
+                if (begin.ordered) {
+                    placed.push_back({ &unit, begin, point(unit.source, true) });
+                }
+            }
+            std::ranges::sort(placed, [](const Placed& left, const Placed& right) {
+                if (left.begin.file != right.begin.file) {
+                    return left.begin.file < right.begin.file;
+                }
+                if (left.begin.offset != right.begin.offset) {
+                    return left.begin.offset < right.begin.offset;
+                }
+                if (left.end.offset != right.end.offset) {
+                    return left.end.offset > right.end.offset;
+                }
+                return left.unit->id < right.unit->id;
+            });
+            std::vector<const Placed*> stack;
+            for (const auto& current : placed) {
+                while (!stack.empty()
+                    && (stack.back()->begin.file != current.begin.file
+                        || stack.back()->end.offset < current.end.offset)) {
+                    stack.pop_back();
+                }
+                if (!stack.empty()
+                    && (stack.back()->begin.offset != current.begin.offset
+                        || stack.back()->end.offset != current.end.offset)
+                    && is_primary(*current.unit)) {
+                    nested_packages[stack.back()->unit->id.value()].push_back(
+                        current.unit->id);
+                }
+                stack.push_back(&current);
+            }
+        }
+
         // A SystemVerilog module, interface or program of a library is a
         // design entity a VHDL instance or binding may name (mixed
         // contract, IEEE 1076-2019 13.1 / UG900): a primary unit of its
@@ -858,6 +1030,128 @@ struct Regions::State {
                      type->array_dimensions.size() == 1U)) {
                 region->implicit[support::vhdl_symbol(designator).index()]
                     .push_back(declaration.id);
+            }
+        }
+
+        // 5.4.3, 6.5.3: an interface type that is an access type (`type T is
+        // access ...`, 2019) has the operations of an access type, which a
+        // generic type has no type definition to declare.
+        for (const auto& declaration : source_design.vhdl_hir.declarations()) {
+            if (declaration.form != vhdl::DeclarationForm::generic_type
+                || !declaration.subtype
+                || declaration.subtype->unspecified_class
+                    != vhdl::UnspecifiedTypeClass::access) {
+                continue;
+            }
+            auto* region = region_of(declaration.scope);
+            const auto* const unit
+                = region == nullptr ? nullptr : unit_by_id(region->unit);
+            const auto standard = unit == nullptr
+                ? std::optional<project::VhdlStandard> { }
+                : project::parse_vhdl_standard(unit->standard);
+            if (!standard) {
+                continue;
+            }
+            for (const auto designator : implicit_designators(
+                     vhdl::TypeForm::access, standard_year(*standard), false)) {
+                region->implicit[support::vhdl_symbol(designator).index()]
+                    .push_back(declaration.id);
+            }
+        }
+
+        // 6.6.3: an alias of a type also declares the literals of an
+        // enumeration type and the units of a physical type (an alias of an
+        // enumeration literal or unit is implicitly declared for each). The
+        // alias is kept as a subtype declaration of that type's subtype
+        // indication, which names the declarations to take; one whose type
+        // is declared in this region or one enclosing it declares them
+        // already.
+        for (const auto& declaration : source_design.vhdl_hir.declarations()) {
+            if (declaration.form != vhdl::DeclarationForm::subtype
+                || !declaration.declared_type) {
+                continue;
+            }
+            auto* region = region_of(declaration.scope);
+            const auto* const definition
+                = source_design.vhdl_hir.find_type(*declaration.declared_type);
+            if (region == nullptr || definition == nullptr
+                || definition->form != vhdl::TypeForm::subtype
+                || definition->scalar_type || definition->scalar_range
+                || !definition->base.constraints.empty()
+                || !definition->base.resolution_function.text().empty()) {
+                continue;
+            }
+            const vhdl::TypeDefinition* target = definition;
+            for (std::size_t steps { }; target != nullptr
+                 && target->form == vhdl::TypeForm::subtype
+                 && !target->scalar_type && steps < 64U; ++steps) {
+                target = source_design.vhdl_hir.find_type(
+                    target->base.type_mark.target);
+            }
+            if (target == nullptr
+                || (target->form != vhdl::TypeForm::enumeration
+                    && target->form != vhdl::TypeForm::physical)) {
+                continue;
+            }
+            const auto owner = source_design.find_declaration(target->declaration);
+            if (!owner || owner->vhdl == nullptr) {
+                continue;
+            }
+            bool declared_here { };
+            std::optional<ScopeId> scope = region->scope;
+            for (std::size_t steps { }; scope && steps < 256U; ++steps) {
+                if (*scope == owner->vhdl->scope) {
+                    declared_here = true;
+                    break;
+                }
+                const auto* const enclosing = region_of(*scope);
+                scope = enclosing == nullptr ? std::nullopt : enclosing->enclosing;
+            }
+            if (declared_here) {
+                continue;
+            }
+            std::vector<DeclarationId> taken;
+            for (const auto& literal : target->enumeration_literals) {
+                taken.push_back(literal.declaration);
+            }
+            for (const auto& unit : target->physical_units) {
+                taken.push_back(unit.declaration);
+            }
+            for (const auto id : taken) {
+                const auto view = source_design.find_declaration(id);
+                if (!view || view->vhdl == nullptr) {
+                    continue;
+                }
+                const auto symbol = declaration_symbol(*view->vhdl);
+                if (!symbol.valid()) {
+                    continue;
+                }
+                auto& declared = region->declared[symbol.index()];
+                if (std::ranges::find(declared, id) == declared.end()) {
+                    declared.push_back(id);
+                }
+            }
+            // 6.6.3 e): implicit alias declarations for each predefined
+            // operation of the type follow the alias, so they are directly
+            // visible here though the type's own are not (they are declared
+            // in the type's region). The alias denotes the type, so its
+            // declaration stands for the operations (Operations::implicit
+            // takes the type of the declaration).
+            const auto* const unit = unit_by_id(region->unit);
+            const auto standard = unit == nullptr
+                ? std::optional<project::VhdlStandard> { }
+                : project::parse_vhdl_standard(unit->standard);
+            if (!standard) {
+                continue;
+            }
+            for (const auto designator : implicit_designators(
+                     target->form, standard_year(*standard), false)) {
+                auto& operations
+                    = region->implicit[support::vhdl_symbol(designator).index()];
+                if (std::ranges::find(operations, declaration.id)
+                    == operations.end()) {
+                    operations.push_back(declaration.id);
+                }
             }
         }
 
@@ -984,7 +1278,107 @@ struct Regions::State {
                     region->uses.push_back(clause);
                 }
             }
+            // 4.7: within a package, a package nested in it is visible from
+            // the end of its declaration (the parser made a library unit of
+            // it).
+            if (const auto nested = nested_packages.find(unit.id.value());
+                nested != nested_packages.end()) {
+                for (const auto id : nested->second) {
+                    const auto* const inner = unit_by_id(id);
+                    if (inner == nullptr) {
+                        continue;
+                    }
+                    UseClause clause;
+                    clause.kind = UseClause::Kind::unit_name;
+                    clause.unit = inner->id;
+                    clause.library = library_of(*inner);
+                    clause.after = point(inner->source, true);
+                    clause.source = inner->source;
+                    region->uses.push_back(clause);
+                }
+            }
             place_context(unit, unit_scopes, scopes);
+        }
+
+        merge_protected_regions(source_design);
+    }
+
+    // 12.1 (2019 o): a protected type declaration and its body form one
+    // declarative region, so the body sees the declarations of the protected
+    // type declaration (its private variables, aliases, types and the
+    // subprograms it declares). The body's region takes the declaration's
+    // entries ahead of its own; the declaration's region stays as it is.
+    void merge_protected_regions(const CompiledDesign& source_design)
+    {
+        for (const auto& body_type : source_design.vhdl_hir.types()) {
+            if (body_type.form != vhdl::TypeForm::protected_body) {
+                continue;
+            }
+            const auto body = source_design.find_declaration(body_type.declaration);
+            if (!body || body->vhdl == nullptr || !body->vhdl->nested_scope) {
+                continue;
+            }
+            auto* const target = region_of(*body->vhdl->nested_scope);
+            const auto symbol = declaration_symbol(*body->vhdl);
+            if (target == nullptr || !symbol.valid()) {
+                continue;
+            }
+            // The protected type declaration of the same name in the region
+            // the body's declaration is in, or one it extends (12.1 c, d).
+            const Region* declaration_region = nullptr;
+            std::optional<ScopeId> scope = body->vhdl->scope;
+            for (std::size_t steps { }; scope && steps < 256U
+                 && declaration_region == nullptr; ++steps) {
+                const auto* const region = region_of(*scope);
+                if (region == nullptr) {
+                    break;
+                }
+                if (const auto found = region->declared.find(symbol.index());
+                    found != region->declared.end()) {
+                    for (const auto id : found->second) {
+                        const auto view = source_design.find_declaration(id);
+                        if (!view || view->vhdl == nullptr
+                            || !view->vhdl->declared_type
+                            || !view->vhdl->nested_scope) {
+                            continue;
+                        }
+                        const auto* const type = source_design.vhdl_hir.find_type(
+                            *view->vhdl->declared_type);
+                        if (type != nullptr
+                            && type->form == vhdl::TypeForm::protected_type) {
+                            declaration_region
+                                = region_of(*view->vhdl->nested_scope);
+                            break;
+                        }
+                    }
+                }
+                scope = region->enclosing;
+            }
+            if (declaration_region == nullptr || declaration_region == target) {
+                continue;
+            }
+            const auto prepend = [](auto& into, const auto& from) {
+                for (const auto& [key, ids] : from) {
+                    auto& merged = into[key];
+                    std::vector<DeclarationId> front;
+                    for (const auto id : ids) {
+                        if (std::ranges::find(merged, id) == merged.end()) {
+                            front.push_back(id);
+                        }
+                    }
+                    merged.insert(merged.begin(), front.begin(), front.end());
+                }
+            };
+            prepend(target->declared, declaration_region->declared);
+            prepend(target->implicit, declaration_region->implicit);
+            for (const auto& [key, overloadable] : declaration_region->undeclared) {
+                target->undeclared.emplace(key, overloadable);
+            }
+            target->uses.insert(target->uses.begin(),
+                declaration_region->uses.begin(), declaration_region->uses.end());
+            target->libraries.insert(target->libraries.begin(),
+                declaration_region->libraries.begin(),
+                declaration_region->libraries.end());
         }
     }
 };
@@ -1085,6 +1479,29 @@ ScopeId Regions::innermost_scope(
         }
     }
     return best != nullptr ? best->scope : result;
+}
+
+std::optional<ScopeId> Regions::child_scope_holding(
+    const ScopeId scope, const SourceSpanId span) const
+{
+    const auto begin = this->begin(span);
+    const auto found = state_->child_positions.find(scope.value());
+    if (found == state_->child_positions.end() || !begin.ordered) {
+        return std::nullopt;
+    }
+    const auto& children = found->second;
+    // The last child beginning at or before the position holds it when it
+    // reaches it (the children of one scope do not overlap).
+    auto next = std::ranges::upper_bound(children, begin.offset, {},
+        [](const auto& child) { return child.begin.offset; });
+    if (next == children.begin()) {
+        return std::nullopt;
+    }
+    --next;
+    if (next->begin.file == begin.file && begin.offset <= next->end.offset) {
+        return next->scope;
+    }
+    return std::nullopt;
 }
 
 std::optional<ScopeId> Regions::unit_scope(const UnitId unit) const noexcept

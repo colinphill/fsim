@@ -106,6 +106,7 @@ struct StandardLiterals {
     std::unordered_map<std::uint16_t, std::unordered_set<std::uint32_t>> by_type;
     std::unordered_set<std::uint32_t> character_1987;
     std::unordered_set<std::uint32_t> character_1993;
+    std::uint32_t file_open_kind_2019 { };
 };
 
 [[nodiscard]] StandardLiterals build_standard_literals()
@@ -130,6 +131,9 @@ struct StandardLiterals {
             "file_origin_begin", "file_origin_current", "file_origin_end" });
     add_all(SD::file_open_state,
         std::array<std::string_view, 2U> { "state_open", "state_closed" });
+    // 2019 16.3: FILE_OPEN_KIND's fourth literal (position 3); the editions
+    // before 2019 have three (standard_has_literal).
+    result.file_open_kind_2019 = support::vhdl_symbol("read_write_mode").index();
 
     const auto add_character = [&](const unsigned code, const bool in_1987) {
         std::string text;
@@ -171,6 +175,10 @@ struct StandardLiterals {
         const auto& set = year == 1987U ? tables.character_1987
                                         : tables.character_1993;
         return set.contains(literal.index());
+    }
+    if (type == SD::file_open_kind && year >= 2019U
+        && literal.index() == tables.file_open_kind_2019) {
+        return true;
     }
     const auto found = tables.by_type.find(static_cast<std::uint16_t>(type));
     return found != tables.by_type.end() && found->second.contains(literal.index());
@@ -254,6 +262,44 @@ public:
         const int depth) const
     {
         check(depth);
+        // The written mark D3 resolved where it is written (12.3, 12.4: a
+        // use clause later in the region is not yet in force) denotes the
+        // type; the HIR builder's target is found through every use clause
+        // of the unit's context, whatever its position.
+        // A mark whose stored result is an object prefix (selected_parts,
+        // `rec.f'subtype`) denotes an element of it, not the prefix itself.
+        // Where both denote the same declaration the target is taken: it
+        // names the definition directly, so a chain of subtypes is not
+        // walked one declaration at a time (no fixed depth, 5.2.2).
+        const auto target_view = subtype.type_mark.target.valid()
+            ? regions_.design().find_type(subtype.type_mark.target)
+            : std::nullopt;
+        const auto target_declaration = target_view && target_view->vhdl != nullptr
+            ? std::optional { target_view->vhdl->declaration }
+            : std::nullopt;
+        const auto disagrees = [&](const vhdl::Name& mark) {
+            if (!target_declaration) {
+                return true;
+            }
+            if (mark.standard != SD::none) {
+                return target_declaration->valid();
+            }
+            return !target_declaration->valid() || *target_declaration != *mark.selected;
+        };
+        if (subtype.written_type_mark && subtype.written_type_mark->analyzed
+            && subtype.written_type_mark->selected_parts == 0U
+            && (subtype.written_type_mark->standard != SD::none
+                || subtype.written_type_mark->selected)
+            && disagrees(*subtype.written_type_mark)) {
+            const auto& mark = *subtype.written_type_mark;
+            if (mark.selected && object_form(
+                    declaration_of(regions_, *mark.selected).form)) {
+                return from_object(declaration_of(regions_, *mark.selected), depth + 1);
+            }
+            if (const auto type = from_name(mark, depth + 1)) {
+                return type;
+            }
+        }
         if (subtype.type_mark.target.valid()) {
             // A target outside the VHDL type definitions (an interface
             // type's placeholder, 6.5.3) is named by the written type mark.
@@ -441,8 +487,17 @@ constexpr int closely_related_limit = 64;
             return false;
         }
         for (std::size_t dimension = 0U; dimension < dimensions; ++dimension) {
-            if (!related(types, types.index(target, dimension),
-                    types.index(operand, dimension), year, depth + 1)) {
+            const auto target_index = types.index(target, dimension);
+            const auto operand_index = types.index(operand, dimension);
+            // A dimension written as a discrete range (`array (1 to 5)`)
+            // names no index type: it is the type of the range's bounds
+            // (5.3.2.2), which only the expression typing core knows. An
+            // index type that is not known here decides nothing (analysis
+            // mode: unknown information reports nothing).
+            if (!target_index || !operand_index) {
+                continue;
+            }
+            if (!related(types, target_index, operand_index, year, depth + 1)) {
                 return false;
             }
         }

@@ -723,6 +723,28 @@ private:
     return result;
 }
 
+// The symbol a scope lookup of `name` compares (IEEE 1800-2023 5.6, 5.6.1,
+// 23.6): only a name written as one identifier is looked up by symbol. An
+// escaped identifier `\bot.r ` is the identifier "bot.r", which the
+// hierarchical reference bot.r (a dotted path into instance bot) must not
+// match; a dotted path is resolved by its parts, never as one identifier.
+[[nodiscard]] inline support::SymbolId systemverilog_lookup_symbol(
+    const sv::Name& name) noexcept
+{
+    const std::string_view spelling { name.spelling };
+    if (spelling.starts_with('\\')) {
+        const auto end = spelling.find_first_of(" \t\n\r\f\v");
+        if (end != std::string_view::npos
+            && spelling.find_first_not_of(" \t\n\r\f\v", end)
+                != std::string_view::npos) {
+            return { };
+        }
+        return name.symbol;
+    }
+    return spelling.find('.') == std::string_view::npos ? name.symbol
+                                                         : support::SymbolId { };
+}
+
 class SystemVerilogHirBuilder final {
 public:
     SystemVerilogHirBuilder(

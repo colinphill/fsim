@@ -20524,6 +20524,18 @@ Lowerer::resolve_hir_vhdl_procedure_call(
                         chosen->body, *actuals, process_scope)))) {
             return *chosen;
         }
+        // A procedure of a native standard package (STD.TEXTIO WRITE, also
+        // through the 2008 alias SWRITE [LINE, STRING, SIDE, WIDTH]) has no
+        // lowered body to bind actuals to (gate BD D2): the stored 12.5
+        // choice decides it, also for an actual such as `"a" & s` that
+        // only its context types (9.3.2, 9.2.5).
+        if (applicable.empty() && chosen != pool.end()) {
+            const auto declaration = specialized_hir_unit_->find_declaration(*stored);
+            if (declaration && declaration->vhdl != nullptr
+                && semantic::vhdl_native_of(*declaration->vhdl) != nullptr) {
+                return *chosen;
+            }
+        }
     }
     if (ambiguous) {
         return std::nullopt;

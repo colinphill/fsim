@@ -573,6 +573,16 @@ class VhdlExecutableBuilder final {
     output.object_class = vh::ObjectClass::constant;
     vh::SubtypeIndication subtype;
     subtype.type_mark = type_reference(integer_type, span, scope);
+    // The parameter's subtype is that of its discrete range (10.10), which
+    // the compile-time typing stores in place of this mark when it decides
+    // the range. A range it leaves undecided (an operator of a projected
+    // package visible, BD2) keeps STANDARD INTEGER: a stored STANDARD row,
+    // no written name (name analysis skips it), as for the representation
+    // of an integer type definition (application_vhdl_hir_types.cpp).
+    vh::Name integer_mark;
+    integer_mark.standard = support::StandardDeclaration::integer;
+    integer_mark.analyzed = true;
+    subtype.written_type_mark = std::move(integer_mark);
     subtype.domain = vh::ValueDomain::integer;
     subtype.signed_value = true;
     const auto owner = std::ranges::find(

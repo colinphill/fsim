@@ -2209,6 +2209,22 @@ void resolve_linked_vhdl_type_marks(CompiledDesign& design)
                 || subtype.type_mark.spelling.empty()) {
                 return;
             }
+            // The analyzed mark names its declaration (12.3, 12.4; anchored
+            // across libraries): a subtype or alias of a type visible only
+            // through a context reference (13.4) binds to that type without
+            // looking its spelling up again.
+            if (subtype.written_type_mark && subtype.written_type_mark->analyzed
+                && subtype.written_type_mark->selected) {
+                const auto marked = design.find_declaration(
+                    *subtype.written_type_mark->selected);
+                if (marked && marked->vhdl != nullptr
+                    && marked->vhdl->declared_type
+                    && *marked->vhdl->declared_type != type.id) {
+                    rebound.push_back(
+                        { position, slot, element, *marked->vhdl->declared_type });
+                    return;
+                }
+            }
             const auto key = std::pair { scope, subtype.type_mark.spelling };
             auto found = resolved.find(key);
             if (found == resolved.end()) {

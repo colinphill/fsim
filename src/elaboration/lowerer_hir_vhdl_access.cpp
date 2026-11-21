@@ -2222,10 +2222,31 @@ bool Lowerer::is_hir_vhdl_access_assignment(
     // is visible in the current scope.
     const auto value = specialized_hir_unit_->find_expression(
         *statement->vhdl->value);
+    // A call of a function returning LINE (a user function, GETENV; 16.4,
+    // 16.5.6) is a LINE value too: the access assignment lowers it as the
+    // string the line designates.
+    // A function name without actuals (`l := mk;`) is a call too (IEEE
+    // 1076-2008 9.3.4): the HIR holds it as a name node.
+    const bool function_value = value && value->vhdl != nullptr
+        && ((value->vhdl->kind == semantic::vhdl::ExpressionKind::call
+                && value->vhdl->marker == support::ExpressionMarker::none)
+            || hir_vhdl_function_name(*statement->vhdl->value));
+    const auto value_subtype = function_value
+        ? hir_vhdl_expression_subtype(*statement->vhdl->value)
+        : std::nullopt;
     const bool supported_line_value = value && value->vhdl != nullptr
-        && value->vhdl->kind == semantic::vhdl::ExpressionKind::call
-        && (value->vhdl->marker == support::ExpressionMarker::vhdl_new_qualified
-            || value->vhdl->marker == support::ExpressionMarker::vhdl_null);
+        && ((value->vhdl->kind == semantic::vhdl::ExpressionKind::call
+                && (value->vhdl->marker
+                        == support::ExpressionMarker::vhdl_new_qualified
+                    || value->vhdl->marker
+                        == support::ExpressionMarker::vhdl_null))
+            || (value_subtype
+                && compiler_owned_textio_line_type(
+                    *specialized_hir_unit_, *value_subtype,
+                    hir_process_scope_,
+                    hir_vhdl_named_type(*specialized_hir_unit_,
+                        *value_subtype,
+                        semantic::vhdl::TypeForm::access))));
     return supported_line_value
         && compiler_owned_textio_line_type(
             *specialized_hir_unit_, *subtype,
@@ -2684,8 +2705,10 @@ bool Lowerer::lower_hir_vhdl_access_assignment(
         && line_binding && line_binding->kind == HirStringBindingKind::local
         && line_binding->local && assigned_line
         && assigned_line->vhdl != nullptr
-        && assigned_line->vhdl->kind
-            == semantic::vhdl::ExpressionKind::call) {
+        && (assigned_line->vhdl->kind
+                == semantic::vhdl::ExpressionKind::call
+            // A function name without actuals is a call (9.3.4).
+            || hir_vhdl_function_name(*statement->vhdl->value))) {
         if (assigned_line->vhdl->marker
             == support::ExpressionMarker::vhdl_new_qualified
             || assigned_line->vhdl->marker

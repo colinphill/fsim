@@ -1867,6 +1867,10 @@ Expression VhdlParser::parse_primary()
                         && arguments[index].operands.empty()) {
                         arguments[index] = build_vhdl_individual_aggregate(
                             parts, arguments[index].span);
+                        // Not a written aggregate (9.3.3): the subelement
+                        // associations of one formal (4.3.2.2, 6.5.7.1).
+                        arguments[index].marker = support::ExpressionMarker::
+                            vhdl_formal_subelements;
                         break;
                     }
                 }

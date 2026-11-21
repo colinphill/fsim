@@ -365,9 +365,11 @@ namespace {
                 }
                 return result;
             }
+            const auto lookup_symbol
+                = systemverilog_hir_detail::systemverilog_lookup_symbol(result);
             auto visible_scope = std::optional<semantic::ScopeId> { scope };
             while (visible_scope) {
-                const auto named = scope_symbols_.named(*visible_scope, result.symbol);
+                const auto named = scope_symbols_.named(*visible_scope, lookup_symbol);
                 result.overloads.insert(
                     result.overloads.end(), named.begin(), named.end());
                 if (!result.overloads.empty()) {
@@ -375,7 +377,7 @@ namespace {
                 }
                 // A loop-generate block's genvar hides outer declarations of
                 // its name (IEEE 1800-2017 27.4).
-                if (genvar_scope(*visible_scope, result.symbol)) {
+                if (genvar_scope(*visible_scope, lookup_symbol)) {
                     return result;
                 }
                 if (append_imported_name_candidates(
@@ -3124,9 +3126,11 @@ namespace {
                 }
                 name.selected.reset();
                 name.overloads.clear();
+                const auto lookup_symbol
+                    = systemverilog_hir_detail::systemverilog_lookup_symbol(name);
                 auto visible_scope = std::optional<semantic::ScopeId> { item.scope };
                 while (visible_scope) {
-                    const auto named = scope_symbols_.named(*visible_scope, name.symbol);
+                    const auto named = scope_symbols_.named(*visible_scope, lookup_symbol);
                     name.overloads.insert(
                         name.overloads.end(), named.begin(), named.end());
                     if (!name.overloads.empty()) {
@@ -3134,7 +3138,7 @@ namespace {
                     }
                     // A loop-generate genvar hides outer declarations of its
                     // name (IEEE 1800-2017 27.4).
-                    if (genvar_scope(*visible_scope, name.symbol)) {
+                    if (genvar_scope(*visible_scope, lookup_symbol)) {
                         break;
                     }
                     if (append_imported_name_candidates(

@@ -4927,8 +4927,17 @@ provided_type_of_stored_identity(
                     const auto element_definition
                         = specialization.find_type(
                             element_subtype.type_mark.target);
+                    // A native declaration (UNSIGNED, STD_LOGIC_VECTOR of
+                    // the standard packages) is its own vector metadata
+                    // above, where the written constraints, also those that
+                    // fold only with an instance's generics, apply to it;
+                    // its base subtype carries no value domain to place
+                    // them (IEEE 1076-2019 5.3.2.2, 16.7).
                     if (element_definition
                         && element_definition->vhdl != nullptr
+                        && compiled_vhdl_native_type_entry(
+                               specialization, *element_definition->vhdl)
+                            == nullptr
                         && (element_definition->vhdl->form
                                 == TypeForm::subtype
                             || element_definition->vhdl->form
@@ -26707,7 +26716,15 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
             // A composite generic that keeps its default takes the default's
             // value when its region is elaborated (IEEE 1076-2019 14.3.2,
             // 14.4.2.1), a read-only signal that VHPI and name reads share.
-            if (actual == actuals.end()
+            // A default that folds statically is recorded as an actual whose
+            // expression is the declaration's own default and that holds no
+            // elaborated bits: it keeps the default, so it gets the signal
+            // too.
+            const bool default_actual = actual != actuals.end()
+                && !actual->vhdl_elaborated_bits
+                && actual->actual_expression && declaration.initializer
+                && *actual->actual_expression == *declaration.initializer;
+            if ((actual == actuals.end() || default_actual)
                 && !working_declared_signal_names.contains(declaration.name)) {
                 const auto generic_name
                     = working_path + "." + declaration.name;

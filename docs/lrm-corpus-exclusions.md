@@ -13,9 +13,9 @@ Exclusions never count as closures.
 | sv-tests | 0 | 2 |
 | verilator | 63 | 300 |
 | ivtest | 7 | 317 |
-| vests | 2 | 0 |
-| nvc | 225 | 0 |
-| vhdl-compliance | 7 | 0 |
+| vests | 4 | 0 |
+| nvc | 228 | 0 |
+| vhdl-compliance | 8 | 0 |
 
 ## sv-tests
 
@@ -727,6 +727,8 @@ Exclusions never count as closures.
 |---|---|---|
 | `billowitch/non_compliant/analyzer_failure/tc300.vhd` | not run | expects compile-time detection of REAL range overflow; REAL bounds are host-dependent and implementations need not detect predefined floating-point overflow (IEEE 1076-1993 3.1.4/3.1.4.1) |
 | `clifton-labs/compliant/functional/attributes/type/range/simple-range-attribute.vhdl` | not run | applies scalar bound attributes to A'RANGE; RANGE denotes a range, not a scalar type or subtype (IEEE 1076-1993 14.1) |
+| `clifton-labs/compliant/functional/statements/for-loops/dynamic_package_procedure_for_loop.vhdl` | not run | applies 'LEFT/'RIGHT to INPUT'RANGE; RANGE denotes a range, not a prefix of a scalar bound attribute (IEEE 1076-1993 14.1, 1076-2019 16.2) |
+| `clifton-labs/compliant/functional/statements/for-loops/dynamic_procedure_for_loop.vhdl` | not run | applies 'LEFT/'RIGHT to INPUT'RANGE; RANGE denotes a range, not a prefix of a scalar bound attribute (IEEE 1076-1993 14.1, 1076-2019 16.2) |
 
 ## nvc
 
@@ -811,6 +813,7 @@ Exclusions never count as closures.
 | `issue1301` | not run | uses GHDL's foreign attribute form; IEEE 1076-2019 20.2.4 defines only the VHPI and VHPIDIRECT forms |
 | `issue1359` | not run | nvc-specific test kind shell |
 | `issue1362` | not run | nvc-specific test kind wave |
+| `issue1381` | not run | calls TO_STRING with one TIME_RECORD argument; IEEE 1076-2019 5.3.3.3 implicitly declares TO_STRING(VALUE: TIME_RECORD) and STD.ENV declares TO_STRING(TREC: TIME_RECORD; FRAC_DIGITS: INTEGER := 0); they are not homographs (12.3), so the call is ambiguous (12.5): an LRM defect, fsim keeps the strict reading |
 | `issue1386` | not run | nvc-specific test kind cover |
 | `issue1389` | not run | nvc-specific test kind cover |
 | `issue1400` | not run | declares a PSL default clock among concurrent statements |
@@ -923,7 +926,9 @@ Exclusions never count as closures.
 | `siginit2` | not run | nvc-specific test kind plugin |
 | `siginit3` | not run | nvc-specific test kind plugin |
 | `signal28` | not run | nvc-specific test kind relaxed |
+| `stdenv1` | not run | calls TO_STRING with one TIME_RECORD argument; IEEE 1076-2019 5.3.3.3 implicitly declares TO_STRING(VALUE: TIME_RECORD) and STD.ENV declares TO_STRING(TREC: TIME_RECORD; FRAC_DIGITS: INTEGER := 0); they are not homographs (12.3), so the call is ambiguous (12.5): an LRM defect, fsim keeps the strict reading |
 | `stdenv3` | not run | expects the call-path name element in nvc's uppercase form ("P1"); IEEE 1076-2019 16.5.6 does not define its case, and fsim gives basic identifiers in lowercase as E'SIMPLE_NAME does (16.2.5) |
+| `stdenv5` | not run | calls TO_STRING with one TIME_RECORD argument; IEEE 1076-2019 5.3.3.3 implicitly declares TO_STRING(VALUE: TIME_RECORD) and STD.ENV declares TO_STRING(TREC: TIME_RECORD; FRAC_DIGITS: INTEGER := 0); they are not homographs (12.3), so the call is ambiguous (12.5): an LRM defect, fsim keeps the strict reading |
 | `tcl1` | not run | nvc-specific test kind tcl |
 | `tcl2` | not run | nvc-specific test kind tcl |
 | `tcl3` | not run | nvc-specific test kind tcl |
@@ -962,6 +967,7 @@ Exclusions never count as closures.
 
 | case | kind | reason |
 |---|---|---|
+| `vhdl_2019/tb_011.vhd` | not run | calls TO_STRING with one TIME_RECORD argument; IEEE 1076-2019 5.3.3.3 implicitly declares TO_STRING(VALUE: TIME_RECORD) and STD.ENV declares TO_STRING(TREC: TIME_RECORD; FRAC_DIGITS: INTEGER := 0); they are not homographs (12.3), so the call is ambiguous (12.5): an LRM defect, fsim keeps the strict reading |
 | `vhdl_2019/tb_014.vhd` | not run | placeholder testbench that reports an unconditional error |
 | `vhdl_2019/tb_014a.vhd` | not run | placeholder testbench that reports an unconditional error |
 | `vhdl_2019/tb_016.vhd` | not run | instantiates entities that have no architecture (IEEE 1076-2019 7.3.3) |

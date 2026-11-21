@@ -1348,6 +1348,17 @@ PackedLogic4 character_string_value(const std::string_view text)
                     unit, subtype.type_mark.target)) {
                 return semantic::vhdl_native_provided_type(*entry);
             }
+            // A mark that denotes a declaration of the design (a user array
+            // that merely shares a library type's name) is that type, not
+            // the library one (IEEE 1076-2019 12.3, 6.3): a stamp left by
+            // an earlier pass does not make it a provided type.
+            if (const auto type = unit.find_type(subtype.type_mark.target);
+                type && type->vhdl != nullptr
+                && type->vhdl->declaration.valid()
+                && type->vhdl->form != semantic::vhdl::TypeForm::subtype
+                && type->vhdl->form != semantic::vhdl::TypeForm::alias) {
+                return semantic::vhdl::ProvidedType::none;
+            }
         }
         return subtype.provided_type;
     }
@@ -23336,9 +23347,19 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             if (!stored_array_type
                 && resolver_for_mark.vhdl_scope_analyzed(
                     expression->vhdl->scope)) {
-                semantic::note_vhdl_unstored_reference(
-                    "Lowerer::lower_hir_expression_impl", type_spelling,
-                    expression->vhdl->scope);
+                // A mark the analysis stored with an exemption (a member
+                // of a compiler-served package such as STD.REFLECTION's
+                // INDEX, 16.6, which has no HIR declaration) is read from
+                // the name; any other missing result is an internal error.
+                if (stored_mark != nullptr) {
+                    semantic::note_vhdl_unstored_name(
+                        "Lowerer::lower_hir_expression_impl", *stored_mark,
+                        expression->vhdl->scope);
+                } else {
+                    semantic::note_vhdl_unstored_reference(
+                        "Lowerer::lower_hir_expression_impl", type_spelling,
+                        expression->vhdl->scope);
+                }
             }
             const auto resolved_array_type = stored_array_type
                 ? *stored_array_type
@@ -23515,8 +23536,37 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 return lower_hir_vhdl_real_to_integer(*lowered_operand,
                     conversion->width, target_subtype);
             }
-            const auto operand_domain = hir_expression_domain(
+            auto operand_domain = hir_expression_domain(
                 operand, hir_process_scope_);
+            // A one-dimensional array type the design declares is closely
+            // related to another array through its element type (IEEE
+            // 1076-2019 9.3.6): its value domain is its element's, not the
+            // domain the parser guessed from the type's spelling (a user
+            // array named UNSIGNED, 12.3).
+            if (const auto declared_operand
+                = hir_vhdl_expression_subtype(operand);
+                declared_operand && declared_operand->type_mark.target.valid()
+                && semantic::vhdl_native_type_of(*specialized_hir_unit_,
+                       declared_operand->type_mark.target) == nullptr) {
+                const auto declared_array = specialized_hir_unit_->find_type(
+                    semantic::vhdl_root_type(*specialized_hir_unit_,
+                        declared_operand->type_mark.target));
+                if (declared_array && declared_array->vhdl != nullptr
+                    && declared_array->vhdl->declaration.valid()
+                    && declared_array->vhdl->form
+                        == semantic::vhdl::TypeForm::array
+                    && declared_array->vhdl->array_dimensions.size() == 1U
+                    && declared_array->vhdl->element_subtype) {
+                    const auto declared_element = hir_effective_vhdl_subtype(
+                        *declared_array->vhdl->element_subtype);
+                    if (declared_element
+                        && declared_element->domain
+                            != semantic::vhdl::ValueDomain::unknown) {
+                        operand_domain
+                            = vhdl_value_domain(declared_element->domain);
+                    }
+                }
+            }
             auto conversion_compatible = operand_domain
                 && *operand_domain == conversion->domain;
             std::optional<std::pair<semantic::vhdl::SubtypeIndication,
@@ -23648,7 +23698,15 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                     && target_root != operand_root) {
                     conversion_compatible = false;
                 }
-                if (conversion_compatible
+                // A user subtype of a targetless predefined array
+                // (`subtype t is bit_vector(33 downto 0)`) has a stored mark
+                // whose root is the subtype, not an array declaration: its
+                // array identity is the predefined one, and the operands
+                // already matched by length above (IEEE 1076-2019 9.3.6).
+                const bool predefined_pair_decided
+                    = target_predefined_array && operand_predefined_array
+                    && !(target_array && operand_array);
+                if (conversion_compatible && !predefined_pair_decided
                     && (target_array || operand_array)) {
                     conversion_compatible = target_array && operand_array;
                     const auto& target_constraints
@@ -26776,9 +26834,24 @@ report(
                     && rhs_composite->first
                         == semantic::vhdl::TypeForm::record
                     && aggregate_operand(0U));
+            // NUMERIC_STD / NUMERIC_BIT, STD_LOGIC_SIGNED / UNSIGNED and the
+            // fixed and floating point packages declare "=" and "/=" for
+            // their vectors; the declaration hides the predefined array
+            // equality (IEEE 1076-2019 12.3, 16.8.5.3) and compares values
+            // after resizing, so operands of different widths are no
+            // mismatch. A stored operation without a resolved declaration
+            // is the predefined one (12.5).
+            const bool declared_equality
+                = (expression->vhdl != nullptr
+                      && expression->vhdl->resolved_declaration)
+                || numeric_vector(source.operands[0])
+                || numeric_vector(source.operands[1])
+                || is_hir_vhdl_fixed_operator(expression_id)
+                || is_hir_vhdl_float_operator(expression_id);
             if (source.operands.size() == 2U
                 && (source.text == "=" || source.text == "/=")
                 && !record_aggregate_comparison
+                && !declared_equality
                 && (vhdl_array_operand(source.operands[0])
                     || vhdl_array_operand(source.operands[1]))) {
                 const auto comparison_width = [&](const std::size_t index)
@@ -28132,10 +28205,30 @@ report(
             // The array operands of a predefined logical operator must have
             // the same length; the operation fails when it is evaluated
             // (IEEE 1076-2008 9.2.2).
+            // The operands are targetless BIT or BOOLEAN vectors, or the
+            // library arrays of STD_ULOGIC (STD_LOGIC_VECTOR and the like,
+            // IEEE 1076-2019 16.4); a record or an array of another element
+            // type has no such operator here.
+            const auto logical_array_operand = [&](const semantic::ExpressionId operand) {
+                const auto composite = hir_vhdl_composite_root_type(operand);
+                if (!composite) {
+                    return true;
+                }
+                if (composite->first != semantic::vhdl::TypeForm::array) {
+                    return false;
+                }
+                const auto type = specialized_hir_unit_->find_type(composite->second);
+                return type && type->vhdl != nullptr
+                    && type->vhdl->array_dimensions.size() == 1U
+                    && type->vhdl->element_subtype
+                    && type->vhdl->element_subtype->type_mark.target.valid()
+                    && semantic::vhdl_native_logic9(*specialized_hir_unit_,
+                        type->vhdl->element_subtype->type_mark.target);
+            };
             if (vhdl_logical && left_self && right_self && *left_self > 1U
                 && *right_self > 1U && *left_self != *right_self
-                && !hir_vhdl_composite_root_type(source.operands[0])
-                && !hir_vhdl_composite_root_type(source.operands[1])) {
+                && logical_array_operand(source.operands[0])
+                && logical_array_operand(source.operands[1])) {
                 const auto operand = lower_hir_expression(
                     source.operands[0], *left_self);
                 if (!operand) {

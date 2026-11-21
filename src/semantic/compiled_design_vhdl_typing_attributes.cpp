@@ -380,6 +380,25 @@ std::optional<AttributeProfile> attribute_profile(const Types& types,
     }
     switch (prefix) {
     case AttributePrefix::named_entity:
+        // A value that is no object, such as the call of the predefined
+        // function T'IMAGE(X) or a literal, is a prefix appropriate for an
+        // array object (1076-1993 14.1 / 1076-2019 16.1, 16.2.3: a prefix
+        // is a name or a function call): the array attributes take it.
+        if (types.class_of(prefix_type) == TypeClass::array) {
+            switch (attribute) {
+            case PredefinedAttribute::left:
+            case PredefinedAttribute::right:
+            case PredefinedAttribute::high:
+            case PredefinedAttribute::low:
+            case PredefinedAttribute::ascending:
+            case PredefinedAttribute::length:
+            case PredefinedAttribute::range:
+            case PredefinedAttribute::reverse_range:
+                return value_profile(types, attribute, false, prefix_type, dimension, year);
+            default:
+                break;
+            }
+        }
         return std::nullopt;
     case AttributePrefix::type_mark:
         return value_profile(types, attribute, true, prefix_type, dimension, year);

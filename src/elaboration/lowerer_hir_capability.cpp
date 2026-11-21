@@ -22672,6 +22672,20 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
     }
     if (const auto standard = hir_vhdl_standard_function_profile(
             expression_id)) {
+        // A SIZE that is not static here (NUMERIC_STD TO_UNSIGNED of the
+        // function's own `return_value'length`, IEEE 1076-2019 4.2.1, 9.3.4)
+        // gives the result no known width: the profile's one-bit width only
+        // stands in for lowering's diagnostic, never for a bound.
+        if (standard->invalid_numeric_size
+            && standard->kind == HirVhdlStandardFunctionKind::numeric_resize) {
+            const auto& call = specialized_hir_unit_->find_expression(
+                expression_id);
+            if (call && call->vhdl != nullptr
+                && call->vhdl->operands.size() == 2U
+                && !hir_constant_integer(call->vhdl->operands[1])) {
+                return std::nullopt;
+            }
+        }
         return standard->width;
     }
     if (const auto vital = hir_vhdl_vital_expression_profile(
@@ -23742,9 +23756,38 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
             if (source.text == "*" || source.text == "+"
                 || source.text == "-" || source.text == "/"
                 || source.text == "rem" || source.text == "mod") {
-                const auto numeric = [&](const semantic::ExpressionId id) {
+                std::function<bool(semantic::ExpressionId)> numeric;
+                numeric = [&](const semantic::ExpressionId id) -> bool {
                     const auto subtype = hir_vhdl_expression_subtype(id);
                     if (!subtype) {
+                        // A predefined operator result records no subtype.
+                        // Its type is its operand's: a concatenation,
+                        // logical or arithmetic operator of a numeric
+                        // vector yields that vector type, NUMERIC_STD
+                        // declares the arithmetic ones for it (IEEE
+                        // 1076-2019 9.2.2, 9.2.5, 16.8.5.3). A relation
+                        // yields BOOLEAN.
+                        const auto node
+                            = specialized_hir_unit_->find_expression(id);
+                        if (!node || node->vhdl == nullptr) {
+                            return false;
+                        }
+                        const auto& operand_source = *node->vhdl;
+                        if (operand_source.kind
+                                == semantic::vhdl::ExpressionKind::unary
+                            && operand_source.operands.size() == 1U
+                            && operand_source.text != "??") {
+                            return numeric(operand_source.operands.front());
+                        }
+                        if ((operand_source.kind
+                                    == semantic::vhdl::ExpressionKind::binary
+                                || operand_source.kind
+                                    == semantic::vhdl::ExpressionKind::
+                                        concatenation)
+                            && !vhdl_comparison_operator(operand_source.text)) {
+                            return std::ranges::any_of(
+                                operand_source.operands, numeric);
+                        }
                         return false;
                     }
                     using Name = semantic::VhdlNativeName;
@@ -23811,8 +23854,14 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
                         return std::size_t { 0U };
                     }
                     if (left_numeric && right_numeric && left && right) {
-                        return source.text == "*"
-                            ? *left + *right
+                        // "/" returns UNSIGNED(L'LENGTH-1 downto 0) and
+                        // "rem" and "mod" UNSIGNED(R'LENGTH-1 downto 0) of
+                        // two vectors, SIGNED alike (IEEE 1076-2008
+                        // 16.8.5.3, numeric_std "/", "rem", "mod").
+                        return source.text == "*" ? *left + *right
+                            : source.text == "/" ? *left
+                            : source.text == "rem" || source.text == "mod"
+                            ? *right
                             : std::max(*left, *right);
                     }
                     if (left_numeric && right_integer && left) {

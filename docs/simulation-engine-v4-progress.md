@@ -138,6 +138,40 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-11-21: Gate BD closed: VHDL analysis at compile time (names, types, rules), precompiled standard libraries, SystemVerilog lookup through symbols, gate-run fixes (`0ae0b2ba` .. D8, sweeps `d8gg`, `d8gga`)
+
+Gate BD makes `fsim compile` analyze VHDL: names (12.1-12.4), expression types (9.3, 12.5) and the analysis rules are decided once at compile and stored; elaboration reads the stored results (strict: a missing stored result in an analyzed unit is an internal error) instead of resolving by spelling. The owner extended the plan's 8+1 builds to 11+1 (D2 split into D2, D2-sites-2, D2b; D4 into D4a/D4b) and granted the D8 gate-run builds 11 to 17 (d8a..d8g). Items the gate did not finish are in gate BD2 (owner 11-21: no item is cut to BE, every item lands in its scheduled build E1..E9).
+
+**Contents:**
+- **D1 (`0ae0b2ba`):** identifiers interned once by both lexers (`support::SymbolId`: case-folded for VHDL 15.4, exact for SystemVerilog 5.6); `Unit::analyzed` stamp, cross-library anchors `{library unit, declaration ordinal}` rebound by position at link; `StandardDeclaration` generated from the STANDARD catalog with edition gating; TIME'VALUE; kernel strings are fsim-defined (no generated code reads library layouts).
+- **D2 (`75f29c2e`), D2-sites-2 (`13d75ab7`):** STD and IEEE (std_logic_1164, numeric_std/bit, the 2008 `_unsigned` packages, math_real, textio, env) are real declarations, compiled at build time per edition (1987..2019) into managed libraries (`share/fsim/lib/<cache>/vhdl-<edition>/{std,ieee}`) and mapped read-only in every workspace; native bodies bind through generated intrinsic ids, and about 600 spelling sites read the native identity. 1993/2002 STD_LOGIC_VECTOR is a distinct type; 1987 TEXTIO has ENDLINE.
+- **D2b (`89c6f4a3`):** UVM 1.2 and 2020.3.1 precompiled as library `uvm`, mapped by `compile.sv.uvm_release` (default 2020.3.1, `none` for no library), loaded only when a source names `uvm_pkg`; a source package `uvm_pkg` beside a mapped release is FSIM-UVM-LIBRARY-001.
+- **D3 (`04b57942`):** name analysis through region symbol tables: visibility, hiding, homographs, use clauses and expanded names; FSIM-VHDL-NAME-001/002/003 at compile.
+- **D4a (`11f85cb9`), D4b (`d64b9d77`):** expression typing (complete-context overload resolution, universal operands, implicit operations per edition, attributes, named associations); FSIM-VHDL-TYPE-001/002/003 at compile; `Expression::type` is the one stored type.
+- **D5 (`7390c58f`):** SystemVerilog HIR builders look names up through scope symbol indexes; `C::T` through the enclosing class body (8.25.1).
+- **D6' (`0c6490d8`):** elaboration and specialization read stored names, picks and type marks; stored selections are anchored through object projection; strict by default (exemptions by recorded reason: names through package instances, members of projected packages, BD2 V4).
+- **D7 (`48c9d61a`):** the analysis rules run at compile on every analyzed architecture (Validator analysis mode: no rule decided from a generic's value, an actual or unknown bounds), replacing the elaborate-each-architecture check and its whitelist; range direction stored once in the HIR; a package body replacement no longer obsoletes the package's users (13.5).
+- **D8 (this commit, builds 11 to 17):** the D8 gate run of d7 found 88 sweep losses vs `bc7g` and 17 cocotb losses introduced in D2..D5 (build-to-build replays had hidden them); all but the clifton pair were legal sources. Fixed in the typing (bounds, universal ranges, conversions in formal parts, expanded operator names, aliases, generic-type results, 2019 TO_STRING and file literals, a 25 GB compile runaway), the name analysis (synthesized declarations, copied nodes, late use clauses, nested packages, protected body regions), and elaboration (NUMERIC_STD "="/"/=" of different widths had been folded to a constant since D2, the 1164 logical length check, widths, conversions, label prefixes). Every procedure call now uses the compile-time 12.5 pick: the legacy link pass had discarded the typing's procedure picks (nvc issue801). 51 new `tests/fixtures/compliance/d8_*` fixtures, one per root cause. Rule from D8: every corpus replay also compares against the last pushed gate baseline.
+
+**Changed results (each accepted by the owner):** listed per commit (D2-sites-2, D2b, D3, D4a reviewed 11-20; D6', D7, D8 asked before their commits). D8: strict TYPE-002 for one-argument `std.env.to_string(trec)` (2019 5.3.3.3 vs STD.ENV, an LRM defect; nvc issue1381, stdenv1, stdenv5, vhdl-compliance tb_011 excluded); vests clifton `input'range'left` pair excluded (16.2); nvc gensub7, vhdl-compliance tb_099, FILE_OPEN_STATE objects and d8_formal_part_overload deferred to BD2 with held fixtures; BIND-056 skipped for types named through package instances / interface packages (restored in BD2 E3); library name as operand = TYPE-001; dynamic_width pins ELAB-HIR-001; vests tc3006 accepted at compile (D7 c1).
+
+**Gate run** (frozen archive `d8g`): ctest -LE uvm 2370/2370, -L uvm 120/120; targeted replay of the build-16/17 targets first (issue801, issue881, synopsys3, tc154, tc145, tc1905, three fixtures), proven beforehand on a debug-symbol scratch copy (owner 11-21: prove before any build). Sweep `d8gg` vs `bc7g`: no unexplained new failure (only the accepted cases above); vs `d7g` 83 fixed. AOT `d8gga` equals `d8gg` in every suite. Crash audit: bounds22/23 only (pre-existing in bc7). cocotb 2.1 and master, Verilog and VHDL, all pass, +0 -0 against `bc7`. collapse_fuzz 200 seeds, 0 failures, 4183 kept. Windows syntax sweep 1650 TUs, 0 failures.
+
+**Results:** frozen archive `d8g`, BASE `bc7g`/`bc7ga` (AOT `d8gga` is identical to `d8gg`).
+
+| Suite | bc7g passed / in scope | d8gg passed / in scope | Excluded (d8gg) |
+|---|---:|---:|---:|
+| ivtest | 2621 / 2621 | 2621 / 2621 | 290 |
+| nvc | 1257 / 1257 | 1253 / 1254 | 228 |
+| sv-tests | 1496 / 1496 | 1496 / 1496 | 1 |
+| verilator | 2069 / 2069 | 2069 / 2069 | 346 |
+| vests | 3663 / 3663 | 3660 / 3661 | 4 |
+| vhdl-compliance | 65 / 65 | 63 / 64 | 8 |
+
+Against bc7g: nvc has three new exclusions (the TO_STRING ruling) and one failure, gensub7 (BD2 E4); vests has two new exclusions (clifton) and one failure, tc3006 (D7 c1, accepted); vhdl-compliance has one new exclusion (tb_011) and one failure, tb_099 (BD2 E8).
+
+**Next:** gate BD2 (E1..E9 + R: structural HIR and anchors, real fixed/float/VITAL/Synopsys sources, generic-instance re-analysis, package-body analysis, V6 for instances, implicit dereference and the operator enum, residue), then BE, BF; D6 last.
+
 ### 2026-11-18: Gate BC closed: observer hooks on demand, FST and VCD per the LRM, typed system routines, kernel coverage, string formatting, monitors and sampled values, covergroup options, assertion instance callbacks, cached frame environment, gate-run fixes (`ca246c86` .. `45556185`, sweeps `bc7g`, `bc7ga`)
 
 Gate BC closes under the closure plan of 11-18: the gate ends at block S, and blocks V (VHDL analysis pass), H (occurrence table) and U (UVM as generated code) become gates BD, BE and BF. A finding outside the gate's items is logged in `.local-artifacts/followups/next-gate-found.md` with a probe and not fixed, unless this gate caused it. The 24 commits after checkpoint TA (`c6284ae7`) are below; the plan's five builds plus two the owner granted for the gate-run losses (builds 6 and 7).

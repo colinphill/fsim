@@ -237,10 +237,30 @@ void check_physical_types(const semantic::SpecializedHirUnit& specialization,
 /// The scopes of the named constructs an expanded name's prefix may denote:
 /// processes, block, generate and loop statements, and subprograms (8.3).
 std::vector<semantic::ScopeId> construct_scopes(
-    const semantic::CompiledDesign& design, const UnitItems& items)
+    const semantic::CompiledDesign& design, const UnitItems& items,
+    const vh::Unit& entity, const vh::Unit& architecture)
 {
     std::vector<semantic::ScopeId> result;
     const auto& hir = design.vhdl_hir;
+    // Block and generate statements (8.3): each region's scope, and the
+    // scope of each of its alternatives.
+    const auto add_regions = [&](const auto& self,
+                                 const std::vector<vh::GenerateRegion>& regions)
+        -> void {
+        for (const auto& region : regions) {
+            result.push_back(region.scope);
+            for (const auto& alternative : region.alternatives) {
+                if (alternative.scope.valid()) {
+                    result.push_back(alternative.scope);
+                }
+            }
+            self(self, region.nested);
+        }
+    };
+    add_regions(add_regions, architecture.generates);
+    if (entity.id != architecture.id) {
+        add_regions(add_regions, entity.generates);
+    }
     for (const auto position : items.processes) {
         result.push_back(hir.processes()[position].scope);
     }
@@ -373,7 +393,22 @@ void check_construct_expanded_name(
             expression.source });
     };
     const auto& name = expression.referenced_name;
-    if (name && name->analyzed && name->selected
+    const auto prefix = support::vhdl_symbol(parts.front());
+    // A block or generate label is the declaration of the statement
+    // (DeclarationForm::generated): when the stored result is that label,
+    // the prefix denotes the construct whose scope the label names.
+    bool label_declared { };
+    semantic::ScopeId label_declaration_scope;
+    if (name && name->selected) {
+        const auto label = specialization.find_declaration(*name->selected);
+        if (label && label->vhdl != nullptr
+            && label->vhdl->form == vh::DeclarationForm::generated
+            && support::vhdl_symbol(label->vhdl->name) == prefix) {
+            label_declared = true;
+            label_declaration_scope = label->vhdl->scope;
+        }
+    }
+    if (!label_declared && name && name->analyzed && name->selected
         && name->selected_parts == 0U) {
         // The suffix was selected: a declaration immediately within a
         // construct is named only within that construct.
@@ -388,7 +423,7 @@ void check_construct_expanded_name(
         }
         return;
     }
-    if (name
+    if (!label_declared && name
         && (name->selected || !name->overloads.empty()
             || name->standard != support::StandardDeclaration::none)) {
         return;
@@ -397,13 +432,13 @@ void check_construct_expanded_name(
     // unit. It denotes that construct when the label is declared in a region
     // enclosing the name and no declaration of the unit in a region enclosing
     // the name hides it (12.3).
-    const auto prefix = support::vhdl_symbol(parts.front());
     const semantic::Scope* label_scope { };
     for (const auto id : constructs) {
         const auto* scope = design.find_scope(id);
         if (scope == nullptr || scope->role != semantic::ScopeRole::named
             || !scope->parent || scope->name.empty()
-            || support::vhdl_symbol(scope->name) != prefix) {
+            || support::vhdl_symbol(scope->name) != prefix
+            || (label_declared && *scope->parent != label_declaration_scope)) {
             continue;
         }
         if (label_scope != nullptr && label_scope->id != scope->id) {
@@ -418,10 +453,13 @@ void check_construct_expanded_name(
         return;
     }
     const auto& hir = design.vhdl_hir;
-    const bool hidden = std::ranges::any_of(
+    // The label's own declaration (form generated) is no other declaration
+    // that hides it.
+    const bool hidden = !label_declared && std::ranges::any_of(
         items.declarations, [&](const std::uint32_t position) {
             const auto& declaration = hir.declarations()[position];
-            return support::vhdl_symbol(declaration.name) == prefix
+            return declaration.form != vh::DeclarationForm::generated
+                && support::vhdl_symbol(declaration.name) == prefix
                 && semantic::scope_within(
                     model, expression.scope, declaration.scope);
         });
@@ -455,7 +493,8 @@ void check_selected_names(const semantic::SpecializedHirUnit& specialization,
             excluded.insert(expression.operands.front().value());
         }
     }
-    const auto constructs = construct_scopes(design, items);
+    const auto constructs
+        = construct_scopes(design, items, entity, architecture);
     for (const auto position : items.expressions) {
         const auto& expression = hir.expressions()[position];
         if (!owned_by_unit(design, expression.scope, entity, architecture)) {

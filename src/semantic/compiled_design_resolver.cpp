@@ -29,6 +29,7 @@
 #include <fstream>
 #include <iterator>
 #include <limits>
+#include <map>
 #include <mutex>
 #include <ranges>
 #include <set>
@@ -3675,6 +3676,13 @@ standard_type_identity(const support::StandardDeclaration row)
     case SD::file_open_status:
         result.standard_scalar_type = Scalar::file_open_status;
         break;
+    // FILE_OPEN_STATE and FILE_ORIGIN_KIND (IEEE 1076-2019 16.3) are STANDARD
+    // enumeration types with no scalar identity of their own: the stored row
+    // is the identity, and no compiler-provided type, scalar or array
+    // identity stands for them.
+    case SD::file_open_state:
+    case SD::file_origin_kind:
+        break;
     case SD::integer: result.standard_scalar_type = Scalar::integer; break;
     case SD::natural:
         result.standard_scalar_type = Scalar::integer;
@@ -4979,6 +4987,60 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
         }
         return distance + 1U;
     };
+    // The element width and domain of a predefined STD.STANDARD array type
+    // (IEEE 1076-2008 16.3); none for another identity.
+    const auto builtin_array_element = [&](
+        const vhdl::BuiltinTypeIdentity builtin)
+        -> std::optional<std::pair<std::uint64_t, vhdl::ValueDomain>> {
+        switch (builtin) {
+        case vhdl::BuiltinTypeIdentity::std_standard_bit_vector:
+            return std::pair { std::uint64_t { 1U }, vhdl::ValueDomain::bit2 };
+        case vhdl::BuiltinTypeIdentity::std_standard_boolean_vector:
+            return std::pair { std::uint64_t { 1U },
+                vhdl::ValueDomain::boolean };
+        case vhdl::BuiltinTypeIdentity::std_standard_string:
+            return std::pair { std::uint64_t { 8U },
+                vhdl::ValueDomain::string };
+        case vhdl::BuiltinTypeIdentity::std_standard_integer_vector:
+            return std::pair { std::uint64_t { standard_width() },
+                vhdl::ValueDomain::integer };
+        case vhdl::BuiltinTypeIdentity::std_standard_time_vector:
+            return std::pair { std::uint64_t { 64U },
+                vhdl::ValueDomain::integer };
+        case vhdl::BuiltinTypeIdentity::std_standard_real_vector:
+            // REAL elements are IEEE doubles (IEEE 1076-2008 16.3).
+            return std::pair { std::uint64_t { 64U },
+                vhdl::ValueDomain::bit2 };
+        default:
+            return std::nullopt;
+        }
+    };
+    // The element width of each unconstrained array type this resolution
+    // met: the frontend's width placeholder on a bare mark of it (a bare
+    // STD_ULOGIC_VECTOR mark has width one), as opposed to a width an
+    // executable layout (an aggregate's row) gave the unconstrained
+    // subtype (IEEE 1076-2008 5.3.2.1, 9.3.3.3).
+    std::map<TypeId, std::uint64_t> unconstrained_element_widths;
+    // True when `width` written on the unconstrained mark of `array` is the
+    // frontend's element placeholder, not a layout: it is then no layout.
+    const auto is_width_placeholder = [&](
+        const vhdl::SubtypeIndication& array, const std::uint64_t width) {
+        std::optional<std::uint64_t> element;
+        if (array.type_mark.target.valid()) {
+            if (const auto found = unconstrained_element_widths.find(
+                    array.type_mark.target);
+                found != unconstrained_element_widths.end()) {
+                element = found->second;
+            }
+        }
+        if (!element) {
+            if (const auto builtin
+                = builtin_array_element(array.builtin_type)) {
+                element = builtin->first;
+            }
+        }
+        return !element || width == *element;
+    };
     const auto complete_predefined = [&](
         vhdl::SubtypeIndication& result,
         const std::span<const CompiledBindingFrame> active,
@@ -5113,34 +5175,9 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
         } else {
             std::uint64_t element_width { };
             auto element_domain = vhdl::ValueDomain::unknown;
-            switch (result.builtin_type) {
-            case vhdl::BuiltinTypeIdentity::std_standard_bit_vector:
-                element_width = 1U;
-                element_domain = vhdl::ValueDomain::bit2;
-                break;
-            case vhdl::BuiltinTypeIdentity::std_standard_boolean_vector:
-                element_width = 1U;
-                element_domain = vhdl::ValueDomain::boolean;
-                break;
-            case vhdl::BuiltinTypeIdentity::std_standard_string:
-                element_width = 8U;
-                element_domain = vhdl::ValueDomain::string;
-                break;
-            case vhdl::BuiltinTypeIdentity::std_standard_integer_vector:
-                element_width = standard_width();
-                element_domain = vhdl::ValueDomain::integer;
-                break;
-            case vhdl::BuiltinTypeIdentity::std_standard_time_vector:
-                element_width = 64U;
-                element_domain = vhdl::ValueDomain::integer;
-                break;
-            case vhdl::BuiltinTypeIdentity::std_standard_real_vector:
-                // REAL elements are IEEE doubles (IEEE 1076-2008 16.3).
-                element_width = 64U;
-                element_domain = vhdl::ValueDomain::bit2;
-                break;
-            default:
-                break;
+            if (const auto builtin = builtin_array_element(result.builtin_type)) {
+                element_width = builtin->first;
+                element_domain = builtin->second;
             }
             if (element_width == 0U && native_domain != VhdlNativeDomain::none) {
                 // The vectors of IEEE.STD_LOGIC_1164 and IEEE.NUMERIC_STD
@@ -6683,7 +6720,10 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
                 // (`subtype STD_LOGIC_VECTOR is (resolved) STD_ULOGIC_VECTOR`).
                 if (result.constraints.empty()
                     && result.element_constraints.empty()
-                    && effective->unconstrained) {
+                    && effective->unconstrained
+                    && (!result.executable_width
+                        || is_width_placeholder(
+                            *effective, *result.executable_width))) {
                     result.executable_width.reset();
                 }
                 merge_inherited(result, *effective);
@@ -6818,6 +6858,8 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
             }
         } else if (definition.form == vhdl::TypeForm::array
             && definition.element_subtype) {
+            // The width written on the mark before this layout is computed.
+            const auto written_width = result.executable_width;
             const auto element = resolve(
                 vhdl::constrained_element_subtype(
                     result, "", *definition.element_subtype),
@@ -7556,7 +7598,23 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
                 result.executable_width.reset();
             }
             if (!constrained_shape) {
-                result.executable_width.reset();
+                // An unconstrained array has no layout of its own: the width
+                // written on its mark is the element placeholder, unless it
+                // is a width an executable layout gave the subtype.
+                std::optional<std::uint64_t> placeholder_width;
+                if (element && !open_element && element->executable_width
+                    && *element->executable_width != 0U) {
+                    placeholder_width = *element->executable_width;
+                    unconstrained_element_widths.insert_or_assign(
+                        result.type_mark.target, *placeholder_width);
+                }
+                if (written_width && *written_width != 0U
+                    && placeholder_width
+                    && *written_width != *placeholder_width) {
+                    result.executable_width = written_width;
+                } else {
+                    result.executable_width.reset();
+                }
             }
         }
         active_types.erase(result.type_mark.target);

@@ -1,0 +1,16 @@
+-- SPDX-License-Identifier: Apache-2.0
+-- Prerequisite of d8_operator_alias_library.vhd (compiled first).
+package d8_oal_arith is
+  function "+" (a, b : bit_vector) return bit_vector;
+end package;
+package body d8_oal_arith is
+  function "+" (a, b : bit_vector) return bit_vector is
+    variable result : bit_vector(a'length - 1 downto 0) := a;
+  begin
+    result(0) := a(a'right) xor b(b'right);
+    return result;
+  end function;
+end package body;
+package d8_oal_utils is
+  alias "+" is work.d8_oal_arith."+" [bit_vector, bit_vector return bit_vector];
+end package;

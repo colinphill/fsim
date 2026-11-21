@@ -323,7 +323,11 @@ begin
         and current_utc.month >= 0
         and current_utc.month <= 11
         and current_epoch > 0.0;
-    formatted_plain := std.env.to_string(epoch_zero);
+    -- IEEE 1076-2019 5.3.3.3 declares TO_STRING(VALUE: TIME_RECORD) for the
+    -- representable record TIME_RECORD; with ENV's TO_STRING(TREC,
+    -- FRAC_DIGITS := 0) a one-actual call is ambiguous (12.5), so the
+    -- default is written.
+    formatted_plain := std.env.to_string(epoch_zero, 0);
     formatted_fraction := std.env.to_string(
         trec => epoch_zero, frac_digits => 6);
     wait for 1 ns;

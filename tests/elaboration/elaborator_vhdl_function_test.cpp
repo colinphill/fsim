@@ -2338,11 +2338,14 @@ end architecture;
     const auto elaborated = compile_and_elaborate(
         parsed.design,
         "vhdl:work.dynamic_width_formal_remains_unresolved(rtl)");
+    // The design is legal (TO_UNSIGNED's SIZE need not be static, IEEE
+    // 1076-2019 16.8.5.2); a function-local vector whose bounds come from a
+    // formal is not lowered yet (BD2), reported as an unsupported HIR form.
     assert(!elaborated.ok());
     assert(std::ranges::any_of(
         elaborated.diagnostics,
         [](const fsim::elaboration::Diagnostic& diagnostic) {
-            return diagnostic.code == "FSIM-ELAB-VHNUM-002";
+            return diagnostic.code == "FSIM-ELAB-HIR-001";
         }));
 }
 

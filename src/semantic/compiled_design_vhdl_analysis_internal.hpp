@@ -201,6 +201,10 @@ public:
     /// specification of a block, 7.3.1); the unit scope when none does.
     [[nodiscard]] ScopeId innermost_scope(
         const vhdl::Unit& unit, SourceSpanId span) const;
+    /// The child scope of `scope` (a component declaration, a block, a
+    /// process of it) holding the text `span` begins in, if any.
+    [[nodiscard]] std::optional<ScopeId> child_scope_holding(
+        ScopeId scope, SourceSpanId span) const;
     /// Whether library logical name `library` is visible at `at` in
     /// `scope`: STD and WORK always (13.2), the predefined environment's
     /// implicit libraries, and every library clause of an enclosing region

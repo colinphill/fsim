@@ -1051,6 +1051,7 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
   while (!at_end() &&
          !(keyword("end", 0, true) && keyword("record", 1, true))) {
     const auto member_start = current();
+    const auto member_index = index_;
     std::vector<Token> names;
     names.push_back(expect_identifier("record element name"));
     while (match(TokenKind::Comma)) {
@@ -1105,6 +1106,11 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
                  type.domain != ValueDomain::Logic9) {
         type.domain = ValueDomain::Logic4;
       }
+    }
+    // An element declaration that consumed nothing (a missing `end record`
+    // before `end;`) has been reported; stop instead of reporting it again.
+    if (index_ == member_index) {
+      break;
     }
   }
   if (type.packed_members.empty() && !empty_record) {
@@ -1808,7 +1814,13 @@ void VhdlParser::parse_subtype_declaration(DesignUnit &unit, const Token &start,
         for (auto index = dimension_begin; index < dimension_end; ++index) {
           dimension.push_back(current(index));
         }
-        const auto hidden = "\\range_record_of_" + prefix_text + "\\";
+        // A basic identifier that no source can write (15.3: a basic
+        // identifier starts with a letter), so it clashes with no user
+        // name. An extended identifier here (\range_record_of_X\) would
+        // be stored decoded in the written type mark of the subtype (the
+        // parser's type mark text drops the backslashes), and the name
+        // would then not denote the extended identifier it is declared as.
+        const auto hidden = "_range_record_of_" + prefix_text;
         const auto prefix_simple = vhdl_name(prefix.back().text);
         // A type mark prefix has its own range record; an array object's
         // range is of its index subtype (16.2.3).
@@ -1852,7 +1864,19 @@ void VhdlParser::parse_subtype_declaration(DesignUnit &unit, const Token &start,
         tokens_.insert(tokens_.begin() + static_cast<std::ptrdiff_t>(index_),
             replacement.begin(), replacement.end());
         if (!declared) {
+          const auto declared_before = unit.type_aliases.size();
           parse_type_declaration(unit, start, nested_scope);
+          // The range record is implicit (5.3.3.2): it takes effect where
+          // the subtype declaration begins, so its span is empty at that
+          // point. Its end must not follow the begin of the hidden type
+          // mark of the subtype, which carries the start token's span
+          // (12.3: a declaration is in force from its end). The record is
+          // the declaration parse_type_declaration just added.
+          for (auto index = declared_before; index < unit.type_aliases.size();
+               ++index) {
+            auto &alias = unit.type_aliases[index];
+            alias.span.end = alias.span.begin;
+          }
           expect_keyword("subtype", true, "FSIM-VHDL-PARSE-134");
         }
       }

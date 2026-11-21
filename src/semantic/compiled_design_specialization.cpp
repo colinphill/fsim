@@ -2400,9 +2400,18 @@ public:
             ? name.referenced_name->selected
             : std::nullopt;
         if (!constant_id) {
-            note_unstored_spelling(
-                "specialization::evaluate_vhdl_record_constant_element",
-                name.text, name.scope);
+            // A name analysis stored with a recorded exemption (a library
+            // unit such as a package instance named as a generic-map
+            // actual, 6.5.7.2) is no unstored reference.
+            if (name.referenced_name) {
+                note_unstored_name(
+                    "specialization::evaluate_vhdl_record_constant_element",
+                    *name.referenced_name, name.scope);
+            } else {
+                note_unstored_spelling(
+                    "specialization::evaluate_vhdl_record_constant_element",
+                    name.text, name.scope);
+            }
             vhdl::Name prefix_name;
             prefix_name.spelling = std::string { prefix };
             constant_id = CompiledDesignResolver { unit_ }
@@ -13531,7 +13540,11 @@ private:
                     mark = subtype->type_mark.spelling;
                     mark_subtype = subtype;
                 }
-            } else if (!declaration || declaration->vhdl == nullptr) {
+            } else if ((!declaration || declaration->vhdl == nullptr)
+                // Only a name can be a type mark; a value prefix such as
+                // `integer'image(x)'length` (IEEE 1076-2019 8.1, 16.2) has
+                // no mark and nothing to look up.
+                && prefix->vhdl->kind == vhdl::ExpressionKind::name) {
                 mark = prefix->vhdl->text;
                 mark_scope = prefix->vhdl->scope;
                 if (prefix->vhdl->referenced_name) {

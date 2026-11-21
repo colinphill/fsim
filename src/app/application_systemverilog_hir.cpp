@@ -502,15 +502,16 @@ namespace systemverilog_hir_detail {
     {
         auto result = systemverilog_name(std::string { spelling }, source(span));
         result.source_order = source_order;
+        const auto lookup_symbol = systemverilog_lookup_symbol(result);
         auto visible_scope = std::optional<semantic::ScopeId> { scope };
         while (visible_scope) {
-            const auto named = scope_symbols_.named(*visible_scope, result.symbol);
+            const auto named = scope_symbols_.named(*visible_scope, lookup_symbol);
             result.overloads.assign(named.begin(), named.end());
             if (!result.overloads.empty()) {
                 break;
             }
             if (const auto genvar = genvar_scopes_.find(*visible_scope);
-                genvar != genvar_scopes_.end() && genvar->second == result.symbol) {
+                genvar != genvar_scopes_.end() && genvar->second == lookup_symbol) {
                 break;
             }
             visible_scope = model_.scopes()[visible_scope->value()].parent;

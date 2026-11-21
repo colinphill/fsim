@@ -720,9 +720,14 @@ private:
                 || prefix->vhdl->kind
                     == semantic::vhdl::ExpressionKind::binary)
             && prefix->vhdl->referenced_name
-            && prefix->vhdl->referenced_name->selected) {
+            && operator_name_of(*prefix->vhdl, *prefix->vhdl->referenced_name)
+                   .selected) {
+            // An operator expression's declared function is the stored 12.5
+            // result (Expression::resolved_declaration), not a selection.
             const auto function = specialization_.find_declaration(
-                *prefix->vhdl->referenced_name->selected);
+                *operator_name_of(
+                    *prefix->vhdl, *prefix->vhdl->referenced_name)
+                     .selected);
             if (function && function->vhdl != nullptr
                 && function->vhdl->form
                     == semantic::vhdl::DeclarationForm::function
@@ -2550,6 +2555,35 @@ private:
         }
     }
 
+    // Whether a subtype indication names the return identifier of a
+    // function (IEEE 1076-2019 4.2.1): the identifier denotes the subtype
+    // the call's context constrains, so it is not unconstrained here.
+    bool return_identifier_subtype(const SubtypeIndication& subtype) const
+    {
+        if (subtype.written_type_mark && subtype.written_type_mark->selected
+            && contextual_result_declaration(
+                *subtype.written_type_mark->selected)) {
+            return true;
+        }
+        auto type = subtype_type(subtype);
+        std::unordered_set<std::uint32_t> visiting;
+        while (type && visiting.insert(type->value()).second) {
+            const auto* definition = type_definition(*type);
+            if (definition == nullptr) {
+                return false;
+            }
+            if (contextual_result_declaration(definition->declaration)) {
+                return true;
+            }
+            if (definition->form != TypeForm::subtype
+                && definition->form != TypeForm::alias) {
+                return false;
+            }
+            type = subtype_type(definition->base);
+        }
+        return false;
+    }
+
     // Whether a subtype indication denotes an array subtype without an
     // index constraint (its type mark names an unconstrained array type and
     // no constraint is given here or by a subtype on the way).
@@ -3310,6 +3344,13 @@ private:
         const semantic::vhdl::Declaration& declaration)
     {
         if (!declaration.subtype) {
+            return;
+        }
+        // An implicit formal-conversion signal (6.5.7.1) copies an
+        // unconstrained formal's subtype; its bounds come from the
+        // association when the instance is elaborated (6.5.6.3), so analysis
+        // knows nothing to report.
+        if (analysis_ && declaration.formal_conversion_signal) {
             return;
         }
         const auto subtype = specialized_subtype(*declaration.subtype);
@@ -6677,21 +6718,19 @@ private:
                     return std::nullopt;
                 }
                 // The conversion function has one parameter of the formal's
-                // type and returns the actual's type (6.5.7.1).
-                semantic::vhdl::Name function_name;
-                function_name.spelling = std::string { name };
-                function_name.canonical = function_name.spelling;
-                if (semantic::CompiledDesignResolver { specialization_ }
-                        .vhdl_scope_analyzed(aggregate->vhdl->scope)) {
-                    semantic::note_vhdl_unstored_reference(
-                        "Validator::conversion_function", function_name.spelling,
-                        aggregate->vhdl->scope);
+                // type and returns the actual's type (6.5.7.1). The typing
+                // stored its result on the folded group (Expression::
+                // referenced_name: the functions whose parameter has the
+                // formal's type, or the type mark); a type conversion or a
+                // group without one refutes nothing.
+                if (!aggregate->vhdl->referenced_name
+                    || aggregate->vhdl->referenced_name->overloads.empty()) {
+                    return index;
                 }
-                const semantic::CompiledDesignResolver resolver { specialization_ };
                 const auto actual_type = operand_type(
                     aggregate->vhdl->associations.front().value);
-                const auto conforms = [&](const auto& candidate) {
-                    const auto function = specialization_.find_declaration(candidate.body);
+                const auto conforms = [&](const semantic::DeclarationId body) {
+                    const auto function = specialization_.find_declaration(body);
                     if (!function || function->vhdl == nullptr
                         || !function->vhdl->callable
                         || !function->vhdl->callable->function
@@ -6716,14 +6755,16 @@ private:
                         return scalar_class(left.kind) && scalar_class(right.kind)
                             && types_conflict(left, right);
                     };
+                    // An inout formal's actual part may itself apply a
+                    // conversion function to its designator (`F1(b) =>
+                    // F2(x)`, 6.5.7.1), so the actual written has the
+                    // formal's type, not F1's result.
                     return !conflict(parameter_type, formal_type)
-                        && !conflict(result_type, actual_type);
+                        && (direction == Direction::inout
+                            || !conflict(result_type, actual_type));
                 };
-                const auto candidates = resolver.resolve_vhdl_callables(
-                    function_name, aggregate->vhdl->scope).candidates;
-                // A type conversion `T(formal)` has no callable candidates.
-                if (!candidates.empty()
-                    && std::ranges::none_of(candidates, conforms)) {
+                if (std::ranges::none_of(
+                        aggregate->vhdl->referenced_name->overloads, conforms)) {
                     return std::nullopt;
                 }
                 return index;
@@ -7172,6 +7213,16 @@ private:
             return;
         }
         const semantic::CompiledDesignResolver resolver { specialization_ };
+        // A call the typing resolved to an implicitly declared STANDARD
+        // function (RISING_EDGE on BIT or BOOLEAN, 2008 16.3; 12.5) matches
+        // no declared callable, so the visible declared set (here IEEE's
+        // STD_ULOGIC overload) cannot refute it.
+        if (expression.resolved_standard
+                != support::StandardDeclaration::none
+            && !expression.resolved_declaration
+            && resolver.vhdl_scope_analyzed(expression.scope)) {
+            return;
+        }
         const auto visible = resolver.resolve_vhdl(
             *expression.referenced_name, expression.scope);
         if (called_before_declaration(expression, expression.source)) {
@@ -7296,8 +7347,25 @@ private:
                     if (!actual->vhdl->referenced_name->selected) {
                         return native_callee;
                     }
-                    const auto declaration = specialization_.find_declaration(
+                    auto declaration = specialization_.find_declaration(
                         *actual->vhdl->referenced_name->selected);
+                    // An object alias of a signal denotes that signal and is
+                    // a signal name (6.6.1, 6.6.2): follow the stored alias
+                    // target; an unresolved target is not guessed (true).
+                    for (std::size_t depth { };
+                        declaration && declaration->vhdl != nullptr
+                        && declaration->vhdl->form
+                            == semantic::vhdl::DeclarationForm::alias
+                        && declaration->vhdl->alias_target
+                        && !declaration->vhdl->alias_signature;
+                        ++depth) {
+                        if (depth > 64U
+                            || !declaration->vhdl->alias_target->selected) {
+                            return true;
+                        }
+                        declaration = specialization_.find_declaration(
+                            *declaration->vhdl->alias_target->selected);
+                    }
                     return !declaration || declaration->vhdl == nullptr
                         || declaration->vhdl->form
                             == semantic::vhdl::DeclarationForm::signal
@@ -7498,6 +7566,31 @@ private:
         return true;
     }
 
+    // Whether `label` is the label of a process or of a labeled sequential
+    // or concurrent statement of this unit (IEEE 1076-2019 11.3, 10.1).
+    bool construct_label_prefix(const std::string_view label) const
+    {
+        const auto& design = specialization_.design();
+        const auto& scopes = design.semantics.scopes();
+        const auto in_design_unit = [&](const semantic::ScopeId scope) {
+            return scope.valid() && scope.value() < scopes.size()
+                && (scopes[scope.value()].unit == entity_.id
+                    || scopes[scope.value()].unit == architecture_.id);
+        };
+        const auto symbol = support::vhdl_symbol(label);
+        return std::ranges::any_of(design.vhdl_hir.processes(),
+                   [&](const semantic::vhdl::Process& process) {
+                       return in_design_unit(process.scope)
+                           && support::vhdl_symbol(process.name) == symbol;
+                   })
+            || std::ranges::any_of(design.vhdl_hir.statements(),
+                [&](const semantic::vhdl::Statement& statement) {
+                    return !statement.label.empty()
+                        && in_design_unit(statement.scope)
+                        && support::vhdl_symbol(statement.label) == symbol;
+                });
+    }
+
     // IEEE 1076-2008 8.3: a selected name whose prefix is an object denotes
     // an element of a record (or the object an access value designates).
     void validate_selected_element(const semantic::vhdl::Expression& expression)
@@ -7515,11 +7608,32 @@ private:
         std::optional<semantic::DeclarationId> selected;
         if (!stored_prefix_object(expression.referenced_name, expression.scope,
                 text.substr(0U, separator), selected)) {
+            // A process or statement label declares nothing, so analysis
+            // stores no object for it: the prefix of an expanded name
+            // `P.x` denotes that construct (8.3), not an object. Whether
+            // the name is allowed there is the construct rule's decision
+            // (FSIM-ELAB-VHNAME-014), not an element selection.
+            if (construct_label_prefix(text.substr(0U, separator))) {
+                return;
+            }
+            // Analysis resolved the name to an entity with no declaration
+            // (a library, a design unit such as a package instance named as
+            // a generic-map actual, a label: 8.3, 12.3): it denotes no
+            // object, so no element is selected.
+            const auto exemption = expression.referenced_name
+                ? expression.referenced_name->exemption
+                : semantic::vhdl::AnalysisExemption::none;
+            if (exemption == semantic::vhdl::AnalysisExemption::no_declaration) {
+                return;
+            }
             semantic::vhdl::Name prefix;
             prefix.spelling = std::string { text.substr(0U, separator) };
             prefix.canonical = prefix.spelling;
-            if (semantic::CompiledDesignResolver { specialization_ }
-                    .vhdl_scope_analyzed(expression.scope)) {
+            // A name through a package instance (R1, BD2 V4) is exempt: its
+            // prefix is read by spelling.
+            if (exemption == semantic::vhdl::AnalysisExemption::none
+                && semantic::CompiledDesignResolver { specialization_ }
+                       .vhdl_scope_analyzed(expression.scope)) {
                 // The name was not analyzed: nothing is stored.
                 semantic::note_vhdl_unstored_reference(
                     "Validator::validate_selected_element", prefix.spelling,
@@ -7752,6 +7866,22 @@ private:
                         + "' is not visible outside its loop",
                     expression.source);
                 return;
+            }
+        }
+        // A literal of a STD.STANDARD enumeration type has no declaration
+        // to select; the typing pass stored the type it denotes (IEEE
+        // 1076-2019 16.3, 9.3.2), which covers the literals the 2019
+        // edition adds (READ_WRITE_MODE, STATE_OPEN, STATE_CLOSED).
+        if (expression.type.kind == semantic::vhdl::TypeIdentity::Kind::standard) {
+            using S = support::StandardDeclaration;
+            switch (expression.type.standard) {
+            case S::boolean: case S::bit: case S::character:
+            case S::severity_level: case S::file_open_kind:
+            case S::file_open_status: case S::file_open_state:
+            case S::file_origin_kind: case S::range_direction:
+                return;
+            default:
+                break;
             }
         }
         if (name_exempt(expression.text)) {
@@ -8237,6 +8367,23 @@ private:
                         association.value, context,
                         *definition->element_subtype,
                         value->vhdl->scope)) {
+                    continue;
+                }
+                // IEEE 1076-2008 9.3.3.3: an element association whose
+                // choices are discrete ranges may give an expression of
+                // the aggregate's own array type, whose elements fill the
+                // range (`15 downto 12 => v(11 downto 8)`, `11 downto 0 =>
+                // c_a`). The segment helpers prove the exact nominal array
+                // type and rank; an unknown length is not reported.
+                if (!positional(association) && !is_others(association)
+                    && (positional_array_segment_count(
+                            association.value, context,
+                            *definition->element_subtype,
+                            value->vhdl->scope)
+                        || dynamic_array_segment(
+                            association.value, context,
+                            *definition->element_subtype,
+                            value->vhdl->scope))) {
                     continue;
                 }
                 // IEEE 1076-2008 9.3.3.3 permits an array-valued range
@@ -13378,6 +13525,31 @@ private:
                     || !association.expression) {
                     continue;
                 }
+                // A type named through a package instance or an interface
+                // package (4.9, 6.5.5) is the instance's (R1, BD2 V4). The
+                // formal's type exists only under the instance's generic map
+                // (an interface package names the actual package, 6.5.7.2),
+                // which this parent-side check does not hold: it is never
+                // decided here. An actual's such type is the parent's own
+                // instance, known at elaboration but not to analysis.
+                const auto through_instance = [](const semantic::vhdl::SubtypeIndication& subtype) {
+                    return subtype.written_type_mark
+                        && subtype.written_type_mark->exemption
+                            == semantic::vhdl::AnalysisExemption::package_instance;
+                };
+                bool skip = through_instance(*formal->subtype);
+                if (const auto actual_node = specialization_.find_expression(*association.expression);
+                    !skip && analysis_ && actual_node && actual_node->vhdl != nullptr
+                    && actual_node->vhdl->referenced_name
+                    && actual_node->vhdl->referenced_name->selected) {
+                    const auto object = specialization_.find_declaration(
+                        *actual_node->vhdl->referenced_name->selected);
+                    skip = object && object->vhdl != nullptr && object->vhdl->subtype
+                        && through_instance(*object->vhdl->subtype);
+                }
+                if (skip) {
+                    continue;
+                }
                 const auto actual = expression_subtype(
                     *association.expression);
                 const auto formal_type = subtype_type(
@@ -13573,6 +13745,8 @@ private:
             // constraints of one with an initial value from that value.
             if ((stored.form == Form::signal || stored.form == Form::variable)
                 && unconstrained_array_subtype(*stored.subtype)
+                && !return_identifier_subtype(*stored.subtype)
+                && !(analysis_ && stored.formal_conversion_signal)
                 && !(stored.initializer && unit_standard(stored.scope) == "2019")) {
                 report("FSIM-ELAB-VHARRAY-010",
                     "VHDL " + std::string { stored.form == Form::signal ? "signal" : "variable" }

@@ -205,6 +205,11 @@ std::string VhdlParser::parse_vhdl_call_generic_map(
           < instance.span.begin.offset) {
     instance.span.begin = vhdl_call_instance_anchor_->begin;
   }
+  // The implicit instance (9.3.4) takes effect where the statement or
+  // declaration holding the call begins: an empty span there, so that the
+  // call, which lies inside the old span, sees it (12.3: a declaration is in
+  // force from its end).
+  instance.span.end = instance.span.begin;
   auto result = instance.name;
   (procedure ? pending_call_procedure_instances_
              : pending_call_function_instances_)

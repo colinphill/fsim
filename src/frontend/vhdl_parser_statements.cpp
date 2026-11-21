@@ -860,6 +860,10 @@ VhdlParser::parse_vhdl_procedure_call() {
       if (target != statement.procedure_arguments.end()) {
         target->value = build_vhdl_individual_aggregate(
             parts, target->value.span);
+        // Not a written aggregate (9.3.3): the subelement associations of
+        // one formal (4.3.2.2, 6.5.7.1).
+        target->value.marker
+            = support::ExpressionMarker::vhdl_formal_subelements;
       }
     }
   } else if (!at(TokenKind::Semicolon)) {

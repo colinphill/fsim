@@ -1734,6 +1734,17 @@ def verilator_cases(root: Path) -> list[Case]:
                 commands.append(Command("host", build))
             foreign_load = (["--vpi", library] if foreign == "vpi"
                             else ["--sv-lib", library])
+        # A test that declares its own package uvm_pkg (not UVM, a stand-in)
+        # compiles without fsim's default UVM library, whose uvm_pkg it would
+        # duplicate (FSIM-UVM-LIBRARY-001); its uvm_pkg is then an ordinary
+        # package.
+        if any(re.search(r"\bpackage\s+uvm_pkg\b", read_text(Path(arg)))
+               for arg in compile_args
+               if arg.endswith((".v", ".sv")) and Path(arg).is_file()):
+            compile_args += ["--uvm-release", "none"]
+            commands = [Command(command.stage, command.args + ["--uvm-release", "none"])
+                        if command.stage == "compile" else command
+                        for command in commands]
         commands.append(Command("compile", compile_args))
         if host:
             commands.append(host)
@@ -2219,7 +2230,23 @@ VESTS_FILE_CHAIN_PREFIXES = (
     VESTS_CLIFTON_FILE_CHAIN_PREFIX,
 )
 # VESTs cases outside the LRM, by (group directory, case path).
+# IEEE 1076-2019 5.3.3.3 / 12.3 / 12.5 (owner 11-21: strict reading).
+STD_ENV_TO_STRING_AMBIGUITY = (
+    "calls TO_STRING with one TIME_RECORD argument; IEEE 1076-2019 "
+    "5.3.3.3 implicitly declares TO_STRING(VALUE: TIME_RECORD) and "
+    "STD.ENV declares TO_STRING(TREC: TIME_RECORD; FRAC_DIGITS: "
+    "INTEGER := 0); they are not homographs (12.3), so the call is "
+    "ambiguous (12.5): an LRM defect, fsim keeps the strict reading"
+)
+
 VESTS_OUT_OF_SCOPE = {
+    **{("clifton-labs/compliant",
+        f"functional/statements/for-loops/{name}.vhdl"): (
+        "out of scope: applies 'LEFT/'RIGHT to INPUT'RANGE; RANGE "
+        "denotes a range, not a prefix of a scalar bound attribute "
+        "(IEEE 1076-1993 14.1, 1076-2019 16.2)"
+    ) for name in ("dynamic_procedure_for_loop",
+                   "dynamic_package_procedure_for_loop")},
     ("clifton-labs/compliant",
      "functional/attributes/type/range/simple-range-attribute.vhdl"): (
         "out of scope: applies scalar bound attributes to A'RANGE; "
@@ -2370,6 +2397,8 @@ def vests_group(directory: str, relative: str) -> str:
 
 # nvc cases that need extensions or expect behavior contrary to the LRM.
 NVC_NONSTANDARD = {
+    **{name: STD_ENV_TO_STRING_AMBIGUITY
+       for name in ("stdenv1", "stdenv5", "issue1381")},
     **{name: "declares a module-body parameter without a default value; "
         "IEEE 1800-2023 6.20.1 allows omitting the default only within a "
         "parameter_port_list"
@@ -2764,6 +2793,7 @@ VHDL_COMPLIANCE_SKIP = {
         "reports an unconditional error"
     for name in ("tb_014", "tb_014a", "tb_023")
 } | {
+    "vhdl_2019/tb_011.vhd": "out of scope: " + STD_ENV_TO_STRING_AMBIGUITY,
     # IEEE 1076-2019 7.3.3: an entity aspect without an architecture names
     # the most recently analyzed one; these entities have none.
     "vhdl_2019/tb_016.vhd": "out of scope: instantiates entities that have "
@@ -2904,6 +2934,10 @@ def run_command(fsim: Path, command: Command, workdir: Path, env: dict,
         text = text[:8_000_000] + "\n...[truncated]...\n" + text[-8_000_000:]
     return StepResult(command.stage, process.returncode, time.monotonic() - started,
                       timed_out, text)
+
+
+# Diagnostics that report an fsim failure, not a rule of the source.
+INTERNAL_FAILURE_CODES = frozenset({"FSIM-CLI-0003"})
 
 
 def first_diagnostics(output: str, limit: int = 3) -> list[dict]:
@@ -3286,8 +3320,17 @@ def run_case_once(case: Case, fsim: Path, workdir: Path, engine: str,
         detail=detail,
         stage=failing.stage,
         seconds=round(sum(s.seconds for s in steps), 3),
-        diagnostics=first_diagnostics(failing.output) if status != "pass" else [],
+        diagnostics=first_diagnostics(failing.output)
+        if status != "pass" or case.expect != "pass" else [],
     )
+    # A case expected to be rejected passes on any failed step; one whose
+    # rejection was only an internal failure (an unhandled command failure
+    # or a crash) is no rule check, so it is marked for audit.
+    if status == "pass" and case.expect != "pass":
+        codes = [item["code"] for item in record["diagnostics"]]
+        crashed = failing.returncode is not None and failing.returncode < 0
+        if crashed or (codes and all(code in INTERNAL_FAILURE_CODES for code in codes)):
+            record["internal_rejection"] = True
     if case.checker == "vunit":
         record["tests"] = vunit_subresults(case, steps)
     if status != "pass":
@@ -3339,6 +3382,11 @@ def summarize(records: list[dict], title: str) -> str:
         rate = f"{100.0 * counts['pass'] / ran:.1f}%" if ran else "-"
         lines.append(f"| {suite} | {len(group)} | {counts['pass']} | {counts['fail']} | "
                      f"{counts['crash']} | {counts['timeout']} | {counts['skip']} | {rate} |")
+    internal = [r for r in records if r.get("internal_rejection")]
+    if internal:
+        lines += ["", f"Expected rejections met only by an internal failure "
+                      f"(FSIM-CLI-0003 or a crash; no rule check): {len(internal)}."]
+        lines += [f"- {r['suite']} `{r['id']}`" for r in internal[:40]]
     vunit = [t for r in records for t in r.get("tests", [])]
     if vunit:
         passed = sum(t["status"] == "pass" for t in vunit)

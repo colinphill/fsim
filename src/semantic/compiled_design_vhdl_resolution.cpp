@@ -643,11 +643,27 @@ private:
             }
             // A type mark that name analysis resolved (12.3, 12.4) keeps its
             // result too.
+            // A mark analysis exempted with a recorded reason (a member of a
+            // compiler-projected package, R2) is its result as well: a fresh
+            // spelling copy would drop that reason.
             if (expressions[index].qualified_type_mark
-                && expressions[index].qualified_type_mark->analyzed) {
+                && (expressions[index].qualified_type_mark->analyzed
+                    || expressions[index].qualified_type_mark->exemption
+                        != vhdl::AnalysisExemption::none)) {
                 frozen = static_cast<std::uint8_t>(frozen | frozen_qualified);
             }
             frozen_expressions_[index] = frozen;
+        }
+        // A procedure call the compile-time typing decided (12.5) keeps its
+        // stored procedure as well (VhdlTypingAuthority): this pass cannot
+        // recompute a call through an alias (SWRITE, 6.6.3) or one whose
+        // actual only its context types.
+        const auto& typed_statements = *statements_;
+        frozen_statements_.assign(typed_statements.size(), 0U);
+        for (std::size_t index { }; typing_authority && index < typed_statements.size(); ++index) {
+            if (typed_statements[index].resolved_procedure) {
+                frozen_statements_[index] = 1U;
+            }
         }
         if (stamped_units_.empty()) {
             return;
@@ -658,7 +674,6 @@ private:
             }
         }
         const auto& statements = *statements_;
-        frozen_statements_.assign(statements.size(), 0U);
         for (std::size_t index { }; index < statements.size(); ++index) {
             if (stamped_scope(statements[index].scope)) {
                 frozen_statements_[index] = 1U;

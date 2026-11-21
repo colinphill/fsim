@@ -21827,7 +21827,22 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     *statement->vhdl->loop_initial);
                 const bool reverse = attribute && attribute->vhdl != nullptr
                     && attribute->vhdl->text == "'reverse_range";
-                const auto* local = attribute && attribute->vhdl != nullptr
+                // A call path vector, or an access value designating one, and
+                // the ITEMS of a DIRECTORY are indexed upwards from 0 (IEEE
+                // 1076-2019 16.5.6.2, 16.5.5). They are STD.ENV containers,
+                // never a shaped array local or heap view, so they are
+                // recognized first.
+                const auto environment_vector = attribute
+                        && attribute->vhdl != nullptr
+                        && attribute->vhdl->kind
+                            == semantic::vhdl::ExpressionKind::call
+                        && (attribute->vhdl->text == "'range" || reverse)
+                        && attribute->vhdl->operands.size() == 1U
+                    ? lower_hir_vhdl_environment_vector(
+                          attribute->vhdl->operands.front())
+                    : std::nullopt;
+                const auto* local = !environment_vector && attribute
+                        && attribute->vhdl != nullptr
                         && attribute->vhdl->kind
                             == semantic::vhdl::ExpressionKind::call
                         && (attribute->vhdl->text == "'range" || reverse)
@@ -21850,18 +21865,6 @@ bool Lowerer::lower_hir_statement_unsuspended(
                             : std::nullopt;
                     }
                 }
-                // A call path vector, or an access value designating one, and
-                // the ITEMS of a DIRECTORY are indexed upwards from 0 (IEEE
-                // 1076-2019 16.5.6.2, 16.5.5).
-                const auto environment_vector = local == nullptr && attribute
-                        && attribute->vhdl != nullptr
-                        && attribute->vhdl->kind
-                            == semantic::vhdl::ExpressionKind::call
-                        && (attribute->vhdl->text == "'range" || reverse)
-                        && attribute->vhdl->operands.size() == 1U
-                    ? lower_hir_vhdl_environment_vector(
-                          attribute->vhdl->operands.front())
-                    : std::nullopt;
                 if (((local != nullptr && dimension) || environment_vector)
                     && parameter != hir_local_registers_.end()
                     && register_domain(parameter->second)

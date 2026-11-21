@@ -21,6 +21,7 @@
 #include "fsim/support/vhdl_identifier.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -64,6 +65,13 @@ struct Meaning {
     /// The position of the formal each operand is associated with in the
     /// callee's formal list (calls; vhdl::no_formal for none).
     std::vector<std::uint32_t> formals;
+    /// Parallel to `operands`: for an operand that is an aggregate the
+    /// parser made of a conversion formal `F(f) => actual` (4.3.2.2), the
+    /// actual inside it, which has the type recorded in `operands`.
+    std::vector<ExpressionId> inner;
+    /// Parallel to `inner`: the conversion function or type mark F of the
+    /// folded conversion formal, as the Name stored on the aggregate.
+    std::vector<std::optional<vhdl::Name>> conversions;
     /// The implicit conversions this interpretation and its operands need.
     unsigned cost { };
     /// The node denotes a type or subtype (a type mark), a signal.
@@ -348,6 +356,34 @@ private:
 
     // ---- candidates ------------------------------------------------------
 
+    /// What the expanded name `name` (8.3: `P.F`, `work.P.F`) denotes by
+    /// visibility, as name analysis resolves it (the declarations, STANDARD
+    /// functions and implicit operations of the package or region its prefix
+    /// denotes); nullopt when a prefix is an object or the member is not
+    /// found.
+    [[nodiscard]] std::optional<Resolution> expanded(const vhdl::Name& name, const ScopeId scope,
+        const SourceSpanId source) const
+    {
+        const auto parts = selected_parts(name);
+        if (parts.size() < 2U) {
+            return std::nullopt;
+        }
+        Resolution resolution;
+        auto denotation = lookup_.denote(parts.front(), scope, regions_.begin(source), resolution);
+        for (std::size_t index = 1; index < parts.size(); ++index) {
+            if (denotation.kind == Denotation::Kind::object
+                || denotation.kind == Denotation::Kind::none) {
+                return std::nullopt;
+            }
+            resolution = lookup_.member(denotation, parts[index], scope);
+            if (resolution.status != Visibility::found) {
+                return std::nullopt;
+            }
+            denotation = lookup_.denote(resolution);
+        }
+        return resolution;
+    }
+
     /// The profiles of every subprogram, enumeration literal, STANDARD
     /// function and implicit operation `designator` denotes at the node.
     [[nodiscard]] std::vector<Profile> overloads(const support::SymbolId designator,
@@ -385,61 +421,150 @@ private:
             return found != nullptr
                 && (found->callable || found->form == vhdl::DeclarationForm::enumeration_literal);
         };
-        const auto add_declaration = [&](const vhdl::Declaration* found) {
+        // 6.6.3: the signature of an alias selects the one subprogram or
+        // literal whose parameter and result type profile it matches.
+        const auto signature_matches = [&](const vhdl::AliasSignature& signature,
+                                           const Profile& profile) {
+            if (signature.parameters.size() != profile.parameters.size()) {
+                return false;
+            }
+            for (std::size_t index { }; index < signature.parameters.size(); ++index) {
+                if (types_.of_subtype(signature.parameters[index]) != profile.parameters[index]) {
+                    return false;
+                }
+            }
+            return !signature.result || types_.of_subtype(*signature.result) == profile.result;
+        };
+        // The signatures of the aliases being expanded, outermost first: an
+        // alias of an alias (6.6.3, `alias h is to_hex_string [T return
+        // string]` where TO_HEX_STRING is itself an alias in one or more
+        // packages) denotes the subprograms every alias on the way selects.
+        std::vector<const vhdl::AliasSignature*> signatures;
+        const auto admitted = [&](const Profile& profile) {
+            return std::ranges::none_of(signatures, [&](const vhdl::AliasSignature* signature) {
+                return !signature_matches(*signature, profile);
+            });
+        };
+        // The implicitly declared operations (5.2.6, 5.3.2.4, 9.2) and the
+        // STANDARD functions (16.3) a resolution denotes: they have no
+        // declaration a name could store; `signature` (an alias's) selects.
+        const auto add_predefined = [&](const Resolution& resolution,
+                                        const support::SymbolId named,
+                                        const vhdl::AliasSignature* signature) {
+            for (const auto& entry : resolution.standard) {
+                if (entry.kind != StandardEntry::Kind::function) {
+                    continue;
+                }
+                auto profile = operations_.of_standard(entry.declaration);
+                if ((signature == nullptr || signature_matches(*signature, profile))
+                    && admitted(profile)) {
+                    add(std::move(profile));
+                }
+            }
+            for (const auto id : resolution.implicit) {
+                if (const auto* type = declaration(id)) {
+                    for (auto& profile : operations_.implicit(*type, named, edition)) {
+                        if ((signature == nullptr || signature_matches(*signature, profile))
+                            && admitted(profile)) {
+                            add(std::move(profile));
+                        }
+                    }
+                }
+            }
+        };
+        const auto add_declaration = [&](const vhdl::Declaration* found, const auto& self,
+                                         const std::size_t depth) -> void {
             if (found != nullptr && found->form == vhdl::DeclarationForm::alias
                 && !found->subtype && found->alias_target) {
-                // 6.6.3: the signature, if any, selects the one subprogram or
-                // literal whose parameter and result type profile it matches.
+                if (depth > 64U) {
+                    throw std::logic_error { "VHDL typing: a subprogram alias refers to itself" };
+                }
+                if (found->alias_signature) {
+                    signatures.push_back(&*found->alias_signature);
+                }
                 std::vector<DeclarationId> targets = found->alias_target->overloads;
                 if (found->alias_target->selected
                     && std::ranges::find(targets, *found->alias_target->selected) == targets.end()) {
                     targets.push_back(*found->alias_target->selected);
                 }
+                // An alias of a library unit read from its object: the
+                // target's selection into another unit is not anchored
+                // (BD2), so it is resolved again here, by the alias's own
+                // visibility at its declaration (6.6.3, 12.3); the signature
+                // selects among the overloads (admitted below).
+                if (targets.empty() && found->alias_signature) {
+                    const auto target_parts = selected_parts(*found->alias_target);
+                    if (!target_parts.empty()) {
+                        const auto at = regions_.begin(found->alias_target->source);
+                        const auto resolution = target_parts.size() > 1U
+                            ? expanded(*found->alias_target, found->scope, found->alias_target->source)
+                            : std::optional<Resolution> { lookup_.visible(target_parts.back(), found->scope, at) };
+                        if (resolution) {
+                            targets = resolution->candidates;
+                        }
+                    }
+                }
                 for (const auto target_id : targets) {
                     const auto* target = declaration(target_id);
+                    if (target != nullptr && target->form == vhdl::DeclarationForm::alias
+                        && !target->subtype && target->alias_target && target != found) {
+                        self(target, self, depth + 1U);
+                        continue;
+                    }
                     if (!overloadable(target)) {
                         continue;
                     }
                     auto profile = operations_.of_declaration(*target);
-                    if (found->alias_signature) {
-                        const auto& signature = *found->alias_signature;
-                        if (signature.parameters.size() != profile.parameters.size()) {
-                            continue;
-                        }
-                        bool same = true;
-                        for (std::size_t index { }; index < signature.parameters.size(); ++index) {
-                            same = same
-                                && types_.of_subtype(signature.parameters[index])
-                                    == profile.parameters[index];
-                        }
-                        if (signature.result) {
-                            same = same && types_.of_subtype(*signature.result) == profile.result;
-                        }
-                        if (!same) {
-                            continue;
-                        }
+                    if (!admitted(profile)) {
+                        continue;
                     }
                     add(std::move(profile));
+                }
+                if (found->alias_signature) {
+                    // An alias of an implicitly declared operation or of a
+                    // STANDARD function (6.6.3, e.g. TO_STRING of 5.2.6):
+                    // the target name denotes no declaration of it.
+                    const auto target_parts = selected_parts(*found->alias_target);
+                    if (!target_parts.empty()) {
+                        const auto at = regions_.begin(found->alias_target->source);
+                        const auto target_resolution = target_parts.size() > 1U
+                            ? expanded(*found->alias_target, found->scope, found->alias_target->source)
+                            : std::optional<Resolution> { lookup_.visible(target_parts.back(), found->scope, at) };
+                        if (target_resolution) {
+                            add_predefined(*target_resolution, target_parts.back(), &*found->alias_signature);
+                        }
+                    }
+                }
+                if (found->alias_signature) {
+                    signatures.pop_back();
                 }
                 return;
             }
             if (overloadable(found)) {
-                add(operations_.of_declaration(*found));
+                auto profile = operations_.of_declaration(*found);
+                if (admitted(profile)) {
+                    add(std::move(profile));
+                }
             }
         };
-        // An expanded name (`P.F`, `work.P.F`): what name analysis stored.
+        // An expanded name (`P.F`, `work.P.F`): what name analysis stored,
+        // and the implicit operations and STANDARD functions of the prefix
+        // (they have no declaration to store, 12.3, 8.3).
         if (name != nullptr && selected_parts(*name).size() > 1U) {
             for (const auto id : name->overloads) {
-                add_declaration(declaration(id));
+                add_declaration(declaration(id), add_declaration, 0U);
             }
             if (name->selected && name->overloads.empty()) {
-                add_declaration(declaration(*name->selected));
+                add_declaration(declaration(*name->selected), add_declaration, 0U);
+            }
+            if (const auto prefix_resolution = expanded(*name, scope, source)) {
+                add_predefined(*prefix_resolution, selected_parts(*name).back(), nullptr);
             }
             return result;
         }
         const auto resolution = lookup_.visible(designator, scope, regions_.begin(source));
         for (const auto id : resolution.candidates) {
-            add_declaration(declaration(id));
+            add_declaration(declaration(id), add_declaration, 0U);
         }
         for (const auto& entry : resolution.standard) {
             if (entry.kind == StandardEntry::Kind::function) {
@@ -459,6 +584,39 @@ private:
                     add(std::move(profile));
                 }
             }
+        }
+        return result;
+    }
+
+    /// TRUE and FALSE (5.2.2.1): BOOLEAN's literals, and those of every
+    /// enumeration type declaring a literal of the same designator, which
+    /// overloads them (12.3).
+    [[nodiscard]] std::vector<Meaning> boolean_literal(const Expression& expression)
+    {
+        std::vector<Meaning> result;
+        const auto resolution = lookup_.visible(support::vhdl_symbol(expression.text),
+            expression.scope, regions_.begin(expression.source));
+        for (const auto id : resolution.candidates) {
+            const auto* found = declaration(id);
+            if (found == nullptr || found->form != vhdl::DeclarationForm::enumeration_literal) {
+                continue;
+            }
+            Meaning meaning;
+            meaning.type = types_.of_literal(*found);
+            meaning.kind = Interpretation::enumeration_literal;
+            meaning.declaration = id;
+            if (meaning.type && std::ranges::none_of(result,
+                    [&](const Meaning& other) { return other.type == meaning.type; })) {
+                result.push_back(std::move(meaning));
+            }
+        }
+        const auto boolean = standard_type(support::StandardDeclaration::boolean);
+        if (std::ranges::none_of(result,
+                [&](const Meaning& other) { return other.type == boolean; })) {
+            Meaning meaning;
+            meaning.type = boolean;
+            meaning.kind = Interpretation::enumeration_literal;
+            result.push_back(std::move(meaning));
         }
         return result;
     }
@@ -511,7 +669,18 @@ private:
     {
         const auto& found = interpret(operand);
         if (found.unmodeled) {
-            return 0U; // not typed here: no constraint (census)
+            // The parser's group of the subelement associations of one formal
+            // (4.3.2.2, 6.5.7.1) is no written aggregate and has no type of
+            // its own, but its actuals have the types of the parts they
+            // associate: they decide among overloads (12.5). Any other
+            // operand not typed here is no constraint (census).
+            const auto* group = node(operand);
+            if (group != nullptr && group->kind == ExpressionKind::aggregate
+                && group->marker == Marker::vhdl_formal_subelements && want
+                && !aggregate_fits(operand, want)) {
+                return std::nullopt;
+            }
+            return 0U;
         }
         if (!want) {
             ++open_operands_; // the operand's type is not known here (census)
@@ -523,12 +692,62 @@ private:
             if (fit == 0) {
                 continue;
             }
+            if (meaning.pseudo == Pseudo::aggregate && !aggregate_fits(operand, want)) {
+                continue;
+            }
             const auto cost = meaning.cost + (fit == 1 ? 1U : 0U);
             if (!best || cost < *best) {
                 best = cost;
             }
         }
         return best;
+    }
+
+    /// Whether the individual-association group `operand` (the parser's
+    /// aggregate of the subelement associations `f(i) => a`, `f.x => b` of
+    /// one formal, 6.5.7.1) fits a formal of type `want`: each actual has
+    /// the type of the formal's part it names, so it takes part in
+    /// overload resolution (12.5). A written aggregate does not: its type
+    /// is determined from the context alone (9.3.3.1), so it fits every
+    /// composite type of its kind. An element not typed here fits.
+    [[nodiscard]] bool aggregate_fits(const ExpressionId operand, const Type& want)
+    {
+        const auto* e = node(operand);
+        if (e == nullptr || e->kind != ExpressionKind::aggregate
+            || e->marker != Marker::vhdl_formal_subelements) {
+            return true;
+        }
+        const auto associations = e->associations;
+        const auto type_class = types_.class_of(want);
+        if (type_class == TypeClass::array && types_.dimensions(want) == 1U) {
+            const auto element = types_.element(want);
+            if (!element) {
+                return true;
+            }
+            for (const auto& association : associations) {
+                // A formal part may be a slice of the formal (4.3.2.2,
+                // 6.5.7.1), whose actual has the formal's type.
+                if (!operand_cost(association.value, element)
+                    && !operand_cost(association.value, want)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        if (type_class == TypeClass::record) {
+            for (const auto& association : associations) {
+                if (association.positional() || association.choice_spelling.empty()
+                    || association.choice_marker != Marker::none) {
+                    continue; // by position or `others`: decided when selected
+                }
+                const auto element = types_.record_element(want,
+                    support::vhdl_symbol(association.choice_spelling));
+                if (element && !operand_cost(association.value, element)) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     /// How well `meaning` fits a context of type `want` (see fit_types);
@@ -560,6 +779,308 @@ private:
         return 0;
     }
 
+    // ---- formal parts (4.3.2.2, 6.5.7.1) -----------------------------------
+
+    /// What a formal part written in a named association associates.
+    struct Association {
+        /// The position of the formal in the callee's formal list.
+        std::size_t formal { };
+        /// The whole formal, not a part of it (`f(i)`, `f.x`).
+        bool whole { true };
+        /// The actual has the type of the formal itself.
+        bool plain { true };
+        /// The type the actual has (not plain).
+        Type actual;
+        /// That type is not decided here (census).
+        bool unknown { };
+        /// A conversion formal `F(f) => actual` the parser folded into an
+        /// aggregate actual (one association, the formal as its choice):
+        /// the actual inside it.
+        ExpressionId inner;
+        /// The conversion function or type mark F of `F(f) => actual`: its
+        /// stored result (selected = the type mark's declaration, overloads =
+        /// the conversion functions whose parameter has the formal's type).
+        std::optional<vhdl::Name> conversion;
+    };
+
+    [[nodiscard]] static std::string_view trimmed(std::string_view text)
+    {
+        const auto blank = [](const char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; };
+        while (!text.empty() && blank(text.front())) {
+            text.remove_prefix(1U);
+        }
+        while (!text.empty() && blank(text.back())) {
+            text.remove_suffix(1U);
+        }
+        return text;
+    }
+
+    /// The leading simple name of a written name (a basic or extended
+    /// identifier, 15.4) and the rest of it; false when it starts with none.
+    [[nodiscard]] static bool split_name(std::string_view text, std::string_view& head,
+        std::string_view& rest)
+    {
+        text = trimmed(text);
+        std::size_t end { };
+        if (!text.empty() && text.front() == '\\') {
+            end = text.find('\\', 1U);
+            if (end == std::string_view::npos) {
+                return false;
+            }
+            ++end;
+        } else {
+            while (end < text.size()
+                && (std::isalnum(static_cast<unsigned char>(text[end])) != 0 || text[end] == '_')) {
+                ++end;
+            }
+        }
+        if (end == 0U) {
+            return false;
+        }
+        head = text.substr(0U, end);
+        rest = trimmed(text.substr(end));
+        return true;
+    }
+
+    /// The type of the part of an object of type `type` that the suffixes
+    /// `suffix` of a formal designator select (4.3.2.2: indexed and sliced
+    /// names, selected names, 8.3-8.5); none when not decided here.
+    [[nodiscard]] Type designated_part(Type type, std::string_view suffix) const
+    {
+        suffix = trimmed(suffix);
+        while (type && !suffix.empty()) {
+            if (types_.class_of(type) == TypeClass::access) {
+                type = types_.designated(type); // implicit dereference (8.3)
+            }
+            if (suffix.front() == '(') {
+                std::size_t depth { };
+                std::size_t close = std::string_view::npos;
+                std::size_t commas { };
+                bool slice = false;
+                for (std::size_t at { }; at < suffix.size(); ++at) {
+                    const char c = suffix[at];
+                    if (c == '"') {
+                        at = suffix.find('"', at + 1U);
+                        if (at == std::string_view::npos) {
+                            return { };
+                        }
+                    } else if (c == '\'' && at + 2U < suffix.size() && suffix[at + 2U] == '\'') {
+                        at += 2U; // a character literal
+                    } else if (c == '(') {
+                        ++depth;
+                    } else if (c == ')') {
+                        if (--depth == 0U) {
+                            close = at;
+                            break;
+                        }
+                    } else if (depth == 1U && c == ',') {
+                        ++commas;
+                    } else if (depth == 1U && std::isalpha(static_cast<unsigned char>(c)) != 0) {
+                        std::size_t end = at;
+                        std::string word;
+                        while (end < suffix.size()
+                            && (std::isalnum(static_cast<unsigned char>(suffix[end])) != 0
+                                || suffix[end] == '_')) {
+                            word += static_cast<char>(std::tolower(static_cast<unsigned char>(suffix[end])));
+                            ++end;
+                        }
+                        const bool tick = at > 0U && suffix[at - 1U] == '\'';
+                        slice = slice || word == "to" || word == "downto"
+                            || (tick && (word == "range" || word == "reverse_range"));
+                        at = end - 1U;
+                    }
+                }
+                if (close == std::string_view::npos || types_.class_of(type) != TypeClass::array) {
+                    return { };
+                }
+                if (!slice) {
+                    if (types_.dimensions(type) != commas + 1U) {
+                        return { };
+                    }
+                    type = types_.element(type);
+                }
+                suffix = trimmed(suffix.substr(close + 1U));
+            } else if (suffix.front() == '.') {
+                std::string_view head;
+                std::string_view rest;
+                if (!split_name(suffix.substr(1U), head, rest)) {
+                    return { };
+                }
+                type = types_.record_element(type, support::vhdl_symbol(head));
+                suffix = rest;
+            } else {
+                return { };
+            }
+        }
+        return type;
+    }
+
+    /// The formal of `profile` the written formal part `written` of a named
+    /// association names (4.3.2.2): a formal designator `f`, `f(i)`, `f.x`,
+    /// or `F(designator)` with a conversion function or type mark F, and
+    /// the type its actual `actual` has; nullopt when it names no formal.
+    [[nodiscard]] std::optional<Association> associate(const Profile& profile,
+        const std::string_view written, const Expression* actual)
+    {
+        const auto formal_named = [&](const support::SymbolId symbol) {
+            std::optional<std::size_t> match;
+            for (std::size_t formal { }; formal < profile.formal_names.size(); ++formal) {
+                if (profile.formal_names[formal] == symbol) {
+                    match = formal;
+                }
+            }
+            return match;
+        };
+        std::string_view head;
+        std::string_view rest;
+        if (!split_name(written, head, rest)) {
+            return std::nullopt;
+        }
+        const auto symbol = support::vhdl_symbol(head);
+        if (const auto formal = formal_named(symbol)) {
+            Association result;
+            result.formal = *formal;
+            if (!rest.empty()) {
+                result.whole = false;
+                result.plain = false;
+                result.actual = designated_part(profile.parameters[*formal], rest);
+                result.unknown = !result.actual;
+            }
+            return result;
+        }
+        // function_name ( formal_designator ) or type_mark ( formal_designator ).
+        std::string_view inner_head;
+        std::string_view inner_rest;
+        ExpressionId folded;
+        if (rest.size() >= 2U && rest.front() == '(' && rest.back() == ')') {
+            if (!split_name(rest.substr(1U, rest.size() - 2U), inner_head, inner_rest)) {
+                return std::nullopt;
+            }
+        } else if (rest.empty() && actual != nullptr && actual->kind == ExpressionKind::aggregate
+            && actual->associations.size() == 1U && actual->associations.front().choices.size() == 1U) {
+            // The parser reads `F(f) => actual` as an individual association
+            // of the formal F: an aggregate whose one choice is f (4.3.2.2).
+            const auto* choice = node(actual->associations.front().choices.front());
+            if (choice == nullptr || !split_name(choice->text, inner_head, inner_rest)
+                || !inner_rest.empty()) {
+                return std::nullopt;
+            }
+            folded = actual->associations.front().value;
+            // `F(f, g) => a`: the parser nests one aggregate per further
+            // selector, built over the group's own span (a written aggregate
+            // actual has its own). 4.3.2.2: `F(formal_designator)` holds one
+            // designator, so this names no formal.
+            if (const auto* value = node(folded); value != nullptr
+                && value->kind == ExpressionKind::aggregate && value->source == actual->source) {
+                return std::nullopt;
+            }
+        } else {
+            return std::nullopt;
+        }
+        const auto formal = formal_named(support::vhdl_symbol(inner_head));
+        if (!formal) {
+            return std::nullopt;
+        }
+        Association result;
+        result.formal = *formal;
+        result.whole = inner_rest.empty();
+        result.plain = false;
+        result.unknown = true;
+        result.inner = folded;
+        const auto designated = inner_rest.empty() ? profile.parameters[*formal]
+                                                   : designated_part(profile.parameters[*formal], inner_rest);
+        if (designated && actual != nullptr) {
+            // The conversion function's result (the formal converts to the
+            // actual's type), else the type mark.
+            std::vector<Type> types;
+            const auto add = [&](const Type& type) {
+                if (type && std::ranges::find(types, type) == types.end()) {
+                    types.push_back(type);
+                }
+            };
+            for (const auto& candidate : overloads(symbol, actual->scope, actual->source, nullptr)) {
+                if (candidate.parameters.size() == 1U && candidate.parameters.front() == designated) {
+                    add(candidate.result);
+                }
+            }
+            if (types.empty()) {
+                const auto resolution = lookup_.visible(symbol, actual->scope,
+                    regions_.begin(actual->source));
+                for (const auto id : resolution.candidates) {
+                    const auto* found = declaration(id);
+                    if (found != nullptr
+                        && (found->form == vhdl::DeclarationForm::type
+                            || found->form == vhdl::DeclarationForm::subtype)) {
+                        add(types_.of_type_declaration(*found));
+                    }
+                }
+                for (const auto& entry : resolution.standard) {
+                    if (entry.kind == StandardEntry::Kind::type) {
+                        add(types_.of_standard(entry.declaration));
+                    }
+                }
+            }
+            if (types.size() == 1U) {
+                result.actual = types.front();
+                result.unknown = false;
+            }
+        }
+        // 4.3.2.2, 6.5.7.1: the stored result of the conversion's name, which
+        // elaboration reads instead of looking F up again.
+        vhdl::Name conversion;
+        conversion.spelling = std::string { head };
+        conversion.canonical = support::canonical_vhdl_spelling(head);
+        conversion.symbol = symbol;
+        conversion.analyzed = true;
+        if (actual != nullptr) {
+            conversion.source = actual->source;
+            if (designated) {
+                for (const auto& candidate : overloads(symbol, actual->scope, actual->source, nullptr)) {
+                    if (candidate.source == Profile::Source::declaration
+                        && candidate.parameters.size() == 1U
+                        && candidate.parameters.front() == designated) {
+                        conversion.overloads.push_back(candidate.declaration);
+                    }
+                }
+            }
+            if (conversion.overloads.empty()) {
+                const auto resolution = lookup_.visible(symbol, actual->scope,
+                    regions_.begin(actual->source));
+                for (const auto id : resolution.candidates) {
+                    const auto* found = declaration(id);
+                    if (found != nullptr
+                        && (found->form == vhdl::DeclarationForm::type
+                            || found->form == vhdl::DeclarationForm::subtype)) {
+                        conversion.selected = id;
+                    }
+                }
+                for (const auto& entry : resolution.standard) {
+                    if (entry.kind == StandardEntry::Kind::type) {
+                        conversion.standard = entry.declaration;
+                    }
+                }
+            } else if (conversion.overloads.size() == 1U) {
+                conversion.selected = conversion.overloads.front();
+            }
+        }
+        result.conversion = std::move(conversion);
+        return result;
+    }
+
+    /// Whether `profile` is a function's, also when its result is of an
+    /// interface type (6.5.3), which has no type here.
+    [[nodiscard]] bool function_profile(const Profile& profile) const
+    {
+        if (profile.result) {
+            return true;
+        }
+        if (profile.source != Profile::Source::declaration) {
+            return false;
+        }
+        const auto* found = declaration(profile.declaration);
+        return found != nullptr && found->callable && found->callable->return_type.has_value();
+    }
+
     /// Applies `profile` to the actuals `operands` with the formal
     /// designators `names` (empty: positional; 6.5.7.1, 4.2.2.1); the
     /// interpretation, or nullopt when the actuals do not fit.
@@ -585,25 +1106,32 @@ private:
         }
         const auto count = operands.size() - first;
         std::vector<std::optional<std::size_t>> formal_of(count);
+        std::vector<std::optional<Association>> associations(count);
         std::vector<bool> taken(profile.parameters.size());
+        std::vector<bool> partial(profile.parameters.size());
         bool named = false;
         for (std::size_t index { }; index < count; ++index) {
             const auto position = index + first;
             const bool is_named = position < names.size() && !names[position].empty();
             if (is_named) {
                 named = true;
-                const auto symbol = support::vhdl_symbol(names[position]);
-                std::optional<std::size_t> match;
-                for (std::size_t formal { }; formal < profile.formal_names.size(); ++formal) {
-                    if (profile.formal_names[formal] == symbol) {
-                        match = formal;
-                    }
-                }
-                if (!match || taken[*match]) {
+                const auto written = associate(profile, names[position], node(operands[position]));
+                if (!written) {
                     return std::nullopt;
                 }
-                formal_of[index] = match;
-                taken[*match] = true;
+                // 6.5.7.1: a formal is associated once as a whole, or by
+                // several parts.
+                if (taken[written->formal] && (written->whole || !partial[written->formal])) {
+                    return std::nullopt;
+                }
+                formal_of[index] = written->formal;
+                taken[written->formal] = true;
+                if (!written->whole) {
+                    partial[written->formal] = true;
+                }
+                if (!written->plain) {
+                    associations[index] = *written;
+                }
             } else {
                 if (named || index >= profile.parameters.size()) {
                     return std::nullopt; // positional after named (6.5.7.1)
@@ -620,7 +1148,10 @@ private:
         }
         Meaning meaning;
         meaning.type = profile.result;
-        meaning.open = profile.result && types_.class_of(profile.result) == TypeClass::none;
+        // A function whose result type is an interface type (6.5.3) has an
+        // unknown result type (BD2, V4).
+        meaning.open = function_profile(profile)
+            && (!profile.result || types_.class_of(profile.result) == TypeClass::none);
         meaning.operands.resize(operands.size());
         meaning.formals.resize(operands.size(), vhdl::no_formal);
         for (std::size_t index { }; index < count; ++index) {
@@ -629,12 +1160,46 @@ private:
                 || types_.class_of(profile.parameters[formal]) == TypeClass::none) {
                 meaning.open = true; // an interface type (6.5.3): BD2 (V4)
             }
-            const auto cost = operand_cost(operands[index + first], profile.parameters[formal]);
+            // 4.3.2.2: the actual of a partial formal or of a formal with a
+            // conversion has the type of that part, or the conversion's.
+            auto want = profile.parameters[formal];
+            if (associations[index]) {
+                want = associations[index]->actual;
+                meaning.open = meaning.open || associations[index]->unknown;
+            }
+            const auto written_actual = associations[index] && associations[index]->inner.valid()
+                ? associations[index]->inner
+                : operands[index + first];
+            auto cost = operand_cost(written_actual, want);
+            if (!cost && associations[index] && associations[index]->inner.valid()) {
+                // 6.5.7.1: with a conversion formal `F(f) => G(a)`, the
+                // actual part may be a conversion G of the actual designator
+                // a: a has the type F converts the formal to, and G's result
+                // the formal's type (an inout formal converts both ways).
+                const auto* converted = node(written_actual);
+                if (converted != nullptr && converted->kind == ExpressionKind::call
+                    && converted->operands.size() == 1U
+                    && operand_cost(converted->operands.front(), want)
+                    && operand_cost(written_actual, profile.parameters[formal])) {
+                    cost = operand_cost(converted->operands.front(), want);
+                    // G(a) itself is typed as the formal's type; a takes
+                    // the type F converts to through G's resolution.
+                    want = profile.parameters[formal];
+                }
+            }
             if (!cost) {
                 return std::nullopt;
             }
             meaning.cost += *cost;
-            meaning.operands[index + first] = profile.parameters[formal];
+            meaning.operands[index + first] = want;
+            if (written_actual != operands[index + first]) {
+                meaning.inner.resize(operands.size());
+                meaning.inner[index + first] = written_actual;
+                meaning.conversions.resize(operands.size());
+                if (associations[index]) {
+                    meaning.conversions[index + first] = associations[index]->conversion;
+                }
+            }
             if (profile.source != Profile::Source::implicit) {
                 meaning.formals[index + first] = static_cast<std::uint32_t>(formal);
             }
@@ -686,6 +1251,15 @@ private:
         // see the placeholder.
         interpretations_.emplace(id.value(), Interpretations { { }, true });
         auto computed = compute(id);
+        // A value of a type this pass cannot determine (an interface type,
+        // 6.5.3) is not typed (census), whatever its operands.
+        if (std::ranges::any_of(computed.list, [](const Meaning& meaning) {
+                return meaning.pseudo == Pseudo::none && !meaning.type && !meaning.range
+                    && !meaning.type_mark;
+            })) {
+            computed.list.clear();
+            computed.unmodeled = true;
+        }
         auto& slot = interpretations_[id.value()];
         slot = std::move(computed);
         return slot;
@@ -746,13 +1320,9 @@ private:
             result.list.push_back(std::move(meaning));
             return result;
         }
-        case ExpressionKind::boolean_literal: {
-            Meaning meaning;
-            meaning.type = standard_type(support::StandardDeclaration::boolean);
-            meaning.kind = Interpretation::enumeration_literal;
-            result.list.push_back(std::move(meaning));
+        case ExpressionKind::boolean_literal:
+            result.list = boolean_literal(e);
             return result;
-        }
         case ExpressionKind::logic_literal:
             result.list = character_literal(e);
             return result;
@@ -773,12 +1343,12 @@ private:
         case ExpressionKind::name:
             return name(e);
         case ExpressionKind::unary:
-            return operation(e, support::vhdl_symbol(e.text), 0U);
+            return operation(e, support::vhdl_symbol(e.text), 0U, operator_name(e));
         case ExpressionKind::binary:
             if (range_node(e)) {
                 return range(e);
             }
-            return operation(e, support::vhdl_symbol(e.text), 0U);
+            return operation(e, support::vhdl_symbol(e.text), 0U, operator_name(e));
         case ExpressionKind::call:
             return call(e);
         case ExpressionKind::index:
@@ -813,6 +1383,25 @@ private:
                         return denoted(*target, scope);
                     }
                 }
+            }
+            if (found.alias_signature) {
+                return std::nullopt; // a subprogram or literal alias (6.6.3), no object
+            }
+            if (!found.subtype && found.initializer) {
+                // 6.6.2: an object alias without subtype indication denotes
+                // the named object, which may be an element, a slice or a
+                // field of the alias target's prefix: the alias has the type
+                // of that name (the HIR keeps it as the initializer).
+                const auto& named = interpret(*found.initializer);
+                if (named.unmodeled || named.list.size() != 1U || !named.list.front().type
+                    || named.list.front().pseudo != Pseudo::none
+                    || named.list.front().type_mark) {
+                    return std::nullopt;
+                }
+                meaning.type = named.list.front().type;
+                meaning.kind = Interpretation::object;
+                meaning.signal = named.list.front().signal;
+                return meaning;
             }
             [[fallthrough]];
         case Form::port:
@@ -855,6 +1444,14 @@ private:
         const auto parts = selected_parts(name);
         if (parts.empty()) {
             result.unmodeled = true;
+            return result;
+        }
+        // A library logical name (13.2) denotes no object or value, so it
+        // has no interpretation as a primary (9.1): an operation with it as
+        // an operand fits nothing.
+        if (parts.size() == 1U && !name.selected && name.overloads.empty()
+            && name.standard == support::StandardDeclaration::none
+            && regions_.library_visible(parts.front(), e.scope, regions_.begin(e.source))) {
             return result;
         }
         // A STANDARD type or subtype mark.
@@ -923,7 +1520,8 @@ private:
         // A non-overloadable declaration.
         if (name.selected && name.overloads.size() <= 1U) {
             if (const auto* found = declaration(*name.selected)) {
-                if (!found->callable && found->form != vhdl::DeclarationForm::enumeration_literal) {
+                if (!found->callable && found->form != vhdl::DeclarationForm::enumeration_literal
+                    && !found->alias_signature) {
                     if (auto meaning = denoted(*found, e.scope)) {
                         result.list.push_back(std::move(*meaning));
                         return result;
@@ -988,13 +1586,42 @@ private:
     /// the prefix denotes an object.
     [[nodiscard]] bool method_name(const vhdl::Name& name) const
     {
-        if (!name.selected || selected_parts(name).size() < 2U) {
+        if (!name.selected) {
             return false;
         }
         const auto* found = declaration(*name.selected);
-        return found != nullptr && !found->callable
-            && found->form != vhdl::DeclarationForm::enumeration_literal
-            && found->form != vhdl::DeclarationForm::alias;
+        if (found == nullptr) {
+            return false;
+        }
+        using Form = vhdl::DeclarationForm;
+        const auto is_object = [&](const vhdl::Declaration& named) {
+            return !named.callable && named.form != Form::enumeration_literal;
+        };
+        const auto denotes_object = [&](const vhdl::Declaration& named) {
+            return is_object(named) && named.form != Form::type && named.form != Form::subtype;
+        };
+        // 6.6.3: an alias with a signature of a method of a protected-type
+        // object (`alias inc is pt.increment [];`) denotes the method.
+        if (found->form == Form::alias && found->alias_signature && found->alias_target
+            && found->alias_target->selected) {
+            const auto* target = declaration(*found->alias_target->selected);
+            if (target != nullptr && denotes_object(*target)) {
+                return true;
+            }
+        }
+        if (selected_parts(name).size() < 2U) {
+            return false;
+        }
+        // 6.6.2: an alias of a shared variable of a protected type is a
+        // prefix of method calls as the variable is.
+        if (found->form == Form::alias) {
+            if (found->alias_signature || !found->alias_target || !found->alias_target->selected) {
+                return false;
+            }
+            const auto* target = declaration(*found->alias_target->selected);
+            return target != nullptr && denotes_object(*target);
+        }
+        return is_object(*found);
     }
 
     /// Whether `name` denotes members of a package fsim serves without
@@ -1004,7 +1631,16 @@ private:
         const ScopeId scope, const SourceSpanId source, const vhdl::Name& name) const
     {
         if (selected_parts(name).size() > 1U) {
-            return !name.selected && name.overloads.empty();
+            if (name.selected || !name.overloads.empty()) {
+                return false;
+            }
+            // Name analysis stores no declaration for the implicit
+            // operations and STANDARD functions of a package (12.3): the
+            // member is then declared when the prefix denotes such.
+            const auto resolution = expanded(name, scope, source);
+            return !resolution
+                || (resolution->candidates.empty() && resolution->implicit.empty()
+                    && resolution->standard.empty());
         }
         return lookup_.visible(designator, scope, regions_.begin(source)).undeclared;
     }
@@ -1109,6 +1745,23 @@ private:
     /// Whether an operand from `first` on is not typed by this pass: the
     /// node is then not typed either (no interpretation is decided on an
     /// operand that fits any type).
+    /// Whether the actual `id` of a call is one the pass does not model. The
+    /// parser's group of the subelement associations of one formal, or of a
+    /// conversion formal `F(f) => a` (4.3.2.2, 6.5.7.1), has no type of its
+    /// own: it is modeled when its actuals are, which then decide (12.5).
+    [[nodiscard]] bool actual_unmodeled(const ExpressionId id)
+    {
+        const auto* group = node(id);
+        if (group != nullptr && group->kind == ExpressionKind::aggregate
+            && group->marker == Marker::vhdl_formal_subelements) {
+            const auto associations = group->associations;
+            return std::ranges::any_of(associations, [&](const auto& association) {
+                return !association.value.valid() || interpret(association.value).unmodeled;
+            });
+        }
+        return interpret(id).unmodeled;
+    }
+
     [[nodiscard]] bool unmodeled_operand(const Expression& e, const std::size_t first)
     {
         for (std::size_t index = first; index < e.operands.size(); ++index) {
@@ -1119,19 +1772,36 @@ private:
         return false;
     }
 
+    /// The name of an operator symbol call `P."-"(x)` (4.2.1, 8.3): its
+    /// expanded name selects the operator from P; an operator written as an
+    /// expression has none (nullptr).
+    [[nodiscard]] static const vhdl::Name* operator_name(const Expression& e)
+    {
+        return e.operator_symbol_call && e.referenced_name ? &*e.referenced_name : nullptr;
+    }
+
     Interpretations operation(const Expression& e, const support::SymbolId designator,
-        const std::size_t first)
+        const std::size_t first, const vhdl::Name* expanded_name = nullptr)
     {
         Interpretations result;
+        // `P."+"(a, b)` (4.2.1, 8.3): the operator is selected from the
+        // package P, not by visibility.
+        const bool selected = expanded_name != nullptr && selected_parts(*expanded_name).size() > 1U;
         if (unmodeled_operand(e, first)
-            || lookup_.visible(designator, e.scope, regions_.begin(e.source)).undeclared) {
+            || (selected ? undeclared(selected_parts(*expanded_name).back(), e.scope, e.source,
+                               *expanded_name)
+                        || generic_named(selected_parts(*expanded_name).back(), e.scope, e.source,
+                            *expanded_name)
+                         : lookup_.visible(designator, e.scope, regions_.begin(e.source)).undeclared)) {
             // An operator a package without declarations supplies (the
             // Synopsys packages, BD2) is census-counted, not typed.
             result.unmodeled = true;
             return result;
         }
-        for (const auto& profile : overloads(designator, e.scope, e.source, nullptr)) {
-            if (profile.parameters.size() != e.operands.size() - first || !profile.result) {
+        for (const auto& profile : overloads(designator, e.scope, e.source,
+                 selected ? expanded_name : nullptr)) {
+            if (profile.parameters.size() != e.operands.size() - first
+                || !function_profile(profile)) {
                 continue;
             }
             if (auto meaning = apply(profile, e.operands, { }, first)) {
@@ -1160,7 +1830,8 @@ private:
             return attribute(e);
         }
         if (e.operator_symbol_call) {
-            return operation(e, support::vhdl_symbol(e.text), 0U);
+            return operation(e, support::vhdl_symbol(e.text), 0U,
+                e.referenced_name ? &*e.referenced_name : nullptr);
         }
         if (!e.referenced_name) {
             result.unmodeled = true;
@@ -1183,7 +1854,8 @@ private:
                 prefix = mark;
             } else if (const auto* found = declaration(*name.selected);
                        found != nullptr && !found->callable
-                       && found->form != vhdl::DeclarationForm::enumeration_literal) {
+                       && found->form != vhdl::DeclarationForm::enumeration_literal
+                       && !found->alias_signature) {
                 // `rec.field(i)`: the object prefix with its element suffixes.
                 Expression as_name = e;
                 as_name.kind = ExpressionKind::name;
@@ -1282,7 +1954,7 @@ private:
             return result;
         }
         for (const auto& profile : overloads(parts.back(), e.scope, e.source, &name)) {
-            if (!profile.result) {
+            if (!function_profile(profile)) {
                 continue;
             }
             if (auto meaning = apply(profile, e.operands, e.argument_names, 0U)) {
@@ -1478,6 +2150,9 @@ private:
             meaning.kind = Interpretation::operation;
             meaning.operands = { boolean, type, type };
             meaning.cost = *then_cost + *else_cost;
+            // 9.3.6, 9.3.8: universal values convert to the context's type.
+            meaning.convertible = type.kind == Type::Kind::universal_integer
+                || type.kind == Type::Kind::universal_real;
             result.list.push_back(std::move(meaning));
         }
         return result;
@@ -2001,6 +2676,9 @@ private:
                 this->condition(operands[index]); // 9.2.9: a condition (?? applies)
                 continue;
             }
+            if (select_inner(chosen, index, operands[index], want)) {
+                continue;
+            }
             if (want) {
                 select(operands[index], want);
             } else {
@@ -2011,6 +2689,34 @@ private:
             select_aggregate(id, chosen.pseudo == Pseudo::aggregate ? expected : chosen.type, 0U);
         }
         return node(id)->type;
+    }
+
+    /// An operand that is the aggregate of a folded conversion formal
+    /// (Association::inner): the actual inside it is typed, the aggregate and
+    /// its choice (the formal's name) are not typed here (census).
+    bool select_inner(const Meaning& chosen, const std::size_t index, const ExpressionId operand,
+        const Type& want)
+    {
+        if (index >= chosen.inner.size() || !chosen.inner[index].valid()) {
+            return false;
+        }
+        auto* aggregate = node(operand);
+        if (aggregate != nullptr) {
+            // The conversion's stored result, for elaboration (6.5.7.1).
+            if (index < chosen.conversions.size() && chosen.conversions[index]) {
+                aggregate->referenced_name = chosen.conversions[index];
+            }
+            for (const auto& association : aggregate->associations) {
+                for (const auto choice : association.choices) {
+                    unmodeled_.insert(choice.value());
+                }
+            }
+        }
+        unmodeled_.insert(operand.value());
+        if (want) {
+            (void)select(chosen.inner[index], want);
+        }
+        return true;
     }
 
     /// Types an operand that has no context type (a conversion operand, an
@@ -2124,6 +2830,11 @@ private:
             // one-dimensional aggregate is an element or a slice of the
             // aggregate's type.
             const auto element = types_.element(type);
+            if (!element) {
+                // An element of an interface type (6.5.3): not typed here.
+                unmodeled_.insert(association.value.value());
+                continue;
+            }
             const auto value = interpret(association.value); // copy: the map may grow
             bool element_fits = value.unmodeled;
             bool array_fits = false;
@@ -2178,6 +2889,22 @@ private:
     [[nodiscard]] std::vector<Type> bound_types(const Interpretations& lefts,
         const Interpretations& rights) const
     {
+        // 5.3.2.2: both bounds universal_integer (universal_real) have the
+        // universal type, whatever other types their operators could give
+        // (12.5: no implicit conversion is needed).
+        const auto has_universal = [](const Interpretations& found, const Type::Kind kind) {
+            return std::ranges::any_of(found.list, [&](const Meaning& meaning) {
+                return meaning.pseudo == Pseudo::none && meaning.type.kind == kind;
+            });
+        };
+        if (has_universal(lefts, Type::Kind::universal_integer)
+            && has_universal(rights, Type::Kind::universal_integer)) {
+            return { Types::universal_integer() };
+        }
+        if (has_universal(lefts, Type::Kind::universal_real)
+            && has_universal(rights, Type::Kind::universal_real)) {
+            return { Types::universal_real() };
+        }
         std::vector<Type> common;
         const auto add = [&](const Type& type) {
             if (type && std::ranges::find(common, type) == common.end()) {
@@ -2375,11 +3102,35 @@ private:
             return;
         }
         const auto type_class = types_.class_of(base);
+        // 5.3.2.2, 6.3: an index constraint of an access type constrains the
+        // designated array type.
+        const auto constrained = type_class == TypeClass::access
+                && types_.class_of(types_.designated(base)) == TypeClass::array
+            ? types_.designated(base)
+            : base;
         for (std::size_t index { }; index < subtype.constraints.size(); ++index) {
             const auto& range = subtype.constraints[index];
-            const auto want = type_class == TypeClass::array ? index_of(base, index) : base;
+            const auto want = types_.class_of(constrained) == TypeClass::array
+                ? index_of(constrained, index)
+                : base;
             type_range(range, want);
         }
+    }
+
+    /// The bounds of an integer, floating or physical type definition
+    /// (3.1.2, 5.2.3.1, 5.2.5.1): each is of some integer (floating) type,
+    /// the two need not be of one type; they are typed alone unless one type
+    /// is common to both.
+    void type_scalar_bounds(const ExpressionId left, const ExpressionId right)
+    {
+        const auto& lefts = interpret(left);
+        const auto& rights = interpret(right);
+        if (lefts.unmodeled || rights.unmodeled || bound_types(lefts, rights).size() != 1U) {
+            (void)select(left, { });
+            (void)select(right, { });
+            return;
+        }
+        (void)select_bounds(left, right);
     }
 
     void type_range(const vhdl::RangeConstraint& range, const Type& want)
@@ -2478,7 +3229,7 @@ private:
             // have any integer (floating) type (5.2.3.1, 5.2.5.1).
             const auto& range = *type.scalar_range;
             if (range.left_expression && range.right_expression) {
-                (void)select_bounds(*range.left_expression, range.right_expression);
+                type_scalar_bounds(*range.left_expression, *range.right_expression);
             }
         }
         const auto self = Types::declared(type.id);
@@ -2702,7 +3453,7 @@ private:
         std::vector<Meaning> fitting;
         unsigned best = std::numeric_limits<unsigned>::max();
         for (const auto& profile : overloads(parts.back(), s.scope, s.source, &s.procedure)) {
-            if (profile.result) {
+            if (function_profile(profile)) {
                 continue;
             }
             auto meaning = apply(profile, actuals, names, 0U);
@@ -2730,7 +3481,7 @@ private:
             // An actual the pass does not model fits every formal: no
             // decision (census), neither "none" nor "ambiguous".
             if (std::ranges::any_of(actuals, [&](const ExpressionId id) {
-                    return interpret(id).unmodeled;
+                    return actual_unmodeled(id);
                 })) {
                 for (const auto actual : actuals) {
                     unmodeled_.insert(actual.value());
@@ -2755,6 +3506,9 @@ private:
             statement.resolved_formals = chosen.formals;
         }
         for (std::size_t index { }; index < actuals.size(); ++index) {
+            if (select_inner(chosen, index, actuals[index], chosen.operands[index])) {
+                continue;
+            }
             if (chosen.operands[index]) {
                 (void)select(actuals[index], chosen.operands[index]);
             }
@@ -2769,12 +3523,57 @@ private:
 
     void type_instance(const vhdl::Instance& instance)
     {
-        // The formals of a binding are not visible by selection here; the
-        // actuals are typed by the formal's type in a later round (6.5.7).
+        // An actual is typed by its formal's subtype (6.5.6.2, 6.5.7.1): the
+        // formal D3 bound by name (resolve_formals) when the association
+        // names the whole formal and converts nothing. Positional actuals,
+        // partial formals (`f(i)`, `f.x`), formal conversions and formals
+        // of a generic (interface) type are left unmodeled here.
         for (const auto* map : { &instance.generic_map, &instance.port_map }) {
             for (const auto& association : *map) {
-                if (association.expression) {
-                    unmodeled_.insert(association.expression->value());
+                if (!association.expression) {
+                    continue;
+                }
+                const auto id = *association.expression;
+                Type type;
+                std::string_view head;
+                std::string_view rest;
+                if (association.kind == vhdl::AssociationKind::expression
+                    && association.formal && association.formal->analyzed
+                    && association.formal->selected
+                    && !association.formal_conversion
+                    && split_name(association.formal->text(), head, rest)
+                    && rest.empty()) {
+                    if (const auto* formal = declaration(*association.formal->selected);
+                        formal != nullptr && formal->subtype
+                        && (formal->form == vhdl::DeclarationForm::port
+                            || formal->form == vhdl::DeclarationForm::generic_constant)) {
+                        // A formal whose type is selected through a generic
+                        // package (6.5.5, `complex_pkg.complex`) has the type
+                        // of the instance bound at elaboration, not the
+                        // template's: the actual's type is not decided here.
+                        const bool instance_type = formal->subtype->written_type_mark
+                            && formal->subtype->written_type_mark->exemption
+                                == vhdl::AnalysisExemption::package_instance;
+                        if (!instance_type) {
+                            type = types_.of_subtype(*formal->subtype);
+                        }
+                        // 6.5.7.1: the conversion of an actual associated with
+                        // an out or buffer port converts the formal's value to
+                        // the actual designator's type: `f(sig)` has the type
+                        // of sig, not of the formal.
+                        const auto* actual = node(id);
+                        if (formal->form == vhdl::DeclarationForm::port
+                            && (formal->direction == vhdl::Direction::output
+                                || formal->direction == vhdl::Direction::buffer)
+                            && actual != nullptr && actual->kind == ExpressionKind::call) {
+                            type = { };
+                        }
+                    }
+                }
+                if (type && types_.class_of(type) != TypeClass::none) {
+                    (void)select(id, type);
+                } else {
+                    unmodeled_.insert(id.value());
                 }
             }
         }
