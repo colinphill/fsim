@@ -10324,31 +10324,6 @@ fsim_add_mixed_standard_case(profile-mismatch
   "package_sizing.sv@2017@sizing|import_plain.sv@2017" tb_profile "unused"
   FAIL_MESSAGE "FSIM-FE-STANDARD-003")
 
-# Windows does not search sibling build directories for dependent DLLs. Every
-# build-tree executable links the one process-wide fsim bridge, which in turn
-# loads the one official SystemC runtime, so expose both target directories to
-# CTest without copying runtime binaries into each test directory.
-if(WIN32)
-  function(fsim_configure_windows_test_runtime directory)
-    get_property(directory_tests DIRECTORY "${directory}" PROPERTY TESTS)
-    if(directory_tests)
-      set_tests_properties(
-        ${directory_tests}
-        DIRECTORY "${directory}"
-        PROPERTIES
-          ENVIRONMENT_MODIFICATION
-            "PATH=path_list_prepend:$<TARGET_FILE_DIR:fsim_systemc_accellera_runtime>;PATH=path_list_prepend:$<TARGET_FILE_DIR:${FSIM_SYSTEMC_UPSTREAM_RUNTIME_TARGET}>")
-    endif()
-    get_property(child_directories
-      DIRECTORY "${directory}" PROPERTY SUBDIRECTORIES)
-    foreach(child_directory IN LISTS child_directories)
-      fsim_configure_windows_test_runtime("${child_directory}")
-    endforeach()
-  endfunction()
-  fsim_configure_windows_test_runtime("${CMAKE_CURRENT_SOURCE_DIR}")
-endif()
-
-
 # VHDL name analysis at compile time (IEEE 1076-2019 12.3, 12.4, 8.3, 13.2):
 # every name of a compiled unit resolves by visibility, whether or not the code
 # is executed; FSIM-VHDL-NAME-001/002/003 are reported by `fsim compile`.
@@ -10600,4 +10575,29 @@ if(TARGET fsim)
       LABELS "application;compliance;vhdl"
       TIMEOUT 120)
   endforeach()
+endif()
+
+# Windows does not search sibling build directories for dependent DLLs. Every
+# build-tree executable links the one process-wide fsim bridge, which in turn
+# loads the one official SystemC runtime, so expose both target directories to
+# CTest without copying runtime binaries into each test directory. Kept last:
+# it applies to the tests registered before it (all of them).
+if(WIN32)
+  function(fsim_configure_windows_test_runtime directory)
+    get_property(directory_tests DIRECTORY "${directory}" PROPERTY TESTS)
+    if(directory_tests)
+      set_tests_properties(
+        ${directory_tests}
+        DIRECTORY "${directory}"
+        PROPERTIES
+          ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:fsim_systemc_accellera_runtime>;PATH=path_list_prepend:$<TARGET_FILE_DIR:${FSIM_SYSTEMC_UPSTREAM_RUNTIME_TARGET}>")
+    endif()
+    get_property(child_directories
+      DIRECTORY "${directory}" PROPERTY SUBDIRECTORIES)
+    foreach(child_directory IN LISTS child_directories)
+      fsim_configure_windows_test_runtime("${child_directory}")
+    endforeach()
+  endfunction()
+  fsim_configure_windows_test_runtime("${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
