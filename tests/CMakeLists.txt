@@ -1212,7 +1212,8 @@ fsim_register_simple_test(
 # artifact round trip.
 add_executable(fsim_symbol_tests support/symbol_test.cpp)
 fsim_configure_test(fsim_symbol_tests)
-target_link_libraries(fsim_symbol_tests PRIVATE fsim_application)
+# The test reads the artifact codec's internal header, which uses Boost.PFR.
+target_link_libraries(fsim_symbol_tests PRIVATE fsim_application fsim_boost_pfr_headers)
 fsim_register_simple_test(
   fsim.symbol-interning
   fsim_symbol_tests

@@ -1744,6 +1744,16 @@ fsim_configure_executable(fsim_standard_library_builder)
 target_include_directories(fsim_standard_library_builder
   PRIVATE "${PROJECT_SOURCE_DIR}/src/app")
 target_link_libraries(fsim_standard_library_builder PRIVATE fsim_application)
+# The builder runs during the build. On Windows the loader finds DLLs beside
+# the executable and on PATH only, and the upstream SystemC runtime DLL is
+# built into its own directory, so that directory joins PATH for the run.
+set(FSIM_STANDARD_LIBRARY_BUILDER_LAUNCH "")
+if(WIN32)
+  set(FSIM_STANDARD_LIBRARY_BUILDER_LAUNCH
+    "${CMAKE_COMMAND}" -E env --modify
+    "PATH=path_list_prepend:$<TARGET_FILE_DIR:${FSIM_SYSTEMC_UPSTREAM_RUNTIME_TARGET}>"
+    --)
+endif()
 set(FSIM_STANDARD_LIBRARY_ARTIFACTS "")
 foreach(edition IN ITEMS 1987 1993 2000 2002 2008 2019)
   set(tree "${FSIM_STANDARD_LIBRARY_TREE_${edition}}")
@@ -1753,7 +1763,8 @@ foreach(edition IN ITEMS 1987 1993 2000 2002 2008 2019)
   add_custom_command(
     OUTPUT "${artifact}"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${edition_directory}"
-    COMMAND fsim_standard_library_builder
+    COMMAND ${FSIM_STANDARD_LIBRARY_BUILDER_LAUNCH}
+      "$<TARGET_FILE:fsim_standard_library_builder>"
       --edition ${edition}
       --source-root "${PROJECT_SOURCE_DIR}"
       --output "${edition_directory}"
@@ -1783,7 +1794,8 @@ foreach(uvm_entry IN ITEMS
   add_custom_command(
     OUTPUT "${artifact}"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${uvm_directory}"
-    COMMAND fsim_standard_library_builder
+    COMMAND ${FSIM_STANDARD_LIBRARY_BUILDER_LAUNCH}
+      "$<TARGET_FILE:fsim_standard_library_builder>"
       --uvm-release uvm-${uvm_release}
       --source-root "${uvm_source_dir}"
       --output "${uvm_directory}"
